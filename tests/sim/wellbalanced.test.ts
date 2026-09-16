@@ -45,7 +45,7 @@ test('lake at rest on rough terrain stays at rest (max |u| < 1e-3 m/s after 2000
     maxQ = Math.max(maxQ, Math.abs(state.qx[c]), Math.abs(state.qy[c]));
   }
   console.log(`  lake at rest: dt=${dt.toFixed(3)} s, max|u|=${maxU.toExponential(2)} m/s, max|q|=${maxQ.toExponential(2)}, max|Δh|=${maxDh.toExponential(2)} m`);
-  assert.ok(snap.simTime > 900, `simTime ${snap.simTime}`);
+  assert.ok(snap.simTime > 20 * 100 * dt * 0.999, `simTime ${snap.simTime}`);
   assert.ok(maxU < 1e-3, `max |u| = ${maxU}`);
   assert.ok(maxDh < 1e-3, `max |Δh| = ${maxDh}`);
   assert.ok(snap.stats.massError < 1e-5, `massError ${snap.stats.massError}`);

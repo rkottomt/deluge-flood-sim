@@ -108,11 +108,13 @@ export function buildLiveScenario(
   // Stage control on the largest water body that touches the domain edge (a river flowing through).
   const sources: WaterSource[] = [];
   let stage: ScenarioPreset['stage'] = null;
-  const river = bodies.find((b) => b.cells * cellSize * cellSize > 50000 && touchesEdge(b, nx, ny));
+  const river = bodies.find((b) => b.cells * cellSize * cellSize > 50000 && b.touchesEdge);
   if (river) {
+    // One stage source wherever the river crosses the domain edge, each at its local surface level, so a
+    // sloping river keeps its slope and the slider raises the whole water surface.
     const pts = edgeSourcePoints(river, nx, ny);
     pts.slice(0, 6).forEach((p, idx) => {
-      sources.push({ id: `stage-${idx + 1}`, type: 'stage', gx: p.gx, gy: p.gy, radius: p.radius, level: river.level, label: 'River stage' });
+      sources.push({ id: `stage-${idx + 1}`, type: 'stage', gx: p.gx, gy: p.gy, radius: p.radius, level: Math.round(p.level * 100) / 100, label: 'River stage' });
     });
     if (sources.length) {
       stage = {
@@ -153,21 +155,16 @@ export function buildLiveScenario(
   };
 }
 
-function touchesEdge(b: WaterBody, nx: number, ny: number): boolean {
-  for (const k of b.indices) {
-    const i = k % nx;
-    const j = (k / nx) | 0;
-    if (i === 0 || j === 0 || i === nx - 1 || j === ny - 1) return true;
-  }
-  return false;
-}
-
 /** Points on the water body just inside each place it crosses the domain edge. */
-function edgeSourcePoints(b: WaterBody, nx: number, ny: number): Array<{ gx: number; gy: number; radius: number }> {
+function edgeSourcePoints(b: WaterBody, nx: number, ny: number): Array<{ gx: number; gy: number; radius: number; level: number }> {
   const mask = new Uint8Array(nx * ny);
-  for (const k of b.indices) mask[k] = 1;
+  const levelAt = new Float32Array(nx * ny);
+  b.indices.forEach((k, q) => {
+    mask[k] = 1;
+    levelAt[k] = b.levels[q];
+  });
   const dist = distanceTransform(nx, ny, (k) => mask[k] === 0);
-  const out: Array<{ gx: number; gy: number; radius: number }> = [];
+  const out: Array<{ gx: number; gy: number; radius: number; level: number }> = [];
   const edges = [
     { len: nx, cell: (t: number, d: number) => d * nx + t },
     { len: nx, cell: (t: number, d: number) => (ny - 1 - d) * nx + t },
@@ -201,7 +198,9 @@ function edgeSourcePoints(b: WaterBody, nx: number, ny: number): Array<{ gx: num
             }
           }
         }
-        if (best >= 0 && bestR >= 1) out.push({ gx: (best % nx) + 0.5, gy: ((best / nx) | 0) + 0.5, radius: bestR });
+        if (best >= 0 && bestR >= 1) {
+          out.push({ gx: (best % nx) + 0.5, gy: ((best / nx) | 0) + 0.5, radius: Math.round(bestR * 10) / 10, level: levelAt[best] });
+        }
       }
       t = t1 + 1;
     }

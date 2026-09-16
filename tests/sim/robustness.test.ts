@@ -75,6 +75,8 @@ test('robust mode survives a stale CFL estimate: huge dt on a sudden deep dam br
   assert.equal(s.nonFinite, 0);
   assert.ok(s.minH >= 0);
   assert.ok(snap.stats.massError < 1e-3);
+  // The local Courant guard keeps the flow physical, not merely bounded by the velocity cap.
+  assert.ok(snap.stats.maxSpeed < 0.5 * solver.options.uMax, `max speed ${snap.stats.maxSpeed}`);
   solver.destroy();
 });
 

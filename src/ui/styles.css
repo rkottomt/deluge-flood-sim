@@ -699,42 +699,33 @@
   height: 15px;
   margin: -3px 8px 0;
 }
+/* Zero-width anchor at the tick position; the label is offset by JS (layoutTickLabels). */
 .dl-tick {
   position: absolute;
   left: calc(var(--t) * 100%);
   top: 0;
-  transform: translateX(-50%);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 1px;
-  white-space: nowrap;
-}
-.dl-tick-start {
-  transform: translateX(-8px);
-  align-items: flex-start;
-}
-.dl-tick-start .dl-tick-dot {
-  margin-left: 7.5px;
-}
-.dl-tick-end {
-  transform: translateX(calc(-100% + 8px));
-  align-items: flex-end;
-}
-.dl-tick-end .dl-tick-dot {
-  margin-right: 7.5px;
+  width: 0;
+  height: 100%;
 }
 .dl-tick-dot {
+  position: absolute;
+  left: -0.5px;
+  top: 0;
   width: 1px;
   height: 3px;
   background: rgba(255, 255, 255, 0.28);
 }
 .dl-tick-label {
+  position: absolute;
+  top: 4px;
+  left: 0;
+  transform: translateX(-50%);
   font-size: 10px;
   font-weight: 600;
   color: var(--dl-text-3);
   line-height: 1;
   letter-spacing: 0.01em;
+  white-space: nowrap;
 }
 .dl-has-ticks {
   padding-bottom: 2px;
@@ -742,12 +733,11 @@
 .dl-ticks-staggered {
   height: 27px;
 }
-.dl-tick.dl-tick-alt {
-  top: 11px;
+.dl-tick.dl-tick-alt .dl-tick-label {
+  top: 16px;
 }
 .dl-tick.dl-tick-alt .dl-tick-dot {
-  height: 12px;
-  margin-top: -9px;
+  height: 14px;
   background: rgba(255, 255, 255, 0.14);
 }
 
@@ -1130,6 +1120,37 @@
 .dl-row-status {
   margin-top: -6px;
 }
+.dl-evac-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: 8px;
+}
+.dl-btn-square {
+  width: 32px;
+  padding: 0;
+}
+.dl-btn > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+.dl-btn-count {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  display: inline-grid;
+  place-items: center;
+  font-size: 11px;
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+  color: #07251a;
+  background: var(--dl-ok);
+}
+.dl-btn-count.dl-zero {
+  color: var(--dl-text-2);
+  background: rgba(255, 255, 255, 0.12);
+}
 
 /* Scenario */
 .dl-flex {
@@ -1335,10 +1356,12 @@
   color: var(--dl-text-3);
   min-width: 0;
 }
-.dl-stage-gauge span {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+.dl-stage-gauge {
+  align-items: flex-start;
+  line-height: 1.35;
+}
+.dl-stage-gauge .dl-icon {
+  margin-top: 1px;
 }
 .dl-stage-slider .dl-slider-value {
   font-size: 17px;
@@ -1858,6 +1881,14 @@
   font-weight: 750;
   letter-spacing: -0.01em;
 }
+.dl-stat-value.dl-long {
+  font-size: 12px;
+  line-height: 17.4px;
+}
+.dl-stat-big .dl-stat-value.dl-long {
+  font-size: 16px;
+  line-height: 25.2px;
+}
 .dl-stat-sub {
   font-size: 10.5px;
   font-weight: 550;
@@ -2181,6 +2212,11 @@
   pointer-events: none;
   transition: visibility 0s linear 0.25s;
 }
+.dl-modal-layer:not(.dl-open) *,
+.dl-loading:not(.dl-show) *,
+.dl-panel.dl-closed * {
+  animation-play-state: paused !important;
+}
 .dl-modal-layer.dl-open {
   visibility: visible;
   pointer-events: auto;
@@ -2462,8 +2498,18 @@
   background: rgba(255, 90, 96, 0.12);
   box-shadow: inset 0 0 0 1px rgba(255, 90, 96, 0.35);
 }
+.dl-how-chip.dl-on {
+  color: #fff;
+  background: rgba(58, 168, 255, 0.24);
+  box-shadow: inset 0 0 0 1px rgba(114, 210, 255, 0.6);
+}
+.dl-how-chip-danger.dl-on {
+  background: rgba(255, 90, 96, 0.26);
+  box-shadow: inset 0 0 0 1px rgba(255, 120, 125, 0.7);
+}
 .dl-how-sec {
   padding: 20px 0 26px;
+  scroll-margin-top: 40px;
 }
 .dl-how-sec + .dl-how-sec:not(.dl-break) {
   border-top: 1px solid var(--dl-line);
@@ -2643,6 +2689,7 @@
   padding: 0 0.05em;
 }
 .m-term {
+  position: relative;
   display: inline-flex;
   flex-direction: column;
   align-items: center;
@@ -2662,8 +2709,21 @@
   vertical-align: top;
   line-height: calc(2.9em - 10px);
 }
+.m-annotated .m-row {
+  /* Room for the (absolutely positioned) notes, which may wrap onto two lines. */
+  padding: 0 2.5em 30px;
+}
+/* Notes hang below their term without widening it, so the equation keeps its natural spacing. */
 .m-note {
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: 14em;
   margin-top: 6px;
+  text-align: center;
+  white-space: normal;
   font-family: var(--dl-font);
   font-size: 11px;
   font-weight: 600;
@@ -2671,7 +2731,6 @@
   line-height: 1.2;
   font-style: normal;
   color: var(--dl-text-3);
-  white-space: nowrap;
 }
 .m-tone-a .m-term-body {
   border-color: rgba(255, 181, 71, 0.55);
@@ -2826,6 +2885,20 @@
 .dl-pipe-box-cpu rect {
   fill: rgba(255, 181, 71, 0.11);
   stroke: rgba(255, 181, 71, 0.55);
+}
+.dl-pipe-badge circle {
+  fill: rgba(58, 168, 255, 0.28);
+  stroke: rgba(140, 210, 255, 0.7);
+  stroke-width: 1;
+}
+.dl-pipe-box-alt .dl-pipe-badge circle {
+  fill: rgba(92, 225, 230, 0.2);
+  stroke: rgba(92, 225, 230, 0.7);
+}
+.dl-pipe-badge text {
+  font-size: 10.5px;
+  font-weight: 800;
+  fill: #eaf6ff;
 }
 .dl-pipe-title {
   font-size: 13.5px;
@@ -3434,25 +3507,34 @@
   transition: none;
   animation: dl-indeterminate 1.3s ease-in-out infinite;
 }
-.dl-loading-foot {
+.dl-progress-row {
   display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  gap: 16px;
+  align-items: center;
+  gap: 12px;
   width: 100%;
-  margin-top: 8px;
-  font-size: 11.5px;
-  color: var(--dl-text-3);
-  text-align: left;
+  margin-top: 14px;
+}
+.dl-progress-row .dl-progress {
+  flex: 1;
+  margin-top: 0;
 }
 .dl-loading-pct {
+  min-width: 34px;
+  text-align: right;
+  font-size: 12px;
   font-weight: 700;
   color: var(--dl-text-2);
   font-variant-numeric: tabular-nums;
 }
 .dl-loading-tip {
-  text-align: right;
-  line-height: 1.4;
+  text-wrap: balance;
+  width: 100%;
+  margin-top: 16px;
+  padding-top: 13px;
+  border-top: 1px solid var(--dl-line);
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--dl-text-3);
 }
 
 /* ── Unsupported ───────────────────────────────────────────────────────────────────────────── */
@@ -3689,6 +3771,34 @@
   .dl-how-cards,
   .dl-pipe-stats {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+/*
+ * Low-effects glass. Backdrop blur is re-rendered by the compositor every frame the canvas changes, which is
+ * real GPU work on a thermally throttled fanless laptop. When the measured frame rate sags (see
+ * installAdaptiveEffects in index.ts) — or the OS asks for less transparency — panels switch to near-opaque
+ * fills that look almost identical and cost nothing.
+ */
+.dl-ui.dl-lowfx .dl-glass,
+.dl-ui.dl-lowfx .dl-island {
+  background: linear-gradient(180deg, rgba(22, 30, 42, 0.965), rgba(13, 18, 27, 0.965));
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+.dl-ui.dl-lowfx .dl-probe,
+.dl-ui.dl-lowfx .dl-toast,
+.dl-ui.dl-lowfx .dl-naive-banner,
+.dl-ui.dl-lowfx .dl-modal-backdrop,
+.dl-ui.dl-lowfx .dl-loading {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+@media (prefers-reduced-transparency: reduce) {
+  .dl-ui .dl-glass,
+  .dl-ui .dl-island {
+    background: linear-gradient(180deg, rgba(22, 30, 42, 0.965), rgba(13, 18, 27, 0.965));
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
   }
 }
 @media (prefers-reduced-motion: reduce) {

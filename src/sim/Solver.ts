@@ -13,8 +13,9 @@
  *            zero the accounting buffer IN THE SAME ENCODER, then mapAsync → stats in Float64.
  *
  * ── Why it stays stable (the short version for judges) ──────────────────────────────────────────────────
- *   1. CFL-adaptive timestep  dt = C·dx / (√(g·h_max) + |u|_max), from a lagged readback inflated by safety
- *      margins and by depths we know are coming (stage sources, water brush).
+ *   1. CFL-adaptive timestep  dt = Cr·dx / (√2·(√(g·h_max) + |u|_max)) — the 2-D Courant condition of the
+ *      staggered scheme (derivation at computeDt) — from a lagged readback inflated by safety margins and by
+ *      depths we know are coming (stage sources, water brush).
  *   2. Semi-implicit friction: division instead of subtraction, so thin films cannot overshoot.
  *   3. Positivity-preserving donor-cell flux limiter: depth can never go negative, mass is exactly conserved.
  *   4. Well-balanced face depth/slope: a lake at rest on rough terrain stays at rest.
@@ -590,14 +591,30 @@ export class GpuFloodSolver implements FloodSolver {
     return this.msPerSubstep;
   }
 
-  /** The timestep the solver would use right now (s). */
+  /**
+   * The timestep the solver would use right now (s):
+   *
+   *     dt = Cr · dx / ( √2 · (√(g·h_max) + |u|_max) )
+   *
+   * WHY √2. Our scheme updates q from the old η, then η from the NEW q (a staggered forward–backward scheme).
+   * A von Neumann analysis for gravity waves gives amplification factors λ with λ² − Tλ + s = 0, where
+   * s = θ + (1−θ)·cos(k·dx) is the smoothing factor and T = 1 + s − 4·C₁²·(sin²(kx·dx/2) + sin²(ky·dx/2)),
+   * C₁ = √(gh)·dt/dx. The worst mode is the 2-D checkerboard (kx = ky = π/dx): stability needs
+   * 8·C₁² ≤ 2(1 + s) = 4θ, i.e. C₁ ≤ √(θ/2). Defining the 2-D Courant number Cr = √2·C₁ makes the limit
+   * "Cr ≤ 1" for the plain scheme and "Cr ≤ √θ" with θ-smoothing — the numbers the UI shows and judges read.
+   * (A 1-D formula, dt = C·dx/√(gh) with C = 0.7, sits right ON the 2-D limit: deep rivers then develop
+   * checkerboard sloshing held back only by the velocity cap. tests/sim/stability.test.ts guards this.)
+   *
+   * h_max and |u|_max come from the latest asynchronous readback, i.e. they are up to a few hundred ms stale.
+   * Robust mode inflates them by safety margins and by depths we KNOW are coming (stage sources, water brush)
+   * and clamps Cr to robustCflMax. Naive mode uses the raw numbers and trusts the user's Cr (the demo sets 1.8).
+   */
   computeDt(): number {
     const o = this.options;
     const p = this.params;
     const robust = p.stabilityMode !== 'naive';
     const cflIn = Number.isFinite(p.cfl) ? p.cfl : DEFAULT_SIM_PARAMS.cfl;
-    // Robust mode clamps the Courant number to ≤ 0.9; naive mode trusts the user (the demo uses 1.8).
-    const cfl = robust ? Math.min(0.9, Math.max(0.05, cflIn)) : Math.max(0.05, cflIn);
+    const cfl = robust ? Math.min(o.robustCflMax, Math.max(0.05, cflIn)) : Math.max(0.05, cflIn);
     this.refreshForcing();
     let h = Math.max(this.hRead, this.hBoost, this.forcing.stageDepthMax, 0.01);
     let u = this.uRead;
@@ -606,8 +623,8 @@ export class GpuFloodSolver implements FloodSolver {
       h *= o.cflDepthMargin;
       u = u * o.cflSpeedMargin + 0.1;
     }
-    const dt = (cfl * this.cellSize) / (Math.sqrt(GRAVITY * h) + u);
-    return Math.min(o.dtMax, Math.max(o.dtMin, dt));
+    const dt = (cfl * this.cellSize) / (Math.SQRT2 * (Math.sqrt(GRAVITY * h) + u));
+    return Math.min(o.dtMax, Math.max(o.dtMin, Number.isFinite(dt) ? dt : o.dtMin));
   }
 
   /**
@@ -794,6 +811,10 @@ export class GpuFloodSolver implements FloodSolver {
     iv[19] = o.advection ? 1 : 0;
     iv[20] = this.resetMaxPending ? 1 : 0;
     fv[21] = VELOCITY_DEPTH;
+    // Local Courant guard threshold (momentum pass) = the robust Courant ceiling; see shaders/momentum.ts.
+    fv[22] = o.robustCflMax;
+    fv[23] = o.smoothingDepthRatio;
+    fv[24] = o.boundaryFroudeMax;
     this.device.queue.writeBuffer(this.simBuf, 0, this.simBytes);
   }
 
@@ -984,7 +1005,8 @@ export class GpuFloodSolver implements FloodSolver {
       volumeIn: this.volumeIn,
       volumeOut: this.volumeOut,
       massError: Math.abs(volume - expected) / Math.max(1, this.initialVolume + this.volumeIn),
-      courant: (maxWave * meta.dtMax) / this.cellSize,
+      // 2-D Courant number (see computeDt): stable below 1 (below √θ ≈ 0.89 with smoothing).
+      courant: (Math.SQRT2 * maxWave * meta.dtMax) / this.cellSize,
     };
     this.snapshot = { simTime: meta.simTime, nx: this.nx, ny: this.ny, depth, stats };
 

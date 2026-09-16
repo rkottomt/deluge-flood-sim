@@ -2,17 +2,22 @@
 /**
  * Deluge end-to-end judge flows (DESIGN.md §9) in headless Chromium on the real GPU.
  *
- *   node scripts/e2e.mjs                 start a Vite dev server on :5190 (or the next free port) and run all flows
+ *   node scripts/e2e.mjs                    in-process Vite dev server on :5190 (or the next free port), all flows
+ *   node scripts/e2e.mjs --prod             production build + `vite preview` (what `npm run demo` serves)
  *   E2E_URL=http://localhost:5173/ node scripts/e2e.mjs      use an already running server
- *   node scripts/e2e.mjs --only=1,2,6    run a subset (flows that need an earlier result compute it themselves)
+ *   node scripts/e2e.mjs --only=1,2,6       run a subset (flows that need an earlier result compute it themselves)
  *   node scripts/e2e.mjs --preset=sandbox   run the preset-specific flows on another preset (default pittsburgh)
+ *   node scripts/e2e.mjs --live             also run the live-area flow (needs internet: USGS, Esri, TIGERweb)
+ *
+ * Offline guarantee: every request to a non-local host is blocked (the demo venue's wifi is unreliable) and
+ * reported; the baked-preset flows must not need any. Only the opt-in live flow may use the network.
  *
  * Screenshots → artifacts/e2e/NN-name.png, machine-readable report → artifacts/e2e/report.json.
  * Prints a PASS/FAIL table with measured numbers and exits non-zero if any flow fails.
  * Console errors, page errors and window.__deluge.errors are collected per flow; any of them fails the flow.
  */
 import { chromium } from 'playwright';
-import { spawn } from 'node:child_process';
+import { build, createServer, preview } from 'vite';
 import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
@@ -39,6 +44,7 @@ const OTHER_PRESETS = ['pittsburgh', 'sandbox', 'johnstown', 'ellicott'].filter(
 fs.mkdirSync(OUT, { recursive: true });
 
 // ─── process management ────────────────────────────────────────────────────────────────────────
+/** In-process Vite server (dev or preview); closed on exit, so it can never be left running. */
 let vite = null;
 let browser = null;
 let cleanedUp = false;
@@ -51,16 +57,11 @@ async function cleanup() {
   } catch {
     /* already gone */
   }
-  if (vite && vite.exitCode === null) {
-    try {
-      process.kill(-vite.pid, 'SIGTERM'); // whole process group (npx → node vite)
-    } catch {
-      try {
-        vite.kill('SIGTERM');
-      } catch {
-        /* already gone */
-      }
-    }
+  try {
+    if (vite?.close) await withTimeout(Promise.resolve(vite.close()), 5000, 'vite close');
+    else if (vite?.httpServer) await new Promise((r) => vite.httpServer.close(r));
+  } catch {
+    /* exiting anyway */
   }
 }
 for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
@@ -85,31 +86,40 @@ function portFree(port) {
   });
 }
 
+/**
+ * Start Vite in this process. Dev mode disables HMR and file watching: other people editing the tree while
+ * the flows run must not reload the page mid-flow. Prod mode builds to artifacts/e2e/dist and previews it.
+ */
 async function startVite() {
   let port = Number(args.port ?? 5190);
   while (!(await portFree(port))) port++;
-  const logPath = path.join(OUT, 'vite.log');
-  const log = fs.openSync(logPath, 'w');
-  vite = spawn('npx', ['vite', '--port', String(port), '--strictPort', '--host', '127.0.0.1'], {
-    cwd: ROOT,
-    detached: true,
-    stdio: ['ignore', log, log],
-    env: { ...process.env, BROWSER: 'none' },
-  });
-  const url = `http://127.0.0.1:${port}/`;
-  const deadline = Date.now() + 60_000;
-  while (Date.now() < deadline) {
-    if (vite.exitCode !== null) throw new Error(`vite exited early (code ${vite.exitCode}); see ${logPath}`);
-    try {
-      const r = await fetch(url);
-      if (r.ok) return url;
-    } catch {
-      /* not up yet */
-    }
-    await sleep(250);
+  const common = { root: ROOT, configFile: path.join(ROOT, 'vite.config.ts'), logLevel: 'warn', clearScreen: false };
+  if (args.prod) {
+    const outDir = path.join(OUT, 'dist');
+    const t0 = Date.now();
+    console.log('[e2e] building production bundle…');
+    await build({ ...common, build: { outDir, emptyOutDir: true } });
+    console.log(`[e2e] built in ${((Date.now() - t0) / 1000).toFixed(1)} s → ${path.relative(ROOT, outDir)}`);
+    vite = await preview({ ...common, build: { outDir }, preview: { port, strictPort: true, host: '127.0.0.1', open: false } });
+  } else {
+    vite = await createServer({ ...common, server: { port, strictPort: true, host: '127.0.0.1', hmr: false, watch: null, open: false } });
+    await vite.listen();
   }
-  throw new Error(`vite did not come up on ${url} within 60 s; see ${logPath}`);
+  const url = `http://127.0.0.1:${port}/`;
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`vite answered ${r.status} on ${url}`);
+  return url;
 }
+
+const isLocalUrl = (u) => {
+  try {
+    const { protocol, hostname } = new URL(u);
+    if (protocol === 'data:' || protocol === 'blob:' || protocol === 'about:') return true;
+    return hostname === '127.0.0.1' || hostname === 'localhost' || hostname === '[::1]';
+  } catch {
+    return true;
+  }
+};
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -133,10 +143,13 @@ const results = [];
 let page;
 let consoleErrors = [];
 const httpFailures = [];
+/** Requests to non-local hosts during the current flow (blocked unless the flow allows the network). */
+let externalRequests = [];
+let allowNetwork = false;
 
 async function main() {
   const baseUrl = process.env.E2E_URL ?? (await startVite());
-  console.log(`[e2e] app URL ${baseUrl}${vite ? ' (own vite server)' : ''}`);
+  console.log(`[e2e] app URL ${baseUrl}${vite ? (args.prod ? ' (own production preview)' : ' (own vite dev server)') : ''}`);
 
   browser = await chromium.launch({
     headless: true,
@@ -144,6 +157,14 @@ async function main() {
     args: ['--enable-unsafe-webgpu', '--enable-gpu', '--ignore-gpu-blocklist'],
   });
   const context = await browser.newContext({ viewport: { width: WIDTH, height: HEIGHT }, deviceScaleFactor: 1 });
+  // Offline enforcement: the built-in presets must work without internet.
+  // (Predicate matcher: local requests — every dev module — are never intercepted.)
+  await context.route((u) => !isLocalUrl(u.href), (route) => {
+    const url = route.request().url();
+    externalRequests.push(url);
+    if (allowNetwork) return route.continue();
+    return route.abort('internetdisconnected');
+  });
   page = await context.newPage();
   page.setDefaultTimeout(120_000);
   page.on('console', (m) => {
@@ -176,7 +197,7 @@ async function main() {
   if (PRESET !== 'pittsburgh') url.searchParams.set('preset', PRESET);
   const ctx = { baseUrl, appUrl: url.href };
   for (const flow of FLOWS) {
-    if (only && !only.has(flow.id)) continue;
+    if (only ? !only.has(flow.id) : flow.optIn && !args[flow.optIn]) continue;
     if (!flow.resetsPage && page.url() === 'about:blank') {
       // Flow 1 was skipped: open the app first.
       await page.goto(ctx.appUrl, { waitUntil: 'domcontentloaded' });
@@ -192,6 +213,8 @@ async function runFlow(flow, ctx) {
   results.push(r);
   console.log(`\n[e2e] (${flow.id}) ${flow.name}`);
   consoleErrors = [];
+  externalRequests = [];
+  allowNetwork = !!flow.network;
   const t0 = Date.now();
   let threw = false;
   // Every flow after the first starts from a ready app (also covers an unexpected page reload).
@@ -208,6 +231,12 @@ async function runFlow(flow, ctx) {
   const appErrors = await delugeErrors(flow.resetsPage ? 0 : errBase);
   r.errors = [...consoleErrors, ...appErrors.filter((e) => !consoleErrors.some((c) => c.includes(e)))];
   check(r, 'no console / page / WebGPU errors', r.errors.length === 0, `${r.errors.length} errors`);
+  if (!flow.network) {
+    const hosts = [...new Set(externalRequests.map((u) => new URL(u).host))];
+    r.metrics.externalRequests = externalRequests.slice(0, 20);
+    check(r, 'works offline (no external requests)', externalRequests.length === 0, externalRequests.length ? `${externalRequests.length} blocked: ${hosts.join(', ')}` : '0 requests');
+  }
+  allowNetwork = false;
   r.pass = !threw && r.checks.every((c) => c.ok || c.soft);
   console.log(`  → ${r.pass ? 'PASS' : 'FAIL'} (${r.seconds.toFixed(1)} s)`);
 }
@@ -762,13 +791,96 @@ const FLOWS = [
       await shot(`09-fps-${PRESET}`);
     },
   },
+  {
+    id: 10,
+    name: 'Power: paused view goes idle, input wakes it',
+    timeoutMs: 120_000,
+    async run(r) {
+      // Count renderer.render() calls from inside the page (the loop keeps running rAF callbacks cheaply).
+      await D(() => {
+        const d = window.__deluge;
+        const renderer = d.getRenderer();
+        if (!window.__e2eRenderCount) {
+          window.__e2eRenderCount = { n: 0 };
+          const orig = renderer.render.bind(renderer);
+          renderer.render = (settings) => {
+            window.__e2eRenderCount.n++;
+            return orig(settings);
+          };
+        }
+        d.setPaused(false);
+      });
+      const countOver = (ms) =>
+        D(async (dur) => {
+          const c = window.__e2eRenderCount;
+          const d = window.__deluge;
+          const n0 = c.n;
+          const t0 = d.getSimClock();
+          await new Promise((res) => setTimeout(res, dur));
+          return { renders: c.n - n0, simAdvanced: d.getSimClock() - t0, anim: d.getPerf().animTime };
+        }, ms);
+      const running = await countOver(2000);
+      await D(() => window.__deluge.setPaused(true));
+      await sleep(1800); // hold period after the last change
+      const idle = await countOver(3000);
+      const idle2 = await countOver(1000);
+      // Mouse input over the canvas wakes full-rate rendering (camera/tools need it).
+      const woke = D(async () => {
+        const c = window.__e2eRenderCount;
+        const n0 = c.n;
+        await new Promise((res) => setTimeout(res, 800));
+        return c.n - n0;
+      });
+      for (let k = 0; k < 16; k++) {
+        await page.mouse.move(WIDTH / 2 + k * 6, HEIGHT / 2);
+        await sleep(45);
+      }
+      const wokeRenders = await woke;
+      await D(() => window.__deluge.setPaused(false));
+      r.metrics = { running, idle, wokeRenders };
+      check(r, 'running: renders at full rate', running.renders >= 50, `${(running.renders / 2).toFixed(0)} renders/s, ${num(running.simAdvanced, 0)} sim s`);
+      check(r, 'paused: sim time frozen', idle.simAdvanced === 0, `${num(idle.simAdvanced)} sim s advanced`);
+      check(r, 'paused + idle: ≤ 6 renders/s', idle.renders <= 18, `${(idle.renders / 3).toFixed(1)} renders/s`);
+      check(r, 'paused + idle: animation clock frozen', idle.anim === idle2.anim, `${num(idle.anim, 3)} → ${num(idle2.anim, 3)} s`);
+      check(r, 'input wakes full-rate rendering', wokeRenders >= 25, `${wokeRenders} renders in 0.8 s of mouse movement`);
+    },
+  },
+  {
+    id: 11,
+    name: 'Live area: real USGS data for any US location (network)',
+    timeoutMs: 240_000,
+    optIn: 'live',
+    network: true,
+    async run(r) {
+      const req = { center: { lat: 40.4443, lon: -79.9608 }, sizeMeters: 4000, resolution: 512, name: 'Oakland, Pittsburgh (live)' };
+      const t0 = Date.now();
+      const outcome = await D(async (q) => {
+        const d = window.__deluge;
+        await d.actions.loadLiveArea(q);
+        const s = d.getState();
+        return { presetId: s.presetId, name: s.terrainName, grid: s.grid, attribution: s.attribution };
+      }, req);
+      const loadS = (Date.now() - t0) / 1000;
+      check(r, 'live area loaded', outcome.name && outcome.grid?.nx === req.resolution, `“${outcome.name}” ${outcome.grid?.nx}×${outcome.grid?.ny} @ ${num(outcome.grid?.cellSize)} m in ${loadS.toFixed(1)} s`);
+      check(r, 'attribution shown', /USGS|3DEP/i.test(outcome.attribution ?? ''), outcome.attribution);
+      await D(() => window.__deluge.setRain(50));
+      const secs = await runFor(600);
+      const s = await stats();
+      check(r, 'rain ponds on live terrain', (s?.volume ?? 0) > 0 && statsFinite(s), s ? `volume ${m3(s.volume)}, wet ${km2(s.wetArea)} (${secs.toFixed(1)} s real)` : 'no stats');
+      await D(() => window.__deluge.setRain(0));
+      await sleep(2000);
+      await shot('11-live-area');
+      r.metrics = { loadSeconds: loadS, requests: externalRequests.length };
+    },
+  },
 ];
 
 // ─── report ────────────────────────────────────────────────────────────────────────────────────
 function printTable() {
   const rows = results.map((r) => {
     const failed = r.checks.filter((c) => !c.ok && !c.soft);
-    const shown = (failed.length ? failed : r.checks.filter((c) => c.label !== 'no console / page / WebGPU errors'))
+    const boilerplate = new Set(['no console / page / WebGPU errors', 'works offline (no external requests)']);
+    const shown = (failed.length ? failed : r.checks.filter((c) => !boilerplate.has(c.label)))
       .map((c) => `${c.ok ? '' : c.soft ? '(soft) ' : 'FAILED '}${c.label}: ${c.measured}`)
       .concat(r.notes.filter((n) => n.startsWith('exception')))
       .map((line) => line.split('\n')[0])

@@ -1,5 +1,5 @@
 /** Terrain surface + diorama skirt shaders. */
-import { COMMON_WGSL, FRAME_WGSL } from './common';
+import { COMMON_WGSL, FRAME_WGSL, LOD_WGSL } from './common';
 
 export const TERRAIN_WGSL = /* wgsl */ `
 ${FRAME_WGSL}
@@ -11,7 +11,9 @@ ${FRAME_WGSL}
 @group(0) @binding(5) var imageryTex: texture_2d<f32>;
 @group(0) @binding(6) var linSamp: sampler;
 @group(0) @binding(7) var imgSamp: sampler;
+@group(0) @binding(8) var wetTex: texture_2d<f32>;
 ${COMMON_WGSL}
+${LOD_WGSL}
 
 struct VOut {
   @builtin(position) pos: vec4f,
@@ -19,22 +21,21 @@ struct VOut {
   @location(1) grid: vec2f,
   @location(2) elev: f32,
   @location(3) side: vec4f, // skirt: xyz outward normal, w = surface elevation at the top of the skirt
+  @location(4) haze: vec4f, // rgb haze color, a = haze amount
 }
 
 @vertex
-fn vsTerrain(@builtin(vertex_index) vi: u32) -> VOut {
-  let vx = u32(F.mesh.x);
-  let k = i32(vi % vx);
-  let l = i32(vi / vx);
-  let t = textureLoad(vtxTex, vec2i(k, l), 0);
-  let g = min(vec2f(f32(k), f32(l)) * F.stride, F.grid);
-  let w = gridToWorld(g, t.r);
+fn vsTerrain(@builtin(vertex_index) vi: u32, n: NodeIn) -> VOut {
+  let v = lodVertex(vi, n);
+  let elev = mix(v.a.r, v.b.r, v.m);
+  let w = gridToWorld(v.g, elev);
   var o: VOut;
   o.pos = F.viewProj * vec4f(w, 1.0);
   o.world = w;
-  o.grid = g;
-  o.elev = t.r;
+  o.grid = v.g;
+  o.elev = elev;
   o.side = vec4f(0.0);
+  o.haze = vertexHaze(w);
   return o;
 }
 
@@ -64,6 +65,7 @@ fn vsSkirt(@builtin(vertex_index) vi: u32) -> VOut {
   o.grid = g;
   o.elev = elev;
   o.side = vec4f(nrm, t.r);
+  o.haze = vertexHaze(w);
   return o;
 }
 
@@ -161,7 +163,7 @@ fn fsTerrain(in: VOut) -> @location(0) vec4f {
     color = mix(color, ink, clamp(max(line * fade * strength, major * strength * 1.3 * (1.0 - smoothstep(0.1, 0.35, contourFw / 5.0))), 0.0, 0.85));
   }
 
-  color = applyHaze(color, in.world);
+  color = mix(color, in.haze.rgb, in.haze.a);
   return vec4f(color, 1.0);
 }
 
@@ -181,7 +183,7 @@ fn fsSkirt(in: VOut) -> @location(0) vec4f {
   let ndl = max(dot(n, F.sunDir), 0.0);
   var color = albedo * (F.sunColor * ndl * 0.8 + skyAmbient(n) * 0.7);
   color *= mix(1.0, 0.45, t);
-  color = applyHaze(color, in.world);
+  color = mix(color, in.haze.rgb, in.haze.a);
   return vec4f(color, 1.0);
 }
 `;

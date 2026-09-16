@@ -2,6 +2,8 @@ import type { SimSnapshot } from '../contracts';
 
 /** After the requested sim time has been stepped, wait at most this long for a readback that includes it. */
 const SNAPSHOT_GRACE_MS = 3000;
+/** A run fails if the sim clock makes no progress for this long (includes scene load + shader compile). */
+const STALL_TIMEOUT_MS = 60_000;
 
 interface Run {
   simSeconds: number;
@@ -14,7 +16,8 @@ interface Run {
   /** Snapshot identity/time seen when the target was reached (to detect "any newer readback"). */
   doneSnap: SimSnapshot | null;
   doneSnapTime: number;
-  deadline: number;
+  /** performance.now() of the last frame that advanced this run (or of its start). */
+  lastProgress: number;
   resolve(): void;
   reject(err: Error): void;
 }
@@ -43,8 +46,8 @@ export class RunForScheduler {
         doneClock: 0,
         doneSnap: null,
         doneSnapTime: NaN,
-        // Generous: assumes ≥ 20 sim-seconds per real second after a 45 s allowance (loading, shader compile).
-        deadline: now + 45_000 + simSeconds * 50,
+        // Progress-based: a slow GPU that keeps advancing is fine; only a stalled sim times out.
+        lastProgress: now,
         resolve,
         reject,
       });
@@ -59,6 +62,7 @@ export class RunForScheduler {
     for (const run of this.runs) {
       if (run.doneAt !== null) continue;
       run.remaining -= advanced;
+      if (advanced > 0) run.lastProgress = now;
       if (run.remaining <= 0) {
         run.doneAt = now;
         run.doneClock = clock;
@@ -88,10 +92,13 @@ export class RunForScheduler {
           run.resolve();
           continue;
         }
-      } else if (now > run.deadline) {
+      } else if (now - run.lastProgress > STALL_TIMEOUT_MS) {
         const done = run.simSeconds - run.remaining;
         run.reject(
-          new Error(`runFor(${run.simSeconds}) timed out after advancing ${done.toFixed(1)} sim s`),
+          new Error(
+            `runFor(${run.simSeconds}) timed out: no progress for ${STALL_TIMEOUT_MS / 1000} s ` +
+              `after advancing ${done.toFixed(1)} sim s (paused by a load, hidden tab, or a stalled GPU?)`,
+          ),
         );
         continue;
       }

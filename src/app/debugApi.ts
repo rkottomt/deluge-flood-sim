@@ -3,6 +3,8 @@ import type {
   AppState,
   CameraPose,
   DelugeDebugAPI,
+  FloodRenderer,
+  FloodSolver,
   PickResult,
   ScenarioPreset,
   SimStats,
@@ -30,9 +32,18 @@ export interface GridSample {
  * Extras beyond the DelugeDebugAPI contract. Non-contract, for automation and debugging only.
  */
 export interface DelugeDebugExtras {
+  /** The application object itself (diagnostics / profiling only). */
+  readonly app: App;
   readonly store: Store;
   readonly actions: AppActions;
   getState(): AppState;
+  /** The current solver (concrete type may expose extras such as gpuMsPerSubstep / runSubsteps). */
+  getSolver(): FloodSolver | null;
+  getRenderer(): FloodRenderer | null;
+  /** Frame pacing / work budget diagnostics. */
+  getPerf(): { fps: number; substepCap: number; budgetMode: string; adaptiveBudget: boolean; frames: number; animTime: number };
+  /** Enable/disable the frame-time substep governor (benchmarks). */
+  setAdaptiveBudget(on: boolean): void;
   selectTool(tool: ToolId): void;
   resetWater(): void;
   isStabilityDemo(): boolean;
@@ -97,6 +108,7 @@ export function createDebugApi(app: App, ready: Promise<void>): DelugeDebug {
         const b = segs[k + 1];
         solver.applyBrush({ kind: 'wall', ax: a.gx, ay: a.gy, bx: b.gx, by: b.gy, radius, height });
       }
+      app.requestRender();
     },
 
     addSource(source: WaterSource) {
@@ -118,6 +130,7 @@ export function createDebugApi(app: App, ready: Promise<void>): DelugeDebug {
       // Assign directly (deterministic for screenshots) and cancel any in-flight fly-to animation.
       camera.pose = pose;
       camera.flyTo(pose, 0.01);
+      app.requestRender();
     },
 
     runFor: (simSeconds) => app.runFor(simSeconds),
@@ -129,9 +142,23 @@ export function createDebugApi(app: App, ready: Promise<void>): DelugeDebug {
     getRoute: () => store.get().route,
 
     // ── extras ────────────────────────────────────────────────────────────────────────────
+    app,
     store,
     actions,
     getState: () => store.get(),
+    getSolver: () => app.scenes?.scene?.solver ?? null,
+    getRenderer: () => app.renderer,
+    getPerf: () => ({
+      fps: app.loop.fps,
+      substepCap: app.budget.cap,
+      budgetMode: app.budget.mode,
+      adaptiveBudget: app.adaptiveBudget,
+      frames: app.driver.frameCount,
+      animTime: app.pacer.animTime,
+    }),
+    setAdaptiveBudget(on) {
+      app.adaptiveBudget = on;
+    },
     selectTool: (tool) => store.set({ tool }),
     resetWater: () => actions.resetWater(),
     isStabilityDemo: () => store.get().sim.stabilityMode === 'naive',

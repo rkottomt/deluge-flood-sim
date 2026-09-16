@@ -5,6 +5,7 @@
 import { h, setText, toggleClass, setAttr, type Child } from './dom';
 import { icon, type IconName } from './icons';
 import { clamp } from './scales';
+import { layoutTickLabels } from './tickLayout';
 
 // ─── Slider ─────────────────────────────────────────────────────────────────────────────────────
 
@@ -43,6 +44,8 @@ export interface Slider {
 }
 
 const RES = 1000;
+
+
 
 export function slider(o: SliderOptions): Slider {
   const out = h('output', { class: 'dl-slider-value' });
@@ -121,20 +124,36 @@ export function slider(o: SliderOptions): Slider {
 
   let ticks: HTMLElement | null = null;
   if (o.ticks?.length) {
-    ticks = h('div', { class: 'dl-slider-ticks', 'aria-hidden': 'true' });
-    const positions = o.ticks.map((tk) => clamp(o.toPos(tk.value), 0, 1)).sort((a, b) => a - b);
-    // Labels closer than ~16% of the track would collide: alternate them onto two rows.
-    const crowded = positions.some((p, i) => i > 0 && p - positions[i - 1] < 0.16);
-    if (crowded) ticks.classList.add('dl-ticks-staggered');
-    const sorted = [...o.ticks].sort((a, b) => o.toPos(a.value) - o.toPos(b.value));
-    sorted.forEach((tk, i) => {
-      const t = clamp(o.toPos(tk.value), 0, 1);
-      const edge = t < 0.08 ? ' dl-tick-start' : t > 0.92 ? ' dl-tick-end' : '';
-      const alt = crowded && i % 2 === 1 ? ' dl-tick-alt' : '';
-      ticks!.append(
-        h('div', { class: 'dl-tick' + edge + alt, style: { '--t': t.toFixed(4) } }, h('span', { class: 'dl-tick-dot' }), h('span', { class: 'dl-tick-label' }, tk.label)),
+    const container = h('div', { class: 'dl-slider-ticks', 'aria-hidden': 'true' });
+    ticks = container;
+    const items = o.ticks
+      .map((tk) => ({ label: tk.label, t: clamp(o.toPos(tk.value), 0, 1) }))
+      .sort((a, b) => a.t - b.t)
+      .map((tk) => {
+        const label = h('span', { class: 'dl-tick-label' }, tk.label);
+        const el = h('div', { class: 'dl-tick', style: { '--t': tk.t.toFixed(4) } }, h('span', { class: 'dl-tick-dot' }), label);
+        container.append(el);
+        return { el, label, t: tk.t };
+      });
+    // Lay labels out against their real rendered widths (only when the track width changes).
+    let lastWidth = -1;
+    const ro = new ResizeObserver(() => {
+      const w = container.clientWidth;
+      if (w === lastWidth || w === 0) return;
+      lastWidth = w;
+      const placed = layoutTickLabels(
+        w,
+        items.map((it) => ({ t: it.t, width: it.label.offsetWidth })),
       );
+      let alt = false;
+      placed.forEach((p, i) => {
+        items[i].label.style.transform = `translateX(${p.dx.toFixed(1)}px)`;
+        toggleClass(items[i].el, 'dl-tick-alt', p.row === 1);
+        alt ||= p.row === 1;
+      });
+      toggleClass(container, 'dl-ticks-staggered', alt);
     });
+    ro.observe(container);
   }
 
   const head = h(

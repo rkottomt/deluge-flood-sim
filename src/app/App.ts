@@ -1,4 +1,4 @@
-import type { AppActions, FloodRenderer, FloodSolver, ToolController } from '../contracts';
+import type { AppActions, AppState, FloodRenderer, FloodSolver, StepInfo, ToolController } from '../contracts';
 import { createDelugeDevice, type DelugeGPU } from '../gpu';
 import { createRenderer } from '../render';
 import { createRouter } from '../routing';
@@ -9,7 +9,9 @@ import { APP_CONFIG, createInitialState } from './defaults';
 import { FrameDriver } from './driver';
 import { errorMessage, ErrorReporter } from './errors';
 import { EvacController } from './evac';
+import { WorkBudget, type BudgetMode } from './governor';
 import { FrameLoop } from './loop';
+import { RenderPacer } from './pacer';
 import { ProbeSampler } from './probe';
 import { RunForScheduler } from './runFor';
 import { SceneManager, SupersededLoadError, type Scene } from './scene';
@@ -25,13 +27,17 @@ export type LoadOutcome = 'ok' | 'failed' | 'superseded';
  * Application orchestrator: creates the GPU device, renderer, router, UI and tool controller, owns the
  * current scene (terrain + solver), and runs the frame loop. The heavy lifting lives in focused helpers:
  *   SceneManager (load sequence) · SimSync (store → solver) · FrameDriver (per-frame work) ·
- *   EvacController (routing) · RunForScheduler (automation) · createActions · installDebugApi.
+ *   SubstepGovernor (frame-time work budget) · RenderPacer (power-aware rendering) ·
+ *   EvacController (routing) · RunForScheduler (automation) · createActions · createDebugApi.
  */
 export class App {
   readonly store = createStore(createInitialState());
   readonly errors = new ErrorReporter();
   readonly stage = new StageLevels();
   readonly runner = new RunForScheduler();
+  /** Frame-time substep governor (one learned cap per interaction mode). */
+  readonly budget = new WorkBudget();
+  readonly pacer = new RenderPacer();
   readonly router = createRouter();
   readonly evac: EvacController;
   readonly sim: SimSync;
@@ -47,6 +53,17 @@ export class App {
   tools: ToolController | null = null;
   probe: ProbeSampler | null = null;
 
+  /** Frame-time substep governor on (default). Off = the user's maxSubstepsPerFrame only (benchmarks). */
+  get adaptiveBudget(): boolean {
+    return this.adaptiveBudgetOn;
+  }
+  set adaptiveBudget(on: boolean) {
+    this.adaptiveBudgetOn = on;
+    this.budget.restart();
+    this.sim.setOverride('governor', on ? { maxSubstepsPerFrame: this.budget.cap } : null);
+  }
+  private adaptiveBudgetOn = true;
+
   /** Stability demo ("Break it") state; the CFL to restore when it is switched off. */
   stabilityDemo = false;
   preDemoCfl: number = APP_CONFIG.robustCfl;
@@ -55,6 +72,8 @@ export class App {
   private resolveReady!: () => void;
   private rejectReady!: (err: Error) => void;
   private readySettled = false;
+  /** performance.now() of the last user input event anywhere in the page. */
+  private lastInputAt = -Infinity;
   private resizePending = true;
 
   constructor(
@@ -81,7 +100,7 @@ export class App {
     });
     this.driver = new FrameDriver(this);
     this.loop = new FrameLoop(
-      (dt, now) => this.frame(dt, now),
+      (dt, now, frameMs) => this.frame(dt, now, frameMs),
       (err) => this.errors.report('frame', errorMessage(err), err),
     );
     this.actions = createActions(this);
@@ -152,7 +171,9 @@ export class App {
     this.probe = new ProbeSampler(store, gpu.device);
     this.probe.install();
     this.sim.install();
+    this.sim.setOverride('governor', { maxSubstepsPerFrame: this.budget.cap });
     this.installResizeHandling();
+    this.installActivityTracking();
     this.store.subscribe((s, prev) => {
       if (s.sim.stabilityMode !== prev.sim.stabilityMode) this.stabilityDemo = s.sim.stabilityMode === 'naive';
     });
@@ -208,9 +229,10 @@ export class App {
 
   runFor(simSeconds: number): Promise<void> {
     const run = this.runner.start(simSeconds, performance.now());
-    this.sim.setOverrides({ timeScale: APP_CONFIG.runForTimeScale });
+    this.sim.setOverride('runFor', { timeScale: APP_CONFIG.runForTimeScale });
+    this.requestRender();
     const restore = () => {
-      if (!this.runner.active) this.sim.setOverrides({});
+      if (!this.runner.active) this.sim.setOverride('runFor', null);
     };
     return run.then(restore, (err: unknown) => {
       restore();
@@ -229,6 +251,24 @@ export class App {
     }
   }
 
+  /** Something changed the picture outside the store / input paths: render at full rate for a moment. */
+  requestRender(): void {
+    this.pacer.poke(performance.now());
+  }
+
+  /**
+   * Feed one simulated frame's timing to the work budget and apply its cap. The mode (and with it the
+   * frame-time target) follows what the user is doing: touching → smooth frames, watching → more sim.
+   */
+  observeFrameBudget(frameMs: number, info: StepInfo, now: number): void {
+    if (!this.adaptiveBudgetOn) return;
+    const interacting = now - Math.max(this.lastInputAt, this.pacer.lastCameraMotion) < APP_CONFIG.interactionHoldMs;
+    const mode: BudgetMode = this.runner.active ? 'automation' : interacting ? 'interactive' : 'watching';
+    const switched = this.budget.setMode(mode);
+    const adapted = this.budget.observe(frameMs, info, now, this.store.get().sim.maxSubstepsPerFrame);
+    if (switched || adapted) this.sim.setOverride('governor', { maxSubstepsPerFrame: this.budget.cap });
+  }
+
   markReady(): void {
     if (this.readySettled) return;
     this.readySettled = true;
@@ -245,6 +285,7 @@ export class App {
     this.sim.pushAll();
     this.evac.reset();
     this.probe?.reset();
+    this.budget.restart();
     this.driver.onSceneChanged(performance.now());
     console.info(
       `[deluge] loaded “${scene.terrain.name}” ${scene.terrain.nx}×${scene.terrain.ny} @ ${scene.terrain.cellSize.toFixed(2)} m`,
@@ -260,12 +301,13 @@ export class App {
     this.store.set({ sim: { ...sim, stabilityMode: 'robust', cfl } });
   }
 
-  private frame(realDt: number, now: number): void {
-    if (this.resizePending && this.renderer) {
+  private frame(realDt: number, now: number, frameMs: number): boolean {
+    if (this.resizePending && this.renderer && !document.hidden) {
       this.resizePending = false;
       this.renderer.resize();
+      this.pacer.poke(now);
     }
-    this.driver.frame(realDt, now);
+    return this.driver.frame(realDt, now, frameMs);
   }
 
   /** Coalesce window/canvas/DPR changes into one renderer.resize() at the start of the next frame. */
@@ -277,4 +319,35 @@ export class App {
     if (typeof ResizeObserver !== 'undefined') new ResizeObserver(mark).observe(this.canvas);
     this.resizePending = true;
   }
+
+  /**
+   * Wake the render pacer on anything that can change the picture while the sim is paused: user input
+   * anywhere (canvas tools, camera, UI controls, shortcuts), store changes other than the HUD stream, and
+   * the tab becoming visible again.
+   */
+  private installActivityTracking(): void {
+    const poke = () => this.pacer.poke(performance.now());
+    const onInput = () => {
+      const now = performance.now();
+      this.lastInputAt = now;
+      this.pacer.poke(now);
+    };
+    const opts: AddEventListenerOptions = { capture: true, passive: true };
+    for (const type of ['pointerdown', 'pointermove', 'pointerup', 'wheel', 'keydown', 'keyup', 'touchstart', 'touchmove']) {
+      window.addEventListener(type, onInput, opts);
+    }
+    document.addEventListener('visibilitychange', poke);
+    this.store.subscribe((s, prev) => {
+      for (const key in s) {
+        const k = key as keyof AppState;
+        if (s[k] !== prev[k] && !HUD_ONLY_KEYS.has(k)) {
+          poke();
+          return;
+        }
+      }
+    });
+  }
 }
+
+/** Store keys that only feed DOM readouts; their ~5 Hz updates must not keep the 3D view rendering. */
+const HUD_ONLY_KEYS: ReadonlySet<keyof AppState> = new Set<keyof AppState>(['stats', 'stepInfo', 'fps', 'probe', 'error']);

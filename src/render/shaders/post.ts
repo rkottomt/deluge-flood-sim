@@ -43,7 +43,7 @@ struct Post {
   exposure: f32,
   srgbOut: f32,     // 1 → apply the sRGB OETF in-shader (non-sRGB canvas format)
   vignette: f32,
-  time: f32,
+  bloom: f32,       // bloom strength (0 when the bloom passes are skipped)
 }
 @group(0) @binding(0) var<uniform> P: Post;
 @group(0) @binding(1) var hdrTex: texture_2d<f32>;
@@ -83,7 +83,7 @@ fn fsTonemap(in: FsOut) -> @location(0) vec4f {
   let uv = vec2f(in.ndc.x * 0.5 + 0.5, 0.5 - in.ndc.y * 0.5);
   let px = vec2i(uv * size);
   var hdr = textureLoad(hdrTex, clamp(px, vec2i(0), vec2i(size) - 1), 0).rgb;
-  hdr += textureSampleLevel(bloomTex, linSamp, uv, 0.0).rgb * 0.06;
+  hdr += textureSampleLevel(bloomTex, linSamp, uv, 0.0).rgb * 0.06 * P.bloom;
   // Guard against NaN/inf from any pass.
   if (!(dot(hdr, vec3f(1.0)) < 1e7)) { hdr = vec3f(0.0); }
   var c = aces(max(hdr, vec3f(0.0)) * P.exposure);

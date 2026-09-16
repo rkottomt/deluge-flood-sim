@@ -133,6 +133,61 @@ fn pullForward(clip: vec4f, fraction: f32) -> vec4f {
 }
 `;
 
+/**
+ * CDLOD patch vertex (see lod.ts). Each node instance draws a PATCH×PATCH grid; vertex (k, l) sits at
+ * origin + (k, l)·q cells and morphs toward the parent grid (odd indices slide onto even ones) as the camera
+ * distance goes from morphStart to morphEnd. Heights are blended between the two base-grid samples, so at
+ * m = 1 the patch is exactly the parent-level mesh and neighbouring levels meet without cracks.
+ */
+export const LOD_WGSL = /* wgsl */ `
+const PATCH: u32 = 32u;
+
+struct NodeIn {
+  @location(0) node: vec4f,    // origin gx, origin gy, quad size (cells), level
+  @location(1) morph: vec4f,   // morphStart, morphEnd (world m), 0, 0
+}
+
+struct LodVertex {
+  g: vec2f,          // morphed grid position
+  g0: vec2f,         // unmorphed grid position (clamped to the domain)
+  a: vec4f,          // base-grid texel at g0
+  b: vec4f,          // base-grid texel at the parent-grid position
+  m: f32,            // morph factor
+}
+
+fn vtxAtGrid(g: vec2f) -> vec4f {
+  let m = vec2i(F.mesh);
+  let t = clamp(vec2i(round(g / F.stride)), vec2i(0), m - 1);
+  return textureLoad(vtxTex, t, 0);
+}
+
+fn lodVertex(vi: u32, n: NodeIn) -> LodVertex {
+  let side = PATCH + 1u;
+  let kl = vec2f(f32(vi % side), f32(vi / side));
+  let q = n.node.z;
+  let g0 = min(n.node.xy + kl * q, F.grid);
+  let odd = fract(kl * 0.5) * 2.0;
+  let gp = min(n.node.xy + (kl - odd) * q, F.grid);
+  var o: LodVertex;
+  o.g0 = g0;
+  o.a = vtxAtGrid(g0);
+  o.b = vtxAtGrid(gp);
+  let w0 = gridToWorld(g0, o.a.r);
+  let d = distance(w0, F.camPos);
+  o.m = clamp((d - n.morph.x) / max(n.morph.y - n.morph.x, 1e-3), 0.0, 1.0);
+  o.g = mix(g0, gp, o.m);
+  return o;
+}
+
+/** Per-vertex aerial perspective (haze varies slowly across the screen, so interpolation is exact enough). */
+fn vertexHaze(world: vec3f) -> vec4f {
+  let v = world - F.camPos;
+  let dir = v / max(length(v), 1e-3);
+  let col = skyRadiance(vec3f(dir.x, max(dir.y, 0.0) * 0.35 + 0.02, dir.z));
+  return vec4f(col, hazeAmount(world));
+}
+`;
+
 /** Manual bilinear sampling of the per-vertex texture (r = bed, g = water surface, a = wet flag). */
 export const VTX_SAMPLE_WGSL = /* wgsl */ `
 fn vtxLoad(k: i32, l: i32) -> vec4f {

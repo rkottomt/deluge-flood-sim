@@ -68,6 +68,16 @@ function section(
   return el;
 }
 
+/**
+ * The router's blocked message usually starts with "No safe route — …", which the alarm heading already
+ * says in capitals; keep only the advice.
+ */
+export function blockedAdvice(message: string | undefined): string {
+  const rest = (message ?? '').replace(/^\s*no safe route\s*[—–:-]*\s*/i, '').trim();
+  if (!rest) return 'Every road to a shelter is flooded. Shelter in place or move to higher floors.';
+  return rest[0].toUpperCase() + rest.slice(1);
+}
+
 const label = (text: string, extra?: HTMLElement | null) =>
   h('div', { class: 'dl-label-row' }, h('span', { class: 'dl-label' }, text), extra ?? null);
 
@@ -379,10 +389,26 @@ export function createPanel(ctx: UIContext): Panel {
   // ════════════════════════════════ Evacuation ════════════════════════════════
   const evacBadge = h('span', { class: 'dl-sec-badge' });
   const evacCard = h('div', { class: 'dl-evac', 'aria-live': 'polite' });
-  const setStartBtn = button('Set start', () => selectTool(store, 'evac'), { icon: 'evac', tip: 'Click a home on the map', key: '8', side: 'top' });
-  const clearStartBtn = button('Clear', () => store.set({ evacStart: null }), { icon: 'close', tip: 'Remove the evacuation start point', side: 'top' });
-  const addShelterBtn = button('Add shelter', () => selectTool(store, 'shelter'), { icon: 'shelter', tip: 'Click to place shelters on high ground', key: '9', side: 'top' });
-  const shelterCount = h('span', { class: 'dl-count' });
+  const setStartBtn = button('Set start', () => selectTool(store, 'evac'), { icon: 'evac', tip: 'Then click a home on the map', key: '8', side: 'top' });
+  const shelterCount = h('span', { class: 'dl-btn-count' });
+  const addShelterBtn = button(['Shelters', shelterCount], () => selectTool(store, 'shelter'), {
+    icon: 'shelter',
+    tip: 'Click the map to add a shelter on high ground; click one to remove it',
+    key: '9',
+    side: 'top',
+  });
+  const clearStartBtn = h(
+    'button',
+    {
+      type: 'button',
+      class: 'dl-btn dl-btn-subtle dl-btn-square',
+      'aria-label': 'Clear the evacuation start point',
+      'data-tip': 'Clear the start point',
+      'data-tip-side': 'top',
+      onclick: () => store.set({ evacStart: null }),
+    },
+    icon('close', 15),
+  );
 
   function renderEvac(route: RouteResult | null, s: AppState) {
     const state = route?.state ?? 'none';
@@ -404,7 +430,7 @@ export function createPanel(ctx: UIContext): Panel {
     } else if (state === 'blocked') {
       evacCard.replaceChildren(
         h('div', { class: 'dl-evac-alarm' }, icon('warning', 30), h('span', { class: 'dl-evac-alarm-text' }, 'NO SAFE ROUTE')),
-        h('p', { class: 'dl-evac-msg' }, route?.message || 'Every road to a shelter is flooded. Shelter in place or move to higher floors.'),
+        h('p', { class: 'dl-evac-msg' }, blockedAdvice(route?.message)),
       );
     } else if (s.evacStart) {
       evacCard.replaceChildren(
@@ -434,7 +460,10 @@ export function createPanel(ctx: UIContext): Panel {
   );
   bind(
     (s) => s.shelters.length,
-    (n) => setText(shelterCount, `${n} shelter${n === 1 ? '' : 's'}`),
+    (n) => {
+      setText(shelterCount, String(n));
+      toggleClass(shelterCount, 'dl-zero', n === 0);
+    },
   );
 
   const roadLegend = h(
@@ -449,7 +478,7 @@ export function createPanel(ctx: UIContext): Panel {
   const evacSec = section(
     'Evacuation',
     'route',
-    [evacCard, h('div', { class: 'dl-row dl-row-wrap' }, setStartBtn, clearStartBtn, addShelterBtn, shelterCount), roadLegend],
+    [evacCard, h('div', { class: 'dl-evac-actions' }, setStartBtn, addShelterBtn, clearStartBtn), roadLegend],
     { id: 'evac', badge: evacBadge },
   );
 

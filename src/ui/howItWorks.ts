@@ -27,6 +27,12 @@ const abs = (inner: string) => `<span class="m-abs">|</span>${inner}<span class=
 const rm = (s: string) => `<span class="m-rm">${s}</span>`;
 const eq = (markup: string, cls = '') => fragment<HTMLElement>(`<div class="m-eq ${cls}"><span class="m-row">${markup}</span></div>`);
 
+/** SVG subscript: base + lowered, smaller tspan (Unicode subscript letters are missing from most fonts). */
+const svgSub = (base: string, s: string) => `${base}<tspan baseline-shift="sub" font-size="8.5">${s}</tspan>`;
+/** Numbered circular badge for a pipeline box, centered at (cx, cy). */
+const svgBadge = (cx: number, cy: number, n: number) =>
+  `<g class="dl-pipe-badge"><circle cx="${cx}" cy="${cy}" r="8.5"/><text x="${cx}" y="${cy + 3.6}" text-anchor="middle">${n}</text></g>`;
+
 const h_ = v('h');
 const g = v('g');
 const n = v('n');
@@ -50,23 +56,26 @@ export function createHowItWorks(ctx: UIContext): Modal {
     ['break', 'Break it'],
   ];
   let modal: Modal;
+  const chips = new Map<string, HTMLButtonElement>();
   const nav = h(
     'nav',
     { class: 'dl-how-nav', 'aria-label': 'Sections' },
-    ...sections.map(([id, text]) =>
-      h(
+    ...sections.map(([id, text]) => {
+      const chip = h(
         'button',
         {
           type: 'button',
           class: `dl-how-chip${id === 'break' ? ' dl-how-chip-danger' : ''}`,
           onclick: () => {
-            const target = modal.body.querySelector<HTMLElement>(`[data-how="${id}"]`);
-            if (target) modal.body.scrollTo({ top: target.offsetTop - 12, behavior: 'smooth' });
+            // scroll-margin-top on the sections keeps titles clear of this sticky nav.
+            modal.body.querySelector<HTMLElement>(`[data-how="${id}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
           },
         },
         text,
-      ),
-    ),
+      );
+      chips.set(id, chip);
+      return chip;
+    }),
   );
 
   const sec = (id: string, kicker: string, title: string, ...body: Array<HTMLElement | string | null>) =>
@@ -94,7 +103,7 @@ export function createHowItWorks(ctx: UIContext): Modal {
     h(
       'p',
       null,
-      'Each cell only needs its four neighbours, so the whole grid can be updated in parallel by thousands of GPU cores — many times per rendered frame. Right now that is ',
+      'Each cell only needs its four neighbors, so the whole grid can be updated in parallel by thousands of GPU cores — many times per rendered frame. Right now that is ',
       liveCells,
       ' cells, about ',
       liveUpdates,
@@ -120,7 +129,7 @@ export function createHowItWorks(ctx: UIContext): Modal {
 
   // ── 2. Equations ──
   const massEq = eq(
-    `${term(pd(h_, v('t')), 'depth changes…')}${op('+')}${term(`${pd(qx, v('x'))}${op('+')}${pd(qy, v('y'))}`, '…by net outflow…')}${op('=')}${term(`${v('R')}${op('−')}${v('I')}${op('+')}${v('S')}`, '…plus rain − infiltration + rivers')}`,
+    `${term(pd(h_, v('t')), 'depth changes…')}${op('+')}${term(`${pd(qx, v('x'))}${op('+')}${pd(qy, v('y'))}`, '…by net outflow…')}${op('=')}${term(`${v('R')}${op('−')}${v('I')}${op('+')}${v('S')}`, '…plus rain − infiltration<br>+ river sources')}`,
     'm-annotated',
   );
   const momEq = eq(
@@ -144,7 +153,7 @@ export function createHowItWorks(ctx: UIContext): Modal {
     ...(
       [
         [h_, 'water depth (m)'],
-        [`${v('q')} = ${v('h')}${v('u')}`, 'flow per metre of width (m²/s)'],
+        [`${v('q')} = ${v('h')}${v('u')}`, 'flow per meter of width (m²/s)'],
         [v('z'), 'ground + walls elevation (m)'],
         [`${eta} = ${v('z')} + ${v('h')}`, 'water surface elevation'],
         [g, 'gravity, 9.81 m/s²'],
@@ -173,7 +182,7 @@ export function createHowItWorks(ctx: UIContext): Modal {
   );
 
   // ── 3. Stability ingredients ──
-  const ingredient = (num: string, title: string, formula: string, why: string, detail: string) =>
+  const ingredient = (num: string, title: string, formula: string, why: string | Node, detail: string) =>
     h(
       'div',
       { class: 'dl-ingredient' },
@@ -200,9 +209,9 @@ export function createHowItWorks(ctx: UIContext): Modal {
       ingredient(
         '2',
         'Semi-implicit friction',
-        `${frac('…', `1${op('+')}${frac(`${g}${dt}${sup(n, '2')}${abs(v('q'))}`, supsub(v('h'), '7/3', v('f')), 'm-small')}`)}`,
-        'in thin films friction is enormously stiff (∝ h⁻⁷ᐟ³).',
-        'An explicit friction update overshoots, reverses the flow and blows up. Putting friction in the denominator means it can only ever slow water down — stable for any timestep.',
+        `${sup(v('q'), `${v('n')}+1`)}${op('=')}${frac(sup(v('q'), '∗'), `1${op('+')}${frac(`${g}${dt}${sup(n, '2')}${abs(v('q'))}`, supsub(v('h'), '7/3', v('f')), 'm-small')}`)}`,
+        h('span', { html: `in thin films friction is enormously stiff (∝&thinsp;<i>h</i><sup>−7/3</sup>).` }),
+        'An explicit friction update overshoots, reverses the flow and blows up. Dividing the frictionless update q* by a factor ≥ 1 means friction can only ever slow water down — stable for any timestep.',
       ),
       ingredient(
         '3',
@@ -242,16 +251,17 @@ export function createHowItWorks(ctx: UIContext): Modal {
     <text x="362" y="66.5" text-anchor="middle" class="dl-pipe-pill-text">repeat N× per frame · Δt from CFL</text>
 
     ${[
-      { x: 22, t: '① Momentum', s1: 'update qₓ, q_y on', s2: 'every cell face' },
-      { x: 182, t: '② Limiter', s1: 'scale donor outflow', s2: 'so depth stays ≥ 0' },
-      { x: 342, t: '③ Continuity', s1: 'h ← h + inflow', s2: '− outflow' },
-      { x: 502, t: '④ Sources', s1: 'rain · storms · rivers', s2: 'infiltration · ledger' },
+      { x: 22, n: 1, t: 'Momentum', s1: `update ${svgSub('q', 'x')}, ${svgSub('q', 'y')} on`, s2: 'every cell face' },
+      { x: 182, n: 2, t: 'Limiter', s1: 'scale donor outflow', s2: 'so depth stays ≥ 0' },
+      { x: 342, n: 3, t: 'Continuity', s1: 'h ← h + inflow', s2: '− outflow' },
+      { x: 502, n: 4, t: 'Sources', s1: 'rain · storms · rivers', s2: 'infiltration · ledger' },
     ]
       .map(
         (b) => `
       <g class="dl-pipe-box">
         <rect x="${b.x}" y="92" width="138" height="78" rx="12"/>
-        <text x="${b.x + 69}" y="120" text-anchor="middle" class="dl-pipe-title">${b.t}</text>
+        ${svgBadge(b.x + 17, 106, b.n)}
+        <text x="${b.x + 73}" y="121" text-anchor="middle" class="dl-pipe-title">${b.t}</text>
         <text x="${b.x + 69}" y="140" text-anchor="middle" class="dl-pipe-sub">${b.s1}</text>
         <text x="${b.x + 69}" y="156" text-anchor="middle" class="dl-pipe-sub">${b.s2}</text>
       </g>`,
@@ -266,7 +276,8 @@ export function createHowItWorks(ctx: UIContext): Modal {
 
     <g class="dl-pipe-box dl-pipe-box-alt">
       <rect x="22" y="230" width="180" height="78" rx="12"/>
-      <text x="112" y="258" text-anchor="middle" class="dl-pipe-title">⑤ Export</text>
+      ${svgBadge(39, 244, 5)}
+      <text x="112" y="258" text-anchor="middle" class="dl-pipe-title">Export</text>
       <text x="112" y="278" text-anchor="middle" class="dl-pipe-sub">h, u, v, max depth →</text>
       <text x="112" y="294" text-anchor="middle" class="dl-pipe-sub">terrain &amp; water renderer</text>
     </g>
@@ -274,7 +285,8 @@ export function createHowItWorks(ctx: UIContext): Modal {
     <text x="236" y="259" text-anchor="middle" class="dl-pipe-note">~4 Hz</text>
     <g class="dl-pipe-box dl-pipe-box-alt">
       <rect x="272" y="230" width="210" height="78" rx="12"/>
-      <text x="377" y="258" text-anchor="middle" class="dl-pipe-title">⑥ Async readback</text>
+      ${svgBadge(289, 244, 6)}
+      <text x="381" y="258" text-anchor="middle" class="dl-pipe-title">Async readback</text>
       <text x="377" y="278" text-anchor="middle" class="dl-pipe-sub">depth + mass ledger copied</text>
       <text x="377" y="294" text-anchor="middle" class="dl-pipe-sub">&amp; zeroed in one encoder</text>
     </g>
@@ -310,8 +322,12 @@ export function createHowItWorks(ctx: UIContext): Modal {
   const pipeline = sec(
     'pipeline',
     '04 · On the GPU',
-    'One substep, five compute passes',
-    h('p', null, 'All state lives in GPU textures that ping-pong between passes. Every substep of a frame is encoded into a single command buffer; the CPU never waits for the GPU.'),
+    'Four compute passes per substep',
+    h(
+      'p',
+      null,
+      'All state lives in GPU textures that ping-pong between passes. Every substep of a frame is encoded into a single command buffer, then the result is exported to the renderer and — a few times a second — read back asynchronously for statistics and routing. The CPU never waits for the GPU.',
+    ),
     h('div', { class: 'dl-pipe-wrap' }, pipelineSvg),
     pipeStats,
   );
@@ -329,7 +345,8 @@ export function createHowItWorks(ctx: UIContext): Modal {
       dataRow('layers', 'USGS 3D Elevation Program (3DEP)', 'Bare-earth elevation — 1 m lidar where available, ~10 m (1/3 arc-second) elsewhere. Rivers are hydro-flattened, so Deluge burns in a channel before filling them.'),
       dataRow('globe', 'Esri World Imagery', 'Aerial photography draped over the terrain (Esri, Maxar, Earthstar Geographics).'),
       dataRow('route', 'US Census Bureau TIGER/Line roads', 'Road network for flood-aware evacuation routing; roads with ≥ 30 cm of water are treated as impassable.'),
-      dataRow('search', 'OpenStreetMap Nominatim', 'Place search in the location picker.'),
+      dataRow('gauge', 'NOAA National Weather Service', 'Official flood stages and historic crests for river gauges, marked on the river-stage slider.'),
+      dataRow('search', 'OpenStreetMap Nominatim', 'Place search in the location picker (© OpenStreetMap contributors).'),
       dataRow('book', 'Method', 'Bates, Horritt & Fewtrell (2010), J. Hydrology · de Almeida, Bates, Freer & Souvignet (2012), Water Resources Research.'),
     ),
   );
@@ -387,6 +404,30 @@ export function createHowItWorks(ctx: UIContext): Modal {
     onRequestClose: () => ctx.setPanel('howItWorks', false),
     body: [nav, plain, equations, stability, pipeline, data, breakCard],
   });
+
+  // Scroll-spy: highlight the chip of the section currently under the nav (rAF-throttled, passive).
+  let spyRaf = 0;
+  let activeChip = '';
+  const spy = () => {
+    spyRaf = 0;
+    const body = modal.body;
+    const probeY = body.scrollTop + 90;
+    let current = sections[0][0];
+    for (const [id] of sections) {
+      const el = body.querySelector<HTMLElement>(`[data-how="${id}"]`);
+      // offsetTop is relative to the dialog (the positioned ancestor), so subtract the body's own offset.
+      if (el && el.offsetTop - body.offsetTop <= probeY) current = id;
+    }
+    // At the very bottom the last (short) section can never reach the top: treat it as active.
+    if (body.scrollTop + body.clientHeight >= body.scrollHeight - 4) current = sections[sections.length - 1][0];
+    if (current === activeChip) return;
+    activeChip = current;
+    for (const [id, chip] of chips) toggleClass(chip, 'dl-on', id === current);
+  };
+  modal.body.addEventListener('scroll', () => {
+    if (!spyRaf) spyRaf = requestAnimationFrame(spy);
+  }, { passive: true });
+  modal.onOpen(() => requestAnimationFrame(spy));
 
   bind((s) => s.panels.howItWorks, (open) => modal.setOpen(open));
   return modal;

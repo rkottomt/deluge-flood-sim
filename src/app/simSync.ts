@@ -17,10 +17,12 @@ export interface SimSyncDeps {
  *   • sim params (identity change) → solver.params = {...sim, ...overrides}   (rain lives in sim.rainRate)
  *   • sources / storms             → setSources / setStorms
  *   • stageOffset                  → stage source levels = base + offset (rewrites store.sources)
- * `overrides` lets automation (runFor) temporarily change e.g. timeScale without touching user state.
+ * Override layers let the app change e.g. timeScale (runFor automation) or the substep cap (frame-time
+ * governor) without touching user-facing state.
  */
 export class SimSync {
-  private overrides: Partial<SimParams> = {};
+  /** Named override layers (e.g. 'runFor' → timeScale, 'governor' → maxSubstepsPerFrame), applied in order. */
+  private readonly layers = new Map<string, Partial<SimParams>>();
   private unsubscribe: (() => void) | null = null;
 
   constructor(private readonly deps: SimSyncDeps) {}
@@ -35,13 +37,36 @@ export class SimSync {
     this.unsubscribe = null;
   }
 
-  setOverrides(overrides: Partial<SimParams>): void {
-    this.overrides = overrides;
+  /** Replace (or with null/empty, remove) one override layer and push the result to the solver. */
+  setOverride(layer: string, patch: Partial<SimParams> | null): void {
+    if (!patch || Object.keys(patch).length === 0) {
+      if (!this.layers.delete(layer)) return;
+    } else {
+      this.layers.set(layer, patch);
+    }
     this.pushParams();
   }
 
+  /** Convenience for the single default layer (automation). */
+  setOverrides(overrides: Partial<SimParams>): void {
+    this.setOverride('default', overrides);
+  }
+
+  /**
+   * User params with override layers applied. `maxSubstepsPerFrame` layers can only LOWER the user's cap
+   * (a work budget must never exceed what the user allowed); every other key replaces the value.
+   */
   effectiveParams(): SimParams {
-    return { ...this.deps.store.get().sim, ...this.overrides };
+    const out: SimParams = { ...this.deps.store.get().sim };
+    for (const patch of this.layers.values()) {
+      for (const key of Object.keys(patch) as Array<keyof SimParams>) {
+        const value = patch[key];
+        if (value === undefined) continue;
+        if (key === 'maxSubstepsPerFrame') out.maxSubstepsPerFrame = Math.min(out.maxSubstepsPerFrame, value as number);
+        else (out as unknown as Record<string, unknown>)[key] = value;
+      }
+    }
+    return out;
   }
 
   /** Push the complete current state into the solver (new solver). */

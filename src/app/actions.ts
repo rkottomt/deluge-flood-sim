@@ -15,6 +15,7 @@ export function createActions(app: App): AppActions {
       solver.reset();
       app.driver.onSolverReset();
     });
+    app.requestRender();
   };
 
   return {
@@ -46,6 +47,7 @@ export function createActions(app: App): AppActions {
         solver.reset({ resetTerrain: true });
         app.driver.onSolverReset();
       });
+      app.requestRender();
     },
 
     clearWalls() {
@@ -54,6 +56,7 @@ export function createActions(app: App): AppActions {
         const { nx, ny } = solver;
         solver.applyBrush({ kind: 'eraseWall', ax: 0, ay: ny / 2, bx: nx, by: ny / 2, radius: Math.max(nx, ny) });
       });
+      app.requestRender();
     },
 
     restoreScenario() {
@@ -71,10 +74,12 @@ export function createActions(app: App): AppActions {
 
     cameraFrameAll() {
       app.renderer?.camera.frameAll();
+      app.requestRender();
     },
 
     cameraTopDown() {
       app.renderer?.camera.topDown();
+      app.requestRender();
     },
 
     setStabilityDemo(on) {

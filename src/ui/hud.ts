@@ -37,6 +37,11 @@ export function createHud(ctx: UIContext, achievedSpeed: () => number | null): H
     );
     return { el, value, sub };
   };
+  /** Set a stat value; unusually long strings (runaway numbers in the stability demo) get a smaller font. */
+  const setValue = (st: { value: HTMLElement }, text: string, longAt: number) => {
+    setText(st.value, text);
+    toggleClass(st.value, 'dl-long', text.length > longAt);
+  };
 
   const area = stat('Flooded land', 'Area newly under ≥ 30 cm of water since reset', true);
   const volume = stat('Water volume', 'Total water stored on the map', true);
@@ -45,15 +50,22 @@ export function createHud(ctx: UIContext, achievedSpeed: () => number | null): H
   const mass = stat('Mass error', 'Relative mass-balance error: |V − (V₀ + in − out)| / (V₀ + in). Proves no water is created or destroyed.');
   const simSpeed = stat('Sim speed', 'Simulated seconds per real second actually achieved');
 
-  bind((s) => formatKm2(s.stats?.floodedArea), (v) => setText(area.value, v));
+  bind((s) => formatKm2(s.stats?.floodedArea), (v) => setValue(area, v, 10));
   bind((s) => (s.stats ? formatAcres(s.stats.floodedArea) : ''), (v) => setText(area.sub, v));
-  bind((s) => formatVolume(s.stats?.volume), (v) => setText(volume.value, v));
+  bind((s) => formatVolume(s.stats?.volume), (v) => setValue(volume, v, 10));
   bind((s) => (s.stats ? formatPools(s.stats.volume) : ''), (v) => setText(volume.sub, v));
-  bind((s) => formatMeters(s.stats?.maxDepth), (v) => setText(depth.value, v));
+  bind((s) => formatMeters(s.stats?.maxDepth), (v) => setValue(depth, v, 7));
   bind((s) => (s.stats ? formatFeet(s.stats.maxDepth) : ''), (v) => setText(depth.sub, v));
-  bind((s) => formatSpeed(s.stats?.maxSpeed), (v) => setText(speed.value, v));
-  bind((s) => (s.stats && Number.isFinite(s.stats.maxSpeed) ? `${fmtNum(s.stats.maxSpeed * 2.23694, 1)} mph` : ''), (v) => setText(speed.sub, v));
-  bind((s) => formatPercent(s.stats?.massError), (v) => setText(mass.value, v));
+  bind((s) => formatSpeed(s.stats?.maxSpeed), (v) => setValue(speed, v, 8));
+  bind(
+    (s) => {
+      const v = s.stats?.maxSpeed;
+      if (v === undefined || !Number.isFinite(v)) return '';
+      return v * 2.23694 >= 1e4 ? 'runaway' : `${fmtNum(v * 2.23694, 1)} mph`;
+    },
+    (v) => setText(speed.sub, v),
+  );
+  bind((s) => formatPercent(s.stats?.massError), (v) => setValue(mass, v, 8));
   bind(
     (s) => {
       const e = s.stats?.massError;
@@ -74,7 +86,7 @@ export function createHud(ctx: UIContext, achievedSpeed: () => number | null): H
       const a = achievedSpeed();
       return formatSpeedup(a ?? s.sim.timeScale);
     },
-    (v) => setText(simSpeed.value, v),
+    (v) => setValue(simSpeed, v, 7),
   );
   bind(
     (s) => (s.stepInfo?.throttled && !s.paused ? 'GPU-limited' : `of ${fmtNum(s.sim.timeScale, 0)}×`),

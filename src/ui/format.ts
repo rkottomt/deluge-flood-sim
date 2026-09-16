@@ -127,10 +127,16 @@ export function formatPools(m3: number | null | undefined): string {
   return `${n} Olympic pool${n === '1.0' || n === '1' ? '' : 's'}`;
 }
 
+/** Compact scientific notation for runaway values (the stability demo): "3.4e6". */
+function sci(v: number): string {
+  return v.toExponential(1).replace('e+', 'e').replace('-', '−');
+}
+
 export function formatMeters(m: number | null | undefined, decimals?: number): string {
   const b = bad(m);
   if (b) return b;
   const a = Math.abs(m as number);
+  if (a >= 1e5) return `${sci(m as number)}${THIN}m`;
   const d = decimals ?? (a >= 100 ? 0 : a >= 10 ? 1 : 2);
   return `${fmtNum(m, d)}${THIN}m`;
 }
@@ -140,6 +146,7 @@ export function formatFeet(m: number | null | undefined, decimals?: number): str
   if (b) return b;
   const ft = (m as number) * FT_PER_M;
   const a = Math.abs(ft);
+  if (a >= 1e5) return `${sci(ft)}${THIN}ft`;
   const d = decimals ?? (a >= 100 ? 0 : 1);
   return `${fmtNum(ft, d)}${THIN}ft`;
 }
@@ -148,7 +155,8 @@ export function formatSpeed(ms: number | null | undefined): string {
   const b = bad(ms);
   if (b) return b;
   const a = Math.abs(ms as number);
-  return `${fmtNum(ms, a >= 10 ? 1 : 2)}${THIN}m/s`;
+  if (a >= 1e4) return `${sci(ms as number)}${THIN}m/s`;
+  return `${fmtNum(ms, a >= 100 ? 0 : a >= 10 ? 1 : 2)}${THIN}m/s`;
 }
 
 /** Relative error (fraction) as percent: 3e-5 → "0.003 %". */

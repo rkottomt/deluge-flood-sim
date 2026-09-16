@@ -5,11 +5,14 @@ import type {
   FloodSolver,
   PresetInfo,
   ProgressFn,
+  SimParams,
+  SolverTerrainInput,
   Store,
   TerrainData,
 } from '../contracts';
 import { computeInitialWater, listPresets, loadLiveArea, loadPreset } from '../data';
 import { createSolver } from '../sim';
+import { APP_CONFIG } from './defaults';
 import { cloneScenarioLists, type StageLevels } from './stage';
 import type { SceneRequest } from './url';
 
@@ -96,7 +99,7 @@ export class SceneManager {
       store.set({ loading: { message: 'Building GPU solver…', progress: 0.88 } });
       this.clear();
 
-      const solver = await createSolver(device, terrain, store.get().sim);
+      const solver = await createSolverWithBudget(device, terrain, store.get().sim);
       pending = solver;
       if (!isCurrent()) throw new SupersededLoadError();
 
@@ -194,6 +197,21 @@ function bindRouter(router: EvacuationRouter, terrain: TerrainData, initialWater
   const ext = router as EvacuationRouter & RouterExtensions;
   ext.setNetwork(terrain.roads, terrain.cellSize, { nx: terrain.nx, ny: terrain.ny });
   ext.setBaselineWater?.(initialWater, terrain.nx, terrain.ny);
+}
+
+/**
+ * createSolver with the app's solver options. The 4th `options` argument is an extra of src/sim beyond the
+ * contract factory signature; it is passed through a loose signature so the app still compiles (and the
+ * option is simply ignored) against a contract-only implementation.
+ */
+function createSolverWithBudget(device: GPUDevice, terrain: TerrainData, params: SimParams): Promise<FloodSolver> {
+  const create = createSolver as unknown as (
+    device: GPUDevice,
+    terrain: SolverTerrainInput,
+    params?: Partial<SimParams>,
+    options?: { gpuBudgetMs?: number },
+  ) => Promise<FloodSolver>;
+  return create(device, terrain, params, { gpuBudgetMs: APP_CONFIG.solverGpuBudgetMs });
 }
 
 function validateTerrain(t: TerrainData): void {

@@ -91,3 +91,41 @@ test('gridToGeoLocal maps corners and center', () => {
   assert.equal(geo.isLikelyUSCoverage(40.44, -80), true);
   assert.equal(geo.isLikelyUSCoverage(48.85, 2.35), false);
 });
+
+test('runaway values stay compact (stability demo)', () => {
+  assert.equal(f.formatSpeed(488.23), `488${T}m/s`);
+  assert.equal(f.formatSpeed(3.4e6), `3.4e6${T}m/s`);
+  assert.equal(f.formatMeters(2.5e7), `2.5e7${T}m`);
+  assert.equal(f.formatMeters(61.04), `61.0${T}m`);
+});
+
+test('tick labels: centered when roomy, re-anchored or staggered when crowded', async () => {
+  const { layoutTickLabels } = await import('../../src/ui/tickLayout');
+  const spans = (W: number, labels: Array<{ t: number; width: number }>) =>
+    layoutTickLabels(W, labels).map((p, i) => ({ row: p.row, l: labels[i].t * W + p.dx, r: labels[i].t * W + p.dx + labels[i].width }));
+  const noOverlap = (s: Array<{ row: number; l: number; r: number }>) => {
+    for (let i = 0; i < s.length; i++)
+      for (let j = i + 1; j < s.length; j++)
+        if (s[i].row === s[j].row) assert.ok(s[i].r <= s[j].l || s[j].r <= s[i].l, `labels ${i} and ${j} overlap`);
+  };
+  // Roomy: every label centered on its tick, single row.
+  const roomy = layoutTickLabels(300, [{ t: 0.2, width: 30 }, { t: 0.5, width: 30 }, { t: 0.8, width: 30 }]);
+  assert.deepEqual(roomy.map((p) => p.row), [0, 0, 0]);
+  assert.ok(roomy.every((p) => Math.abs(p.dx + 15) < 1e-9));
+  // Rain slider (Light/Heavy/Extreme/Harvey): the close Extreme–Harvey pair is re-anchored on one row.
+  const rain = [
+    { t: 0.278, width: 28 },
+    { t: 0.487, width: 32 },
+    { t: 0.73, width: 45 },
+    { t: 0.834, width: 38 },
+  ];
+  const r = spans(280, rain);
+  noOverlap(r);
+  assert.deepEqual(r.map((x) => x.row), [0, 0, 0, 0]);
+  // Hopelessly crowded: falls back to a second row, still without same-row overlaps.
+  const crowded = spans(200, [{ t: 0.5, width: 60 }, { t: 0.52, width: 60 }, { t: 0.54, width: 60 }]);
+  noOverlap(crowded.slice(0, 2));
+  assert.equal(crowded[1].row, 1);
+  // Labels stay within the strip (±8 px inset margin).
+  for (const x of spans(200, [{ t: 0, width: 50 }, { t: 1, width: 50 }])) assert.ok(x.l >= -8 && x.r <= 208);
+});

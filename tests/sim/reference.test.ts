@@ -21,6 +21,8 @@ interface Case {
   storms?: StormCell[];
   steps: number;
   tol: number;
+  /** Fixed timestep, s (default 0.25). */
+  dt?: number;
   /** Extra uniform depth everywhere (m). */
   fill?: number;
   options?: Record<string, unknown>;
@@ -45,12 +47,14 @@ async function compare(c: Case) {
   const p = solver.params;
   const o = solver.options;
   const robust = p.stabilityMode !== 'naive';
-  const dt = Math.fround(0.25);
+  const dt = Math.fround(c.dt ?? 0.25);
   const sp: SchemeStepParams = {
     dt,
     dx,
     manningN: p.manningN,
     theta: robust ? o.theta : 1,
+    smoothingDepthRatio: o.smoothingDepthRatio,
+    courantGuard: o.robustCflMax,
     hMin: o.hMin,
     uMax: o.uMax,
     froudeMax: o.froudeMax,
@@ -60,6 +64,7 @@ async function compare(c: Case) {
     open: p.boundary === 'open',
     robust,
     boundaryMinSlope: o.boundaryMinSlope,
+    boundaryFroudeMax: o.boundaryFroudeMax,
     stageAlpha: Math.fround(1 - Math.exp(-dt / o.stageRelaxSeconds)),
     forcing: packForcing(c.sources ?? [], c.storms ?? [], nx, ny, dx, z0, (k) => elevation[k]),
   };
@@ -107,9 +112,10 @@ const cases: Case[] = [
     steps: 400,
     tol: 2e-3,
   },
-  // Naive (explicit friction, no limiter) is only stable without thin films and without the stiff explicit
-  // open-boundary outflow: fully wet, deep, walled domain.
-  { label: 'naive mode, deep water', params: { boundary: 'wall', manningN: 0.03, stabilityMode: 'naive' }, fill: 20, steps: 200, tol: 2e-3 },
+  // Naive (explicit friction, no limiter, θ = 1) is only stable without thin films, without the stiff explicit
+  // open-boundary outflow and well inside the 2-D Courant limit: fully wet, deep, walled domain, Cr ≈ 0.18.
+  // (At dt = 0.25 s this case is at Cr ≈ 0.9 with no smoothing and blows up within ~20 steps — as it should.)
+  { label: 'naive mode, deep water', params: { boundary: 'wall', manningN: 0.03, stabilityMode: 'naive' }, fill: 20, steps: 400, dt: 0.05, tol: 2e-3 },
 ];
 
 for (const c of cases) {

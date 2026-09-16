@@ -472,6 +472,146 @@ export function buildRoadNetwork(
   return { nodes: Float32Array.from(nodeXY), edges: outEdges };
 }
 
+/**
+ * Node hand-made polylines (synthetic road layouts) that cross without sharing vertices: insert an explicit
+ * vertex at every crossing, and snap polyline endpoints lying within `snap` of another polyline onto it
+ * (T-junctions). Both polylines receive bit-identical coordinates, so `buildRoadNetwork` joins them.
+ * Lines are flat [x, y, ...] arrays in any planar unit; they are modified in place and returned.
+ */
+export function nodeCrossings(lines: number[][], snap = 1.5): number[][] {
+  type Insert = { seg: number; t: number; x: number; y: number };
+  const BUCKET = 16;
+  const buildIndex = () => {
+    const buckets = new Map<number, Array<[number, number]>>();
+    lines.forEach((pts, l) => {
+      for (let s = 0; s + 3 < pts.length; s += 2) {
+        const bx0 = Math.floor((Math.min(pts[s], pts[s + 2]) - snap) / BUCKET);
+        const bx1 = Math.floor((Math.max(pts[s], pts[s + 2]) + snap) / BUCKET);
+        const by0 = Math.floor((Math.min(pts[s + 1], pts[s + 3]) - snap) / BUCKET);
+        const by1 = Math.floor((Math.max(pts[s + 1], pts[s + 3]) + snap) / BUCKET);
+        for (let by = by0; by <= by1; by++) {
+          for (let bx = bx0; bx <= bx1; bx++) {
+            const key = bx * 100003 + by;
+            const list = buckets.get(key);
+            if (list) list.push([l, s / 2]);
+            else buckets.set(key, [[l, s / 2]]);
+          }
+        }
+      }
+    });
+    return buckets;
+  };
+  const applyInserts = (inserts: Map<number, Insert[]>) => {
+    for (const [l, list] of inserts) {
+      const pts = lines[l];
+      list.sort((a, b) => a.seg - b.seg || a.t - b.t);
+      const out: number[] = [];
+      const push = (x: number, y: number) => {
+        if (out.length && out[out.length - 2] === x && out[out.length - 1] === y) return;
+        out.push(x, y);
+      };
+      let q = 0;
+      for (let s = 0; s < pts.length / 2; s++) {
+        push(pts[s * 2], pts[s * 2 + 1]);
+        while (q < list.length && list[q].seg === s) {
+          push(list[q].x, list[q].y);
+          q++;
+        }
+      }
+      lines[l] = out;
+    }
+  };
+  const addInsert = (m: Map<number, Insert[]>, l: number, ins: Insert) => {
+    const list = m.get(l);
+    if (list) list.push(ins);
+    else m.set(l, [ins]);
+  };
+
+  // 1. T-junctions: move dangling endpoints onto the nearest other segment within `snap`.
+  {
+    const index = buildIndex();
+    const inserts = new Map<number, Insert[]>();
+    lines.forEach((pts, l) => {
+      const nv = pts.length / 2;
+      for (const end of [0, nv - 1]) {
+        const px = pts[end * 2];
+        const py = pts[end * 2 + 1];
+        const list = index.get(Math.floor(px / BUCKET) * 100003 + Math.floor(py / BUCKET));
+        if (!list) continue;
+        let best: { l: number; seg: number; t: number; x: number; y: number; d: number } | null = null;
+        for (const [l2, s2] of list) {
+          if (l2 === l && Math.abs(s2 - Math.min(end, nv - 2)) <= 1) continue;
+          const o = lines[l2];
+          const ax = o[s2 * 2];
+          const ay = o[s2 * 2 + 1];
+          const dx = o[s2 * 2 + 2] - ax;
+          const dy = o[s2 * 2 + 3] - ay;
+          const len2 = dx * dx + dy * dy;
+          if (len2 === 0) continue;
+          const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / len2));
+          // Snap to an existing vertex when the foot point is within 1e-3 of it (keeps coordinates identical).
+          const x = t < 1e-3 ? ax : t > 1 - 1e-3 ? o[s2 * 2 + 2] : ax + dx * t;
+          const y = t < 1e-3 ? ay : t > 1 - 1e-3 ? o[s2 * 2 + 3] : ay + dy * t;
+          const d = Math.hypot(x - px, y - py);
+          if (d <= snap && (!best || d < best.d)) best = { l: l2, seg: s2, t, x, y, d };
+        }
+        if (!best || best.d === 0) continue;
+        pts[end * 2] = best.x;
+        pts[end * 2 + 1] = best.y;
+        addInsert(inserts, best.l, { seg: best.seg, t: best.t, x: best.x, y: best.y });
+      }
+    });
+    applyInserts(inserts);
+  }
+
+  // 2. Proper crossings.
+  {
+    const index = buildIndex();
+    const inserts = new Map<number, Insert[]>();
+    const seen = new Set<string>();
+    for (const list of index.values()) {
+      for (let p = 0; p < list.length; p++) {
+        for (let r = p + 1; r < list.length; r++) {
+          let [l1, s1] = list[p];
+          let [l2, s2] = list[r];
+          if (l1 === l2 && Math.abs(s1 - s2) <= 1) continue;
+          if (l1 > l2 || (l1 === l2 && s1 > s2)) [l1, s1, l2, s2] = [l2, s2, l1, s1];
+          const key = `${l1}:${s1}:${l2}:${s2}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          const a = lines[l1];
+          const b = lines[l2];
+          const ax = a[s1 * 2];
+          const ay = a[s1 * 2 + 1];
+          const adx = a[s1 * 2 + 2] - ax;
+          const ady = a[s1 * 2 + 3] - ay;
+          const bx = b[s2 * 2];
+          const by = b[s2 * 2 + 1];
+          const bdx = b[s2 * 2 + 2] - bx;
+          const bdy = b[s2 * 2 + 3] - by;
+          const den = adx * bdy - ady * bdx;
+          if (Math.abs(den) < 1e-12) continue; // parallel / collinear
+          const t = ((bx - ax) * bdy - (by - ay) * bdx) / den;
+          const u = ((bx - ax) * ady - (by - ay) * adx) / den;
+          const E = 1e-9;
+          if (t < -E || t > 1 + E || u < -E || u > 1 + E) continue;
+          // Prefer existing vertices so both lines share exact coordinates.
+          let x = ax + adx * t;
+          let y = ay + ady * t;
+          if (t < 1e-3) [x, y] = [ax, ay];
+          else if (t > 1 - 1e-3) [x, y] = [a[s1 * 2 + 2], a[s1 * 2 + 3]];
+          else if (u < 1e-3) [x, y] = [bx, by];
+          else if (u > 1 - 1e-3) [x, y] = [b[s2 * 2 + 2], b[s2 * 2 + 3]];
+          addInsert(inserts, l1, { seg: s1, t, x, y });
+          addInsert(inserts, l2, { seg: s2, t: u, x, y });
+        }
+      }
+    }
+    applyInserts(inserts);
+  }
+  return lines;
+}
+
 /** Convenience: fetch roads for a domain (TIGERweb → OSM fallback) and build the graph. Null on failure. */
 export async function fetchRoadNetwork(
   terrain: { nx: number; ny: number; cellSize: number; bounds: GeoBounds },

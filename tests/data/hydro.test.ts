@@ -1,0 +1,308 @@
+/// <reference types="node" />
+/**
+ * Hydro-conditioning on synthetic hydro-flattened DEMs: the channel burn must follow the flat river surface
+ * only (not a disconnected pond at the same level, not a flat terrace slightly above it, not the floodplain),
+ * carve the requested depth with a smooth monotone bank, and handle sloping rivers. Also water-body detection
+ * for live areas, the distance transform and isotonic regression helpers.
+ */
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import {
+  burnRivers,
+  burnWaterBodies,
+  detectWaterBodies,
+  distanceTransform,
+  findRiverEnds,
+  monotoneNonIncreasing,
+  riverLevelProfile,
+} from '../../src/data/hydro';
+import { computeInitialWater } from '../../src/data/initialWater';
+
+const N = 256;
+const CELL = 5;
+const POOL = 100;
+
+/** Deterministic small-amplitude roughness (lidar texture), ±amp. */
+function rough(i: number, j: number, amp: number): number {
+  const h = Math.sin(i * 12.9898 + j * 78.233) * 43758.5453;
+  return (h - Math.floor(h) - 0.5) * 2 * amp;
+}
+
+const centerY = (x: number) => 128 + 20 * Math.sin(x / 40);
+const HALF_W = 10;
+
+/**
+ * Flat-pool river (west → east) on a floodplain 1.5 m above the pool. The water surface is exactly flat; the
+ * 2 cells beyond the water edge ramp linearly to the floodplain (bilinear resampling of the shoreline).
+ * Traps: a disconnected flat pond at exactly the pool level, and a flat terrace at pool + 0.6 m touching
+ * the river.
+ */
+function flatRiverDEM(surface: (i: number) => number = () => POOL) {
+  const z = new Float32Array(N * N);
+  const river = new Uint8Array(N * N);
+  const pond = new Uint8Array(N * N);
+  const terrace = new Uint8Array(N * N);
+  for (let j = 0; j < N; j++) {
+    for (let i = 0; i < N; i++) {
+      const k = j * N + i;
+      const L = surface(i);
+      const d = Math.abs(j + 0.5 - centerY(i + 0.5));
+      const flood = L + 1.5 + 0.004 * Math.abs(j - 128) + rough(i, j, 0.08);
+      if (d <= HALF_W) {
+        z[k] = L;
+        river[k] = 1;
+      } else if (d <= HALF_W + 2) {
+        const t = (d - HALF_W) / 2;
+        z[k] = L + t * (flood - L);
+      } else {
+        z[k] = flood;
+      }
+      // Disconnected pond: 20×14 cells, flat at the pool level, well away from the river.
+      if (i >= 30 && i < 50 && j >= 20 && j < 34) {
+        z[k] = L;
+        pond[k] = 1;
+        river[k] = 0;
+      }
+      // Flat terrace (parking lot) 0.6 m above the pool, touching the river's north bank.
+      if (i >= 120 && i < 150 && d > HALF_W && j < centerY(i + 0.5) && d <= HALF_W + 12) {
+        z[k] = L + 0.6;
+        terrace[k] = 1;
+      }
+    }
+  }
+  return { z, river, pond, terrace };
+}
+
+test('flat-pool burn follows the river only, with the requested depth and smooth banks', () => {
+  const { z, river, pond, terrace } = flatRiverDEM();
+  const res = burnRivers(z, N, N, CELL, [
+    {
+      name: 'Test River',
+      path: [
+        { gx: 2, gy: centerY(2) },
+        { gx: 128, gy: centerY(128) },
+        { gx: 254, gy: centerY(254) },
+      ],
+      depth: 6,
+      bankCells: 3,
+      flatLevel: POOL,
+    },
+  ]);
+  let riverCells = 0;
+  let riverBurned = 0;
+  let outsideBurned = 0;
+  let pondBurned = 0;
+  let terraceBurned = 0;
+  let farBurned = 0;
+  for (let j = 0; j < N; j++) {
+    for (let i = 0; i < N; i++) {
+      const k = j * N + i;
+      const d = Math.abs(j + 0.5 - centerY(i + 0.5));
+      if (river[k]) {
+        riverCells++;
+        if (res.owner[k]) riverBurned++;
+      } else if (res.owner[k]) {
+        outsideBurned++;
+        if (d > HALF_W + 2) farBurned++;
+      }
+      if (pond[k] && res.owner[k]) pondBurned++;
+      if (terrace[k] && res.owner[k]) terraceBurned++;
+    }
+  }
+  assert.equal(pondBurned, 0, 'disconnected pond at the same level must not be burned');
+  assert.equal(terraceBurned, 0, 'flat terrace 0.6 m above the pool must not be burned');
+  assert.equal(farBurned, 0, 'no floodplain cells beyond the shoreline ramp');
+  assert.ok(riverBurned >= riverCells * 0.99, `river cells burned ${riverBurned}/${riverCells}`);
+  assert.ok(outsideBurned <= riverCells * 0.08, `shoreline cells burned ${outsideBurned}`);
+  assert.equal(res.burnedCells, riverBurned + outsideBurned);
+
+  // Depth at the center and monotone bank profile across a section.
+  for (const i of [40, 128, 200]) {
+    const cj = Math.floor(centerY(i + 0.5));
+    const bedCenter = res.elevation[cj * N + i];
+    assert.ok(Math.abs(bedCenter - (POOL - 6)) < 0.05, `center bed ${bedCenter} at column ${i}`);
+    for (const dir of [-1, 1]) {
+      // Bed rises monotonically from the center to the shore (channel cells), and the first land cell is not
+      // lower than the last water cell.
+      let prev = bedCenter;
+      for (let s = 1; s <= HALF_W + 4; s++) {
+        const k = (cj + dir * s) * N + i;
+        const v = res.elevation[k];
+        assert.ok(v >= prev - 0.02, `bank not monotone at column ${i}, offset ${dir * s}: ${v} < ${prev}`);
+        prev = v;
+        if (!res.owner[k]) break;
+      }
+    }
+    // The first water cell next to the shore is only slightly lowered (smooth bank, not a cliff).
+    for (let s = 0; s <= HALF_W + 2; s++) {
+      const k = (cj - s) * N + i;
+      if (!res.owner[k]) {
+        const inner = res.burn[(cj - s + 1) * N + i];
+        assert.ok(inner < 3.5, `bank step ${inner} m next to shore`);
+        break;
+      }
+    }
+  }
+  // Land is untouched.
+  for (let k = 0; k < N * N; k++) if (!res.owner[k]) assert.equal(res.elevation[k], z[k]);
+
+  // Initial water from a couple of seeds fills exactly the channel at the pool level.
+  const h = computeInitialWater(
+    { nx: N, ny: N, elevation: res.elevation },
+    { initialFill: [{ seeds: [{ gx: 60, gy: centerY(60) }], level: POOL }] },
+  );
+  let wetOutside = 0;
+  let wet = 0;
+  for (let k = 0; k < N * N; k++) {
+    if (h[k] > 0.01) {
+      wet++;
+      if (!res.owner[k]) wetOutside++;
+    }
+    if (pond[k]) assert.equal(h[k], 0, 'pond stays dry (not connected, and bed == level)');
+  }
+  assert.equal(wetOutside, 0);
+  assert.ok(wet >= riverBurned * 0.99);
+  const cj = Math.floor(centerY(128.5));
+  assert.ok(Math.abs(h[cj * N + 128] - 6) < 0.05);
+
+  // Sources at the domain edges sit on the channel spine with a footprint inside the channel.
+  const ends = findRiverEnds(res, N, N, 12);
+  const west = ends.find((e) => e.end === 'upstream')!;
+  const east = ends.find((e) => e.end === 'downstream')!;
+  assert.ok(west && east);
+  assert.equal(west.edge, 'west');
+  assert.equal(east.edge, 'east');
+  for (const e of [west, east]) {
+    assert.ok(Math.abs(e.gy - centerY(e.gx)) <= 2.5, `source ${e.end} off the centerline: ${e.gy} vs ${centerY(e.gx)}`);
+    assert.ok(e.radius >= 4 && e.radius <= 12);
+    assert.ok(Math.min(e.gx, N - e.gx) >= e.radius + 0.5 - 1e-6, 'footprint inside the domain');
+    assert.ok(Math.min(e.gx, N - e.gx) <= 20, 'near the edge');
+  }
+});
+
+test('sloping river: monotone profile, burn follows the slope without flooding the banks', () => {
+  const slope = 0.02; // m per cell = 4 m/km
+  const surface = (i: number) => POOL + 5 - slope * i;
+  const { z, river, pond } = flatRiverDEM(surface);
+  const path = [];
+  for (let x = 2; x <= 254; x += 36) path.push({ gx: x, gy: centerY(x) });
+  const res = burnRivers(z, N, N, CELL, [{ name: 'Sloped', path, depth: 2.5, bankCells: 2 }]);
+  const r = res.rivers[0];
+  for (let q = 1; q < r.levels.length; q++) assert.ok(r.levels[q] <= r.levels[q - 1] + 1e-9, 'levels non-increasing downstream');
+  assert.ok(Math.abs(r.maxLevel - surface(2)) < 0.3, `upstream level ${r.maxLevel}`);
+  assert.ok(Math.abs(r.minLevel - surface(254)) < 0.3, `downstream level ${r.minLevel}`);
+  let riverCells = 0;
+  let riverBurned = 0;
+  let pondBurned = 0;
+  let far = 0;
+  for (let j = 0; j < N; j++) {
+    for (let i = 0; i < N; i++) {
+      const k = j * N + i;
+      if (river[k]) {
+        riverCells++;
+        if (res.owner[k]) riverBurned++;
+      }
+      if (pond[k] && res.owner[k]) pondBurned++;
+      if (res.owner[k] && Math.abs(j + 0.5 - centerY(i + 0.5)) > HALF_W + 2) far++;
+    }
+  }
+  assert.equal(pondBurned, 0);
+  assert.equal(far, 0);
+  assert.ok(riverBurned >= riverCells * 0.97, `burned ${riverBurned}/${riverCells}`);
+
+  // Sloped initial fill: one fill, seeds along the centerline carrying their own level.
+  const seeds: Array<{ gx: number; gy: number; level: number }> = [];
+  for (let q = 0; q < r.centerline.length / 2; q += 8) {
+    const gx = r.centerline[q * 2];
+    const gy = r.centerline[q * 2 + 1];
+    seeds.push({ gx, gy, level: res.waterLevel[Math.floor(gy) * N + Math.floor(gx)] });
+  }
+  const h = computeInitialWater({ nx: N, ny: N, elevation: res.elevation }, { initialFill: [{ seeds, level: Math.min(...seeds.map((s) => s.level)) }] });
+  let wet = 0;
+  let wetOutside = 0;
+  let maxDepth = 0;
+  for (let k = 0; k < N * N; k++) {
+    if (h[k] > 0.01) {
+      wet++;
+      if (!res.owner[k]) wetOutside++;
+      maxDepth = Math.max(maxDepth, h[k]);
+    }
+  }
+  assert.equal(wetOutside, 0, 'upstream levels must not spill onto downstream banks');
+  assert.ok(wet >= riverBurned * 0.95, `wet ${wet} vs burned ${riverBurned}`);
+  assert.ok(maxDepth < 2.5 + 0.6, `max depth ${maxDepth}`);
+});
+
+test('riverLevelProfile rejects bridge decks and stays monotone', () => {
+  const z: number[] = [];
+  const flat: boolean[] = [];
+  for (let k = 0; k < 300; k++) {
+    let v = 110 - 0.01 * k;
+    let f = true;
+    if (k >= 140 && k < 146) {
+      v += 12; // bridge deck crossing the river
+      f = false;
+    }
+    z.push(v + (k % 7 === 0 ? 0.05 : 0));
+    flat.push(f);
+  }
+  const L = riverLevelProfile(z, flat);
+  for (let k = 1; k < L.length; k++) assert.ok(L[k] <= L[k - 1] + 1e-9);
+  for (let k = 130; k < 160; k++) assert.ok(Math.abs(L[k] - (110 - 0.01 * k)) < 0.25, `profile at bridge ${k}: ${L[k]}`);
+  assert.deepEqual(Array.from(monotoneNonIncreasing([3, 1, 2, 0])), [3, 1.5, 1.5, 0]);
+});
+
+test('distance transform matches brute force', () => {
+  const nx = 37;
+  const ny = 23;
+  const sites = new Set<number>();
+  let s = 11;
+  for (let q = 0; q < 25; q++) {
+    s = (s * 48271) % 2147483647;
+    sites.add(s % (nx * ny));
+  }
+  const dt = distanceTransform(nx, ny, (k) => sites.has(k));
+  for (let k = 0; k < nx * ny; k++) {
+    let best = Infinity;
+    for (const t of sites) best = Math.min(best, Math.hypot((k % nx) - (t % nx), Math.floor(k / nx) - Math.floor(t / nx)));
+    assert.ok(Math.abs(dt[k] - best) < 1e-4, `cell ${k}: ${dt[k]} vs ${best}`);
+  }
+});
+
+test('live-area water-body detection finds a lake and a river, not flat fields', () => {
+  const n = 256;
+  const cell = 10;
+  const z = new Float32Array(n * n);
+  const lake = new Uint8Array(n * n);
+  for (let j = 0; j < n; j++) {
+    for (let i = 0; i < n; i++) {
+      const k = j * n + i;
+      // Rolling hills with lidar roughness.
+      z[k] = 250 + 8 * Math.sin(i / 23) + 6 * Math.cos(j / 31) + rough(i, j, 0.15);
+      const dl = Math.hypot(i - 70, j - 70);
+      if (dl < 22) {
+        z[k] = 240; // hydro-flattened lake, 4 ha+
+        lake[k] = 1;
+      } else if (dl < 26) z[k] = Math.min(z[k], 240 + (dl - 22) * 2.5);
+      // A river crossing the domain at 230 m (flat), banks rising.
+      const dr = Math.abs(j - 190);
+      if (dr <= 6) z[k] = 230;
+      else if (dr <= 12) z[k] = Math.min(z[k], 230 + (dr - 6) * 1.2);
+      // A flat, perfectly level field on a hilltop (not a local minimum).
+      if (i > 180 && i < 230 && j > 40 && j < 90) z[k] = 262;
+    }
+  }
+  const bodies = detectWaterBodies(z, n, n, cell);
+  const lakeBody = bodies.find((b) => Math.abs(b.level - 240) < 0.05);
+  const riverBody = bodies.find((b) => Math.abs(b.level - 230) < 0.05);
+  assert.ok(lakeBody, 'lake detected');
+  assert.ok(riverBody, 'river detected');
+  assert.ok(!bodies.some((b) => Math.abs(b.level - 262) < 0.5), 'hilltop field rejected (rim not higher)');
+  const k0 = Math.floor(lakeBody!.seed.gy) * n + Math.floor(lakeBody!.seed.gx);
+  assert.equal(lake[k0], 1, 'seed inside the lake');
+  const burned = burnWaterBodies(z, n, n, bodies, 3, 2);
+  assert.ok(Math.abs(burned.elevation[70 * n + 70] - 237) < 1e-3, 'lake center lowered by 3 m');
+  const h = computeInitialWater({ nx: n, ny: n, elevation: burned.elevation }, { initialFill: burned.fills });
+  assert.ok(Math.abs(h[70 * n + 70] - 3) < 1e-3);
+  assert.equal(h[60 * n + 200], 0, 'hilltop dry');
+});

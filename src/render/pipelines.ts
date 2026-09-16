@@ -1,5 +1,5 @@
 /** Creation of all render/compute pipelines and shared bind group layouts. */
-import { PREP_CELLS_WGSL, PREP_VERTS_WGSL, PREP_WGSL } from './shaders/prep';
+import { PREP_CELLS_WGSL, PREP_VERTS_WGSL, PREP_WGSL, WET_BASE_WGSL, WET_DOWN_WGSL } from './shaders/prep';
 import { TERRAIN_WGSL } from './shaders/terrain';
 import { WATER_WGSL } from './shaders/water';
 import { MARKER_WGSL, RIBBON_WGSL } from './shaders/overlay';
@@ -14,6 +14,8 @@ export interface Pipelines {
   overlayBGL: GPUBindGroupLayout;
   prepCells: GPUComputePipeline;
   prepVerts: GPUComputePipeline;
+  wetBase: GPUComputePipeline;
+  wetDown: GPUComputePipeline;
   sky: GPURenderPipeline;
   terrain: GPURenderPipeline;
   skirt: GPURenderPipeline;
@@ -60,6 +62,7 @@ export async function createPipelines(device: GPUDevice, canvasFormat: GPUTextur
       { binding: 5, visibility: VF, texture: { sampleType: 'float' } },
       { binding: 6, visibility: VF, sampler: { type: 'filtering' } },
       { binding: 7, visibility: VF, sampler: { type: 'filtering' } },
+      { binding: 8, visibility: GPUShaderStage.VERTEX, texture: { sampleType: 'unfilterable-float' } },
     ],
   });
   const overlayBGL = device.createBindGroupLayout({
@@ -74,9 +77,11 @@ export async function createPipelines(device: GPUDevice, canvasFormat: GPUTextur
   const sceneLayout = device.createPipelineLayout({ bindGroupLayouts: [sceneBGL] });
   const overlayLayout = device.createPipelineLayout({ bindGroupLayouts: [overlayBGL] });
 
-  const [prepCellsM, prepVertsM, terrainM, waterM, ribbonM, markerM, skyM, rainM, bloomM, tonemapM] = await Promise.all([
+  const [prepCellsM, prepVertsM, wetBaseM, wetDownM, terrainM, waterM, ribbonM, markerM, skyM, rainM, bloomM, tonemapM] = await Promise.all([
     checkedModule(device, PREP_WGSL + PREP_CELLS_WGSL, 'prep-cells'),
     checkedModule(device, PREP_WGSL + PREP_VERTS_WGSL, 'prep-verts'),
+    checkedModule(device, WET_BASE_WGSL, 'wet-base'),
+    checkedModule(device, WET_DOWN_WGSL, 'wet-down'),
     checkedModule(device, TERRAIN_WGSL, 'terrain'),
     checkedModule(device, WATER_WGSL, 'water'),
     checkedModule(device, RIBBON_WGSL, 'ribbons'),
@@ -100,6 +105,15 @@ export async function createPipelines(device: GPUDevice, canvasFormat: GPUTextur
       { shaderLocation: 2, offset: 16, format: 'float32x4' },
     ],
   };
+  /** CDLOD node instances (see lod.ts): node (origin, quad size, level) + morph range. */
+  const nodeLayout: GPUVertexBufferLayout = {
+    arrayStride: 32,
+    stepMode: 'instance',
+    attributes: [
+      { shaderLocation: 0, offset: 0, format: 'float32x4' },
+      { shaderLocation: 1, offset: 16, format: 'float32x4' },
+    ],
+  };
   const markerLayout: GPUVertexBufferLayout = {
     arrayStride: 72,
     attributes: [
@@ -112,20 +126,21 @@ export async function createPipelines(device: GPUDevice, canvasFormat: GPUTextur
   };
 
   const R = (d: GPURenderPipelineDescriptor) => device.createRenderPipelineAsync(d);
-  const [sky, terrain, skirt, water, waterSkirt, ribbons, markersOpaque, markersBlend, rain, bloom, tonemap, prepCells, prepVerts] =
+  const [sky, terrain, skirt, water, waterSkirt, ribbons, markersOpaque, markersBlend, rain, bloom, tonemap, prepCells, prepVerts, wetBase, wetDown] =
     await Promise.all([
       R({
         label: 'sky',
         layout: 'auto',
         vertex: { module: skyM, entryPoint: 'vsFull' },
         fragment: { module: skyM, entryPoint: 'fsSky', targets: hdrOpaque },
-        depthStencil: { format: DEPTH_FORMAT, depthWriteEnabled: false, depthCompare: 'always' },
+        // Drawn after opaque geometry: only pixels still at the cleared far depth (0, reversed-Z) are shaded.
+        depthStencil: { format: DEPTH_FORMAT, depthWriteEnabled: false, depthCompare: 'equal' },
         multisample: msaa,
       }),
       R({
         label: 'terrain',
         layout: sceneLayout,
-        vertex: { module: terrainM, entryPoint: 'vsTerrain' },
+        vertex: { module: terrainM, entryPoint: 'vsTerrain', buffers: [nodeLayout] },
         fragment: { module: terrainM, entryPoint: 'fsTerrain', targets: hdrOpaque },
         primitive: { topology: 'triangle-list', cullMode: 'none' },
         depthStencil: depthWrite,
@@ -143,7 +158,7 @@ export async function createPipelines(device: GPUDevice, canvasFormat: GPUTextur
       R({
         label: 'water',
         layout: sceneLayout,
-        vertex: { module: waterM, entryPoint: 'vsWater' },
+        vertex: { module: waterM, entryPoint: 'vsWater', buffers: [nodeLayout] },
         fragment: { module: waterM, entryPoint: 'fsWater', targets: hdrBlend },
         primitive: { topology: 'triangle-list', cullMode: 'none' },
         depthStencil: depthWrite,
@@ -208,7 +223,9 @@ export async function createPipelines(device: GPUDevice, canvasFormat: GPUTextur
       }),
       device.createComputePipelineAsync({ label: 'prep-cells', layout: 'auto', compute: { module: prepCellsM, entryPoint: 'cells' } }),
       device.createComputePipelineAsync({ label: 'prep-verts', layout: 'auto', compute: { module: prepVertsM, entryPoint: 'verts' } }),
+      device.createComputePipelineAsync({ label: 'wet-base', layout: 'auto', compute: { module: wetBaseM, entryPoint: 'wetBase' } }),
+      device.createComputePipelineAsync({ label: 'wet-down', layout: 'auto', compute: { module: wetDownM, entryPoint: 'wetDown' } }),
     ]);
 
-  return { sceneBGL, overlayBGL, prepCells, prepVerts, sky, terrain, skirt, water, waterSkirt, ribbons, markersOpaque, markersBlend, rain, bloom, tonemap };
+  return { sceneBGL, overlayBGL, prepCells, prepVerts, wetBase, wetDown, sky, terrain, skirt, water, waterSkirt, ribbons, markersOpaque, markersBlend, rain, bloom, tonemap };
 }

@@ -29,7 +29,7 @@ export function createLoadingOverlay(ctx: UIContext): HTMLElement {
   const el = h(
     'div',
     { class: 'dl-loading', role: 'status', 'aria-live': 'polite' },
-    h('div', { class: 'dl-loading-card dl-glass' }, wave, title, msg, bar, h('div', { class: 'dl-loading-foot' }, pct, tip)),
+    h('div', { class: 'dl-loading-card dl-glass' }, wave, title, msg, h('div', { class: 'dl-progress-row' }, bar, pct), tip),
   );
   let tipIdx = Math.floor(Math.random() * TIPS.length);
   let tipTimer = 0;
@@ -59,12 +59,6 @@ export function createLoadingOverlay(ctx: UIContext): HTMLElement {
       fill.style.setProperty('--p', String(p / 100));
       bar.setAttribute('aria-valuenow', String(p));
       setText(pct, indeterminate ? '' : `${p}%`);
-    },
-  );
-  bind(
-    (s) => s.terrainName,
-    () => {
-      /* title stays generic; message carries specifics */
     },
   );
   return el;

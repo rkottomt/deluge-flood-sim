@@ -19,6 +19,13 @@ export interface SolverOptions {
    */
   theta: number;
   /**
+   * K in the θ-smoothing neighbour weight w = min(1, K·hf/hf_neighbour): a neighbouring face contributes fully
+   * unless it is more than K× deeper than this face. Stops smoothing from pouring a deep channel's discharge
+   * into a thin shoreline film (spurious velocities, slow drift of a lake at rest) while leaving ordinary
+   * depth variations — and uniform discharge — untouched.
+   */
+  smoothingDepthRatio: number;
+  /**
    * Include the convective acceleration terms ∂(q·u)/∂x + ∂(q·v)/∂y (first-order upwind, conservative form).
    * false = the pure local-inertial model of Bates et al. (2010). With advection the scheme reproduces the
    * Ritter dam-break solution; without it fronts on frictionless beds advance at roughly half speed.
@@ -32,8 +39,18 @@ export interface SolverOptions {
   froudeMax: number;
   /** Minimum bed slope used by the open (free outflow) boundary ghost cell. */
   boundaryMinSlope: number;
+  /** Robust mode Froude cap on open-boundary outflow; 1 = critical flow over a free edge (see bflux in shaders/common.ts). */
+  boundaryFroudeMax: number;
   /** Relaxation time constant for stage sources, s (0 = set level directly). */
   stageRelaxSeconds: number;
+  /**
+   * Largest Courant number robust mode will use, whatever SimParams.cfl says. Courant numbers in Deluge are
+   * TWO-DIMENSIONAL: Cr = √2·(√(g·h) + |u|)·dt/dx (see Solver.computeDt for the derivation). The staggered
+   * forward–backward scheme is stable for Cr ≤ 1 without smoothing, and for Cr ≤ √θ with de Almeida
+   * θ-smoothing (the smoothing damps the checkerboard mode but also shortens its stability interval).
+   * θ = 0.8 → limit 0.894; we stop at 0.85.
+   */
+  robustCflMax: number;
   /** Timestep clamp, s. */
   dtMin: number;
   dtMax: number;
@@ -51,12 +68,15 @@ export interface SolverOptions {
 
 export const DEFAULT_SOLVER_OPTIONS: SolverOptions = {
   theta: 0.8,
+  smoothingDepthRatio: 4,
   advection: true,
   hMin: 1e-4,
   uMax: 15,
   froudeMax: 8,
   boundaryMinSlope: 0.001,
+  boundaryFroudeMax: 1,
   stageRelaxSeconds: 10,
+  robustCflMax: 0.85,
   dtMin: 0.001,
   dtMax: 5,
   readbackIntervalMs: 300,

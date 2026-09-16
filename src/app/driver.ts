@@ -10,8 +10,9 @@ const BLOWUP_SPEED = 100;
 const READY_SNAPSHOT_WAIT_MS = 3000;
 
 /**
- * Per-frame work: step the solver, consume readbacks (stats → HUD, depth → routing), compose overlays
- * and render. Also tracks the sim clock used by runFor() and resolves the debug API's `ready` promise.
+ * Per-frame work: step the solver (feeding the frame-time governor), consume readbacks (stats → HUD,
+ * depth → routing), compose overlays and render (paced: full rate only while something changes). Also
+ * tracks the sim clock used by runFor() and resolves the debug API's `ready` promise.
  */
 export class FrameDriver {
   /** Sim seconds advanced since the last reset / scene load (sum of StepInfo.simSecondsAdvanced). */
@@ -27,6 +28,7 @@ export class FrameDriver {
   private sceneFrames = 0;
   private sceneReadyAt = 0;
   private blowupNotified = false;
+  private wasRunning = false;
   private readonly overlays = new OverlayComposer();
 
   constructor(private readonly app: App) {}
@@ -58,12 +60,16 @@ export class FrameDriver {
     this.blowupNotified = false;
   }
 
-  frame(realDt: number, now: number): void {
-    const { store, renderer, runner, scenes, evac } = this.app;
+  /**
+   * One frame. Returns true if it was rendered at full rate (for the FPS meter).
+   * `frameMs` is the raw interval since the previous frame (feeds the substep governor).
+   */
+  frame(realDt: number, now: number, frameMs: number): boolean {
+    const { store, renderer, runner, scenes, evac, pacer } = this.app;
     const scene = scenes?.scene;
     if (!scene || !renderer) {
       this.publishHud(now, store.get());
-      return;
+      return false;
     }
     const { solver } = scene;
     let state = store.get();
@@ -72,9 +78,11 @@ export class FrameDriver {
     // stop the others — above all, rendering must keep going.
 
     // 1. Simulation. The old scene may still be shown while a new one loads — never step it then.
-    const running = (!state.paused || runner.active) && !state.loading && !document.hidden;
+    const hidden = document.hidden;
+    const running = (!state.paused || runner.active) && !state.loading && !hidden;
     this.lastAdvance = 0;
     if (running) {
+      if (!this.wasRunning) this.app.budget.restart();
       this.guard('solver.step', () => {
         const info = solver.step(realDt);
         this.lastStepInfo = info;
@@ -84,10 +92,12 @@ export class FrameDriver {
         this.lastAdvance = advance;
         this.simClock += advance;
         runner.onStep(advance, this.simClock, now, this.lastSnapshot);
+        this.app.observeFrameBudget(frameMs, info, now);
       });
     } else if (this.lastStepInfo && this.lastStepInfo.substeps !== 0) {
       this.lastStepInfo = { ...this.lastStepInfo, simSecondsAdvanced: 0, substeps: 0, throttled: false };
     }
+    this.wasRunning = running;
     const tools = this.app.tools;
     if (tools && !state.loading) this.guard('tools.update', () => tools.update(realDt));
 
@@ -97,22 +107,31 @@ export class FrameDriver {
     if (!state.loading) this.guard('probe', () => this.app.probe?.tick(now, solver));
     runner.onFrame(snap, this.lastAdvance, now);
 
-    // 3. Overlays + render.
+    // 3. Overlays + render — at full rate while anything changes, otherwise a low-rate heartbeat.
     state = store.get();
-    this.guard('overlays', () => {
-      const transient = tools?.getTransientOverlay() ?? NO_TRANSIENT;
-      const overlay = this.overlays.compose(state, evac.roadStatus, evac.statusVersion, transient);
-      if (overlay) renderer.setOverlays(overlay);
-    });
-    const rendered = this.guard('render', () =>
-      renderer.render({
-        ...state.render,
-        rainRate: running ? state.sim.rainRate : 0,
-        time: now / 1000,
-      }),
-    );
+    const camera = renderer.camera;
+    const pace = pacer.decide(now, running || runner.active || !!state.loading, hidden, camera.pose);
+    let rendered = false;
+    if (pace.render) {
+      this.guard('overlays', () => {
+        const transient = tools?.getTransientOverlay() ?? NO_TRANSIENT;
+        const overlay = this.overlays.compose(state, evac.roadStatus, evac.statusVersion, transient);
+        if (overlay) {
+          renderer.setOverlays(overlay);
+          pacer.poke(now);
+        }
+      });
+      rendered = this.guard('render', () =>
+        renderer.render({
+          ...state.render,
+          rainRate: running ? state.sim.rainRate : 0,
+          time: pacer.animTime,
+        }),
+      );
+      pacer.rendered(now, realDt, pace.active, camera.pose);
+      if (rendered) this.sceneFrames++;
+    }
     this.frameCount++;
-    if (rendered) this.sceneFrames++;
 
     // 4. First frame with terrain + water → debug API ready.
     if (this.sceneFrames >= 2 && (this.lastSnapshot || now - this.sceneReadyAt > READY_SNAPSHOT_WAIT_MS)) {
@@ -120,6 +139,7 @@ export class FrameDriver {
     }
 
     this.publishHud(now, state);
+    return rendered && pace.active;
   }
 
   /** Run one frame stage; report (deduplicated) instead of throwing. Returns false if it threw. */
@@ -149,6 +169,7 @@ export class FrameDriver {
   }
 
   private onSnapshot(snap: SimSnapshot, now: number): void {
+    this.app.pacer.poke(now);
     this.lastSnapshot = snap;
     this.lastSnapTime = snap.simTime;
     this.pendingStats = { ...snap.stats };

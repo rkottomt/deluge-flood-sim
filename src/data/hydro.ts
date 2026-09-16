@@ -764,28 +764,42 @@ export function findRiverEnds(res: BurnResult, nx: number, ny: number, maxRadius
 // ──────────────────────────────────────────────────────────────────────────────────────────────
 
 export interface WaterBody {
-  /** Water surface elevation, m. */
+  /** Median water-surface elevation, m. */
   level: number;
+  /** Lowest and highest surface elevation — they differ for gently sloping rivers, m. */
+  minLevel: number;
+  maxLevel: number;
   cells: number;
   /** A representative interior cell (max distance to shore), grid coords. */
   seed: GridPoint;
-  /** Cell indices of the body (including the shoreline ring). */
+  /** Initial-fill seeds spread over the body, each carrying the local surface level. */
+  seeds: Array<GridPoint & { level: number }>;
+  /** Cell indices of the body (flat core + shoreline ring). */
   indices: Int32Array;
+  /** Local water-surface level for each entry of `indices`, m. */
+  levels: Float32Array;
+  /** True if the body reaches the domain boundary (a river flowing through, or a lake cut by the edge). */
+  touchesEdge: boolean;
 }
 
 export interface DetectOptions {
   /** Minimum area, m². Default 20 000 m² (≈ 2 ha). */
   minArea?: number;
-  /** Max elevation spread (p90 − p10) within the flat region, m. Default 0.15. */
+  /** Max elevation spread allowed for a still water body, m. Default 0.15. */
   maxSpread?: number;
-  /** Fraction of the surrounding ring that must be ≥ level + 0.25 m. Default 0.7. */
+  /** Max overall surface gradient for a sloping (river) body, m per m. Default 0.002 (2 m/km). */
+  maxGradient?: number;
+  /** Fraction of the cells just beyond the shoreline that must be ≥ local level + 0.25 m. Default 0.7. */
   minRimHigher?: number;
+  /** Shoreline tolerance: ring cells within ± this of the adjacent surface level join the body, m. Default 0.3. */
   tolerance?: number;
 }
 
 /**
- * Detect likely water bodies: large 4-connected regions of flat cells, nearly constant elevation, whose rim
- * is mostly higher (a local minimum). Works on hydro-flattened DEMs (lakes, reservoirs, pools, wide rivers).
+ * Detect likely water bodies in a hydro-flattened DEM: large 4-connected regions of flat cells (a water surface
+ * is flat or very gently sloping), plus up to two rings of shoreline cells near the surface level, whose
+ * surroundings just beyond the shoreline are mostly higher (a local minimum — rejects flat fields, roofs and
+ * hilltop parking lots). Handles lakes, reservoirs, navigation pools and gently sloping rivers.
  */
 export function detectWaterBodies(
   elev: Float32Array,
@@ -799,84 +813,153 @@ export function detectWaterBodies(
   const flatTol = Math.max(0.01, 0.0015 * cellSize);
   const minCells = Math.max(30, Math.ceil((opts.minArea ?? 20000) / (cellSize * cellSize)));
   const maxSpread = opts.maxSpread ?? 0.15;
+  const maxGradient = opts.maxGradient ?? 0.002;
   const minRim = opts.minRimHigher ?? 0.7;
   const tol = opts.tolerance ?? 0.3;
-  const label = new Int32Array(n).fill(-1);
-  const bodies: WaterBody[] = [];
+  const label = new Int32Array(n).fill(-1); // flat-component id
+  const inBody = new Int32Array(n); // accepted body id + 1
+  const inSet = new Int32Array(n).fill(-1); // candidate id currently being evaluated (core + ring)
+  const levelOf = new Float32Array(n);
   const stack = new Int32Array(n);
+  const nb = new Int32Array(4);
+  const nb4 = (k: number) => {
+    const i = k % nx;
+    const j = (k / nx) | 0;
+    nb[0] = i > 0 ? k - 1 : -1;
+    nb[1] = i < nx - 1 ? k + 1 : -1;
+    nb[2] = j > 0 ? k - nx : -1;
+    nb[3] = j < ny - 1 ? k + nx : -1;
+  };
+  const bodies: WaterBody[] = [];
   const comp: number[] = [];
   let nextLabel = 0;
   for (let s = 0; s < n; s++) {
-    if (label[s] !== -1 || relief[s] > flatTol) continue;
+    if (label[s] !== -1 || relief[s] > flatTol || inBody[s]) continue;
     const lab = nextLabel++;
     comp.length = 0;
     let sp = 0;
     stack[sp++] = s;
     label[s] = lab;
+    let i0 = nx;
+    let i1 = 0;
+    let j0 = ny;
+    let j1 = 0;
     while (sp > 0) {
       const k = stack[--sp];
       comp.push(k);
-      const i = k % nx;
-      const j = (k / nx) | 0;
+      const ci = k % nx;
+      const cj = (k / nx) | 0;
+      if (ci < i0) i0 = ci;
+      if (ci > i1) i1 = ci;
+      if (cj < j0) j0 = cj;
+      if (cj > j1) j1 = cj;
       const z = elev[k];
-      const nb = [i > 0 ? k - 1 : -1, i < nx - 1 ? k + 1 : -1, j > 0 ? k - nx : -1, j < ny - 1 ? k + nx : -1];
-      for (const m of nb) {
-        if (m < 0 || label[m] !== -1 || relief[m] > flatTol) continue;
+      nb4(k);
+      for (let q = 0; q < 4; q++) {
+        const m = nb[q];
+        if (m < 0 || label[m] !== -1 || relief[m] > flatTol || inBody[m]) continue;
         if (Math.abs(elev[m] - z) > flatTol) continue;
         label[m] = lab;
         stack[sp++] = m;
       }
     }
     if (comp.length < minCells) continue;
-    // Elevation statistics (sampled for big components).
+
+    // Surface statistics (sampled for big components).
     const step = Math.max(1, Math.floor(comp.length / 20000));
     const zs: number[] = [];
     for (let q = 0; q < comp.length; q += step) zs.push(elev[comp[q]]);
     zs.sort((a, b) => a - b);
-    const p10 = zs[Math.floor(zs.length * 0.1)];
-    const p90 = zs[Math.floor(zs.length * 0.9)];
     const level = zs[zs.length >> 1];
-    if (p90 - p10 > maxSpread) continue;
-    // Rim test.
-    let rim = 0;
-    let rimHigher = 0;
+    const p02 = zs[Math.floor(zs.length * 0.02)];
+    const p98 = zs[Math.min(zs.length - 1, Math.floor(zs.length * 0.98))];
+    const extent = Math.hypot(i1 - i0 + 1, j1 - j0 + 1) * cellSize;
+    if (p98 - p02 > maxSpread + maxGradient * extent) continue;
+
+    // Core cells carry their own (hydro-flattened) elevation as the surface level; grow up to two shoreline
+    // rings of cells within ± tol of the adjacent level (resampled shore cells that failed the flatness test).
     for (const k of comp) {
-      const i = k % nx;
-      const j = (k / nx) | 0;
-      const nb = [i > 0 ? k - 1 : -1, i < nx - 1 ? k + 1 : -1, j > 0 ? k - nx : -1, j < ny - 1 ? k + nx : -1];
-      for (const m of nb) {
-        if (m < 0 || label[m] === lab) continue;
-        rim++;
-        if (elev[m] >= level + 0.25) rimHigher++;
-      }
+      inSet[k] = lab;
+      levelOf[k] = elev[k];
     }
-    // Domain-edge cells count as neutral (a river leaving the domain has no rim there).
-    if (rim > 0 && rimHigher / rim < minRim) continue;
-    // Shoreline ring within tolerance.
     const indices = comp.slice();
-    for (const k of comp) {
-      const i = k % nx;
-      const j = (k / nx) | 0;
-      const nb = [i > 0 ? k - 1 : -1, i < nx - 1 ? k + 1 : -1, j > 0 ? k - nx : -1, j < ny - 1 ? k + nx : -1];
-      for (const m of nb) {
-        if (m < 0 || label[m] === lab || label[m] === -2) continue;
-        if (elev[m] <= level + tol && label[m] === -1) {
-          label[m] = -2; // claimed ring cell (not a flat seed any more)
+    let frontStart = 0;
+    for (let ring = 0; ring < 2; ring++) {
+      const frontEnd = indices.length;
+      for (let q = frontStart; q < frontEnd; q++) {
+        const k = indices[q];
+        const L = levelOf[k];
+        nb4(k);
+        for (let r = 0; r < 4; r++) {
+          const m = nb[r];
+          if (m < 0 || inSet[m] === lab || inBody[m]) continue;
+          if (Math.abs(elev[m] - L) > tol) continue;
+          inSet[m] = lab;
+          levelOf[m] = L;
           indices.push(m);
         }
       }
+      frontStart = frontEnd;
     }
-    bodies.push({ level, cells: indices.length, seed: { gx: 0, gy: 0 }, indices: Int32Array.from(indices) });
+    // Rim just beyond the shoreline: mostly higher than the adjacent surface. Domain-edge neighbors are neutral.
+    let rim = 0;
+    let rimHigher = 0;
+    let touchesEdge = false;
+    for (const k of indices) {
+      nb4(k);
+      for (let r = 0; r < 4; r++) {
+        const m = nb[r];
+        if (m < 0) {
+          touchesEdge = true;
+          continue;
+        }
+        if (inSet[m] === lab) continue;
+        rim++;
+        if (elev[m] >= levelOf[k] + 0.25) rimHigher++;
+      }
+    }
+    if (rim > 0 && rimHigher / rim < minRim) continue;
+
+    const id = bodies.length + 1;
+    const levels = new Float32Array(indices.length);
+    indices.forEach((k, q) => {
+      inBody[k] = id;
+      levels[q] = levelOf[k];
+    });
+    bodies.push({
+      level,
+      minLevel: zs[0],
+      maxLevel: zs[zs.length - 1],
+      cells: indices.length,
+      seed: { gx: 0, gy: 0 },
+      seeds: [],
+      indices: Int32Array.from(indices),
+      levels,
+      touchesEdge,
+    });
   }
-  // Seeds: interior-most cell of each body.
+
+  // Seeds: the interior-most cell of each body, plus — for sloping bodies — a lattice of core cells carrying
+  // their local level (computeInitialWater's per-seed levels reproduce the sloping surface).
   if (bodies.length) {
-    const mask = new Uint8Array(n);
-    for (const b of bodies) for (const k of b.indices) mask[k] = 1;
-    const dist = distanceTransform(nx, ny, (k) => mask[k] === 0);
+    const dist = distanceTransform(nx, ny, (k) => inBody[k] === 0);
+    const lattice = Math.max(4, Math.round(80 / cellSize));
     for (const b of bodies) {
-      let best = b.indices[0];
-      for (const k of b.indices) if (dist[k] > dist[best]) best = k;
-      b.seed = { gx: (best % nx) + 0.5, gy: ((best / nx) | 0) + 0.5 };
+      // Interior-most, also counting the domain edge as shore (a river's widest point is often cut by the edge).
+      const interior = (k: number) => Math.min(dist[k], (k % nx) + 0.5, nx - (k % nx) - 0.5, ((k / nx) | 0) + 0.5, ny - ((k / nx) | 0) - 0.5);
+      let best = 0;
+      for (let q = 0; q < b.indices.length; q++) if (interior(b.indices[q]) > interior(b.indices[best])) best = q;
+      const kb = b.indices[best];
+      b.seed = { gx: (kb % nx) + 0.5, gy: ((kb / nx) | 0) + 0.5 };
+      b.seeds.push({ ...b.seed, level: b.levels[best] });
+      if (b.maxLevel - b.minLevel > 0.05) {
+        for (let q = 0; q < b.indices.length; q++) {
+          const k = b.indices[q];
+          const i = k % nx;
+          const j = (k / nx) | 0;
+          if (i % lattice === 0 && j % lattice === 0 && dist[k] >= 1.5) b.seeds.push({ gx: i + 0.5, gy: j + 0.5, level: b.levels[q] });
+        }
+      }
     }
   }
   bodies.sort((a, b) => b.cells - a.cells);
@@ -884,8 +967,9 @@ export function detectWaterBodies(
 }
 
 /**
- * Burn detected water bodies (live areas): lower each by `depth` with smooth banks, bed = min(z, level) − burn.
- * Returns the conditioned elevation and one initial-fill entry per body.
+ * Burn detected water bodies (live areas): lower each by `depth` below its local surface with smooth banks,
+ * bed = min(z, level) − depth·smoothstep(0, bankCells, distance to shore). Returns the conditioned elevation
+ * and one initial-fill entry per body (sloping bodies use per-seed levels).
  */
 export function burnWaterBodies(
   elevation: Float32Array,
@@ -894,15 +978,19 @@ export function burnWaterBodies(
   bodies: WaterBody[],
   depth = 3,
   bankCells = 2,
-): { elevation: Float32Array; burnedCells: number; fills: { seeds: GridPoint[]; level: number }[] } {
+): {
+  elevation: Float32Array;
+  burnedCells: number;
+  fills: Array<{ seeds: Array<GridPoint & { level?: number }>; level: number }>;
+} {
   const n = nx * ny;
   const mask = new Uint8Array(n);
   const level = new Float32Array(n);
   for (const b of bodies) {
-    for (const k of b.indices) {
+    b.indices.forEach((k, q) => {
       mask[k] = 1;
-      level[k] = b.level;
-    }
+      level[k] = b.levels[q];
+    });
   }
   const dist = distanceTransform(nx, ny, (k) => mask[k] === 0);
   const out = new Float32Array(elevation);
@@ -915,6 +1003,8 @@ export function burnWaterBodies(
   return {
     elevation: out,
     burnedCells: burned,
-    fills: bodies.map((b) => ({ seeds: [b.seed], level: b.level })),
+    fills: bodies.map((b) =>
+      b.seeds.length > 1 ? { seeds: b.seeds, level: b.minLevel } : { seeds: [{ gx: b.seed.gx, gy: b.seed.gy }], level: b.level },
+    ),
   };
 }

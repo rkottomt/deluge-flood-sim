@@ -9,11 +9,10 @@
  * The river is carved with a real channel (no hydro-conditioning needed) and the scenario uses the same
  * sloped-river initial fill (per-seed levels) as the baked presets.
  */
-import type { CameraPose, GeoBounds, ScenarioPreset, Shelter, TerrainData, WaterSource } from '../contracts';
-import { gridToGeo, squareDomain } from './geo';
+import type { CameraPose, GeoBounds, RoadClass, ScenarioPreset, Shelter, TerrainData, WaterSource } from '../contracts';
+import { squareDomain } from './geo';
 import { smoothstep } from './hydro';
-import { buildRoadNetwork, type RawRoad } from './roads';
-import { makeGeoToGrid } from './geo';
+import { buildRoadNetwork, nodeCrossings, type RawRoad } from './roads';
 
 export const SANDBOX_NAME = 'Riverside — synthetic valley';
 
@@ -60,11 +59,18 @@ interface PolyInfo {
   s: number; // 0..1 along the polyline
 }
 
+/**
+ * Distance to a polyline and the normalized arc-length parameter of the nearest point. The parameter is a
+ * soft-min blend over segments (weights fall off over ~12 cells of extra distance): the plain nearest-segment
+ * parameter jumps across the bisector on the inside of a bend, which would crease any terrain built from it.
+ */
 function polylineInfo(px: number, py: number, pts: Array<[number, number]>, cum: number[]): PolyInfo {
-  let best = Infinity;
-  let bestS = 0;
   const total = cum[cum.length - 1];
-  for (let k = 0; k + 1 < pts.length; k++) {
+  const nseg = pts.length - 1;
+  const ds = SCRATCH_D.length >= nseg ? SCRATCH_D : (SCRATCH_D = new Float64Array(nseg));
+  const ss = SCRATCH_S.length >= nseg ? SCRATCH_S : (SCRATCH_S = new Float64Array(nseg));
+  let best = Infinity;
+  for (let k = 0; k < nseg; k++) {
     const [ax, ay] = pts[k];
     const [bx, by] = pts[k + 1];
     const dx = bx - ax;
@@ -72,12 +78,40 @@ function polylineInfo(px: number, py: number, pts: Array<[number, number]>, cum:
     const l2 = dx * dx + dy * dy;
     const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / l2));
     const d = Math.hypot(px - (ax + dx * t), py - (ay + dy * t));
-    if (d < best) {
-      best = d;
-      bestS = (cum[k] + t * Math.sqrt(l2)) / total;
-    }
+    ds[k] = d;
+    ss[k] = (cum[k] + t * Math.sqrt(l2)) / total;
+    if (d < best) best = d;
   }
-  return { dist: best, s: bestS };
+  let wsum = 0;
+  let s = 0;
+  for (let k = 0; k < nseg; k++) {
+    const w = Math.exp(-(ds[k] - best) / 12);
+    wsum += w;
+    s += w * ss[k];
+  }
+  return { dist: best, s: s / wsum };
+}
+let SCRATCH_D = new Float64Array(8);
+let SCRATCH_S = new Float64Array(8);
+
+/**
+ * A smooth field evaluated on a lattice every `step` cells and bilinearly interpolated at cell centers — the
+ * low-frequency noise octaves don't need per-cell evaluation (keeps generation well under half a second).
+ */
+function latticeField(n: number, step: number, fn: (xc: number, yc: number) => number): (i: number, j: number) => number {
+  const m = Math.ceil(n / step) + 2;
+  const v = new Float32Array(m * m);
+  for (let b = 0; b < m; b++) for (let a = 0; a < m; a++) v[b * m + a] = fn(a * step, b * step);
+  return (i, j) => {
+    const fx = (i + 0.5) / step;
+    const fy = (j + 0.5) / step;
+    const a = Math.floor(fx);
+    const b = Math.floor(fy);
+    const tx = fx - a;
+    const ty = fy - b;
+    const k = b * m + a;
+    return (v[k] * (1 - tx) + v[k + 1] * tx) * (1 - ty) + (v[k + m] * (1 - tx) + v[k + m + 1] * tx) * ty;
+  };
 }
 
 function cumulative(pts: Array<[number, number]>): number[] {
@@ -124,11 +158,17 @@ export function generateSandbox(opts: SandboxOptions = {}): TerrainData {
   const confLevel = riverLevel(yConf);
   const RES_LEVEL = 138;
   const DAM_CREST = 141.5;
+  // Creek bed profile along the tributary — continuous in s (any jump would print a straight crease across the
+  // hills, since every cell whose nearest creek point has that parameter inherits the step).
+  const DAM_TOE = 119;
+  const LAKE_END_BED = 138.5;
   const tribBed = (s: number) => {
-    if (s <= damS) return confLevel + 0.4 + (119 - confLevel) * (s / damS);
-    if (s <= lakeEndS) return 125 + 11 * ((s - damS) / (lakeEndS - damS)) ** 1.5;
-    return 139.5 + 45 * (s - lakeEndS);
+    if (s <= damS) return confLevel + 0.4 + (DAM_TOE - confLevel - 0.4) * (s / damS);
+    if (s <= lakeEndS) return DAM_TOE + (LAKE_END_BED - DAM_TOE) * ((s - damS) / (lakeEndS - damS)) ** 1.5;
+    return LAKE_END_BED + 45 * (s - lakeEndS);
   };
+  /** Weight of the incised creek channel: 0 in the reservoir reach, ramping in below the dam / above the lake. */
+  const creekWeight = (s: number) => Math.max(smoothstep(damS - 0.01, damS - 0.05, s), smoothstep(lakeEndS, lakeEndS + 0.04, s));
   const damPoint: [number, number] = [
     trib[1][0] + 0.1 * (trib[2][0] - trib[1][0]),
     trib[1][1] + 0.1 * (trib[2][1] - trib[1][1]),
@@ -138,6 +178,8 @@ export function generateSandbox(opts: SandboxOptions = {}): TerrainData {
   damDir[0] /= damDirLen;
   damDir[1] /= damDirLen;
 
+  const hillsAt = latticeField(N, Math.max(1, Math.round(24 / cs)), (x, y) => fbm(x * cs, y * cs, 1600, 5, 11));
+  const detailAt = latticeField(N, Math.max(1, Math.round(12 / cs)), (x, y) => fbm(x * cs, y * cs, 220, 3, 29));
   const elevation = new Float32Array(N * N);
   for (let j = 0; j < N; j++) {
     const yc = j + 0.5;
@@ -145,10 +187,8 @@ export function generateSandbox(opts: SandboxOptions = {}): TerrainData {
     const Ls = riverLevel(yc);
     for (let i = 0; i < N; i++) {
       const xc = i + 0.5;
-      const xm = xc * cs;
-      const ym = yc * cs;
-      const hills = fbm(xm, ym, 1600, 5, 11);
-      const detail = fbm(xm, ym, 220, 3, 29);
+      const hills = hillsAt(i, j);
+      const detail = detailAt(i, j);
 
       // Main valley.
       const d = Math.abs(xc - rx) * cs; // meters from river centerline
@@ -166,9 +206,10 @@ export function generateSandbox(opts: SandboxOptions = {}): TerrainData {
       const bed = tribBed(t.s);
       const tz = bed + 1.2 + 0.004 * dt + 70 * smoothstep(120, 650, dt) + 22 * hills * smoothstep(200, 600, dt) + 0.4 * detail;
       z = Math.min(z, tz);
-      // Creek channel below the dam and above the lake.
-      if (t.s < damS - 0.01 || t.s > lakeEndS) {
-        z = Math.min(z, bed + 1.2 - 1.6 * (1 - smoothstep(4, 14, dt)));
+      // Creek channel (≈ 20 m wide) below the dam and above the lake — only near the creek itself.
+      if (dt < 14) {
+        const w = creekWeight(t.s);
+        if (w > 0) z = Math.min(z, bed + 1.2 - 1.6 * w * (1 - smoothstep(4, 14, dt)));
       }
       // Dam: a thick wall across the tributary valley with sloped faces.
       const ax = (xc - damPoint[0]) * damDir[0] + (yc - damPoint[1]) * damDir[1]; // along valley, cells
@@ -178,139 +219,160 @@ export function generateSandbox(opts: SandboxOptions = {}): TerrainData {
         z = Math.max(z, face);
       }
 
-      // River channel with smooth banks.
+      // River channel: bed at Ls − depth in the middle, smooth banks rising to the floodplain (Ls + 2.6 m) with
+      // the water's edge (bed = Ls) at about one half-width from the centerline.
       const dc = Math.abs(xc - rx);
-      const chan = Ls - riverDepth * (1 - smoothstep(riverHalfW * 0.45, riverHalfW * 1.15, dc)) + 0.4;
-      if (dc < riverHalfW * 1.6) z = Math.min(z, chan);
+      if (dc < riverHalfW * 1.5) {
+        z = Math.min(z, Ls - riverDepth + (riverDepth + 2.6) * smoothstep(riverHalfW * 0.3, riverHalfW * 1.5, dc));
+      }
 
       elevation[j * N + i] = z;
     }
   }
 
-  // ── Roads (built through the same noding pipeline as real data).
-  const toGeo = (gx: number, gy: number): [number, number] => {
-    const g = gridToGeo({ nx: N, ny: N, bounds }, gx, gy);
-    return [g.lon, g.lat];
-  };
+  // ── Roads: laid out in grid coordinates, noded at every crossing / T-junction, then built into a graph by the
+  //    same pipeline as real TIGER data (identity projection).
   const elevAt = (gx: number, gy: number) => {
     const i = Math.min(N - 1, Math.max(0, Math.floor(gx)));
     const j = Math.min(N - 1, Math.max(0, Math.floor(gy)));
     return elevation[j * N + i];
   };
-  const raw: RawRoad[] = [];
-  const addRoad = (pts: Array<[number, number]>, cls: RawRoad['cls'], name?: string) => {
-    if (pts.length >= 2) raw.push({ coords: pts.map(([x, y]) => toGeo(x, y)), cls, name });
+  type Pt = [number, number];
+  const lines: Array<{ pts: Pt[]; cls: RoadClass; name: string }> = [];
+  const addRoad = (pts: Pt[], cls: RoadClass, name: string) => {
+    if (pts.length >= 2) lines.push({ pts, cls, name });
   };
-  const step = 4;
-  // Highway on the west valley wall.
+  const hwX = (y: number) => riverX(y) - 1250 / cs + 60 * Math.sin(y / 90);
+
+  // Valley Expressway along the west valley wall.
   {
-    const pts: Array<[number, number]> = [];
-    for (let y = 0; y <= N; y += step) pts.push([riverX(y) - 1250 / cs + 60 * Math.sin(y / 90), y]);
+    const pts: Pt[] = [];
+    for (let y = 0; y <= N; y += 4) pts.push([hwX(y), y]);
     addRoad(pts, 'highway', 'Valley Expressway');
   }
-  // Main St and River Rd on the east floodplain.
-  {
-    const main: Array<[number, number]> = [];
-    const river: Array<[number, number]> = [];
-    for (let y = 0.12 * N; y <= 0.88 * N; y += step) {
-      main.push([riverX(y) + 330 / cs, y]);
-      river.push([riverX(y) + 95 / cs, y]);
-    }
-    addRoad(main, 'major', 'Main St');
-    addRoad(river, 'minor', 'River Rd');
-  }
-  // Bridge St: highway → across the river → Main St → up the east hill (Ridge Rd).
-  const yBridge = 0.56 * N;
-  {
-    const x0 = riverX(yBridge) - 1250 / cs + 60 * Math.sin(yBridge / 90);
-    const x1 = riverX(yBridge) + 330 / cs;
-    addRoad(
-      [
-        [x0, yBridge],
-        [riverX(yBridge), yBridge],
-        [x1, yBridge],
-      ],
-      'major',
-      'Bridge St',
-    );
-    const ridge: Array<[number, number]> = [];
-    for (let x = x1; x <= Math.min(N, x1 + 1500 / cs); x += step) ridge.push([x, yBridge - 0.25 * (x - x1) + 30 * Math.sin((x - x1) / 60)]);
-    ridge[0] = [x1, yBridge];
-    addRoad(ridge, 'major', 'Ridge Rd');
-  }
-  // Town street grid (only on land that is not river, creek, reservoir or dam).
+
+  // Town lattice on the east floodplain: numbered streets across the valley (rows), avenues parallel to the
+  // river (columns, following its meander). Lattice points are computed once so rows and columns share them.
   const inTown = (x: number, y: number) => {
     const dx = x - riverX(y);
     if (dx < 90 / cs || dx > 780 / cs) return false;
-    if (y < 0.24 * N || y > 0.78 * N) return false;
-    const t = polylineInfo(x, y, trib, tribCum);
-    if (t.dist * cs < 30) return false;
+    if (polylineInfo(x, y, trib, tribCum).dist * cs < 30) return false;
     return elevAt(x, y) < riverLevel(y) + 26;
   };
-  const spacing = 110 / cs;
-  const streetNames = ['1st', '2nd', '3rd', '4th', '5th', '6th', '7th', '8th', '9th', '10th', '11th', '12th', '13th', '14th', '15th', '16th', '17th', '18th', '19th', '20th', '21st', '22nd', '23rd', '24th', '25th', '26th', '27th', '28th', '29th', '30th', '31st', '32nd'];
-  let si = 0;
-  for (let y = 0.24 * N; y <= 0.78 * N; y += spacing) {
-    let run: Array<[number, number]> = [];
-    const flush = () => {
-      if (run.length >= 3) addRoad(run, 'local', `${streetNames[si % streetNames.length]} St`);
-      run = [];
-    };
-    for (let x = riverX(y) + 90 / cs; x <= riverX(y) + 780 / cs; x += 2) {
-      if (inTown(x, y)) run.push([x, y]);
-      else flush();
-    }
-    flush();
-    si++;
-  }
-  const avenueNames = ['Water', 'Mill', 'Oak', 'Maple', 'Cedar', 'Hill', 'Summit'];
-  avenueNames.forEach((nm, a) => {
-    const off = (140 + a * 105) / cs;
-    let run: Array<[number, number]> = [];
-    const flush = () => {
-      if (run.length >= 3) addRoad(run, 'local', `${nm} Ave`);
-      run = [];
-    };
-    for (let y = 0.24 * N; y <= 0.78 * N; y += 2) {
-      const x = riverX(y) + off;
-      if (inTown(x, y)) run.push([x, y]);
-      else flush();
-    }
-    flush();
-  });
-  // Dam road across the crest.
-  {
-    const nxp = -damDir[1];
-    const nyp = damDir[0];
-    const pts: Array<[number, number]> = [];
-    for (let s = -560 / cs; s <= 560 / cs; s += step) pts.push([damPoint[0] + nxp * s, damPoint[1] + nyp * s]);
-    addRoad(pts, 'minor', 'Dam Rd');
-  }
-  const roads = buildRoadNetwork(raw, { nx: N, ny: N, cellSize: cs, toGrid: makeGeoToGrid({ nx: N, ny: N, bounds }) });
-
-  // ── Shelters: the highest road node inside each search box.
-  const nodeAtHighest = (x0: number, y0: number, x1: number, y1: number): { gx: number; gy: number } => {
-    let best = { gx: (x0 + x1) / 2, gy: (y0 + y1) / 2 };
-    let bestZ = -Infinity;
-    for (let k = 0; k < roads.nodes.length / 2; k++) {
-      const gx = roads.nodes[k * 2];
-      const gy = roads.nodes[k * 2 + 1];
-      if (gx < x0 || gx > x1 || gy < y0 || gy > y1) continue;
-      const z = elevAt(gx, gy);
-      if (z > bestZ) {
-        bestZ = z;
-        best = { gx, gy };
+  const rowStep = 110 / cs;
+  const rows: number[] = [];
+  for (let y = 0.24 * N; y <= 0.78 * N + 1e-6; y += rowStep) rows.push(y);
+  const bridgeRow = Math.round((0.56 * N - rows[0]) / rowStep);
+  const yBridge = rows[bridgeRow];
+  const cols: Array<{ off: number; name: string; cls: RoadClass; arterial?: boolean }> = [
+    { off: 95, name: 'River Rd', cls: 'minor', arterial: true },
+    { off: 205, name: 'Water Ave', cls: 'local' },
+    { off: 330, name: 'Main St', cls: 'major', arterial: true },
+    { off: 440, name: 'Mill Ave', cls: 'local' },
+    { off: 550, name: 'Oak Ave', cls: 'local' },
+    { off: 660, name: 'Maple Ave', cls: 'local' },
+    { off: 770, name: 'Hill Ave', cls: 'local' },
+  ];
+  const lattice = (c: number, y: number): Pt => [riverX(y) + cols[c].off / cs, y];
+  const ordinal = (n: number) => `${n}${n % 10 === 1 && n !== 11 ? 'st' : n % 10 === 2 && n !== 12 ? 'nd' : n % 10 === 3 && n !== 13 ? 'rd' : 'th'}`;
+  /** Emit maximal runs of consecutive samples whose connecting pieces are all inside the town. */
+  const addRuns = (samples: Pt[], ok: (a: Pt, b: Pt) => boolean, cls: RoadClass, name: string) => {
+    let run: Pt[] = [];
+    for (let q = 0; q < samples.length; q++) {
+      if (q > 0 && ok(samples[q - 1], samples[q])) {
+        if (!run.length) run.push(samples[q - 1]);
+        run.push(samples[q]);
+      } else {
+        addRoad(run, cls, name);
+        run = [];
       }
     }
-    return best;
+    addRoad(run, cls, name);
   };
-  const xb = riverX(yBridge) + 330 / cs;
-  const shelters: Shelter[] = [
-    { name: 'Ridge Rd School', ...nodeAtHighest(xb + 900 / cs, yBridge - 300 / cs, xb + 1300 / cs, yBridge - 60 / cs) },
-    { name: 'Valley Hospital', ...nodeAtHighest(0, 0.55 * N, riverX(0.6 * N) - 900 / cs, 0.72 * N) },
-    { name: 'Dam Rd Fire Station', ...nodeAtHighest(damPoint[0] - 110, damPoint[1] - 110, damPoint[0] + 110, damPoint[1] + 110) },
-  ];
+  const pieceInTown = (a: Pt, b: Pt) => inTown(a[0], a[1]) && inTown(b[0], b[1]) && inTown((a[0] + b[0]) / 2, (a[1] + b[1]) / 2);
+  rows.forEach((y, r) => {
+    const samples = cols.map((_, c) => lattice(c, y));
+    if (r === bridgeRow) addRuns(samples, pieceInTown, 'major', 'Bridge St');
+    else addRuns(samples, pieceInTown, 'local', `${ordinal(r + 1)} St`);
+  });
+  cols.forEach((col, c) => {
+    // Arterials run the length of the valley (bridging the creek); avenues stay inside the town.
+    const y0 = col.arterial ? 0.12 * N : rows[0];
+    const y1 = col.arterial ? 0.88 * N : rows[rows.length - 1];
+    const ys: number[] = [];
+    for (let y = y0; y < rows[0]; y += 4) ys.push(y);
+    rows.forEach((ry, r) => {
+      ys.push(ry);
+      if (r + 1 < rows.length) for (let k = 1; k < 4; k++) ys.push(ry + (k * rowStep) / 4);
+    });
+    for (let y = rows[rows.length - 1] + 4; y <= y1; y += 4) ys.push(y);
+    const samples = ys.filter((y) => y >= y0 - 1e-6 && y <= y1 + 1e-6).map((y) => lattice(c, y));
+    addRuns(samples, col.arterial ? () => true : pieceInTown, col.cls, col.name);
+  });
 
+  // Bridge St (west half): expressway → across the Clear River → River Rd.
+  addRoad([[hwX(yBridge), yBridge], [riverX(yBridge), yBridge], lattice(0, yBridge)], 'major', 'Bridge St');
+  // North bridge: expressway → Main St at the north end of town (a second way out when Bridge St floods).
+  const yNorth = 0.16 * N;
+  addRoad([[hwX(yNorth), yNorth], [riverX(yNorth), yNorth], lattice(2, yNorth)], 'major', 'Mill Bridge Rd');
+  // South bridge: expressway → Main St south of town.
+  const ySouth = 0.84 * N;
+  addRoad([[hwX(ySouth), ySouth], [riverX(ySouth), ySouth], lattice(2, ySouth)], 'major', 'Ferry Rd');
+
+  // Ridge Rd climbs east from the end of Bridge St into the hills.
+  let bridgeEast = lattice(0, yBridge);
+  for (let c = 1; c < cols.length && inTown(...lattice(c, yBridge)); c++) bridgeEast = lattice(c, yBridge);
+  const ridge: Pt[] = [bridgeEast];
+  for (let dx = 4; dx <= 1500 / cs && bridgeEast[0] + dx < N - 4; dx += 4) {
+    ridge.push([bridgeEast[0] + dx, yBridge - 0.28 * dx + 8 * Math.sin(dx / 35)]);
+  }
+  addRoad(ridge, 'major', 'Ridge Rd');
+
+  // Dam Rd: from Ridge Rd across the dam crest to a fire station on the north abutment.
+  const damPerp: Pt = [-damDir[1], damDir[0]];
+  const damSouth: Pt = [damPoint[0] + damPerp[0] * (560 / cs), damPoint[1] + damPerp[1] * (560 / cs)];
+  let ridgeJoin = ridge[0];
+  for (const p of ridge) if (Math.hypot(p[0] - damSouth[0], p[1] - damSouth[1]) < Math.hypot(ridgeJoin[0] - damSouth[0], ridgeJoin[1] - damSouth[1])) ridgeJoin = p;
+  {
+    const pts: Pt[] = [ridgeJoin];
+    for (let s = 560 / cs; s >= -560 / cs; s -= 4) pts.push([damPoint[0] + damPerp[0] * s, damPoint[1] + damPerp[1] * s]);
+    addRoad(pts, 'minor', 'Dam Rd');
+  }
+  // Hospital Dr: a spur climbing west off the expressway.
+  const yHosp = 0.66 * N;
+  const hospital: Pt[] = [];
+  for (let k = 0; k <= 20; k++) hospital.push([hwX(yHosp) - k * 4, yHosp + 12 * Math.sin(k / 6)]);
+  addRoad(hospital, 'minor', 'Hospital Dr');
+
+  const noded = nodeCrossings(lines.map((l) => l.pts.flat()), 1.5);
+  const raw: RawRoad[] = lines.map((l, idx) => {
+    const flat = noded[idx];
+    const coords: Array<[number, number]> = [];
+    for (let q = 0; q < flat.length; q += 2) coords.push([flat[q], flat[q + 1]]);
+    return { coords, cls: l.cls, name: l.name };
+  });
+  const roads = buildRoadNetwork(raw, { nx: N, ny: N, cellSize: cs, toGrid: (x, y) => [x, y] }, { minComponentMeters: 100 });
+
+  // ── Shelters at the high ends of the spur roads (all reachable through the network).
+  const endOf = (pts: Pt[]) => pts[pts.length - 1];
+  const damNorth = [damPoint[0] - damPerp[0] * (560 / cs), damPoint[1] - damPerp[1] * (560 / cs)];
+  const nearestNode = (p: ArrayLike<number>) => {
+    let best = 0;
+    let bestD = Infinity;
+    for (let k = 0; k < roads.nodes.length / 2; k++) {
+      const d = Math.hypot(roads.nodes[k * 2] - p[0], roads.nodes[k * 2 + 1] - p[1]);
+      if (d < bestD) {
+        bestD = d;
+        best = k;
+      }
+    }
+    return { gx: roads.nodes[best * 2], gy: roads.nodes[best * 2 + 1] };
+  };
+  const shelters: Shelter[] = [
+    { name: 'Ridge Rd School', ...nearestNode(endOf(ridge)) },
+    { name: 'Valley Hospital', ...nearestNode(endOf(hospital)) },
+    { name: 'Lakeview Fire Station', ...nearestNode(damNorth) },
+  ];
   // ── Scenario.
   const levelSouth = riverLevel(N - 6);
   const sources: WaterSource[] = [

@@ -1,5 +1,5 @@
 /** Water surface shaders: photoreal floodwater and hazard colormaps. */
-import { COMMON_WGSL, FRAME_WGSL } from './common';
+import { COMMON_WGSL, FRAME_WGSL, LOD_WGSL } from './common';
 
 export const WATER_WGSL = /* wgsl */ `
 ${FRAME_WGSL}
@@ -11,7 +11,9 @@ ${FRAME_WGSL}
 @group(0) @binding(5) var rippleTex: texture_2d<f32>;
 @group(0) @binding(6) var linSamp: sampler;
 @group(0) @binding(7) var repSamp: sampler;
+@group(0) @binding(8) var wetTex: texture_2d<f32>;
 ${COMMON_WGSL}
+${LOD_WGSL}
 
 struct WOut {
   @builtin(position) pos: vec4f,
@@ -19,28 +21,48 @@ struct WOut {
   @location(1) grid: vec2f,
   @location(2) thick: f32,     // water surface − rendered bed at this point (m, unexaggerated)
   @location(3) skirt: f32,     // 1 on the domain-edge cross-section
+  @location(4) haze: vec4f,    // rgb haze color, a = haze amount
+}
+
+const PATCH_LOG2: i32 = 5;
+
+fn wetAt(mip: i32, t: vec2i) -> f32 {
+  let lv = clamp(mip, 0, i32(textureNumLevels(wetTex)) - 1);
+  let size = vec2i(textureDimensions(wetTex, lv));
+  // Texel spans grow with the mip; convert from the requested mip's texel grid when clamped.
+  let tt = t >> vec2u(u32(max(mip - lv, 0)));
+  return textureLoad(wetTex, clamp(tt, vec2i(0), size - 1), lv).r;
 }
 
 @vertex
-fn vsWater(@builtin(vertex_index) vi: u32) -> WOut {
-  let vx = u32(F.mesh.x);
-  let k = i32(vi % vx);
-  let l = i32(vi / vx);
-  let t = textureLoad(vtxTex, vec2i(k, l), 0);
+fn vsWater(@builtin(vertex_index) vi: u32, n: NodeIn) -> WOut {
   var o: WOut;
-  if (t.a < 0.5) {
-    // Whole neighbourhood dry: every triangle using this vertex is dry → emit a clipped degenerate.
+  let level = i32(n.node.w + 0.5);
+  let nodeCells = n.node.z * f32(PATCH);
+  // Whole node dry (no water within one cell of it): collapse every vertex → zero-area triangles.
+  if (wetAt(level + PATCH_LOG2, vec2i(floor(n.node.xy / nodeCells + 0.5))) < 0.5) {
     o.pos = vec4f(2.0, 2.0, -1.0, 1.0);
     o.thick = -1.0;
     return o;
   }
-  let g = min(vec2f(f32(k), f32(l)) * F.stride, F.grid);
-  let w = gridToWorld(g, t.g);
+  let v = lodVertex(vi, n);
+  let bed = mix(v.a.r, v.b.r, v.m);
+  var surface = mix(v.a.g, v.b.g, v.m);
+  // No water within two quads of this vertex (covers its morph range): sink it far below the terrain. No visible
+  // water triangle can touch it, and its dry triangles are then rejected by the depth test instead of shaded.
+  let f = vec2i(floor(v.g0 / (2.0 * n.node.z)));
+  let mip = level + 1;
+  let near = max(max(wetAt(mip, f - vec2i(1, 1)), wetAt(mip, f - vec2i(0, 1))), max(wetAt(mip, f - vec2i(1, 0)), wetAt(mip, f)));
+  if (near < 0.5) {
+    surface = bed - 60.0;
+  }
+  let w = gridToWorld(v.g, surface);
   o.pos = pullForward(F.viewProj * vec4f(w, 1.0), 2.5e-5);
   o.world = w;
-  o.grid = g;
-  o.thick = t.g - t.r;
+  o.grid = v.g;
+  o.thick = surface - bed;
   o.skirt = 0.0;
+  o.haze = vertexHaze(w);
   return o;
 }
 
@@ -73,6 +95,7 @@ fn vsWaterSkirt(@builtin(vertex_index) vi: u32) -> WOut {
   o.grid = g;
   o.thick = select(-1.0, top - elev + 0.001, wet);
   o.skirt = 1.0;
+  o.haze = vertexHaze(w);
   return o;
 }
 
@@ -223,9 +246,7 @@ fn fsWater(in: WOut) -> @location(0) vec4f {
   alpha = clamp(alpha, 0.0, 1.0) * shore;
   // Premultiplied output + aerial perspective.
   rgb = rgb * shore;
-  let haze = hazeAmount(in.world);
-  let hazeCol = skyRadiance(vec3f(-V.x, max(-V.y, 0.0) * 0.35 + 0.02, -V.z));
-  rgb = mix(rgb, hazeCol * alpha, haze);
+  rgb = mix(rgb, in.haze.rgb * alpha, in.haze.a);
   return vec4f(rgb, alpha);
 }
 `;

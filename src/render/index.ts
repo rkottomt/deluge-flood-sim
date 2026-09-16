@@ -16,8 +16,9 @@ import type {
   RenderSettings,
   TerrainData,
 } from '../contracts';
-import { OrbitController, type CameraEnvironment } from './camera';
+import { OrbitController, type CameraEnvironment, type CameraMatrices } from './camera';
 import { HeightField, meshStride } from './heightfield';
+import { frustumPlanes, LOD_INSTANCE_FLOATS, LOD_PATCH, LodTree } from './lod';
 import { bandsForMode, cssToLinear } from './legend';
 import { buildMarkers, buildRoadRibbons, buildWallGhost, circlePolyline, MarkerBuilder, RibbonBuilder, RibbonKind } from './overlays';
 import { pickTerrain, screenRay } from './picking';
@@ -26,18 +27,54 @@ import { FRAME_UNIFORM_SIZE } from './shaders/common';
 import { OVERLAY_UNIFORM_SIZE } from './shaders/overlay';
 import { createImageryTexture, createRippleTexture, createSolidTexture } from './textures';
 import { clamp, smoothstep } from './math';
+import { AdaptiveResolution, QUALITY_PRESETS, targetSize, type QualityPreset, type RendererQuality } from './quality';
+import { GpuTimer } from './gpuTimer';
 
 export { DEPTH_BANDS, MAX_DEPTH_BANDS, VELOCITY_BANDS, bandsForMode } from './legend';
 export { OrbitController } from './camera';
+export type { RendererQuality } from './quality';
 
 const WATER_MODE_INDEX = { realistic: 0, depth: 1, maxDepth: 2, velocity: 3 } as const;
-/** Upper bound on rendered pixels (≈ 2560×1600) so Retina displays stay fast. */
-const MAX_RENDER_PIXELS = 2560 * 1600;
-const MAX_RAIN_DROPS = 14000;
 
-export async function createRenderer(device: GPUDevice, canvas: HTMLCanvasElement, format: GPUTextureFormat): Promise<FloodRenderer> {
+export interface RendererOptions {
+  /** Default 'auto': adaptive resolution targeting ≥ 48 fps sustained, idle frames capped at 30 fps. */
+  quality?: RendererQuality;
+}
+
+/** Live renderer statistics (milliseconds are smoothed). GPU timings need 'timestamp-query' (else 0). */
+export interface RendererStats {
+  gpuMs: number;
+  prepMs: number;
+  mainMs: number;
+  postMs: number;
+  /** CPU time spent inside render() (encoding + uploads). */
+  cpuMs: number;
+  /** Frames actually drawn / render() calls skipped by the idle cap since creation. */
+  framesDrawn: number;
+  framesSkipped: number;
+  width: number;
+  height: number;
+  /** Rendered pixels relative to the canvas at its capped DPR (1 = full resolution). */
+  renderScale: number;
+  gpuTimingAvailable: boolean;
+}
+
+/** FloodRenderer plus the (non-contract) quality knob and statistics. */
+export interface DelugeRendererAPI extends FloodRenderer {
+  readonly camera: OrbitController;
+  readonly quality: RendererQuality;
+  setQuality(quality: RendererQuality): void;
+  readonly stats: Readonly<RendererStats>;
+}
+
+export async function createRenderer(
+  device: GPUDevice,
+  canvas: HTMLCanvasElement,
+  format: GPUTextureFormat,
+  options: RendererOptions = {},
+): Promise<DelugeRendererAPI> {
   const pipelines = await createPipelines(device, format);
-  return new DelugeRenderer(device, canvas, format, pipelines);
+  return new DelugeRenderer(device, canvas, format, pipelines, options);
 }
 
 /** Growable GPU buffer. */
@@ -76,6 +113,10 @@ interface SceneGPU {
   vx: number;
   vy: number;
   hf: HeightField;
+  lod: LodTree;
+  wetTex: GPUTexture;
+  /** [base (from vtxTex), down 0→1, down 1→2, …] */
+  wetBGs: GPUBindGroup[];
   groundMin: number;
   groundMax: number;
   vtxTex: GPUTexture;
@@ -100,15 +141,39 @@ interface SceneGPU {
 interface MeshBuffers {
   vx: number;
   vy: number;
-  index: GPUBuffer;
-  indexCount: number;
   skirt: GPUBuffer;
   skirtCount: number;
 }
 
-class DelugeRenderer implements FloodRenderer {
+class DelugeRenderer implements DelugeRendererAPI {
   readonly camera: OrbitController;
+  readonly stats: RendererStats = {
+    gpuMs: 0,
+    prepMs: 0,
+    mainMs: 0,
+    postMs: 0,
+    cpuMs: 0,
+    framesDrawn: 0,
+    framesSkipped: 0,
+    width: 0,
+    height: 0,
+    renderScale: 1,
+    gpuTimingAvailable: false,
+  };
 
+  private qualityMode: RendererQuality = 'auto';
+  private adaptive = new AdaptiveResolution();
+  private timer: GpuTimer;
+  /** Previous rendered frame's inputs, for the idle cap and prep skipping. */
+  private lastDrawAt = 0;
+  private lastSignature = '';
+  private overlayVersion = 0;
+  /** Developer toggles for profiling (e.g. 'terrain', 'water', 'roads', 'markers', 'sky', 'bloom', 'prep'). */
+  readonly debugSkip = new Set<string>();
+  private prevRenderCallDrew = false;
+  private lastPrepState: GPUTexture | null = null;
+  private lastPrepUseMax = -1;
+  private framesSincePrep = 1e9;
   private ctx: GPUCanvasContext;
   private frameBuf: GPUBuffer;
   private frameData = new Float32Array(FRAME_UNIFORM_SIZE / 4);
@@ -125,6 +190,13 @@ class DelugeRenderer implements FloodRenderer {
 
   private scene: SceneGPU | null = null;
   private mesh: MeshBuffers | null = null;
+  /** Index buffer of one LOD_PATCH × LOD_PATCH node patch (shared by terrain and water). */
+  private patchIndex: GPUBuffer;
+  private patchIndexCount = LOD_PATCH * LOD_PATCH * 6;
+  private nodeBuf: DynBuffer;
+  private nodeCount = 0;
+  /** Last LOD selection (diagnostics). */
+  lodStats: { nodes: number; perLevel: number[] } = { nodes: 0, perLevel: [] };
 
   // Render targets
   private width = 0;
@@ -163,7 +235,11 @@ class DelugeRenderer implements FloodRenderer {
     private canvas: HTMLCanvasElement,
     private format: GPUTextureFormat,
     private P: Pipelines,
+    options: RendererOptions,
   ) {
+    this.qualityMode = options.quality ?? 'auto';
+    this.timer = new GpuTimer(device);
+    this.stats.gpuTimingAvailable = this.timer.enabled;
     const ctx = canvas.getContext('webgpu');
     if (!ctx) throw new Error('Could not get a WebGPU canvas context');
     this.ctx = ctx;
@@ -203,6 +279,8 @@ class DelugeRenderer implements FloodRenderer {
     this.markerOpaqueI = new DynBuffer(device, I, 'markers-opaque-idx');
     this.markerBlendV = new DynBuffer(device, V, 'markers-blend');
     this.markerBlendI = new DynBuffer(device, I, 'markers-blend-idx');
+    this.nodeBuf = new DynBuffer(device, V, 'lod-nodes');
+    this.patchIndex = createPatchIndex(device);
 
     this.camera = new OrbitController(this.cameraEnv());
     this.camera.attach(canvas);
@@ -261,6 +339,40 @@ class DelugeRenderer implements FloodRenderer {
     const tex = (label: string, w: number, h: number, format: GPUTextureFormat) =>
       device.createTexture({ label, size: [w, h], format, usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING });
     const vtxTex = tex('vtx', vx, vy, 'rgba32float');
+    const lod = new LodTree(nx, ny, solver.cellSize, stride, solver.getGroundCPU(), solver.getBarrierCPU());
+    // Wet pyramid over base quads, power-of-two so every LOD node maps to exactly one texel of some mip.
+    const pw = nextPow2(vx - 1);
+    const ph = nextPow2(vy - 1);
+    const wetMips = Math.floor(Math.log2(Math.max(pw, ph))) + 1;
+    const wetTex = device.createTexture({
+      label: 'wet-pyramid',
+      size: [pw, ph],
+      format: 'r32float',
+      mipLevelCount: wetMips,
+      usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
+    });
+    const wetBGs: GPUBindGroup[] = [
+      device.createBindGroup({
+        label: 'wet-base',
+        layout: this.P.wetBase.getBindGroupLayout(0),
+        entries: [
+          { binding: 0, resource: vtxTex.createView() },
+          { binding: 1, resource: wetTex.createView({ baseMipLevel: 0, mipLevelCount: 1 }) },
+        ],
+      }),
+    ];
+    for (let lv = 1; lv < wetMips; lv++) {
+      wetBGs.push(
+        device.createBindGroup({
+          label: `wet-down${lv}`,
+          layout: this.P.wetDown.getBindGroupLayout(0),
+          entries: [
+            { binding: 0, resource: wetTex.createView({ baseMipLevel: lv - 1, mipLevelCount: 1 }) },
+            { binding: 1, resource: wetTex.createView({ baseMipLevel: lv, mipLevelCount: 1 }) },
+          ],
+        }),
+      );
+    }
     const surfTex = tex('surf', nx, ny, 'rgba16float');
     const normTex = tex('norm', nx, ny, 'rgba16float');
     const miscTex = tex('misc', nx, ny, 'rgba16float');
@@ -285,6 +397,7 @@ class DelugeRenderer implements FloodRenderer {
       { binding: 5, resource: tex5.createView() },
       { binding: 6, resource: this.linClamp },
       { binding: 7, resource: samp7 },
+      { binding: 8, resource: wetTex.createView() },
     ];
     const terrainBG = device.createBindGroup({ label: 'terrain', layout: this.P.sceneBGL, entries: sceneEntries(imageryTex, this.aniso) });
     const waterBG = device.createBindGroup({ label: 'water', layout: this.P.sceneBGL, entries: sceneEntries(this.rippleTex, this.repeat) });
@@ -334,6 +447,9 @@ class DelugeRenderer implements FloodRenderer {
       vx,
       vy,
       hf,
+      lod,
+      wetTex,
+      wetBGs,
       groundMin: gMin,
       groundMax: gMax,
       vtxTex,
@@ -363,6 +479,7 @@ class DelugeRenderer implements FloodRenderer {
     const s = this.scene;
     if (!s) return;
     s.vtxTex.destroy();
+    s.wetTex.destroy();
     s.surfTex.destroy();
     s.normTex.destroy();
     s.miscTex.destroy();
@@ -375,34 +492,11 @@ class DelugeRenderer implements FloodRenderer {
     this.scene = null;
   }
 
-  /** Shared triangle index buffers for the (vx × vy) vertex grid and its edge skirt. */
+  /** Index buffer for the diorama edge skirt of a (vx × vy) base vertex grid. */
   private ensureMesh(vx: number, vy: number): void {
     if (this.mesh && this.mesh.vx === vx && this.mesh.vy === vy) return;
-    this.mesh?.index.destroy();
     this.mesh?.skirt.destroy();
-    const quads = (vx - 1) * (vy - 1);
-    const index = this.device.createBuffer({ label: 'grid-idx', size: quads * 6 * 4, usage: GPUBufferUsage.INDEX, mappedAtCreation: true });
-    const I = new Uint32Array(index.getMappedRange());
     let o = 0;
-    for (let l = 0; l < vy - 1; l++) {
-      const row = l * vx;
-      const next = row + vx;
-      for (let k = 0; k < vx - 1; k++) {
-        const a = row + k;
-        const b = a + 1;
-        const c = next + k;
-        const d = c + 1;
-        // Split along the b–c diagonal (HeightField.heightAt mirrors this).
-        I[o++] = a;
-        I[o++] = c;
-        I[o++] = b;
-        I[o++] = b;
-        I[o++] = c;
-        I[o++] = d;
-      }
-    }
-    index.unmap();
-
     const maxV = Math.max(vx, vy);
     const sideLen = [vx, vx, vy, vy];
     const skirtCount = sideLen.reduce((acc, n) => acc + (n - 1) * 6, 0);
@@ -424,12 +518,13 @@ class DelugeRenderer implements FloodRenderer {
       }
     }
     skirt.unmap();
-    this.mesh = { vx, vy, index, indexCount: quads * 6, skirt, skirtCount };
+    this.mesh = { vx, vy, skirt, skirtCount };
   }
 
   // ── Overlays ─────────────────────────────────────────────────────────────────────────────
 
   setOverlays(overlays: OverlayState): void {
+    if (overlays !== this.overlays) this.overlayVersion++;
     this.overlays = overlays;
   }
 
@@ -530,27 +625,50 @@ class DelugeRenderer implements FloodRenderer {
     this.needsResize = true;
   }
 
-  private ensureTargets(): void {
+  // ── Quality ──────────────────────────────────────────────────────────────────────────────
+
+  get quality(): RendererQuality {
+    return this.qualityMode;
+  }
+
+  setQuality(quality: RendererQuality): void {
+    if (!(quality in QUALITY_PRESETS) && quality !== 'auto') return;
+    if (quality === this.qualityMode) return;
+    this.qualityMode = quality;
+    this.adaptive.reset();
+    this.needsResize = true;
+  }
+
+  private preset(): QualityPreset {
+    if (this.qualityMode !== 'auto') return QUALITY_PRESETS[this.qualityMode];
+    const p = this.adaptive.pixels;
+    return {
+      maxDpr: 2,
+      maxPixels: p,
+      bloom: p >= 1280 * 800,
+      prepInterval: p >= 1280 * 800 ? 1 : 2,
+      idleFps: 30,
+      rainDrops: p >= 1920 * 1080 ? 14000 : 9000,
+      lodQuadPixels: p >= 1600 * 1000 ? 3 : 4,
+    };
+  }
+
+  private ensureTargets(preset: QualityPreset): void {
     const canvas = this.canvas;
-    const dpr = Math.min(2, (typeof window !== 'undefined' ? window.devicePixelRatio : 1) || 1);
+    const dpr = typeof window !== 'undefined' ? window.devicePixelRatio : 1;
     const cssW = Math.max(1, canvas.clientWidth || canvas.width || 1);
     const cssH = Math.max(1, canvas.clientHeight || canvas.height || 1);
-    let w = Math.max(1, Math.round(cssW * dpr));
-    let h = Math.max(1, Math.round(cssH * dpr));
-    if (w * h > MAX_RENDER_PIXELS) {
-      const s = Math.sqrt(MAX_RENDER_PIXELS / (w * h));
-      w = Math.max(1, Math.floor(w * s));
-      h = Math.max(1, Math.floor(h * s));
-    }
-    const maxDim = this.device.limits.maxTextureDimension2D;
-    w = Math.min(w, maxDim);
-    h = Math.min(h, maxDim);
+    const [w, h] = targetSize(cssW, cssH, dpr, preset.maxDpr, preset.maxPixels, this.device.limits.maxTextureDimension2D);
+    const full = cssW * cssH * Math.min(2, dpr || 1) ** 2;
+    this.stats.renderScale = Math.min(1, Math.sqrt((w * h) / Math.max(1, full)));
     if (w === this.width && h === this.height && this.msaaColor) {
       this.needsResize = false;
       return;
     }
     this.width = w;
     this.height = h;
+    this.stats.width = w;
+    this.stats.height = h;
     canvas.width = w;
     canvas.height = h;
     this.msaaColor?.destroy();
@@ -627,14 +745,54 @@ class DelugeRenderer implements FloodRenderer {
     return entry;
   }
 
+  /**
+   * Everything that can change the image apart from the animation clock. When it is unchanged the frame is
+   * "idle" and may be skipped by the idle frame-rate cap.
+   */
+  private frameSignature(settings: RenderSettings): string {
+    const p = this.camera.pose;
+    const s = this.scene;
+    return [
+      p.target.gx,
+      p.target.gy,
+      p.target.elevation,
+      p.distance,
+      p.yaw,
+      p.pitch,
+      settings.waterMode,
+      settings.verticalExaggeration,
+      settings.showImagery,
+      settings.showRoads,
+      settings.showContours,
+      settings.rainRate > 0.2,
+      this.overlayVersion,
+      s ? this.textureId(s.solver.stateTexture) : 0,
+      this.canvas.clientWidth,
+      this.canvas.clientHeight,
+      this.needsResize,
+    ].join('|');
+  }
+
+  private textureIds = new WeakMap<GPUTexture, number>();
+  private nextTextureId = 1;
+  /** Stable small integer per texture object (identity → string key). */
+  private textureId(t: GPUTexture): number {
+    let id = this.textureIds.get(t);
+    if (id === undefined) {
+      id = this.nextTextureId++;
+      this.textureIds.set(t, id);
+    }
+    return id;
+  }
+
   render(settings: RenderSettings): void {
     if (this.destroyed) return;
-    const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    const cpuStart = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    const now = cpuStart;
     const dt = this.lastFrameMs ? (now - this.lastFrameMs) / 1000 : 1 / 60;
     this.lastFrameMs = now;
     this.frameCounter++;
 
-    this.ensureTargets();
     const exag = clamp(Number.isFinite(settings.verticalExaggeration) ? settings.verticalExaggeration : 1.5, 0.1, 20);
     if (exag !== this.exaggeration) {
       this.exaggeration = exag;
@@ -642,39 +800,97 @@ class DelugeRenderer implements FloodRenderer {
     }
     this.camera.update(dt);
 
-    const s = this.scene;
-    if (s && this.frameCounter % 45 === 0) s.hf.refreshRange();
+    // Idle frame cap: when nothing but the clock changed (camera still, same solver state, same overlays and
+    // settings, no rain), draw at most `idleFps` — saves GPU/thermal budget on fanless laptops.
+    let preset = this.preset();
+    const signature = this.frameSignature(settings);
+    const idle = signature === this.lastSignature;
+    this.lastSignature = signature;
+    if (idle && preset.idleFps < 60 && now - this.lastDrawAt < 1000 / preset.idleFps - 2) {
+      this.stats.framesSkipped++;
+      this.prevRenderCallDrew = false;
+      return;
+    }
 
-    this.writeFrameUniforms(settings);
-    if (s) this.syncOverlays();
+    // Adaptive resolution (only from consecutive drawn frames, so idle-capped intervals don't count).
+    if (this.prevRenderCallDrew && this.qualityMode === 'auto') {
+      const interval = now - this.lastDrawAt;
+      if (this.adaptive.sample(interval, now, this.timer.enabled ? this.timer.totalMs : undefined)) preset = this.preset();
+    }
+    this.prevRenderCallDrew = true;
+    this.lastDrawAt = now;
+
+    this.ensureTargets(preset);
+
+    const s = this.scene;
+    if (s) {
+      s.lod.refreshSome(2);
+      const [lo, hi] = s.lod.range;
+      s.hf.minElev = lo;
+      s.hf.maxElev = hi;
+    }
+
+    const matrices = this.writeFrameUniforms(settings);
+    if (s) {
+      this.syncOverlays();
+      const snap = s.solver.getSnapshot();
+      const maxDepth = snap && Number.isFinite(snap.stats.maxDepth) ? snap.stats.maxDepth : 30;
+      const pixelAngle = (2 * Math.tan(matrices.fovY / 2)) / Math.max(1, this.height);
+      const sel = s.lod.select(matrices.eye, frustumPlanes(matrices.viewProj), pixelAngle, preset.lodQuadPixels, this.exaggeration, 3, Math.min(maxDepth, 200) + 12);
+      this.nodeBuf.write(sel.instances, sel.count);
+      this.nodeCount = sel.count;
+      this.lodStats = { nodes: sel.count, perLevel: sel.perLevel };
+    }
 
     const d = this.device;
     const enc = d.createCommandEncoder({ label: 'frame' });
+    this.timer.beginFrame();
 
     if (s) {
       const mode = WATER_MODE_INDEX[settings.waterMode] ?? 0;
-      const prep = new ArrayBuffer(48);
-      const pi = new Int32Array(prep);
-      const pf = new Float32Array(prep);
-      pi[0] = s.nx;
-      pi[1] = s.ny;
-      pi[2] = s.vx;
-      pi[3] = s.vy;
-      pi[4] = s.stride;
-      pi[5] = mode === 2 ? 1 : 0;
-      pf[6] = 0.01;
-      pf[7] = s.terrain.cellSize;
-      pf[8] = 0.05;
-      d.queue.writeBuffer(s.prepParams, 0, prep);
-      const bgs = this.prepBindGroups(s);
-      const cp = enc.beginComputePass({ label: 'prep' });
-      cp.setPipeline(this.P.prepCells);
-      cp.setBindGroup(0, bgs.cells);
-      cp.dispatchWorkgroups(Math.ceil(s.nx / 16), Math.ceil(s.ny / 16));
-      cp.setPipeline(this.P.prepVerts);
-      cp.setBindGroup(0, bgs.verts);
-      cp.dispatchWorkgroups(Math.ceil(s.vx / 16), Math.ceil(s.vy / 16));
-      cp.end();
+      const useMax = mode === 2 ? 1 : 0;
+      const state = s.solver.stateTexture;
+      this.framesSincePrep++;
+      // Derived textures only change when the solver state (or the displayed field) changes. The real solver
+      // re-exports into a new texture after every step and brush edit; a periodic refresh covers solvers that
+      // edit bed textures in place.
+      const changed = state !== this.lastPrepState || useMax !== this.lastPrepUseMax;
+      const due = changed ? this.framesSincePrep >= preset.prepInterval || useMax !== this.lastPrepUseMax : this.framesSincePrep >= 30;
+      if (due && !this.debugSkip.has('prep')) {
+        this.framesSincePrep = 0;
+        this.lastPrepState = state;
+        this.lastPrepUseMax = useMax;
+        const prep = new ArrayBuffer(48);
+        const pi = new Int32Array(prep);
+        const pf = new Float32Array(prep);
+        pi[0] = s.nx;
+        pi[1] = s.ny;
+        pi[2] = s.vx;
+        pi[3] = s.vy;
+        pi[4] = s.stride;
+        pi[5] = useMax;
+        pf[6] = 0.01;
+        pf[7] = s.terrain.cellSize;
+        pf[8] = 0.05;
+        d.queue.writeBuffer(s.prepParams, 0, prep);
+        const bgs = this.prepBindGroups(s);
+        const cp = enc.beginComputePass({ label: 'prep', timestampWrites: this.timer.writes('prep') });
+        cp.setPipeline(this.P.prepCells);
+        cp.setBindGroup(0, bgs.cells);
+        cp.dispatchWorkgroups(Math.ceil(s.nx / 16), Math.ceil(s.ny / 16));
+        cp.setPipeline(this.P.prepVerts);
+        cp.setBindGroup(0, bgs.verts);
+        cp.dispatchWorkgroups(Math.ceil(s.vx / 16), Math.ceil(s.vy / 16));
+        cp.setPipeline(this.P.wetBase);
+        cp.setBindGroup(0, s.wetBGs[0]);
+        cp.dispatchWorkgroups(Math.ceil(s.wetTex.width / 16), Math.ceil(s.wetTex.height / 16));
+        cp.setPipeline(this.P.wetDown);
+        for (let lv = 1; lv < s.wetBGs.length; lv++) {
+          cp.setBindGroup(0, s.wetBGs[lv]);
+          cp.dispatchWorkgroups(Math.ceil(Math.max(1, s.wetTex.width >> lv) / 8), Math.ceil(Math.max(1, s.wetTex.height >> lv) / 8));
+        }
+        cp.end();
+      }
     }
 
     const pass = enc.beginRenderPass({
@@ -683,17 +899,23 @@ class DelugeRenderer implements FloodRenderer {
         { view: this.msaaColor!.createView(), resolveTarget: this.hdr!.createView(), loadOp: 'clear', storeOp: 'discard', clearValue: [0, 0, 0, 1] },
       ],
       depthStencilAttachment: { view: this.msaaDepth!.createView(), depthClearValue: 0, depthLoadOp: 'clear', depthStoreOp: 'discard' },
+      timestampWrites: this.timer.writes('main'),
     });
-    pass.setPipeline(this.P.sky);
-    pass.setBindGroup(0, this.skyBG);
-    pass.draw(3);
+    if (!s && !this.debugSkip.has('sky')) {
+      pass.setPipeline(this.P.sky);
+      pass.setBindGroup(0, this.skyBG);
+      pass.draw(3);
+    }
 
     if (s && this.mesh) {
       const m = this.mesh;
       pass.setBindGroup(0, s.terrainBG);
-      pass.setIndexBuffer(m.index, 'uint32');
-      pass.setPipeline(this.P.terrain);
-      pass.drawIndexed(m.indexCount);
+      if (this.nodeCount > 0 && this.nodeBuf.buffer) {
+        pass.setVertexBuffer(0, this.nodeBuf.buffer);
+        pass.setIndexBuffer(this.patchIndex, 'uint16');
+        pass.setPipeline(this.P.terrain);
+        if (!this.debugSkip.has('terrain')) pass.drawIndexed(this.patchIndexCount, this.nodeCount);
+      }
       pass.setIndexBuffer(m.skirt, 'uint32');
       pass.setPipeline(this.P.skirt);
       pass.drawIndexed(m.skirtCount);
@@ -706,17 +928,26 @@ class DelugeRenderer implements FloodRenderer {
         pass.drawIndexed(this.markerOpaqueI.count);
       }
 
+      if (!this.debugSkip.has('sky')) {
+        pass.setPipeline(this.P.sky);
+        pass.setBindGroup(0, this.skyBG);
+        pass.draw(3);
+      }
+
       pass.setBindGroup(0, s.waterBG);
-      pass.setIndexBuffer(m.index, 'uint32');
-      pass.setPipeline(this.P.water);
-      pass.drawIndexed(m.indexCount);
+      if (this.nodeCount > 0 && this.nodeBuf.buffer) {
+        pass.setVertexBuffer(0, this.nodeBuf.buffer);
+        pass.setIndexBuffer(this.patchIndex, 'uint16');
+        pass.setPipeline(this.P.water);
+        if (!this.debugSkip.has('water')) pass.drawIndexed(this.patchIndexCount, this.nodeCount);
+      }
       pass.setIndexBuffer(m.skirt, 'uint32');
       pass.setPipeline(this.P.waterSkirt);
       pass.drawIndexed(m.skirtCount);
 
       pass.setBindGroup(0, s.overlayBG);
       pass.setPipeline(this.P.ribbons);
-      if (settings.showRoads && s.roadVerts && s.roadIndices && s.roadIndexCount > 0) {
+      if (!this.debugSkip.has('roads') && settings.showRoads && s.roadVerts && s.roadIndices && s.roadIndexCount > 0) {
         pass.setVertexBuffer(0, s.roadVerts);
         pass.setIndexBuffer(s.roadIndices, 'uint32');
         pass.drawIndexed(s.roadIndexCount);
@@ -735,7 +966,7 @@ class DelugeRenderer implements FloodRenderer {
       }
     }
 
-    const drops = rainDropCount(settings.rainRate);
+    const drops = rainDropCount(settings.rainRate, preset.rainDrops);
     if (drops > 0) {
       pass.setPipeline(this.P.rain);
       pass.setBindGroup(0, this.rainBG);
@@ -744,33 +975,50 @@ class DelugeRenderer implements FloodRenderer {
     pass.end();
 
     // Bloom: bright-pass ¼-res downsample, then horizontal + vertical blur.
-    const bloomPass = (target: GPUTexture, bg: GPUBindGroup) => {
-      const p = enc.beginRenderPass({ colorAttachments: [{ view: target.createView(), loadOp: 'clear', storeOp: 'store', clearValue: [0, 0, 0, 1] }] });
-      p.setPipeline(this.P.bloom);
-      p.setBindGroup(0, bg);
-      p.draw(3);
-      p.end();
-    };
-    bloomPass(this.bloomA!, this.bloomBGs[0]);
-    bloomPass(this.bloomB!, this.bloomBGs[1]);
-    bloomPass(this.bloomA!, this.bloomBGs[2]);
+    if (preset.bloom && !this.debugSkip.has('bloom')) {
+      const bloomPass = (target: GPUTexture, bg: GPUBindGroup, timed: boolean) => {
+        const p = enc.beginRenderPass({
+          colorAttachments: [{ view: target.createView(), loadOp: 'clear', storeOp: 'store', clearValue: [0, 0, 0, 1] }],
+          timestampWrites: timed ? this.timer.writes('post') : undefined,
+        });
+        p.setPipeline(this.P.bloom);
+        p.setBindGroup(0, bg);
+        p.draw(3);
+        p.end();
+      };
+      bloomPass(this.bloomA!, this.bloomBGs[0], false);
+      bloomPass(this.bloomB!, this.bloomBGs[1], false);
+      bloomPass(this.bloomA!, this.bloomBGs[2], false);
+    }
 
     const overcast = smoothstep(1, 60, settings.rainRate);
     const srgbOut = this.format.endsWith('-srgb') ? 0 : 1;
-    d.queue.writeBuffer(this.postBuf, 0, new Float32Array([0.62 * (1 + overcast * 0.35), srgbOut, 0.35, settings.time]));
+    d.queue.writeBuffer(this.postBuf, 0, new Float32Array([0.62 * (1 + overcast * 0.35), srgbOut, 0.35, preset.bloom ? 1 : 0]));
     const tp = enc.beginRenderPass({
       label: 'tonemap',
       colorAttachments: [{ view: this.ctx.getCurrentTexture().createView(), loadOp: 'clear', storeOp: 'store', clearValue: [0, 0, 0, 1] }],
+      timestampWrites: this.timer.writes('post'),
     });
     tp.setPipeline(this.P.tonemap);
     tp.setBindGroup(0, this.tonemapBG!);
     tp.draw(3);
     tp.end();
 
+    const timed = this.timer.resolve(enc);
     d.queue.submit([enc.finish()]);
+    if (timed) this.timer.collect();
+
+    const st = this.stats;
+    st.framesDrawn++;
+    st.prepMs = this.timer.ms.prep;
+    st.mainMs = this.timer.ms.main;
+    st.postMs = this.timer.ms.post;
+    st.gpuMs = this.timer.totalMs;
+    const cpu = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - cpuStart;
+    st.cpuMs += (cpu - st.cpuMs) * 0.1;
   }
 
-  private writeFrameUniforms(settings: RenderSettings): void {
+  private writeFrameUniforms(settings: RenderSettings): CameraMatrices {
     const f = this.frameData;
     const s = this.scene;
     const cssW = Math.max(1, this.canvas.clientWidth || this.width);
@@ -856,6 +1104,7 @@ class DelugeRenderer implements FloodRenderer {
     ov[10] = settings.showImagery ? 0.55 : 0.8;
     ov[11] = s?.roadStatusCopy ? 1 : 0;
     this.device.queue.writeBuffer(this.overlayBuf, 0, ov);
+    return m;
   }
 
   // ── Picking ──────────────────────────────────────────────────────────────────────────────
@@ -876,13 +1125,46 @@ class DelugeRenderer implements FloodRenderer {
     this.camera.detach();
     this.resizeObserver?.disconnect();
     this.disposeScene();
-    this.mesh?.index.destroy();
     this.mesh?.skirt.destroy();
     this.mesh = null;
+    this.patchIndex.destroy();
+    this.nodeBuf.destroy();
     for (const t of [this.msaaColor, this.msaaDepth, this.hdr, this.bloomA, this.bloomB, this.rippleTex, this.dummyImagery]) t?.destroy();
     for (const b of [this.frameBuf, this.overlayBuf, this.postBuf, ...this.bloomBufs]) b.destroy();
     for (const b of [this.dynRibbons, this.dynRibbonIdx, this.markerOpaqueV, this.markerOpaqueI, this.markerBlendV, this.markerBlendI]) b.destroy();
+    this.timer.destroy();
   }
+}
+
+function nextPow2(n: number): number {
+  let p = 1;
+  while (p < n) p *= 2;
+  return p;
+}
+
+/** Triangle indices of one (LOD_PATCH+1)² vertex patch, split along the (k+1,l)–(k,l+1) diagonal like heightAt. */
+function createPatchIndex(device: GPUDevice): GPUBuffer {
+  const side = LOD_PATCH + 1;
+  const count = LOD_PATCH * LOD_PATCH * 6;
+  const buf = device.createBuffer({ label: 'lod-patch-idx', size: Math.ceil((count * 2) / 4) * 4, usage: GPUBufferUsage.INDEX, mappedAtCreation: true });
+  const I = new Uint16Array(buf.getMappedRange(), 0, count);
+  let o = 0;
+  for (let l = 0; l < LOD_PATCH; l++) {
+    for (let k = 0; k < LOD_PATCH; k++) {
+      const a = l * side + k;
+      const b = a + 1;
+      const c = a + side;
+      const d = c + 1;
+      I[o++] = a;
+      I[o++] = c;
+      I[o++] = b;
+      I[o++] = b;
+      I[o++] = c;
+      I[o++] = d;
+    }
+  }
+  buf.unmap();
+  return buf;
 }
 
 function niceStep(raw: number): number {
@@ -891,9 +1173,9 @@ function niceStep(raw: number): number {
   return (f < 1.5 ? 1 : f < 3.5 ? 2 : f < 7.5 ? 5 : 10) * p;
 }
 
-function rainDropCount(rate: number): number {
+function rainDropCount(rate: number, maxDrops: number): number {
   if (!(rate > 0.2)) return 0;
-  return Math.round(MAX_RAIN_DROPS * clamp(Math.log1p(rate) / Math.log1p(120), 0.04, 1));
+  return Math.round(maxDrops * clamp(Math.log1p(rate) / Math.log1p(120), 0.04, 1));
 }
 
 function hashArray(a: Float32Array): number {

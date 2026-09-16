@@ -4,11 +4,11 @@
  *  cells  (nx×ny)  → surfTex rgba16float: h, u, v, foam source          (filterable)
  *                    normTex rgba16float: ∂bed/∂x, ∂bed/∂z, ∂η/∂x, ∂η/∂z (filterable, wet-only η differences)
  *                    miscTex rgba16float: barrier, max depth, 0, 0        (filterable)
- *  verts  (vx×vy)  → vtxTex  rgba32float: bed, water surface, mean depth, wet-neighbourhood flag
+ *  verts  (vx×vy)  → vtxTex  rgba32float: bed, water surface, mean depth, wet flag (any of its 4 cells wet)
+ *  wet    pyramid  → wetTex  r32float mips: per base quad "water may be visible here", max-downsampled
  *
- * The vertex texture lets both the terrain and water vertex shaders use a single textureLoad per vertex,
- * and the wet-neighbourhood flag lets the water mesh cull whole dry regions by emitting degenerate
- * triangles (a vertex is only flagged dry when every triangle touching it is dry).
+ * The vertex texture lets both the terrain and water vertex shaders use a single textureLoad per base-grid
+ * vertex; the wet pyramid lets the water pass cull dry LOD nodes and sink far-from-water vertices.
  */
 
 export const PREP_WGSL = /* wgsl */ `
@@ -122,9 +122,9 @@ export const PREP_VERTS_WGSL = /* wgsl */ `
 fn verts(@builtin(global_invocation_id) gid: vec3u) {
   let kl = vec2i(gid.xy);
   if (kl.x >= P.vx || kl.y >= P.vy) { return; }
-  let s = P.stride;
-  let base = kl * s;
+  let base = kl * P.stride;
 
+  // A vertex sits on the corner shared by the 4 surrounding cells.
   var groundSum = 0.0;
   var barrierMax = 0.0;
   var depthSum = 0.0;
@@ -147,24 +147,53 @@ fn verts(@builtin(global_invocation_id) gid: vec3u) {
       }
     }
   }
+  // Ground is averaged (smooth terrain), barriers take the max so one-cell walls keep their full height.
   let bedV = groundSum * 0.25 + barrierMax;
   var surface = bedV - P.collapse;
   if (wetCount > 0.0) {
     surface = min(etaWet / wetCount, bedV + depthMax);
   }
+  textureStore(vtxOut, kl, vec4f(bedV, surface, depthSum * 0.25, select(0.0, 1.0, wetCount > 0.0)));
+}
+`;
 
-  // Wet-neighbourhood flag: any wet cell touching this vertex or any adjacent vertex.
-  var flag = select(0.0, 1.0, wetCount > 0.0);
-  if (flag == 0.0) {
-    for (var oy = -s - 1; oy <= s && flag == 0.0; oy++) {
-      for (var ox = -s - 1; ox <= s; ox++) {
-        if (depthOf(state(cl(base + vec2i(ox, oy)))) > P.hWet) {
-          flag = 1.0;
-          break;
-        }
-      }
-    }
+/**
+ * Wet pyramid (r32float with mips): mip 0 texel (k, l) = 1 if any corner of base quad (k, l) touches a wet cell
+ * (i.e. the quad's water triangles can be visible, dilated by one cell); mip j+1 = max over 2×2 of mip j.
+ * The water vertex shader uses it to collapse whole dry LOD nodes and to sink vertices far from any water.
+ */
+export const WET_BASE_WGSL = /* wgsl */ `
+@group(0) @binding(0) var vtxTex: texture_2d<f32>;
+@group(0) @binding(1) var dst: texture_storage_2d<r32float, write>;
+
+@compute @workgroup_size(16, 16)
+fn wetBase(@builtin(global_invocation_id) gid: vec3u) {
+  let size = vec2i(textureDimensions(dst));
+  let p = vec2i(gid.xy);
+  if (p.x >= size.x || p.y >= size.y) { return; }
+  let m = vec2i(textureDimensions(vtxTex));
+  var w = 0.0;
+  if (p.x < m.x - 1 && p.y < m.y - 1) {
+    w = max(max(textureLoad(vtxTex, p, 0).a, textureLoad(vtxTex, p + vec2i(1, 0), 0).a),
+            max(textureLoad(vtxTex, p + vec2i(0, 1), 0).a, textureLoad(vtxTex, p + vec2i(1, 1), 0).a));
   }
-  textureStore(vtxOut, kl, vec4f(bedV, surface, depthSum * 0.25, flag));
+  textureStore(dst, p, vec4f(w, 0.0, 0.0, 0.0));
+}
+`;
+
+export const WET_DOWN_WGSL = /* wgsl */ `
+@group(0) @binding(0) var src: texture_2d<f32>;
+@group(0) @binding(1) var dst: texture_storage_2d<r32float, write>;
+
+@compute @workgroup_size(8, 8)
+fn wetDown(@builtin(global_invocation_id) gid: vec3u) {
+  let size = vec2i(textureDimensions(dst));
+  let p = vec2i(gid.xy);
+  if (p.x >= size.x || p.y >= size.y) { return; }
+  let s = vec2i(textureDimensions(src)) - 1;
+  let q = p * 2;
+  let w = max(max(textureLoad(src, min(q, s), 0).r, textureLoad(src, min(q + vec2i(1, 0), s), 0).r),
+              max(textureLoad(src, min(q + vec2i(0, 1), s), 0).r, textureLoad(src, min(q + vec2i(1, 1), s), 0).r));
+  textureStore(dst, p, vec4f(w, 0.0, 0.0, 0.0));
 }
 `;
