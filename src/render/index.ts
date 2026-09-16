@@ -21,13 +21,13 @@ import { HeightField, meshStride } from './heightfield';
 import { frustumPlanes, LOD_INSTANCE_FLOATS, LOD_PATCH, LodTree } from './lod';
 import { bandsForMode, cssToLinear } from './legend';
 import { buildMarkers, buildRoadRibbons, buildWallGhost, circlePolyline, MarkerBuilder, RibbonBuilder, RibbonKind } from './overlays';
-import { pickTerrain, screenRay } from './picking';
+import { cameraRay, pickTerrain } from './picking';
 import { createPipelines, DEPTH_FORMAT, HDR_FORMAT, MSAA, type Pipelines } from './pipelines';
 import { FRAME_UNIFORM_SIZE } from './shaders/common';
 import { OVERLAY_UNIFORM_SIZE } from './shaders/overlay';
 import { createImageryTexture, createRippleTexture, createSolidTexture } from './textures';
 import { clamp, smoothstep } from './math';
-import { AdaptiveResolution, QUALITY_PRESETS, targetSize, type QualityPreset, type RendererQuality } from './quality';
+import { AdaptiveQuality, QUALITY_PRESETS, targetSize, type QualityPreset, type RendererQuality } from './quality';
 import { GpuTimer } from './gpuTimer';
 
 export { DEPTH_BANDS, MAX_DEPTH_BANDS, VELOCITY_BANDS, bandsForMode } from './legend';
@@ -54,8 +54,10 @@ export interface RendererStats {
   framesSkipped: number;
   width: number;
   height: number;
-  /** Rendered pixels relative to the canvas at its capped DPR (1 = full resolution). */
+  /** Rendered pixels per CSS pixel along each axis (e.g. 2 on a Retina display at full resolution). */
   renderScale: number;
+  /** Current 'auto' ladder step (0 = best); -1 for fixed presets. */
+  autoLevel: number;
   gpuTimingAvailable: boolean;
 }
 
@@ -158,11 +160,12 @@ class DelugeRenderer implements DelugeRendererAPI {
     width: 0,
     height: 0,
     renderScale: 1,
+    autoLevel: -1,
     gpuTimingAvailable: false,
   };
 
   private qualityMode: RendererQuality = 'auto';
-  private adaptive = new AdaptiveResolution();
+  private adaptive = new AdaptiveQuality();
   private timer: GpuTimer;
   /** Previous rendered frame's inputs, for the idle cap and prep skipping. */
   private lastDrawAt = 0;
@@ -640,17 +643,7 @@ class DelugeRenderer implements DelugeRendererAPI {
   }
 
   private preset(): QualityPreset {
-    if (this.qualityMode !== 'auto') return QUALITY_PRESETS[this.qualityMode];
-    const p = this.adaptive.pixels;
-    return {
-      maxDpr: 2,
-      maxPixels: p,
-      bloom: p >= 1280 * 800,
-      prepInterval: p >= 1280 * 800 ? 1 : 2,
-      idleFps: 30,
-      rainDrops: p >= 1920 * 1080 ? 14000 : 9000,
-      lodQuadPixels: p >= 1600 * 1000 ? 3 : 4,
-    };
+    return this.qualityMode === 'auto' ? this.adaptive.preset : QUALITY_PRESETS[this.qualityMode];
   }
 
   private ensureTargets(preset: QualityPreset): void {
@@ -659,8 +652,8 @@ class DelugeRenderer implements DelugeRendererAPI {
     const cssW = Math.max(1, canvas.clientWidth || canvas.width || 1);
     const cssH = Math.max(1, canvas.clientHeight || canvas.height || 1);
     const [w, h] = targetSize(cssW, cssH, dpr, preset.maxDpr, preset.maxPixels, this.device.limits.maxTextureDimension2D);
-    const full = cssW * cssH * Math.min(2, dpr || 1) ** 2;
-    this.stats.renderScale = Math.min(1, Math.sqrt((w * h) / Math.max(1, full)));
+    this.stats.renderScale = Math.sqrt((w * h) / Math.max(1, cssW * cssH));
+    this.stats.autoLevel = this.qualityMode === 'auto' ? this.adaptive.level : -1;
     if (w === this.width && h === this.height && this.msaaColor) {
       this.needsResize = false;
       return;
@@ -824,7 +817,7 @@ class DelugeRenderer implements DelugeRendererAPI {
 
     const s = this.scene;
     if (s) {
-      s.lod.refreshSome(2);
+      s.lod.refreshSome();
       const [lo, hi] = s.lod.range;
       s.hf.minElev = lo;
       s.hf.maxElev = hi;
@@ -835,7 +828,8 @@ class DelugeRenderer implements DelugeRendererAPI {
       this.syncOverlays();
       const snap = s.solver.getSnapshot();
       const maxDepth = snap && Number.isFinite(snap.stats.maxDepth) ? snap.stats.maxDepth : 30;
-      const pixelAngle = (2 * Math.tan(matrices.fovY / 2)) / Math.max(1, this.height);
+      // LOD error is measured against a ~1100 px-tall reference so Retina resolutions don't multiply geometry.
+      const pixelAngle = (2 * Math.tan(matrices.fovY / 2)) / Math.min(1100, Math.max(1, this.height));
       const sel = s.lod.select(matrices.eye, frustumPlanes(matrices.viewProj), pixelAngle, preset.lodQuadPixels, this.exaggeration, 3, Math.min(maxDepth, 200) + 12);
       this.nodeBuf.write(sel.instances, sel.count);
       this.nodeCount = sel.count;
@@ -1023,6 +1017,7 @@ class DelugeRenderer implements DelugeRendererAPI {
     const s = this.scene;
     const cssW = Math.max(1, this.canvas.clientWidth || this.width);
     const cssH = Math.max(1, this.canvas.clientHeight || this.height);
+    this.camera.aspect = cssW / cssH;
     const m = this.camera.matrices(cssW / cssH);
     f.set(m.viewProj, 0);
     f.set(m.invViewProj, 16);
@@ -1100,10 +1095,10 @@ class DelugeRenderer implements DelugeRendererAPI {
     const cc = o?.cursor?.color ?? [1, 1, 1];
     ov.set([cc[0], cc[1], cc[2], 0.95], 0);
     const blocked = o?.routeState === 'blocked';
-    ov.set(blocked ? [1.6, 0.1, 0.06, 1] : [0.12, 0.9, 1.4, 0], 4);
-    ov[8] = Math.max(25, this.camera.pose.distance * 0.03);
+    ov.set(blocked ? [1.8, 0.1, 0.06, 1] : [0.1, 0.85, 1.5, 0], 4);
+    ov[8] = Math.max(25, this.camera.pose.distance * 0.035);
     ov[9] = o?.routeState === 'ok' ? 1 : blocked ? 2 : 0;
-    ov[10] = settings.showImagery ? 0.55 : 0.8;
+    ov[10] = settings.showImagery ? 0.7 : 0.85;
     ov[11] = s?.roadStatusCopy ? 1 : 0;
     this.device.queue.writeBuffer(this.overlayBuf, 0, ov);
     return m;
@@ -1117,7 +1112,7 @@ class DelugeRenderer implements DelugeRendererAPI {
     const cssW = Math.max(1, this.canvas.clientWidth || this.width);
     const cssH = Math.max(1, this.canvas.clientHeight || this.height);
     const m = this.camera.matrices(cssW / cssH);
-    const ray = screenRay(cssX, cssY, cssW, cssH, m.invViewProj);
+    const ray = cameraRay(m, cssX, cssY, cssW, cssH);
     return pickTerrain(ray, s.hf, this.exaggeration, s.solver.getSnapshot());
   }
 

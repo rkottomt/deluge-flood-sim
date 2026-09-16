@@ -105,37 +105,51 @@ export function buildLiveScenario(
   sample.sort((a, b) => a - b);
   const median = sample[sample.length >> 1] ?? 0;
 
-  // Stage control on the largest water body that touches the domain edge (a river flowing through).
+  // Stage control: a stage source wherever a sizeable water body (a river flowing through, or a lake cut by the
+  // edge) crosses the domain boundary, each at its local surface level — a sloping river keeps its slope and the
+  // slider raises every water surface that enters or leaves the domain.
   const sources: WaterSource[] = [];
   let stage: ScenarioPreset['stage'] = null;
-  const river = bodies.find((b) => b.cells * cellSize * cellSize > 50000 && b.touchesEdge);
-  if (river) {
-    // One stage source wherever the river crosses the domain edge, each at its local surface level, so a
-    // sloping river keeps its slope and the slider raises the whole water surface.
-    const pts = edgeSourcePoints(river, nx, ny);
-    pts.slice(0, 6).forEach((p, idx) => {
-      sources.push({ id: `stage-${idx + 1}`, type: 'stage', gx: p.gx, gy: p.gy, radius: p.radius, level: Math.round(p.level * 100) / 100, label: 'River stage' });
+  const edgeBodies = bodies.filter((b) => b.touchesEdge && b.cells * cellSize * cellSize > 50000);
+  const candidates = edgeBodies.flatMap((b) => edgeSourcePoints(b, nx, ny).map((p) => ({ ...p, body: b })));
+  candidates.sort((a, b) => b.radius - a.radius);
+  const MAX_STAGE_SOURCES = 8;
+  for (const c of candidates) {
+    if (sources.length >= MAX_STAGE_SOURCES) break;
+    // Skip near-duplicates (a wide river crossing a corner shows up on two edges).
+    if (sources.some((s) => Math.hypot(s.gx - c.gx, s.gy - c.gy) < 2 * (s.radius + c.radius))) continue;
+    sources.push({
+      id: `stage-${sources.length + 1}`,
+      type: 'stage',
+      gx: c.gx,
+      gy: c.gy,
+      radius: c.radius,
+      level: Math.round(c.level * 100) / 100,
+      label: 'Water level at the domain edge',
     });
-    if (sources.length) {
-      stage = {
-        label: 'River level (detected water surface)',
-        gaugeDatum: river.level,
-        normalLevel: river.level,
-        maxOffset: 10,
-      };
-    }
+  }
+  const mainBody = edgeBodies[0] ?? null;
+  if (sources.length && mainBody) {
+    stage = {
+      label: `Water level (detected surface ${mainBody.level.toFixed(1)} m)`,
+      gaugeDatum: Math.round(mainBody.level * 100) / 100,
+      normalLevel: Math.round(mainBody.level * 100) / 100,
+      maxOffset: 10,
+    };
   }
 
-  const floodCeiling = (river?.level ?? sample[Math.floor(sample.length * 0.1)] ?? median) + 12;
-  const shelters = pickHighShelters(elev, nx, ny, roads, floodCeiling, 3);
+  // Shelters: dry intersections above the flood ceiling (the raised water level, or low ground + 12 m).
+  const waterLevel = mainBody?.level ?? bodies[0]?.level ?? sample[Math.floor(sample.length * 0.05)] ?? median;
+  const floodCeiling = waterLevel + (stage ? stage.maxOffset : 12);
+  const shelters = pickHighShelters(elev, nx, ny, cellSize, roads, bodies, floodCeiling, 4);
 
   const sizeKm = (nx * cellSize) / 1000;
   const description =
     `${name}: ${sizeKm.toFixed(1)} km × ${sizeKm.toFixed(1)} km of live ${demSource === 'usgs3dep' ? 'USGS 3DEP' : 'Terrarium'} ` +
     `elevation at ${cellSize.toFixed(1)} m per cell` +
-    (bodies.length ? `, with ${bodies.length} water bod${bodies.length === 1 ? 'y' : 'ies'} detected and pre-filled` : '') +
+    (bodies.length ? `, with ${bodies.length} water surface${bodies.length === 1 ? '' : 's'} detected and pre-filled` : '') +
     '. Add rain or a storm cell, drop inflow sources on streams' +
-    (stage ? ', raise the river level' : '') +
+    (stage ? ', raise the water level' : '') +
     ', and set an evacuation start point to see which roads stay dry.';
 
   return {
@@ -209,36 +223,66 @@ function edgeSourcePoints(b: WaterBody, nx: number, ny: number): Array<{ gx: num
 }
 
 /**
- * Pick up to `count` shelters: road nodes (or grid cells when there are no roads) well above `ceiling`,
- * preferring high ground, spread apart by farthest-point sampling.
+ * Pick up to `count` shelters for a live area: road intersections (degree ≥ 3, so they're in town and reachable)
+ * at least 3 m above `ceiling` and ≥ 150 m from detected water, spread out by farthest-point sampling that
+ * starts near the domain center. Where no ground clears the ceiling (e.g. New Orleans) the highest intersections
+ * away from water are used. Names come from the street at the intersection.
  */
 export function pickHighShelters(
   elev: Float32Array,
   nx: number,
   ny: number,
+  cellSize: number,
   roads: RoadNetwork | null,
+  bodies: WaterBody[],
   ceiling: number,
   count: number,
 ): Shelter[] {
-  const cand: Array<{ gx: number; gy: number; z: number }> = [];
   const margin = Math.max(8, nx * 0.04);
-  const push = (gx: number, gy: number) => {
-    if (gx < margin || gy < margin || gx > nx - margin || gy > ny - margin) return;
-    const z = elev[Math.min(ny - 1, Math.floor(gy)) * nx + Math.min(nx - 1, Math.floor(gx))];
-    cand.push({ gx, gy, z });
-  };
-  if (roads && roads.nodes.length >= 2) {
-    for (let k = 0; k < roads.nodes.length / 2; k++) push(roads.nodes[k * 2], roads.nodes[k * 2 + 1]);
-  } else {
+  const inside = (gx: number, gy: number) => gx >= margin && gy >= margin && gx <= nx - margin && gy <= ny - margin;
+  const zAt = (gx: number, gy: number) => elev[Math.min(ny - 1, Math.floor(gy)) * nx + Math.min(nx - 1, Math.floor(gx))];
+  const waterMask = new Uint8Array(nx * ny);
+  for (const b of bodies) for (const k of b.indices) waterMask[k] = 1;
+  const waterDist = bodies.length ? distanceTransform(nx, ny, (k) => waterMask[k] === 1) : null;
+  const farFromWater = (gx: number, gy: number) =>
+    !waterDist || waterDist[Math.min(ny - 1, Math.floor(gy)) * nx + Math.min(nx - 1, Math.floor(gx))] * cellSize >= 150;
+
+  type Cand = { gx: number; gy: number; z: number; name?: string };
+  const cand: Cand[] = [];
+  if (roads && roads.edges.length) {
+    const degree = new Uint16Array(roads.nodes.length / 2);
+    const nameOf: Array<string | undefined> = [];
+    for (const e of roads.edges) {
+      degree[e.a]++;
+      degree[e.b]++;
+      if (e.name) {
+        nameOf[e.a] ??= e.name;
+        nameOf[e.b] ??= e.name;
+      }
+    }
+    for (let k = 0; k < degree.length; k++) {
+      const gx = roads.nodes[k * 2];
+      const gy = roads.nodes[k * 2 + 1];
+      if (degree[k] >= 3 && inside(gx, gy) && farFromWater(gx, gy)) cand.push({ gx, gy, z: zAt(gx, gy), name: nameOf[k] });
+    }
+  }
+  if (!cand.length) {
     const step = Math.max(4, Math.floor(nx / 64));
-    for (let j = step / 2; j < ny; j += step) for (let i = step / 2; i < nx; i += step) push(i + 0.5, j + 0.5);
+    for (let j = step / 2; j < ny; j += step) {
+      for (let i = step / 2; i < nx; i += step) if (inside(i + 0.5, j + 0.5) && farFromWater(i + 0.5, j + 0.5)) cand.push({ gx: i + 0.5, gy: j + 0.5, z: zAt(i + 0.5, j + 0.5) });
+    }
   }
   if (!cand.length) return [];
-  cand.sort((a, b) => b.z - a.z);
-  // Keep the top quartile (by elevation) that is above the flood ceiling.
-  let pool = cand.slice(0, Math.max(count, Math.ceil(cand.length * 0.25))).filter((c) => c.z > ceiling);
-  if (pool.length === 0) pool = cand.slice(0, Math.max(count, 16));
-  const chosen = [pool[0]];
+  let pool = cand.filter((c) => c.z >= ceiling + 3);
+  if (pool.length < count) {
+    // Nothing (or too little) clears the flood ceiling: fall back to the highest tenth of the candidates.
+    const sorted = cand.slice().sort((a, b) => b.z - a.z);
+    pool = sorted.slice(0, Math.max(count, Math.ceil(sorted.length * 0.1)));
+  }
+  // Farthest-point sampling seeded with the pool candidate nearest the domain center.
+  let first = pool[0];
+  for (const c of pool) if (Math.hypot(c.gx - nx / 2, c.gy - ny / 2) < Math.hypot(first.gx - nx / 2, first.gy - ny / 2)) first = c;
+  const chosen = [first];
   while (chosen.length < count && chosen.length < pool.length) {
     let best = pool[0];
     let bestD = -1;
@@ -250,8 +294,12 @@ export function pickHighShelters(
         best = c;
       }
     }
-    if (bestD <= 0) break;
+    if (bestD * cellSize < 200) break;
     chosen.push(best);
   }
-  return chosen.map((c, idx) => ({ name: `High ground ${String.fromCharCode(65 + idx)} (${Math.round(c.z)} m)`, gx: c.gx, gy: c.gy }));
+  return chosen.map((c, idx) => ({
+    name: `${c.name ? `Shelter — ${c.name}` : `High ground ${String.fromCharCode(65 + idx)}`} (${Math.round(c.z)} m)`,
+    gx: Math.round(c.gx * 100) / 100,
+    gy: Math.round(c.gy * 100) / 100,
+  }));
 }

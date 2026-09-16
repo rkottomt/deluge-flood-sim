@@ -7,7 +7,7 @@
  */
 import type { CameraController, CameraPose } from '../contracts';
 import { clamp, mat4Invert, mat4Multiply, perspectiveReversedInfinite, v3, viewFromBasis, type Mat4, type Vec3 } from './math';
-import { intersectPlaneY, screenRay, type Ray } from './picking';
+import { cameraRay, intersectPlaneY, type Ray } from './picking';
 
 export const CAMERA_FOV_Y = (42 * Math.PI) / 180;
 const MIN_PITCH = 0.035;
@@ -34,6 +34,8 @@ export interface CameraMatrices {
   invViewProj: Mat4;
   eye: Vec3;
   forward: Vec3;
+  right: Vec3;
+  up: Vec3;
   near: number;
   fovY: number;
   aspect: number;
@@ -104,6 +106,8 @@ export class OrbitController implements CameraController {
   private canvas: HTMLCanvasElement | null = null;
   private listeners: Array<[EventTarget, string, EventListener, AddEventListenerOptions?]> = [];
   private viewportCss = { w: 1, h: 1 };
+  /** Viewport aspect (width / height), kept current by the renderer; used by frameAll. */
+  aspect = 1.6;
 
   constructor(public env: CameraEnvironment) {
     const d = env.nx * env.cellSize;
@@ -146,19 +150,43 @@ export class OrbitController implements CameraController {
   }
 
   frameAll(): void {
+    this.flyTo(this.framingPose(), 1.3);
+  }
+
+  /** Pleasant 3/4 view whose distance is solved so the whole domain box (with relief) fits on screen. */
+  framingPose(yaw = 0.32, pitch = 0.66, margin = 0.94): CameraPose {
     const e = this.env;
     const size = Math.max(e.nx, e.ny) * e.cellSize;
-    const center = e.heightAt(e.nx / 2, e.ny / 2);
-    const elev = center ?? e.minElev;
-    this.flyTo(
-      {
-        target: { gx: e.nx / 2, gy: e.ny * 0.53, elevation: clamp(elev, e.minElev, e.maxElev) },
-        distance: size * 1.12,
-        yaw: 0.32,
-        pitch: 0.66,
-      },
-      1.3,
-    );
+    const hx = (e.nx / 2) * e.cellSize;
+    const hz = (e.ny / 2) * e.cellSize;
+    const y0 = e.minElev * e.exaggeration;
+    const y1 = e.maxElev * e.exaggeration;
+    const corners: Vec3[] = [];
+    for (const x of [-hx, hx]) for (const y of [y0, y1]) for (const z of [-hz, hz]) corners.push([x, y, z]);
+    const pose: CameraPose = { target: { gx: e.nx / 2, gy: e.ny / 2, elevation: (e.minElev + e.maxElev) / 2 }, distance: size, yaw, pitch };
+    const fits = (dist: number) => {
+      pose.distance = dist;
+      const { forward, right, up } = OrbitController.basis(yaw, pitch);
+      const eye = v3.sub(this.worldTarget(pose), v3.scale(forward, dist));
+      const ty = Math.tan(CAMERA_FOV_Y / 2);
+      const tx = ty * Math.max(0.2, this.aspect);
+      for (const c of corners) {
+        const rel = v3.sub(c, eye);
+        const zf = v3.dot(rel, forward);
+        if (zf <= 1) return false;
+        if (Math.abs(v3.dot(rel, right) / (zf * tx)) > margin || Math.abs(v3.dot(rel, up) / (zf * ty)) > margin) return false;
+      }
+      return true;
+    };
+    let lo = size * 0.2;
+    let hi = size * 8;
+    for (let i = 0; i < 40; i++) {
+      const mid = Math.sqrt(lo * hi);
+      if (fits(mid)) hi = mid;
+      else lo = mid;
+    }
+    pose.distance = hi;
+    return pose;
   }
 
   topDown(): void {
@@ -206,7 +234,7 @@ export class OrbitController implements CameraController {
     const proj = perspectiveReversedInfinite(CAMERA_FOV_Y, aspect, near);
     const viewProj = mat4Multiply(proj, view);
     const invViewProj = mat4Invert(viewProj);
-    return { view, proj, viewProj, invViewProj, eye, forward, near, fovY: CAMERA_FOV_Y, aspect };
+    return { view, proj, viewProj, invViewProj, eye, forward, right, up, near, fovY: CAMERA_FOV_Y, aspect };
   }
 
   /** Advance damping / flight. Call once per frame before computing matrices. */
@@ -337,7 +365,7 @@ export class OrbitController implements CameraController {
 
   private rayFor(pose: CameraPose, x: number, y: number): Ray {
     const m = this.matrices(this.viewportCss.w / this.viewportCss.h, pose);
-    return screenRay(x, y, this.viewportCss.w, this.viewportCss.h, m.invViewProj);
+    return cameraRay(m, x, y, this.viewportCss.w, this.viewportCss.h);
   }
 
   private beginInteraction(): void {

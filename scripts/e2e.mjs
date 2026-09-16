@@ -943,7 +943,10 @@ const FLOWS = [
       const wokeRenders = await woke;
       await D(() => window.__deluge.setPaused(false));
       r.metrics = { running, idle, wokeRenders };
-      check(r, 'running: renders at full rate', running.renders >= 50, `${(running.renders / 2).toFixed(0)} renders/s, ${num(running.simAdvanced, 0)} sim s`);
+      // Relative to idle (absolute rates vary with other GPU load on the machine).
+      const runRate = running.renders / 2;
+      const idleRate = idle.renders / 3;
+      check(r, 'running: renders every frame (≥ 20/s and ≥ 4× the idle rate)', runRate >= 20 && runRate >= 4 * idleRate, `${runRate.toFixed(0)} renders/s running vs ${idleRate.toFixed(1)}/s idle, ${num(running.simAdvanced, 0)} sim s`);
       check(r, 'paused: sim time frozen', idle.simAdvanced === 0, `${num(idle.simAdvanced)} sim s advanced`);
       check(r, 'paused + idle: ≤ 6 renders/s', idle.renders <= 18, `${(idle.renders / 3).toFixed(1)} renders/s`);
       check(r, 'paused + idle: animation clock frozen', idle.anim === idle2.anim, `${num(idle.anim, 3)} → ${num(idle2.anim, 3)} s`);

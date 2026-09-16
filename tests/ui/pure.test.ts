@@ -146,3 +146,10 @@ test('evacuation card text drops what the card already shows', async () => {
   assert.equal(blockedAdvice('No safe route — every shelter is flooded. Shelter in place on higher floors.'), 'Every shelter is flooded. Shelter in place on higher floors.');
   assert.match(blockedAdvice(undefined), /Shelter in place/);
 });
+
+test('astronomical values from a blown-up solver stay short', () => {
+  assert.equal(f.formatVolume(-1.285139299216e18), `−1.3e18${T}m³`);
+  assert.equal(f.formatPools(-5.14e20), '−2.1e17 Olympic pools');
+  assert.equal(f.formatKm2(3e24), `3.0e18${T}km²`);
+  assert.ok(f.formatAcres(3e24).length < 16);
+});

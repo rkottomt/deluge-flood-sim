@@ -35,10 +35,10 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     // Domain-edge faces: the ghost cell has the same depth, so hf = h; W/N boundary fluxes are recomputed.
     var qW = w.g;
     var hfW = faceDepth(w.r, w.a, h, s.a);
-    if (i == 0) { qW = -bflux(h, s.a, e.a); hfW = h; }
+    if (i == 0) { qW = -bflux(h, i, j, 1, 0); hfW = h; }
     var qN = n.b;
     var hfN = faceDepth(n.r, n.a, h, s.a);
-    if (j == 0) { qN = -bflux(h, s.a, so.a); hfN = h; }
+    if (j == 0) { qN = -bflux(h, i, j, 0, 1); hfN = h; }
     var hfE = faceDepth(h, s.a, e.r, e.a);
     if (i == sim.nx - 1) { hfE = h; }
     var hfS = faceDepth(h, s.a, so.r, so.a);

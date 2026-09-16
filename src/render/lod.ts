@@ -97,8 +97,13 @@ export class LodTree {
     this.propagate();
   }
 
-  /** Incremental refresh: recompute `rowsPerCall` leaf rows (cyclic) and propagate. Cheap per frame. */
-  refreshSome(rowsPerCall = 2): void {
+  /**
+   * Incremental refresh: recompute leaf rows (cyclic) within a cell budget and propagate. ~0.1 ms per frame, so
+   * edits (walls, digging) reach the bounding boxes within a fraction of a second at any grid size.
+   */
+  refreshSome(cellBudget = 70_000): void {
+    const cellsPerRow = (this.leafCells + 2) * this.nx;
+    const rowsPerCall = Math.max(1, Math.floor(cellBudget / cellsPerRow));
     for (let k = 0; k < rowsPerCall; k++) {
       this.refreshLeafRow(this.refreshRow);
       this.refreshRow = (this.refreshRow + 1) % this.rows[0];

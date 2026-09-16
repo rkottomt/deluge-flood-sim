@@ -17,13 +17,13 @@ const IMAGERY_URL = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_
 const LABELS_URL = 'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}';
 const NOMINATIM = 'https://nominatim.openstreetmap.org';
 
-export const QUICK_PICKS: Array<{ name: string; lat: number; lon: number; note: string }> = [
-  { name: 'New Orleans', lat: 29.9511, lon: -90.0715, note: 'Below sea level' },
-  { name: 'Houston', lat: 29.7604, lon: -95.3698, note: 'Bayous, Harvey 2017' },
-  { name: 'Miami', lat: 25.7617, lon: -80.1918, note: 'Low coastal city' },
-  { name: 'Boulder', lat: 40.015, lon: -105.2705, note: 'Canyon flash floods' },
-  { name: 'Asheville NC', lat: 35.5951, lon: -82.5515, note: 'Mountain river valley' },
-  { name: 'Sacramento', lat: 38.5816, lon: -121.4944, note: 'River confluence' },
+export const QUICK_PICKS: Array<{ name: string; lat: number; lon: number; note: string; tip: string }> = [
+  { name: 'New Orleans', lat: 29.9511, lon: -90.0715, note: 'Below sea level', tip: 'Much of the city sits below sea level between the Mississippi and Lake Pontchartrain' },
+  { name: 'Houston', lat: 29.7604, lon: -95.3698, note: 'Harvey, 2017', tip: 'Flat bayou city — Hurricane Harvey dropped over 40 inches of rain in 2017' },
+  { name: 'Miami', lat: 25.7617, lon: -80.1918, note: 'Low & coastal', tip: 'Low-lying coastal city on porous limestone' },
+  { name: 'Boulder', lat: 40.015, lon: -105.2705, note: 'Flash floods', tip: 'Canyon mouth at the foot of the Rockies — the 2013 Front Range floods' },
+  { name: 'Asheville NC', lat: 35.5951, lon: -82.5515, note: 'Helene, 2024', tip: 'Mountain river valley devastated by Hurricane Helene flooding in 2024' },
+  { name: 'Sacramento', lat: 38.5816, lon: -121.4944, note: 'Two rivers', tip: 'Confluence of the Sacramento and American rivers, protected by levees' },
 ];
 
 const SIZES = [2000, 5000, 8000, 12000] as const;
@@ -157,8 +157,9 @@ export function createLocationPicker(ctx: UIContext): Modal {
     ...QUICK_PICKS.map((p) =>
       h(
         'button',
-        { type: 'button', class: 'dl-quick-btn', 'data-tip': p.note, 'data-tip-side': 'top', onclick: () => setCenter(p.lat, p.lon, p.name, true) },
-        h('span', null, p.name),
+        { type: 'button', class: 'dl-quick-btn', 'data-tip': p.tip, 'data-tip-side': 'top', 'data-pick': p.name, onclick: () => setCenter(p.lat, p.lon, p.name, true) },
+        h('span', { class: 'dl-quick-name' }, p.name),
+        h('span', { class: 'dl-quick-note' }, p.note),
       ),
     ),
   );
@@ -286,6 +287,10 @@ export function createLocationPicker(ctx: UIContext): Modal {
       setText(sumGrid, `${km} × ${km} km · ${resolution} × ${resolution} cells · ${fmtNum(cell, cell < 10 ? 1 : 0)} m`);
     }
     coverageWarn.hidden = !center || isLikelyUSCoverage(center.lat, center.lon);
+    for (const b of quick.querySelectorAll<HTMLButtonElement>('.dl-quick-btn')) {
+      const p = QUICK_PICKS.find((q) => q.name === b.dataset.pick);
+      toggleClass(b, 'dl-on', !!p && !!center && p.lat === center.lat && p.lon === center.lon);
+    }
     toggleClass(summary, 'dl-empty', !center);
     syncLoad();
   }

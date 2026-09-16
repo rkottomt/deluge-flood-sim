@@ -61,6 +61,8 @@ export function writeSceneToUrl(request: SceneRequest): void {
       if (resolution !== APP_CONFIG.liveResolution) url.searchParams.set('res', String(resolution));
       if (name) url.searchParams.set('name', name);
     }
+    // Keep `live=lat,lon,km` readable in shared links (commas are valid in a query string).
+    url.search = url.search.replace(/%2C/gi, ',');
     if (url.href !== window.location.href) window.history.replaceState(null, '', url);
   } catch {
     // Non-essential (e.g. sandboxed iframes may forbid history access).

@@ -45,16 +45,36 @@ export interface SchemeStepParams {
 const g = GRAVITY;
 
 /**
- * Free-outflow boundary flux magnitude (outward, ≥ 0) for an edge cell with depth h and bed zc whose inner
- * neighbour has bed zin. Ghost cell: same depth, bed lowered by dx·S with S = max(local bed slope, minSlope).
- * The face depth is then h and the water-surface slope S; we use the steady (normal-flow) solution of the
- * momentum equation with Manning friction, q = h^{5/3}·√S / n, capped at Froude boundaryFroudeMax in robust mode.
+ * Free-outflow boundary flux magnitude (outward, ≥ 0) of edge cell (i, j); (di, dj) points into the domain.
+ * Ghost cell: same depth, water surface lower by dx·S, S = max(boundaryMinSlope, min(bed slope, surface slope))
+ * toward the edge between the first and second inner cells (boundaryMinSlope alone if either is dry).
+ * Outflow is the steady normal-flow solution q = h^{5/3}·√S / n, capped at Froude boundaryFroudeMax in robust
+ * mode. See bflux in shaders/common.ts for why the slope is measured this way.
  */
-export function boundaryFlux(h: number, zc: number, zin: number, p: SchemeStepParams): number {
-  if (!p.open || !(h >= p.hMin)) return 0;
-  const S = Math.max((zin - zc) / p.dx, p.boundaryMinSlope);
-  let q = (Math.pow(h, 5 / 3) * Math.sqrt(S)) / Math.max(p.manningN, 0.01);
-  if (p.robust) q = Math.min(q, h * Math.min(p.uMax, p.boundaryFroudeMax * Math.sqrt(g * h)));
+export function boundaryFlux(
+  h: ArrayLike<number>,
+  z: ArrayLike<number>,
+  nx: number,
+  ny: number,
+  i: number,
+  j: number,
+  di: number,
+  dj: number,
+  p: SchemeStepParams,
+): number {
+  const hc = h[j * nx + i];
+  if (!p.open || !(hc >= p.hMin)) return 0;
+  const at = (ii: number, jj: number) => Math.min(ny - 1, Math.max(0, jj)) * nx + Math.min(nx - 1, Math.max(0, ii));
+  const a = at(i + di, j + dj);
+  const b = at(i + 2 * di, j + 2 * dj);
+  let S = p.boundaryMinSlope;
+  if (h[a] >= p.hMin && h[b] >= p.hMin) {
+    const bedS = (z[b] - z[a]) / p.dx;
+    const surfS = (z[b] - z[a] + (h[b] - h[a])) / p.dx;
+    S = Math.max(Math.min(bedS, surfS), p.boundaryMinSlope);
+  }
+  let q = (Math.pow(hc, 5 / 3) * Math.sqrt(S)) / Math.max(p.manningN, 0.01);
+  if (p.robust) q = Math.min(q, hc * Math.min(p.uMax, p.boundaryFroudeMax * Math.sqrt(g * hc)));
   return q;
 }
 
@@ -229,10 +249,10 @@ export class CpuReferenceSolver {
     // Face fluxes of an arbitrary cell (boundary faces from the open-boundary rule).
     const faces = (i: number, j: number): [number, number, number, number] => {
       const c = j * nx + i;
-      const qE = i === nx - 1 ? boundaryFlux(h[c], z[c], z[at(i - 1, j)], p) : fx[c];
-      const qW = i === 0 ? -boundaryFlux(h[c], z[c], z[at(i + 1, j)], p) : fx[c - 1];
-      const qS = j === ny - 1 ? boundaryFlux(h[c], z[c], z[at(i, j - 1)], p) : fy[c];
-      const qN = j === 0 ? -boundaryFlux(h[c], z[c], z[at(i, j + 1)], p) : fy[c - nx];
+      const qE = i === nx - 1 ? boundaryFlux(h, z, nx, ny, i, j, -1, 0, p) : fx[c];
+      const qW = i === 0 ? -boundaryFlux(h, z, nx, ny, i, j, 1, 0, p) : fx[c - 1];
+      const qS = j === ny - 1 ? boundaryFlux(h, z, nx, ny, i, j, 0, -1, p) : fy[c];
+      const qN = j === 0 ? -boundaryFlux(h, z, nx, ny, i, j, 0, 1, p) : fy[c - nx];
       return [qE, qW, qS, qN];
     };
     const kOf = (i: number, j: number) => {

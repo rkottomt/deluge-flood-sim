@@ -306,3 +306,68 @@ test('live-area water-body detection finds a lake and a river, not flat fields',
   assert.ok(Math.abs(h[70 * n + 70] - 3) < 1e-3);
   assert.equal(h[60 * n + 200], 0, 'hilltop dry');
 });
+
+test('live areas: a canal behind a leaky sub-grid floodwall does not drown the low neighborhood next to it', () => {
+  const n = 192;
+  const cell = 8;
+  const z = new Float32Array(n * n);
+  for (let j = 0; j < n; j++) {
+    for (let i = 0; i < n; i++) {
+      const k = j * n + i;
+      let v = 6 + 0.02 * i + rough(i, j, 0.1); // high ground west
+      if (i >= 80 && i < 100) v = 0.5; // canal, hydro-flattened at 0.5 m, crossing the domain north → south
+      else if (i === 79 || i === 100) v = 2.5; // levees / floodwalls
+      // Neighborhood east of the canal, below the canal surface, with bare-earth urban roughness (curbs, yards).
+      if (i > 100) v = 0.1 + rough(i, j, 0.2);
+      if (i === 100 && j >= 90 && j < 93) v = 0.3; // a 3-cell gap in the wall the DEM resolution smears
+      z[k] = v;
+    }
+  }
+  const bodies = detectWaterBodies(z, n, n, cell);
+  const canal = bodies.find((b) => Math.abs(b.level - 0.5) < 0.01);
+  assert.ok(canal, 'canal detected');
+  assert.ok(canal!.touchesEdge);
+  const burned = burnWaterBodies(z, n, n, bodies, 3, 2);
+  assert.ok(burned.sealedCells >= 3, `gap sealed (${burned.sealedCells})`);
+  const h = computeInitialWater({ nx: n, ny: n, elevation: burned.elevation }, { initialFill: burned.fills });
+  assert.ok(h[100 * n + 90] > 2.9, 'canal full');
+  let east = 0;
+  for (let j = 0; j < n; j++) for (let i = 102; i < n; i++) if (h[j * n + i] > 0) east++;
+  assert.equal(east, 0, 'neighborhood behind the wall stays dry');
+});
+
+test('live areas: a two-reach river with low gravel-bar banks is fully detected without over-deep water at the step', () => {
+  const n = 256;
+  const cell = 8;
+  const z = new Float32Array(n * n);
+  for (let j = 0; j < n; j++) {
+    for (let i = 0; i < n; i++) {
+      const k = j * n + i;
+      const upper = i < 128;
+      const L = upper ? 91.5 : 90.8; // reaches separated by a riffle at i = 128
+      const d = Math.abs(j - 128);
+      let v = 100 + 0.05 * d + rough(i, j, 0.2);
+      if (d <= 25) v = L - 0.0005 * (i % 128); // gently sloping flat surface
+      else if (d <= 30) {
+        // Banks: on the upper reach's north side a long low gravel bar only 5–15 cm above the water.
+        const bar = upper && j < 128 && i > 10 && i < 118;
+        v = bar ? L + 0.05 + 0.02 * (d - 26) + rough(i, j, 0.01) : L + 0.6 * (d - 25);
+      }
+      if (i >= 126 && i <= 130 && d <= 25) v = 91.15 + rough(i, j, 0.15); // riffle: not flat
+      z[k] = v;
+    }
+  }
+  const bodies = detectWaterBodies(z, n, n, cell);
+  const up = bodies.find((b) => Math.abs(b.level - 91.5) < 0.1);
+  const down = bodies.find((b) => Math.abs(b.level - 90.8) < 0.1);
+  assert.ok(up, 'upper reach (low bars) detected');
+  assert.ok(down, 'lower reach detected');
+  const burned = burnWaterBodies(z, n, n, bodies, 3, 2);
+  assert.equal(burned.fills.length, 1, 'one fill with per-seed levels');
+  const h = computeInitialWater({ nx: n, ny: n, elevation: burned.elevation }, { initialFill: burned.fills });
+  let maxDepth = 0;
+  for (let k = 0; k < h.length; k++) maxDepth = Math.max(maxDepth, h[k]);
+  assert.ok(maxDepth < 3.3, `max initial depth ${maxDepth.toFixed(2)} m (burn is 3 m)`);
+  assert.ok(h[128 * n + 60] > 2.9 && h[128 * n + 200] > 2.9, 'both reaches full');
+  assert.equal(h[20 * n + 60], 0, 'valley side dry');
+});

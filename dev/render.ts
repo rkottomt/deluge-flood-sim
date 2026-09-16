@@ -68,6 +68,8 @@ declare global {
       pose?: Partial<CameraPose> & { target?: Partial<CameraPose['target']> };
       exag?: number;
     }) => void;
+    /** Replace the scene with a new mock scene (exercises setScene/dispose); resolves after a few frames. */
+    __swap: (o: { n?: number; imagery?: boolean; roads?: boolean }) => Promise<string>;
   }
 }
 window.__errors = [];
@@ -105,10 +107,9 @@ async function main() {
   window.__renderer = renderer;
 
   const presetId = q.get('preset');
-  const scene = presetId ? await presetScene(device, presetId) : await mockScene(device);
+  let scene = presetId ? await presetScene(device, presetId) : await mockScene(device);
   renderer.setScene(scene.terrain, scene.solver);
-  const { nx, ny } = scene.terrain;
-  console.log(`[harness] scene ready in ${(performance.now() - t0).toFixed(0)} ms, ${nx}×${ny}, ${gpu.description}`);
+  console.log(`[harness] scene ready in ${(performance.now() - t0).toFixed(0)} ms, ${scene.terrain.nx}×${scene.terrain.ny}, ${gpu.description}`);
 
   const base = scene.cameras[q.get('cam') ?? 'overview'] ?? scene.cameras.overview;
   renderer.camera.pose = {
@@ -158,6 +159,17 @@ async function main() {
   });
 
   window.__pick = (x, y) => renderer.pick(x, y);
+  window.__swap = async (o) => {
+    const old = scene;
+    const next = await mockScene(device, o);
+    renderer.setScene(next.terrain, next.solver);
+    scene = next;
+    old.solver.destroy();
+    renderer.camera.frameAll();
+    await new Promise((r) => setTimeout(r, 500));
+    await device.queue.onSubmittedWorkDone();
+    return `${next.terrain.nx}×${next.terrain.ny} imagery=${!!next.terrain.imagery} roads=${!!next.terrain.roads} lod=${(renderer as unknown as { lodStats: { nodes: number } }).lodStats.nodes}`;
+  };
   window.__set = (o) => {
     if (o.mode) waterMode = o.mode;
     if (o.rain !== undefined) rain = o.rain;
@@ -224,7 +236,7 @@ async function main() {
       const p = renderer.camera.pose;
       const st = renderer.stats;
       hud.textContent =
-        `${(1000 / avg).toFixed(0)} fps  ${avg.toFixed(1)} ms  ${canvas.width}×${canvas.height}  grid ${nx}×${ny}  quality ${renderer.quality} (scale ${st.renderScale.toFixed(2)})\n` +
+        `${(1000 / avg).toFixed(0)} fps  ${avg.toFixed(1)} ms  ${canvas.width}×${canvas.height}  grid ${scene.terrain.nx}×${scene.terrain.ny}  quality ${renderer.quality} (scale ${st.renderScale.toFixed(2)})\n` +
         `gpu ${st.gpuMs.toFixed(2)} ms (prep ${st.prepMs.toFixed(2)} main ${st.mainMs.toFixed(2)} post ${st.postMs.toFixed(2)})  cpu ${st.cpuMs.toFixed(2)} ms\n` +
         `mode ${waterMode}  rain ${rain}  lod ${(renderer as unknown as { lodStats: { nodes: number; perLevel: number[] } }).lodStats.nodes} [${(renderer as unknown as { lodStats: { perLevel: number[] } }).lodStats.perLevel.join(",")}]  ${scene.status()}\n` +
         `cam gx=${p.target.gx.toFixed(0)} gy=${p.target.gy.toFixed(0)} elev=${p.target.elevation.toFixed(0)} d=${p.distance.toFixed(0)} yaw=${p.yaw.toFixed(2)} pitch=${p.pitch.toFixed(2)}`;
@@ -282,14 +294,14 @@ async function main() {
 
 // ── Scene: synthetic valley + mock solver ──────────────────────────────────────────────────
 
-async function mockScene(device: GPUDevice): Promise<HarnessScene> {
-  const n = num('n', 1024);
+async function mockScene(device: GPUDevice, o: { n?: number; imagery?: boolean; roads?: boolean } = {}): Promise<HarnessScene> {
+  const n = o.n ?? num('n', 1024);
   const fixedStage = q.has('stage') ? num('stage', 3) : undefined;
   const { terrain, solver, mock } = await createMockScene(device, {
     n,
     stage: fixedStage,
-    imagery: flag('imagery', true),
-    roads: flag('roads', true),
+    imagery: o.imagery ?? flag('imagery', true),
+    roads: o.roads ?? flag('roads', true),
   });
   const T = mock.town;
   const P = mock.protectedRect;

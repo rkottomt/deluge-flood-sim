@@ -75,7 +75,7 @@ fn fsTonemap(in: FsOut) -> @location(0) vec4f {
   let uv = vec2f(in.ndc.x * 0.5 + 0.5, 0.5 - in.ndc.y * 0.5);
   let px = vec2i(uv * size);
   var hdr = textureLoad(hdrTex, clamp(px, vec2i(0), vec2i(size) - 1), 0).rgb;
-  hdr += textureSampleLevel(bloomTex, linSamp, uv, 0.0).rgb * 0.06 * P.bloom;
+  hdr += textureSampleLevel(bloomTex, linSamp, uv, 0.0).rgb * 0.11 * P.bloom;
   // Guard against NaN/inf from any pass.
   if (!(dot(hdr, vec3f(1.0)) < 1e7)) { hdr = vec3f(0.0); }
   var c = aces(max(hdr, vec3f(0.0)) * P.exposure);
@@ -201,7 +201,7 @@ fn vsRain(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> R
 @fragment
 fn fsRain(in: ROut) -> @location(0) vec4f {
   let edge = 1.0 - abs(in.across);
-  let a = in.fade * (0.25 + 0.75 * edge) * 0.22;
+  let a = in.fade * (0.25 + 0.75 * edge) * 0.3 * (0.6 + 0.4 * smoothstep(5.0, 60.0, F.rainRate));
   let col = mix(F.skyHorizon, vec3f(0.9, 0.93, 1.0), 0.5) * 1.2;
   return vec4f(col * a, a * 0.6);
 }

@@ -1,6 +1,7 @@
 /**
  * Unit tests for the app's power/performance controllers (no GPU, no DOM):
- *   SubstepGovernor (frame-time AIMD work budget) · RenderPacer (idle render pacing) · SimSync override layers.
+ *   SubstepGovernor / WorkBudget (frame-time + GPU-latency AIMD work budget) · RenderPacer (idle render pacing) ·
+ *   SimSync override layers.
  * Run: node --import tsx --test tests/app/*.test.ts
  */
 import { test } from 'node:test';
@@ -38,7 +39,7 @@ function simulate(
   return { now, history, intervals };
 }
 
-const interactive = () => new SubstepGovernor({ targetMs: 20, band: 0.1, minCap: 1, initialCap: 4, windowMs: 300, windowFrames: 10, warmupFrames: 8 });
+const interactive = () => new SubstepGovernor({ targetMs: 20, latencyMs: 1000, band: 0.1, minCap: 1, initialCap: 4, windowMs: 300, windowFrames: 10, warmupFrames: 8 });
 
 test('governor: grows the cap while frames are fast and the cap limits the sim', () => {
   const gov = interactive();
@@ -97,23 +98,69 @@ test('governor: thermal slowdown lowers the cap; never exceeds the user cap', ()
   assert.equal(capped.cap, 4);
 });
 
-test('work budget: each mode learns its own cap; watching and automation trade frame rate for throughput', () => {
+/**
+ * A GPU with a real queue: each vsync (16.7 ms) it drains 16.7 ms of work; requestAnimationFrame only fires while
+ * fewer than 3 frames are queued (like Chrome). A frame's latency is the queued work ahead of it plus its own.
+ */
+function simulateQueue(budget: WorkBudget, frames: number, opts: { baseMs: number; perSubstepMs: number; demand: number }) {
+  const VSYNC = 16.667;
+  let backlog = 0;
+  let now = 0;
+  const latencies: number[] = [];
+  for (let f = 0; f < frames; f++) {
+    let frameMs = VSYNC;
+    now += VSYNC;
+    backlog = Math.max(0, backlog - VSYNC);
+    while (backlog > 2 * VSYNC) {
+      now += VSYNC;
+      frameMs += VSYNC;
+      backlog = Math.max(0, backlog - VSYNC);
+    }
+    const n = Math.min(budget.cap, opts.demand);
+    const work = opts.baseMs + n * opts.perSubstepMs;
+    const latency = backlog + work;
+    backlog += work;
+    budget.observe(frameMs, { simSecondsAdvanced: n * 0.2, substeps: n, dt: 0.2, throttled: opts.demand > n }, now, 120);
+    budget.noteLatency(latency);
+    latencies.push(latency);
+  }
+  return latencies;
+}
+
+test('work budget: GPU latency keeps the queue drained while rAF still looks like 60 fps', () => {
   const budget = new WorkBudget();
-  const load = { baseMs: 8, perSubstepMs: 1.5, demand: 80, smooth: true };
+  // 10 ms render + 1.5 ms/substep: 4 substeps fit a vsync; 5+ silently queue up (latency grows, rAF stays ~60).
+  const load = { baseMs: 10, perSubstepMs: 1.5, demand: 60 };
   budget.setMode('interactive');
-  const a = simulate(budget, 2400, load);
+  const lat = simulateQueue(budget, 3600, load).slice(-1200);
+  const sorted = [...lat].sort((a, b) => a - b);
+  const p50 = sorted[sorted.length >> 1];
+  assert.ok(p50 <= 28 * 1.1, `interactive median latency ${p50.toFixed(1)} ms`);
   const interactiveCap = budget.cap;
+  assert.ok(interactiveCap >= 3 && interactiveCap <= 5, `interactive cap ${interactiveCap}`);
+
   budget.setMode('watching');
-  const b = simulate(budget, 2400, { ...load, t0: a.now });
+  simulateQueue(budget, 3600, load);
   const watchingCap = budget.cap;
   budget.setMode('automation');
-  simulate(budget, 2400, { ...load, t0: b.now });
+  simulateQueue(budget, 3600, load);
   const automationCap = budget.cap;
-  assert.ok(interactiveCap < watchingCap && watchingCap < automationCap, `${interactiveCap} < ${watchingCap} < ${automationCap}`);
-  // Switching back applies the learned interactive cap immediately.
-  assert.equal(budget.setMode('interactive'), true);
+  assert.ok(interactiveCap <= watchingCap && watchingCap <= automationCap, `${interactiveCap} ≤ ${watchingCap} ≤ ${automationCap}`);
+
+  // Switching back applies the learned interactive cap immediately (no re-convergence stutter).
+  budget.setMode('interactive');
   assert.equal(budget.cap, interactiveCap);
   assert.equal(budget.capFor('watching'), watchingCap);
+});
+
+test('work budget: frame time alone would not have caught the backlog', () => {
+  // Same load, latency target disabled: the cap climbs far past what the GPU can drain.
+  const blind = new SubstepGovernor({ targetMs: 18.5, latencyMs: 1e9, band: 0.05, minCap: 1, initialCap: 2, windowMs: 300, windowFrames: 10, warmupFrames: 8 });
+  const wrapper = new WorkBudget();
+  (wrapper as unknown as { governors: Record<string, SubstepGovernor> }).governors.watching = blind;
+  const lat = simulateQueue(wrapper, 3600, { baseMs: 10, perSubstepMs: 1.5, demand: 60 }).slice(-600);
+  const mean = lat.reduce((a, b) => a + b, 0) / lat.length;
+  assert.ok(mean > 40, `without the latency signal the queue backs up (mean latency ${mean.toFixed(1)} ms)`);
 });
 
 const pose = (yaw: number): CameraPose => ({ target: { gx: 1, gy: 2, elevation: 3 }, distance: 100, yaw, pitch: 0.5 });

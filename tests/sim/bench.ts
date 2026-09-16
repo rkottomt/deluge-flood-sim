@@ -7,8 +7,8 @@
  * Reports substeps/second of the full per-substep pipeline (momentum + continuity passes), the cost of the
  * per-frame export pass, the readback (map + CPU stats) cost, and what that means against DESIGN §3.4:
  * 1024² ≥ 4 substeps/frame at 30 fps (120 substeps/s + render), 512² ≥ 16 substeps/frame at 60 fps (960/s).
- * Timing is wall-clock from submit to queue.onSubmittedWorkDone over large batches, so driver scheduling is
- * included (conservative).
+ * Throughput is wall-clock from submit to queue.onSubmittedWorkDone over large batches (driver scheduling and any
+ * other GPU users included: conservative); "GPU" is execution time per substep from timestamp queries.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -79,11 +79,22 @@ async function measure(label: string, solver: GpuFloodSolver, device: GPUDevice)
   const readbackMs = (now() - t2) / reads;
   const cpuMs = solver.readbackDiagnostics.processMs;
 
+  // GPU execution time per substep from timestamp queries (what the adaptive budget uses): run app-like frames
+  // with a huge budget so every frame carries many substeps. Much less sensitive than wall-clock time to other
+  // processes competing for the CPU/driver.
+  solver.gpuBudgetMs = 1e6;
+  solver.params = { ...solver.params, timeScale: 1e6, maxSubstepsPerFrame: 16 };
+  for (let f = 0; f < 50; f++) {
+    solver.step(1 / 60);
+    await solver.flush();
+  }
+  const gpuMs = solver.gpuBudgetUsesTimestamps ? solver.gpuMsPerSubstep : NaN;
+
   const msPerSubstep = 1000 / substepsPerSec;
   const at30 = Math.floor((33.3 - 8) / msPerSubstep); // leave ~8 ms of the frame for rendering
   const at60 = Math.floor((16.7 - 6) / msPerSubstep);
   console.log(
-    `${label.padEnd(26)} ${substepsPerSec.toFixed(0).padStart(6)} substeps/s  (${msPerSubstep.toFixed(2)} ms each, dt ${dt.toFixed(3)} s)  ` +
+    `${label.padEnd(26)} ${substepsPerSec.toFixed(0).padStart(6)} substeps/s  (${msPerSubstep.toFixed(2)} ms wall, ${gpuMs.toFixed(2)} ms GPU each, dt ${dt.toFixed(3)} s)  ` +
       `export ${exportMs.toFixed(2)} ms  readback ${readbackMs.toFixed(1)} ms (CPU ${cpuMs.toFixed(1)} ms)  ` +
       `≈ ${at30} substeps/frame @30fps, ${at60} @60fps`,
   );

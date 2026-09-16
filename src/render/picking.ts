@@ -1,6 +1,6 @@
 /**
- * Ray ↔ heightfield intersection in world space against the exact rendered surface (see heightfield.ts):
- * march along the ray at a fraction of a mesh cell, then refine the first crossing by bisection.
+ * Ray ↔ heightfield intersection in world space against the exact rendered (finest-LOD) surface, see heightfield.ts:
+ * a grid walk over the mesh quads the ray crosses with analytic ray–triangle tests (no sampling, no misses).
  */
 import type { PickResult, SimSnapshot } from '../contracts';
 import { HeightField } from './heightfield';
@@ -11,7 +11,10 @@ export interface Ray {
   dir: Vec3; // normalized
 }
 
-/** Build a world-space ray through a CSS pixel given the inverse view-projection (reversed-Z). */
+/**
+ * World-space ray through a CSS pixel given the inverse view-projection (reversed-Z). Float32 matrices lose
+ * precision far from the origin; prefer cameraRay() when the camera basis is available.
+ */
 export function screenRay(cssX: number, cssY: number, cssW: number, cssH: number, invViewProj: ArrayLike<number>): Ray {
   const ndcX = (cssX / Math.max(1, cssW)) * 2 - 1;
   const ndcY = 1 - (cssY / Math.max(1, cssH)) * 2;
@@ -25,6 +28,32 @@ export function screenRay(cssX: number, cssY: number, cssW: number, cssH: number
   return { origin: p0, dir: [d[0] / l, d[1] / l, d[2] / l] };
 }
 
+/** Pinhole camera description in double precision (see CameraMatrices). */
+export interface CameraRayBasis {
+  eye: Vec3;
+  forward: Vec3;
+  right: Vec3;
+  up: Vec3;
+  fovY: number;
+  aspect: number;
+}
+
+/** Exact (float64) world ray from the eye through a CSS pixel. */
+export function cameraRay(cam: CameraRayBasis, cssX: number, cssY: number, cssW: number, cssH: number): Ray {
+  const ndcX = (cssX / Math.max(1, cssW)) * 2 - 1;
+  const ndcY = 1 - (cssY / Math.max(1, cssH)) * 2;
+  const ty = Math.tan(cam.fovY / 2);
+  const tx = ty * cam.aspect;
+  const f = cam.forward;
+  const r = cam.right;
+  const u = cam.up;
+  const dx = f[0] + r[0] * ndcX * tx + u[0] * ndcY * ty;
+  const dy = f[1] + r[1] * ndcX * tx + u[1] * ndcY * ty;
+  const dz = f[2] + r[2] * ndcX * tx + u[2] * ndcY * ty;
+  const l = Math.hypot(dx, dy, dz) || 1;
+  return { origin: [cam.eye[0], cam.eye[1], cam.eye[2]], dir: [dx / l, dy / l, dz / l] };
+}
+
 export interface HeightfieldHit {
   gx: number;
   gy: number;
@@ -34,7 +63,12 @@ export interface HeightfieldHit {
   t: number;
 }
 
-/** Intersect a world ray with the terrain surface. Returns null if it misses the domain. */
+/**
+ * Intersect a world ray with the terrain surface. Returns null if it misses the domain.
+ *
+ * Exact: walks the mesh quads the ray crosses in order (2D DDA over the stride grid) and intersects the two
+ * triangles of each quad analytically, so thin one-cell walls and grazing tangents are never skipped.
+ */
 export function intersectHeightfield(ray: Ray, hf: HeightField, exaggeration: number): HeightfieldHit | null {
   const cs = hf.cellSize;
   const halfX = (hf.nx / 2) * cs;
@@ -62,41 +96,54 @@ export function intersectHeightfield(ray: Ray, hf: HeightField, exaggeration: nu
     if (t0 > t1) return null;
   }
 
-  const f = (t: number) => {
-    const x = o[0] + d[0] * t;
-    const z = o[2] + d[2] * t;
-    const gx = x / cs + hf.nx / 2;
-    const gy = z / cs + hf.ny / 2;
-    return o[1] + d[1] * t - hf.heightAt(gx, gy) * exaggeration;
-  };
+  // Work in "quad units": x' = gx / stride, z' = gy / stride; y stays in world units.
+  const s = hf.stride;
+  const qs = cs * s; // world size of a quad
+  const ox = (o[0] + halfX) / qs;
+  const oz = (o[2] + halfZ) / qs;
+  const dx = d[0] / qs;
+  const dz = d[2] / qs;
+  const maxK = hf.vx - 2;
+  const maxL = hf.vy - 2;
 
-  // March at ≤ 0.35 mesh cells horizontally (thin one-cell walls can't be skipped); vertical steps are
-  // additionally limited so steep look-down rays don't take huge jumps.
-  const horiz = Math.hypot(d[0], d[2]);
-  const cellWorld = cs * hf.stride * 0.35;
-  const step = Math.max(cellWorld / Math.max(horiz, 1e-3), 1e-3);
-  let tPrev = t0;
-  let fPrev = f(t0);
-  if (fPrev <= 0) {
-    // Origin already below the surface at entry (camera inside terrain): report the entry point.
-    return hitAt(t0);
-  }
-  const maxSteps = 200000;
-  for (let n = 0; n < maxSteps && tPrev < t1; n++) {
-    const tCur = Math.min(tPrev + step, t1);
-    const fCur = f(tCur);
-    if (fCur <= 0) {
-      let a = tPrev;
-      let b = tCur;
-      for (let k = 0; k < 40; k++) {
-        const m = 0.5 * (a + b);
-        if (f(m) > 0) a = m;
-        else b = m;
-      }
-      return hitAt(0.5 * (a + b));
+  const entryX = ox + dx * t0;
+  const entryZ = oz + dz * t0;
+  let k = Math.min(Math.max(Math.floor(entryX), 0), maxK);
+  let l = Math.min(Math.max(Math.floor(entryZ), 0), maxL);
+  const stepK = dx > 0 ? 1 : -1;
+  const stepL = dz > 0 ? 1 : -1;
+  const tDeltaK = Math.abs(dx) > 1e-15 ? Math.abs(1 / dx) : Infinity;
+  const tDeltaL = Math.abs(dz) > 1e-15 ? Math.abs(1 / dz) : Infinity;
+  let tMaxK = Math.abs(dx) > 1e-15 ? t0 + ((dx > 0 ? k + 1 : k) - entryX) / dx : Infinity;
+  let tMaxL = Math.abs(dz) > 1e-15 ? t0 + ((dz > 0 ? l + 1 : l) - entryZ) / dz : Infinity;
+
+  const ex = exaggeration;
+  const P = (kk: number, ll: number): [number, number, number] => [kk * qs - halfX, hf.corner(kk, ll) * ex, ll * qs - halfZ];
+  const maxIter = hf.vx + hf.vy + 4;
+  for (let iter = 0; iter < maxIter; iter++) {
+    const A = P(k, l);
+    const B = P(k + 1, l);
+    const C = P(k, l + 1);
+    const D = P(k + 1, l + 1);
+    // Same split as the GPU mesh: triangles (a, c, b) and (b, c, d).
+    let best = Infinity;
+    const t1a = rayTriangle(o, d, A, C, B);
+    if (t1a >= t0 - 1e-6 && t1a < best) best = t1a;
+    const t2a = rayTriangle(o, d, B, C, D);
+    if (t2a >= t0 - 1e-6 && t2a < best) best = t2a;
+    if (best < Infinity) return hitAt(Math.max(best, 0));
+
+    // Advance to the next quad along the ray.
+    if (tMaxK < tMaxL) {
+      if (tMaxK > t1) break;
+      k += stepK;
+      tMaxK += tDeltaK;
+    } else {
+      if (tMaxL > t1) break;
+      l += stepL;
+      tMaxL += tDeltaL;
     }
-    tPrev = tCur;
-    fPrev = fCur;
+    if (k < 0 || l < 0 || k > maxK || l > maxL) break;
   }
   return null;
 
@@ -107,6 +154,35 @@ export function intersectHeightfield(ray: Ray, hf: HeightField, exaggeration: nu
     const gy = Math.min(Math.max(z / cs + hf.ny / 2, 0), hf.ny);
     return { gx, gy, elevation: hf.heightAt(gx, gy), t };
   }
+}
+
+/** Möller–Trumbore, double-sided. Returns the ray parameter or Infinity. */
+function rayTriangle(o: Vec3, d: Vec3, a: Vec3, b: Vec3, c: Vec3): number {
+  const e1x = b[0] - a[0];
+  const e1y = b[1] - a[1];
+  const e1z = b[2] - a[2];
+  const e2x = c[0] - a[0];
+  const e2y = c[1] - a[1];
+  const e2z = c[2] - a[2];
+  const px = d[1] * e2z - d[2] * e2y;
+  const py = d[2] * e2x - d[0] * e2z;
+  const pz = d[0] * e2y - d[1] * e2x;
+  const det = e1x * px + e1y * py + e1z * pz;
+  if (Math.abs(det) < 1e-12) return Infinity;
+  const inv = 1 / det;
+  const tx = o[0] - a[0];
+  const ty = o[1] - a[1];
+  const tz = o[2] - a[2];
+  const u = (tx * px + ty * py + tz * pz) * inv;
+  const eps = 1e-9;
+  if (u < -eps || u > 1 + eps) return Infinity;
+  const qx = ty * e1z - tz * e1y;
+  const qy = tz * e1x - tx * e1z;
+  const qz = tx * e1y - ty * e1x;
+  const v = (d[0] * qx + d[1] * qy + d[2] * qz) * inv;
+  if (v < -eps || u + v > 1 + eps) return Infinity;
+  const t = (e2x * qx + e2y * qy + e2z * qz) * inv;
+  return t >= 0 ? t : Infinity;
 }
 
 /** Full PickResult (adds water depth from the latest snapshot, nearest cell). */

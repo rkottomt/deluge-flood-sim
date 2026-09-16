@@ -130,6 +130,7 @@ export class FrameDriver {
       );
       pacer.rendered(now, realDt, pace.active, camera.pose);
       if (rendered) this.sceneFrames++;
+      if (rendered && running && this.app.adaptiveBudget) this.app.latency.afterSubmit();
     }
     this.frameCount++;
 

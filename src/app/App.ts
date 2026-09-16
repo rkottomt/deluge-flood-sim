@@ -10,6 +10,7 @@ import { FrameDriver } from './driver';
 import { errorMessage, ErrorReporter } from './errors';
 import { EvacController } from './evac';
 import { WorkBudget, type BudgetMode } from './governor';
+import { GpuLatencyProbe } from './latency';
 import { FrameLoop } from './loop';
 import { RenderPacer } from './pacer';
 import { ProbeSampler } from './probe';
@@ -38,6 +39,11 @@ export class App {
   /** Frame-time substep governor (one learned cap per interaction mode). */
   readonly budget = new WorkBudget();
   readonly pacer = new RenderPacer();
+  /** GPU queue latency → work budget (see governor.ts for why frame time alone is not enough). */
+  readonly latency = new GpuLatencyProbe(
+    () => this.gpu?.device.queue ?? null,
+    (ms) => this.budget.noteLatency(ms),
+  );
   readonly router = createRouter();
   readonly evac: EvacController;
   readonly sim: SimSync;
@@ -323,13 +329,15 @@ export class App {
   /**
    * Wake the render pacer on anything that can change the picture while the sim is paused: user input
    * anywhere (canvas tools, camera, UI controls, shortcuts), store changes other than the HUD stream, and
-   * the tab becoming visible again.
+   * the tab becoming visible again. Input ON THE CANVAS (camera drags, tool strokes, the cursor ring) also
+   * marks the user as interacting, which switches the work budget to low-latency mode; hovering panels or
+   * dragging a DOM slider does not (that feedback is DOM, and the flood should keep its speed).
    */
   private installActivityTracking(): void {
     const poke = () => this.pacer.poke(performance.now());
-    const onInput = () => {
+    const onInput = (ev: Event) => {
       const now = performance.now();
-      this.lastInputAt = now;
+      if (ev.target === this.canvas) this.lastInputAt = now;
       this.pacer.poke(now);
     };
     const opts: AddEventListenerOptions = { capture: true, passive: true };

@@ -39,8 +39,17 @@ export async function fetchImageryBytes(
 export async function decodeImageBitmap(bytes: Uint8Array | ArrayBuffer, mime = 'image/jpeg'): Promise<ImageBitmap | null> {
   if (typeof createImageBitmap !== 'function' || typeof Blob === 'undefined') return null;
   const blob = new Blob([bytes as BlobPart], { type: mime });
-  // Imagery is a color texture: no premultiply / color-space conversion surprises, keep it north-up.
-  return createImageBitmap(blob, { imageOrientation: 'none', premultiplyAlpha: 'none', colorSpaceConversion: 'none' });
+  // Imagery is a color texture: no premultiply / color-space conversion surprises, keep it north-up (ignore any
+  // EXIF orientation). 'from-image' is the current spelling of the old 'none'; fall back to defaults if a browser
+  // rejects either option rather than losing the imagery.
+  for (const imageOrientation of ['from-image', 'none'] as ImageOrientation[]) {
+    try {
+      return await createImageBitmap(blob, { imageOrientation, premultiplyAlpha: 'none', colorSpaceConversion: 'none' });
+    } catch (e) {
+      if (!(e instanceof TypeError)) throw e;
+    }
+  }
+  return createImageBitmap(blob);
 }
 
 /**

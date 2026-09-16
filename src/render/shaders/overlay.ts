@@ -57,14 +57,19 @@ fn vsRibbon(v: RIn) -> ROut {
   if (kind == 0u) {
     var st = 0u;
     if (O.hasStatus > 0.5) { st = roadStatus[id]; }
-    if (st == 0u) { color = vec4f(0.72, 0.70, 0.66, O.roadAlpha); }
-    else if (st == 1u) { color = vec4f(1.0, 0.52, 0.04, 0.95); minHalfPx = 1.3; }
-    else { color = vec4f(1.0, 0.06, 0.05, 0.85); minHalfPx = 1.6; }
+    // Importance from the class width (local 3.5 m … highway 11 m): minor dry roads thin out with distance so the
+    // overview stays readable, while wet/flooded roads always stand out.
+    let importance = smoothstep(3.0, 11.0, v.attr.z);
+    let d0 = length(gridToWorld(v.center, s.r) - F.camPos);
+    let fade = mix(1.0 - smoothstep(F.domainSize * 0.35, F.domainSize * 1.1, d0), 1.0, importance);
+    if (st == 0u) { color = vec4f(0.93, 0.92, 0.88, O.roadAlpha * fade); minHalfPx = mix(0.7, 1.1, importance); }
+    else if (st == 1u) { color = vec4f(1.0, 0.55, 0.05, 0.95); minHalfPx = 1.4; }
+    else { color = vec4f(1.0, 0.07, 0.05, 0.9); minHalfPx = 1.7; }
   } else if (kind == 1u) {
     lift = 1.2;
-    minHalfPx = 7.0;
+    minHalfPx = 9.0;
     color = O.routeColor;
-    coreFrac = 0.3;
+    coreFrac = 0.28;
   } else {
     lift = 0.6;
     minHalfPx = 1.6;
@@ -98,28 +103,27 @@ fn fsRibbon(in: ROut) -> @location(0) vec4f {
   let aw = fwidth(in.side);
   let haze = hazeAmount(in.world);
   if (in.kind == 0u) {
-    // Road: bright core with a dark casing for contrast over imagery.
+    // Road: bright core with a dark casing for contrast over imagery (the casing fades when the ribbon is only a
+    // couple of pixels wide, where it would just darken the line).
     let body = 1.0 - smoothstep(1.0 - aw * 1.5, 1.0, a);
-    let casing = smoothstep(0.55 - aw, 0.7 + aw, a);
-    let rgb = mix(in.color.rgb * 1.1, in.color.rgb * 0.18, casing * 0.75);
+    let casing = smoothstep(0.55 - aw, 0.7 + aw, a) * (1.0 - smoothstep(0.35, 0.8, aw));
+    let rgb = mix(in.color.rgb * 1.15, in.color.rgb * 0.12, casing * 0.8);
     let alpha = in.color.a * body * (1.0 - haze * 0.7);
     return vec4f(rgb * alpha, alpha);
   }
   if (in.kind == 1u) {
-    // Evacuation route: glowing ribbon with animated chevron dashes (additive).
-    let core = 1.0 - smoothstep(in.coreFrac - aw, in.coreFrac + aw, a);
-    let glow = exp(-a * a * 5.0) * 0.55;
+    // Evacuation route: bright HDR core (feeds bloom) with animated chevrons marching toward the shelter, inside a
+    // soft additive halo. Blocked routes turn red and pulse instead of marching.
     let blocked = O.routeState > 1.5;
+    let core = 1.0 - smoothstep(in.coreFrac - aw, in.coreFrac + aw, a);
+    let halo = exp(-a * a * 3.0) * (1.0 - core);
     let dash = O.routeDash;
-    var phase = fract(in.along / dash - F.time * select(0.9, 0.0, blocked));
-    // Chevrons: offset the phase by |side| so dashes point along the direction of travel.
-    phase = fract(phase + a * 0.35 * select(1.0, 0.0, blocked));
-    let on = select(smoothstep(0.0, 0.08, phase) * (1.0 - smoothstep(0.5, 0.58, phase)),
-                    step(phase, 0.55), blocked);
-    let pulse = select(1.0, 0.55 + 0.45 * sin(F.time * 6.0), blocked);
-    let coreCol = mix(in.color.rgb * 0.55, vec3f(1.0) * 3.0 + in.color.rgb * 2.0, on);
-    let rgb = (coreCol * core + in.color.rgb * glow * (1.0 - core)) * pulse * (1.0 - haze * 0.5);
-    let alpha = core * 0.85;
+    let chevron = fract(in.along / dash - a * 0.45 - F.time * 1.1);
+    let on = select(smoothstep(0.0, 0.1, chevron) * (1.0 - smoothstep(0.45, 0.55, chevron)), 1.0, blocked);
+    let pulse = select(1.0, 0.45 + 0.55 * (0.5 + 0.5 * sin(F.time * 5.5)), blocked);
+    let coreCol = mix(in.color.rgb * 1.2, vec3f(2.2) + in.color.rgb * 3.0, on);
+    let rgb = (coreCol * core + in.color.rgb * halo * 1.6) * pulse * (1.0 - haze * 0.5);
+    let alpha = min(1.0, core * 0.9 + halo * 0.25);
     return vec4f(rgb, alpha);
   }
   // Cursor ring.
@@ -189,6 +193,11 @@ fn fsMarker(in: MOut, @builtin(front_facing) front: bool) -> @location(0) vec4f 
   let V = normalize(F.camPos - in.world);
   var n = normalize(in.normal);
   let haze = hazeAmount(in.world) * 0.6;
+  // Derivatives must be taken in uniform control flow.
+  let ringU = atan2(in.local.z, in.local.x) * length(in.local.xz) / 9.0;
+  let ringFw = fwidth(ringU);
+  let ghostCoord = (in.world.x + in.world.z) / 5.0 + in.world.y / 2.5 - F.time * 0.5;
+  let ghostFw = fwidth(ghostCoord);
   switch (in.kind) {
     case 0u: {
       // Lit solid (pins, poles, houses).
@@ -212,17 +221,19 @@ fn fsMarker(in: MOut, @builtin(front_facing) front: bool) -> @location(0) vec4f 
       return vec4f(rgb, 0.0);
     }
     case 2u: {
-      // Storm rain column: animated falling streaks on a translucent curtain.
-      let ang = atan2(in.local.z, in.local.x);
-      let col = floor(ang * 40.0 / PI);
-      let speed = 0.9 + hash11(col) * 0.6;
-      let v = fract(in.world.y / (F.domainSize * 0.02) + F.time * speed + hash11(col + 3.0));
-      let streak = smoothstep(0.0, 0.1, v) * (1.0 - smoothstep(0.25, 0.6, v));
+      // Storm rain curtain: soft falling streaks that average out to a translucent veil when they get sub-pixel.
+      let colId = floor(ringU);
+      let fu = fract(ringU);
+      let speed = 0.8 + hash11(colId) * 0.7;
+      let v = fract(in.world.y / 140.0 + F.time * speed + hash11(colId + 3.0));
+      let fall = smoothstep(0.0, 0.12, v) * (1.0 - smoothstep(0.3, 0.85, v));
+      let across = smoothstep(0.0, 0.4, fu) * (1.0 - smoothstep(0.6, 1.0, fu));
+      let detail = 1.0 - smoothstep(0.25, 0.8, ringFw);
+      let streak = mix(0.35, fall * across, detail);
       let facing = abs(dot(n, V));
-      let edge = pow(1.0 - facing, 1.5) * 0.7 + 0.3;
-      let hFade = smoothstep(0.0, 0.08, in.phase) ;
-      let a = in.color.a * (0.35 + 0.65 * streak) * edge;
-      let rgb = in.color.rgb * (0.6 + 0.4 * streak) * mix(vec3f(1.0), skyAmbient(n), 0.5);
+      let edge = pow(1.0 - facing, 1.5) * 0.6 + 0.4;
+      let a = in.color.a * (0.45 + 0.8 * streak) * edge;
+      let rgb = in.color.rgb * (0.75 + 0.5 * streak) * (skyAmbient(vec3f(0.0, 1.0, 0.0)) * 0.9 + 0.1);
       return vec4f(rgb * a, a);
     }
     case 3u: {
@@ -239,13 +250,26 @@ fn fsMarker(in: MOut, @builtin(front_facing) front: bool) -> @location(0) vec4f 
       return vec4f(rgb * a, a);
     }
     case 4u: {
-      // Wall preview ghost: translucent hazard stripes with bright edges.
-      let stripes = step(0.5, fract((in.world.x + in.world.z + in.world.y * 2.0) / 3.0 - F.time * 0.6));
+      // Wall preview ghost: translucent amber with moving hazard stripes (anti-aliased, fading when too fine) and
+      // a bright crest line at the planned height (params.z carries the height in meters).
+      let sw = max(ghostFw, 1e-4);
+      let tri = abs(fract(ghostCoord) - 0.5) * 2.0;
+      let stripes = mix(0.5, smoothstep(0.5 - sw, 0.5 + sw, tri), 1.0 - smoothstep(0.2, 0.6, sw));
       let facing = abs(dot(n, V));
       let edge = pow(1.0 - facing, 2.0);
-      let a = in.color.a * (0.35 + 0.25 * stripes + 0.4 * edge);
-      let rgb = in.color.rgb * (1.2 + 0.8 * stripes + edge * 1.5);
-      return vec4f(rgb * a, a);
+      let crest = smoothstep(0.85, 1.0, in.local.y / max(in.size, 0.01)) + select(0.0, 0.6, n.y > 0.9);
+      let a = in.color.a * (0.3 + 0.25 * stripes + 0.35 * edge + 0.3 * crest);
+      let rgb = in.color.rgb * (1.1 + 0.9 * stripes + edge * 1.2 + crest * 2.5);
+      return vec4f(rgb * a, min(a, 1.0));
+    }
+    case 6u: {
+      // Stage gauge staff: red/white survey stripes (10 bands along the staff) with a tiny bit of lighting.
+      let band = step(0.5, fract(in.local.y * 10.0));
+      let ndl = max(dot(n, F.sunDir), 0.0);
+      let base = mix(vec3f(0.9, 0.9, 0.88), vec3f(0.8, 0.07, 0.05), band);
+      var rgb = base * (F.sunColor * ndl * 0.6 + skyAmbient(n) * 1.1) + base * 0.3;
+      rgb = mix(rgb, skyRadiance(-V), haze);
+      return vec4f(rgb, 1.0);
     }
     default: {
       // Expanding pulse ring on a flat disc (local radius 0..1).

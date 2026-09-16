@@ -1,24 +1,29 @@
 import type { StepInfo } from '../contracts';
 
 /**
- * Adaptive solver work budget driven by MEASURED FRAME TIME (the thing the user actually feels).
+ * Adaptive solver work budget driven by what the user feels: FRAME TIME and GPU LATENCY.
  *
  * The solver advances `realDt × timeScale` sim seconds per frame in CFL-limited substeps; every substep is
  * GPU work that competes with rendering. On a fanless laptop the GPU also slows down as it heats up, so a
  * fixed substep count that is smooth at minute 1 stutters at minute 10. A governor owns a substep cap (fed
  * to the solver as `maxSubstepsPerFrame`) and steers it with an AIMD controller, like TCP congestion control:
  *
- *   • frame time above target → multiplicative decrease (cap × 0.7); that cap is remembered as a ceiling and
- *     probed again only after a backoff (1 s, 2 s, 4 s … 8 s), so the cap settles instead of sawtoothing;
- *   • frame time below target AND this cap is what limits the sim → additive increase.
+ *   • over target → multiplicative decrease (cap × 0.7); that cap is remembered as a ceiling and probed
+ *     again only after a backoff (1 s, 2 s, 4 s … 8 s), so the cap settles instead of sawtoothing;
+ *   • under target AND this cap is what limits the sim → additive increase.
  *
- * Frame time per evaluation window is a trimmed mean (the single worst interval is dropped), so isolated
- * hitches (a GC pause, a readback) don't cost throughput. The first frames after a (re)start are ignored
- * (shader compilation, tab switches).
+ * Two signals, because each is blind to one failure: requestAnimationFrame keeps firing at ~60 Hz while the
+ * GPU queue silently backs up (measured on the M4 at 1024²: render-only frames are acknowledged by the GPU
+ * after ~13 ms, with 4 substeps after ~51 ms, with 8 after ~72 ms — 3–4 frames of input lag at "57 fps"), and
+ * GPU latency alone can't see main-thread stalls. Frame time per window is a trimmed mean (one hitch per
+ * window is ignored); latency is the window median of submit → onSubmittedWorkDone. The first frames after
+ * a (re)start are ignored (shader compilation, tab switches).
  */
 export interface GovernorConfig {
   /** Frame-time target, ms. */
   targetMs: number;
+  /** GPU latency target (render submit → queue done), ms. */
+  latencyMs: number;
   /** Dead band around the target (fraction): decrease above target·(1+band), increase below target·(1−band). */
   band: number;
   minCap: number;
@@ -30,7 +35,7 @@ export interface GovernorConfig {
   warmupFrames: number;
 }
 
-const BASE_CONFIG: Omit<GovernorConfig, 'targetMs' | 'initialCap'> = {
+const BASE_CONFIG: Omit<GovernorConfig, 'targetMs' | 'latencyMs' | 'initialCap'> = {
   band: 0.05,
   minCap: 1,
   windowMs: 300,
@@ -48,6 +53,7 @@ export class SubstepGovernor {
   cap: number;
 
   private window: number[] = [];
+  private latencies: number[] = [];
   private windowStart = -Infinity;
   private frames = 0;
   /** Cap at which the last decrease happened (probing at/above it waits for the backoff). */
@@ -55,6 +61,8 @@ export class SubstepGovernor {
   private holdUntil = -Infinity;
   private backoffMs = MIN_BACKOFF_MS;
   private lastDecrease = -Infinity;
+  /** After a decrease the GPU queue needs a moment to drain; windows until then are not judged. */
+  private settleUntil = -Infinity;
   private throttledInWindow = false;
 
   constructor(readonly config: GovernorConfig) {
@@ -65,8 +73,14 @@ export class SubstepGovernor {
   restart(): void {
     this.frames = 0;
     this.window = [];
+    this.latencies = [];
     this.windowStart = -Infinity;
     this.throttledInWindow = false;
+  }
+
+  /** A GPU latency sample (ms from a frame's submit until the queue finished it). */
+  noteLatency(ms: number): void {
+    if (ms >= 0 && ms < 2000 && this.frames > this.config.warmupFrames) this.latencies.push(ms);
   }
 
   /**
@@ -91,8 +105,11 @@ export class SubstepGovernor {
     if (this.window.length < c.windowFrames || now - this.windowStart < c.windowMs) return false;
 
     const frameTime = trimmedMean(this.window);
+    // Without enough latency samples (no WebGPU queue callback yet) judge by frame time alone.
+    const latency = this.latencies.length >= 3 ? median(this.latencies) : 0;
     const throttled = this.throttledInWindow;
     this.window = [];
+    this.latencies = [];
     this.throttledInWindow = false;
 
     if (now - this.lastDecrease > CALM_RESET_MS) {
@@ -100,19 +117,29 @@ export class SubstepGovernor {
       this.backoffMs = MIN_BACKOFF_MS;
     }
     const before = this.cap;
-    if (frameTime > c.targetMs * (1 + c.band) && this.cap > c.minCap) {
+    if (now < this.settleUntil) return false;
+    const over = frameTime > c.targetMs * (1 + c.band) || latency > c.latencyMs * (1 + c.band);
+    const under = frameTime < c.targetMs * (1 - c.band) && latency < c.latencyMs * (1 - c.band);
+    if (over && this.cap > c.minCap) {
       this.ceiling = this.cap;
       this.cap = Math.max(c.minCap, Math.floor(this.cap * 0.7));
       this.holdUntil = now + this.backoffMs;
       this.backoffMs = Math.min(MAX_BACKOFF_MS, this.backoffMs * 2);
       this.lastDecrease = now;
-    } else if (frameTime < c.targetMs * (1 - c.band) && throttled && this.cap < upper) {
+      this.settleUntil = now + 2 * c.windowMs;
+    } else if (!over && under && throttled && this.cap < upper) {
       let next = Math.min(upper, this.cap + Math.max(1, Math.round(this.cap * 0.1)));
       if (next >= this.ceiling && now < this.holdUntil) next = Math.max(this.cap, this.ceiling - 1);
       this.cap = next;
     }
     return this.cap !== before;
   }
+}
+
+function median(xs: number[]): number {
+  const s = [...xs].sort((a, b) => a - b);
+  const m = s.length >> 1;
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
 }
 
 /** Mean without the single largest sample (robust to one hitch per window). */
@@ -128,18 +155,24 @@ function trimmedMean(xs: number[]): number {
 }
 
 /**
- * What the frame is for, which decides the frame-time target:
- *   interactive — the user is touching something (camera, tools, sliders): smoothness first (~55–60 fps);
- *   watching    — hands off, the flood is the show: more substeps per frame (~40 fps);
- *   automation  — runFor() fast-forwarding: throughput first (~20 fps).
+ * What the frame is for, which decides how much GPU backlog is acceptable:
+ *   interactive — the user is touching something (camera, tools, sliders): ~no queued frames (low input lag);
+ *   watching    — hands off, the flood is the show: input lag is invisible, so the GPU queue may run a few
+ *                 frames deep for more sim per frame (measured uncontended on the M4 at 1024²: 4 substeps →
+ *                 57 fps, ~51 ms latency, 47 sim-s/s vs 1 substep → 60 fps, ~14 ms, 13 sim-s/s);
+ *   automation  — runFor() fast-forwarding: a little deeper still.
+ *
+ * No mode trades FRAME RATE for sim speed: the renderer runs its own adaptive-resolution controller on frame
+ * intervals (it lowers resolution above ~20.8 ms), so a sim that slows frames would blur the picture, and a
+ * saturated queue makes the solver's in-flight guard skip whole frames. Picture quality and responsiveness
+ * outrank sim speed; the HUD reports the achieved speed honestly ("GPU-limited").
  */
 export type BudgetMode = 'interactive' | 'watching' | 'automation';
 
-export const BUDGET_TARGET_MS: Record<BudgetMode, number> = {
-  // 60 Hz display: grow only while (nearly) every frame makes vsync, shrink once ~1 in 8 frames is dropped.
-  interactive: 18.5,
-  watching: 26,
-  automation: 50,
+export const BUDGET_TARGETS: Record<BudgetMode, { frameMs: number; latencyMs: number }> = {
+  interactive: { frameMs: 18.5, latencyMs: 28 },
+  watching: { frameMs: 19.5, latencyMs: 60 },
+  automation: { frameMs: 19.5, latencyMs: 80 },
 };
 
 /**
@@ -150,12 +183,13 @@ export class WorkBudget {
   mode: BudgetMode = 'watching';
   private readonly governors: Record<BudgetMode, SubstepGovernor>;
 
-  constructor(targets: Record<BudgetMode, number> = BUDGET_TARGET_MS) {
-    const make = (targetMs: number, initialCap: number) => new SubstepGovernor({ ...BASE_CONFIG, targetMs, initialCap });
+  constructor(targets: Record<BudgetMode, { frameMs: number; latencyMs: number }> = BUDGET_TARGETS) {
+    const make = (mode: BudgetMode, initialCap: number) =>
+      new SubstepGovernor({ ...BASE_CONFIG, targetMs: targets[mode].frameMs, latencyMs: targets[mode].latencyMs, initialCap });
     this.governors = {
-      interactive: make(targets.interactive, 4),
-      watching: make(targets.watching, 8),
-      automation: make(targets.automation, 16),
+      interactive: make('interactive', 2),
+      watching: make('watching', 4),
+      automation: make('automation', 8),
     };
   }
 
@@ -182,5 +216,9 @@ export class WorkBudget {
 
   observe(frameMs: number, info: StepInfo, now: number, maxCap: number): boolean {
     return this.governors[this.mode].observe(frameMs, info, now, maxCap);
+  }
+
+  noteLatency(ms: number): void {
+    this.governors[this.mode].noteLatency(ms);
   }
 }

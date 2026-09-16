@@ -188,7 +188,7 @@ export function buildRoadRibbons(roads: RoadNetwork, cellSize: number, stride: n
 
 export const MARKER_STRIDE = 18; // local(3) normal(3) anchor(4) params(4) color(4)
 
-export const MarkerKind = { Solid: 0, Beam: 1, StormColumn: 2, Cloud: 3, Ghost: 4, Pulse: 5 } as const;
+export const MarkerKind = { Solid: 0, Beam: 1, StormColumn: 2, Cloud: 3, Ghost: 4, Pulse: 5, Gauge: 6 } as const;
 export const AnchorMode = { Ground: 0, Absolute: 1, WaterSurface: 2 } as const;
 export const ScaleMode = { Marker: 0, Meters: 1, MetersExaggerated: 2 } as const;
 
@@ -470,7 +470,7 @@ export function buildMarkers(
     } else {
       const g: Anchor = { gx: src.gx, gy: src.gy, elev: 0, mode: AnchorMode.Ground };
       const lv: Anchor = { gx: src.gx, gy: src.gy, elev: src.level, mode: AnchorMode.Absolute };
-      const pole = solid(size, C.white, phase);
+      const pole: MarkerStyle = { scaleMode: ScaleMode.Marker, kind: MarkerKind.Gauge, size, phase, color: C.white };
       opaque.lathe([
         { r: 0.045, y: -0.1, anchor: g, n: [1, 0] },
         { r: 0.045, y: 0.9, anchor: lv, n: [1, 0] },
@@ -526,7 +526,8 @@ export function buildWallGhost(
 ): void {
   const n0 = Math.floor(pts.length / 2);
   if (n0 < 1) return;
-  const st: MarkerStyle = { scaleMode: ScaleMode.MetersExaggerated, kind: MarkerKind.Ghost, size: 1, phase: 0, color: C.ghost };
+  const top = Math.max(0.2, height);
+  const st: MarkerStyle = { scaleMode: ScaleMode.MetersExaggerated, kind: MarkerKind.Ghost, size: top, phase: 0, color: C.ghost };
   // Densify to ≈ one mesh cell.
   const P: number[] = [];
   for (let i = 0; i < n0; i++) {
@@ -546,7 +547,6 @@ export function buildWallGhost(
     P.push(P[0] + 0.01, P[1]);
   }
   const n = P.length / 2;
-  const top = Math.max(0.2, height);
   const left: number[] = [];
   const right: number[] = [];
   for (let i = 0; i < n; i++) {

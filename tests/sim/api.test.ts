@@ -61,7 +61,7 @@ test('SimStats from the GPU reduction pass match a brute-force CPU computation o
   solver.destroy();
 });
 
-test('step(): advances realSeconds × timeScale in CFL-sized substeps, honours maxSubstepsPerFrame and reports throttling', async () => {
+test('step(): CFL-sized substeps, sub-substep time carried between frames, maxSubstepsPerFrame, throttling', async () => {
   const nx = 64;
   const ny = 64;
   const elevation = roughTerrain(nx, ny, 5, 10, 50);
@@ -75,32 +75,55 @@ test('step(): advances realSeconds × timeScale in CFL-sized substeps, honours m
   });
   solver.gpuBudgetMs = 1e6; // isolate the user cap from the GPU budget here
   const dtCfl = solver.computeDt();
+  assert.ok(dtCfl > 0.3, `dt ${dtCfl}`);
 
-  // Plenty of headroom: exactly the requested time, dt ≤ CFL dt.
-  let info = solver.step(1 / 60);
-  assert.equal(info.throttled, false);
-  assert.ok(Math.abs(info.simSecondsAdvanced - 10 / 60) < 1e-9, `advanced ${info.simSecondsAdvanced}`);
-  assert.ok(info.dt <= dtCfl + 1e-12);
-  assert.equal(info.substeps, Math.ceil(10 / 60 / dtCfl - 1e-9));
+  // timeScale 10 at 60 fps requests 1/6 s per frame, less than one substep: time accumulates, and every
+  // substep that runs uses the full CFL dt (never a tiny one).
+  let advanced = 0;
+  let substeps = 0;
+  const frames = 120;
+  for (let f = 0; f < frames; f++) {
+    const info = solver.step(1 / 60);
+    await solver.flush(); // like a real frame: the GPU finishes before the next one (else the backlog guard skips)
+    assert.equal(info.throttled, false);
+    assert.ok(info.substeps <= 1);
+    if (info.substeps) assert.equal(info.dt, dtCfl);
+    advanced += info.simSecondsAdvanced;
+    substeps += info.substeps;
+  }
+  const requested = (frames * 10) / 60;
+  console.log(`  ${frames} frames at ×10: ${substeps} substeps (dt ${dtCfl.toFixed(3)} s) advanced ${advanced.toFixed(3)} of ${requested.toFixed(3)} s`);
+  assert.ok(requested - advanced >= -1e-9 && requested - advanced < dtCfl, 'carried remainder is less than one substep');
+  assert.equal(substeps, Math.floor(requested / dtCfl + 1e-9));
+  assert.ok(Math.abs(solver.time - advanced) < 1e-9);
 
-  // Large timeScale: capped by maxSubstepsPerFrame, dt = CFL dt, throttled.
+  // Large timeScale: capped by maxSubstepsPerFrame, throttled, backlog dropped (no burst on the next frame).
   solver.params = { ...solver.params, timeScale: 3600, maxSubstepsPerFrame: 7 };
-  info = solver.step(0.1);
+  let info = solver.step(0.1);
+  await solver.flush();
   assert.equal(info.substeps, 7);
   assert.equal(info.throttled, true);
   assert.ok(Math.abs(info.simSecondsAdvanced - 7 * info.dt) < 1e-9);
-  assert.ok(info.simSecondsAdvanced < 360);
+  solver.params = { ...solver.params, timeScale: 1 };
+  info = solver.step(1 / 60);
+  assert.ok(info.substeps <= 1, `backlog must not burst: ${info.substeps}`);
 
   // No work for zero / invalid time.
   for (const r of [0, -1, NaN, Infinity]) {
     const t0 = solver.time;
-    const z = solver.step(r);
-    if (r === Infinity) continue; // clamped to an enormous request: allowed to run (capped) but must not throw
-    assert.equal(z.substeps, 0, `realSeconds ${r}`);
+    assert.equal(solver.step(r).substeps, 0, `realSeconds ${r}`);
     assert.equal(solver.time, t0);
   }
   solver.params = { ...solver.params, timeScale: 0 };
   assert.equal(solver.step(0.016).substeps, 0);
+
+  // reset() forgets carried time.
+  solver.params = { ...solver.params, timeScale: dtCfl * 60 * 0.9 };
+  solver.step(1 / 60);
+  await solver.flush();
+  solver.reset();
+  await solver.flush();
+  assert.equal(solver.step(1 / 60).substeps, 0, 'carried time must not survive reset');
 
   const snap = await solver.readbackNow();
   assert.ok(Math.abs(snap.simTime - solver.time) < 1e-9, 'snapshot time matches submitted work');

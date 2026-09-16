@@ -31,62 +31,79 @@ export const QUALITY_PRESETS: Record<Exclude<RendererQuality, 'auto'>, QualityPr
   low: { maxDpr: 1, maxPixels: 1440 * 900, bloom: false, prepInterval: 2, idleFps: 30, rainDrops: 6000, lodQuadPixels: 5 },
 };
 
-/** Pixel-budget bounds for 'auto'. */
-const AUTO_MIN_PIXELS = 960 * 600;
-const AUTO_MAX_PIXELS = 2560 * 1600;
-const AUTO_START_PIXELS = 1920 * 1200;
+/**
+ * 'auto' ladder, best → cheapest. Resolution is traded first down to 1 render pixel per CSS pixel; only then do
+ * effects go (bloom, water-mesh refresh rate, coarser LOD), and sub-CSS resolution is the last resort.
+ */
+export const AUTO_LADDER: QualityPreset[] = [
+  { maxDpr: 2, maxPixels: 2560 * 1600, bloom: true, prepInterval: 1, idleFps: 30, rainDrops: 16000, lodQuadPixels: 2.5 },
+  { maxDpr: 1.5, maxPixels: 1920 * 1200, bloom: true, prepInterval: 1, idleFps: 30, rainDrops: 14000, lodQuadPixels: 3 },
+  { maxDpr: 1.25, maxPixels: 1680 * 1050, bloom: true, prepInterval: 1, idleFps: 30, rainDrops: 12000, lodQuadPixels: 3.5 },
+  { maxDpr: 1, maxPixels: 1600 * 1000, bloom: true, prepInterval: 2, idleFps: 30, rainDrops: 10000, lodQuadPixels: 4 },
+  { maxDpr: 1, maxPixels: 1440 * 900, bloom: false, prepInterval: 2, idleFps: 30, rainDrops: 8000, lodQuadPixels: 5 },
+  { maxDpr: 0.8, maxPixels: 1280 * 800, bloom: false, prepInterval: 3, idleFps: 30, rainDrops: 6000, lodQuadPixels: 6 },
+];
+const AUTO_START_LEVEL = 1;
 
-/** Frame interval (ms) above which 'auto' lowers resolution (≈ 48 fps) and below which it may raise it. */
+/** Frame interval (ms) above which 'auto' steps down (≈ 48 fps) and below which it may step up. */
 const SLOW_MS = 20.8;
 const FAST_MS = 17.6;
 
 /**
- * Adaptive pixel budget from frame intervals. Only intervals between two consecutive *rendered* frames are fed
+ * Adaptive quality level from frame intervals. Only intervals between two consecutive *rendered* frames are fed
  * in (idle-capped frames are excluded by the caller), so a deliberately throttled idle scene never looks slow.
+ * Steps down quickly (≈ 0.7 s of slow frames), steps up cautiously (4 s of fast frames, renderer GPU time low),
+ * and doubles the wait after an up-step that had to be undone, so it settles instead of oscillating.
  */
-export class AdaptiveResolution {
-  pixels = AUTO_START_PIXELS;
+export class AdaptiveQuality {
+  level = AUTO_START_LEVEL;
   private ema = 16.7;
-  private slowFrames = 0;
-  private fastFrames = 0;
+  /** Milliseconds of consecutive slow / fast frames. */
+  private slowMs = 0;
+  private fastMs = 0;
   private cooldownUntil = 0;
-  /** After a raise that had to be undone, wait longer before trying again. */
   private raiseHoldMs = 4000;
   private lastRaiseAt = -Infinity;
 
+  get preset(): QualityPreset {
+    return AUTO_LADDER[this.level];
+  }
+
   reset(): void {
-    this.pixels = AUTO_START_PIXELS;
+    this.level = AUTO_START_LEVEL;
     this.ema = 16.7;
-    this.slowFrames = 0;
-    this.fastFrames = 0;
+    this.slowMs = 0;
+    this.fastMs = 0;
     this.cooldownUntil = 0;
     this.raiseHoldMs = 4000;
+    this.lastRaiseAt = -Infinity;
   }
 
   /**
-   * Feed one frame interval; returns true when the budget changed.
-   * `gpuMs` (optional, from timestamp queries) lets us refuse raises when the GPU is already busy.
+   * Feed one frame interval; returns true when the level changed.
+   * `gpuMs` (optional, from timestamp queries) lets us refuse up-steps when the renderer is already expensive.
    */
   sample(intervalMs: number, now: number, gpuMs?: number): boolean {
     if (!(intervalMs > 0) || intervalMs > 250) return false;
-    this.ema += (intervalMs - this.ema) * 0.08;
+    this.ema += (intervalMs - this.ema) * 0.12;
     if (now < this.cooldownUntil) return false;
-    this.slowFrames = this.ema > SLOW_MS ? this.slowFrames + 1 : 0;
-    this.fastFrames = this.ema < FAST_MS ? this.fastFrames + 1 : 0;
+    this.slowMs = this.ema > SLOW_MS ? this.slowMs + intervalMs : 0;
+    this.fastMs = this.ema < FAST_MS ? this.fastMs + intervalMs : 0;
 
-    if (this.slowFrames > 40 && this.pixels > AUTO_MIN_PIXELS) {
-      // Frame time scales ≈ with pixels: aim for the target with a margin.
-      const ratio = Math.min(0.85, Math.max(0.6, (FAST_MS / this.ema) ** 1.2));
-      this.pixels = Math.max(AUTO_MIN_PIXELS, Math.round(this.pixels * ratio));
-      if (now - this.lastRaiseAt < 6000) this.raiseHoldMs = Math.min(60000, this.raiseHoldMs * 2);
-      this.settle(now, 1500);
+    if (this.slowMs > 700 && this.level < AUTO_LADDER.length - 1) {
+      this.level++;
+      if (now - this.lastRaiseAt < 4000) this.raiseHoldMs = Math.min(64000, this.raiseHoldMs * 2);
+      this.settle(now, 1200);
       return true;
     }
-    const gpuBusy = gpuMs !== undefined && gpuMs > 9;
-    if (this.fastFrames > 240 && this.pixels < AUTO_MAX_PIXELS && !gpuBusy) {
-      this.pixels = Math.min(AUTO_MAX_PIXELS, Math.round(this.pixels * 1.2));
+    // The solver shares the GPU and sizes its substeps to what is left, so only claim more when the renderer
+    // itself is clearly cheap.
+    const gpuBusy = gpuMs !== undefined && gpuMs > 6;
+    if (this.fastMs > this.raiseHoldMs && this.level > 0 && !gpuBusy) {
+      this.level--;
       this.lastRaiseAt = now;
-      this.settle(now, this.raiseHoldMs);
+      // Short settle: a bad up-step must be undone quickly (the next up-step then needs longer headroom).
+      this.settle(now, 1500);
       return true;
     }
     return false;
@@ -94,8 +111,8 @@ export class AdaptiveResolution {
 
   private settle(now: number, ms: number): void {
     this.cooldownUntil = now + ms;
-    this.slowFrames = 0;
-    this.fastFrames = 0;
+    this.slowMs = 0;
+    this.fastMs = 0;
     this.ema = 16.7;
   }
 }

@@ -59,10 +59,10 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
   var qS = fc.y;
   var qW = fW.x;
   var qN = fN.y;
-  if (i == nx1) { qE = bflux(sc.r, sc.a, st(i - 1, j).a); }
-  if (i == 0)   { qW = -bflux(sc.r, sc.a, st(i + 1, j).a); }
-  if (j == ny1) { qS = bflux(sc.r, sc.a, st(i, j - 1).a); }
-  if (j == 0)   { qN = -bflux(sc.r, sc.a, st(i, j + 1).a); }
+  if (i == nx1) { qE = bflux(sc.r, i, j, -1, 0); }
+  if (i == 0)   { qW = -bflux(sc.r, i, j, 1, 0); }
+  if (j == ny1) { qS = bflux(sc.r, i, j, 0, -1); }
+  if (j == 0)   { qN = -bflux(sc.r, i, j, 0, 1); }
 
   if (sim.robust != 0) {
     let kc = kfac(sc.r, qE, qW, qS, qN, r);
@@ -74,9 +74,9 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
       var e = f.x;
       var sS = f.y;
       var nN = fl(i + 1, j - 1).y;
-      if (i + 1 == nx1) { e = bflux(s.r, s.a, sc.a); }
-      if (j == ny1) { sS = bflux(s.r, s.a, st(i + 1, j - 1).a); }
-      if (j == 0) { nN = -bflux(s.r, s.a, st(i + 1, j + 1).a); }
+      if (i + 1 == nx1) { e = bflux(s.r, i + 1, j, -1, 0); }
+      if (j == ny1) { sS = bflux(s.r, i + 1, j, 0, -1); }
+      if (j == 0) { nN = -bflux(s.r, i + 1, j, 0, 1); }
       kE = kfac(s.r, e, qE, sS, nN, r);
     }
     // West face: donor is the west neighbour if flow is eastward.
@@ -86,9 +86,9 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
       var w = fl(i - 2, j).x;
       var sS = fW.y;
       var nN = fl(i - 1, j - 1).y;
-      if (i - 1 == 0) { w = -bflux(s.r, s.a, sc.a); }
-      if (j == ny1) { sS = bflux(s.r, s.a, st(i - 1, j - 1).a); }
-      if (j == 0) { nN = -bflux(s.r, s.a, st(i - 1, j + 1).a); }
+      if (i - 1 == 0) { w = -bflux(s.r, i - 1, j, 1, 0); }
+      if (j == ny1) { sS = bflux(s.r, i - 1, j, 0, -1); }
+      if (j == 0) { nN = -bflux(s.r, i - 1, j, 0, 1); }
       kW = kfac(s.r, qW, w, sS, nN, r);
     }
     // South face: donor is the south neighbour if flow is northward.
@@ -99,9 +99,9 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
       var e = f.x;
       var w = fl(i - 1, j + 1).x;
       var sS = f.y;
-      if (i == nx1) { e = bflux(s.r, s.a, st(i - 1, j + 1).a); }
-      if (i == 0) { w = -bflux(s.r, s.a, st(i + 1, j + 1).a); }
-      if (j + 1 == ny1) { sS = bflux(s.r, s.a, sc.a); }
+      if (i == nx1) { e = bflux(s.r, i, j + 1, -1, 0); }
+      if (i == 0) { w = -bflux(s.r, i, j + 1, 1, 0); }
+      if (j + 1 == ny1) { sS = bflux(s.r, i, j + 1, 0, -1); }
       kS = kfac(s.r, e, w, sS, qS, r);
     }
     // North face: donor is the north neighbour if flow is southward.
@@ -111,9 +111,9 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
       var e = fN.x;
       var w = fl(i - 1, j - 1).x;
       var nN = fl(i, j - 2).y;
-      if (i == nx1) { e = bflux(s.r, s.a, st(i - 1, j - 1).a); }
-      if (i == 0) { w = -bflux(s.r, s.a, st(i + 1, j - 1).a); }
-      if (j - 1 == 0) { nN = -bflux(s.r, s.a, sc.a); }
+      if (i == nx1) { e = bflux(s.r, i, j - 1, -1, 0); }
+      if (i == 0) { w = -bflux(s.r, i, j - 1, 1, 0); }
+      if (j - 1 == 0) { nN = -bflux(s.r, i, j - 1, 0, 1); }
       kN = kfac(s.r, e, w, qN, nN, r);
     }
     qE = qE * select(kE, kc, qE >= 0.0);

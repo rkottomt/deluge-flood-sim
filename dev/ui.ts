@@ -5,7 +5,7 @@
  *
  * URL params (for screenshots): ?panel=help|how|picker  ?loading=1  ?error=1  ?tool=<ToolId>
  *   ?route=ok|blocked|none|cycle  ?naive=1  ?paused=1  ?stage=<ft>  ?rain=<mm/hr>  ?mode=<WaterViewMode>
- *   ?closed=1 (panel collapsed)  ?probe=x,y (css px)  ?scroll=<px> (how-it-works body)
+ *   ?closed=1 (panel collapsed)  ?probe=x,y (css px)  ?scroll=<px> (how-it-works body)  ?lowfx=1|0 (force glass mode)
  */
 import { createStore } from '../src/app/store';
 import { mountUI, createToolController } from '../src/ui';

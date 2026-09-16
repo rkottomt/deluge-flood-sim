@@ -149,6 +149,8 @@ export class GpuFloodSolver implements FloodSolver {
   private resetMaxPending = true;
 
   private simTime = 0;
+  /** Requested simulated time not yet covered by a whole substep (carried between frames), s. */
+  private pendingSimTime = 0;
   private generation = 0;
   private volumeIn = 0;
   private volumeOut = 0;
@@ -511,27 +513,39 @@ export class GpuFloodSolver implements FloodSolver {
     map?.();
   }
 
+  /**
+   * Advance realSeconds × timeScale of simulated time. Every substep uses the CFL timestep; requested time that
+   * does not fill a whole substep is carried to the next frame (so at timeScale 1, ~one substep per 0.4 s of
+   * sim instead of one per frame — up to ~25× less GPU work — and naive mode really runs at the user's Courant
+   * number at any time scale). If the substep cap (maxSubstepsPerFrame ∩ GPU budget) cannot keep up, the backlog
+   * beyond one substep is dropped and `throttled` is reported: sim speed degrades, frame rate does not.
+   */
   step(realSeconds: number): StepInfo {
     const info: StepInfo = { simSecondsAdvanced: 0, substeps: 0, dt: 0, throttled: false };
     if (this.destroyed) return info;
     const scale = Number.isFinite(this.params.timeScale) ? Math.max(0, this.params.timeScale) : 0;
     const requested = (Number.isFinite(realSeconds) ? Math.max(0, realSeconds) : 0) * scale;
-    const dtCfl = this.computeDt();
-    info.dt = dtCfl;
+    const dt = this.computeDt();
+    info.dt = dt;
     if (!(requested > 0)) return info;
 
-    let n = Math.max(1, Math.ceil(requested / dtCfl - 1e-9));
-    let dt = requested / n;
+    this.pendingSimTime += requested;
+    // 1e-9 relative slack so exact multiples (e.g. timeScale = dt·fps) don't lose a substep to rounding.
+    let n = Math.floor(this.pendingSimTime / dt + 1e-9);
     const cap = this.substepCap();
     if (n > cap) {
       n = cap;
-      dt = dtCfl;
       info.throttled = true;
     }
-    if (n <= 0) return info;
+    if (n <= 0) {
+      // Nothing to run yet (the carried time is less than one substep), or the GPU queue is backed up.
+      if (info.throttled) this.pendingSimTime = Math.min(this.pendingSimTime, dt);
+      return info;
+    }
     this.encodeFrame(n, dt, true);
+    this.pendingSimTime = Math.max(0, this.pendingSimTime - n * dt);
+    if (info.throttled) this.pendingSimTime = Math.min(this.pendingSimTime, dt);
     info.substeps = n;
-    info.dt = dt;
     info.simSecondsAdvanced = n * dt;
     return info;
   }
@@ -557,6 +571,7 @@ export class GpuFloodSolver implements FloodSolver {
 
     this.generation++;
     this.simTime = 0;
+    this.pendingSimTime = 0;
     this.volumeIn = 0;
     this.volumeOut = 0;
     this.snapshot = null;
@@ -616,7 +631,10 @@ export class GpuFloodSolver implements FloodSolver {
     for (const b of [this.accBuf, this.simBuf, this.forcingBuf, this.brushBuf, this.depthBuf, this.blocksBuf, this.dryMaskBuf]) {
       b.destroy();
     }
+    // Staging buffers with a readback in flight are destroyed by mapReadback once the map settles (destroying a
+    // buffer mid-map rejects the promise: harmless in browsers, a crash in Dawn-for-Node).
     for (const s of this.staging) {
+      if (s.busy) continue;
       s.depth.destroy();
       s.blocks.destroy();
     }
@@ -675,7 +693,8 @@ export class GpuFloodSolver implements FloodSolver {
    *
    * h_max and |u|_max come from the latest asynchronous readback, i.e. they are up to a few hundred ms stale.
    * Robust mode inflates them by safety margins and by depths we KNOW are coming (stage sources, water brush)
-   * and clamps Cr to robustCflMax. Naive mode uses the raw numbers and trusts the user's Cr (the demo sets 1.8).
+   * and clamps Cr to robustCflMax. Naive mode uses the raw depth, no speed term, and trusts the user's Cr (the demo
+   * sets 1.8).
    */
   computeDt(): number {
     const o = this.options;
@@ -685,11 +704,13 @@ export class GpuFloodSolver implements FloodSolver {
     const cfl = robust ? Math.min(o.robustCflMax, Math.max(0.05, cflIn)) : Math.max(0.05, cflIn);
     this.refreshForcing();
     let h = Math.max(this.hRead, this.hBoost, this.forcing.stageDepthMax, 0.01);
-    let u = this.uRead;
+    // Naive mode uses the textbook local-inertial timestep (Bates et al. 2010), dt = C·dx/√(g·h_max): no flow
+    // speed term and no margins, so the demo's C = 1.8 really applies to the gravity waves in every river.
+    let u = 0;
     if (robust) {
       // The maxima are stale (last readback, up to a few hundred ms old): inflate them.
       h *= o.cflDepthMargin;
-      u = u * o.cflSpeedMargin + 0.1;
+      u = this.uRead * o.cflSpeedMargin + 0.1;
     }
     const dt = (cfl * this.cellSize) / (Math.SQRT2 * (Math.sqrt(GRAVITY * h) + u));
     return Math.min(o.dtMax, Math.max(o.dtMin, Number.isFinite(dt) ? dt : o.dtMin));
@@ -996,14 +1017,21 @@ export class GpuFloodSolver implements FloodSolver {
   }
 
   private async mapReadback(set: StagingSet, meta: ReadbackMeta): Promise<void> {
-    try {
-      await Promise.all([set.depth.mapAsync(GPUMapMode.READ), set.blocks.mapAsync(GPUMapMode.READ)]);
-    } catch {
-      // Destroyed / device lost while mapping.
+    const maps = [set.depth.mapAsync(GPUMapMode.READ), set.blocks.mapAsync(GPUMapMode.READ)];
+    const results = await Promise.allSettled(maps);
+    if (this.destroyed) {
+      for (const b of [set.depth, set.blocks]) {
+        if (b.mapState === 'mapped') b.unmap();
+        b.destroy();
+      }
+      return;
+    }
+    if (results.some((r) => r.status === 'rejected')) {
+      // Device lost while mapping.
+      for (const b of [set.depth, set.blocks]) if (b.mapState === 'mapped') b.unmap();
       set.busy = false;
       return;
     }
-    if (this.destroyed) return;
     try {
       if (meta.gen === this.generation) {
         this.processReadback(set.depth.getMappedRange(), new Float32Array(set.blocks.getMappedRange()), meta);

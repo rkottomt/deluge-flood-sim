@@ -15,7 +15,8 @@ export interface SolverOptions {
   /**
    * de Almeida (2012) θ-smoothing weight. q̃ = θ·q_c + (1−θ)/2·(q_up + q_down). θ = 1 disables smoothing.
    * 0.7–0.9 damps the grid-scale (checkerboard) oscillations that the plain local-inertial scheme develops
-   * at low friction, at the cost of a tiny amount of numerical diffusion.
+   * at low friction, at the cost of a little numerical diffusion. Note it also lowers the 2-D Courant stability
+   * limit from 1 to √θ (see robustCflMax and Solver.computeDt).
    */
   theta: number;
   /**
@@ -35,7 +36,11 @@ export interface SolverOptions {
   hMin: number;
   /** Robust mode velocity cap, m/s. */
   uMax: number;
-  /** Robust mode Froude-number cap. */
+  /**
+   * Robust mode Froude-number cap on interior faces: |q| ≤ hf·min(uMax, froudeMax·√(g·hf)). A safety net for thin
+   * films, not physics — 8 rather than ~2 because a dam-break front is legitimately strongly supercritical
+   * (the Ritter tip has Fr → ∞); with Fr ≤ 2 the dam-break front of tests/sim/dambreak.test.ts runs 22 % slow.
+   */
   froudeMax: number;
   /**
    * Minimum slope S of the open (free outflow) boundary: outflow is normal flow q = h^{5/3}·√S/n with

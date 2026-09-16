@@ -228,11 +228,11 @@ fn fsWater(in: WOut) -> @location(0) vec4f {
     // Foam / whitewater: hydraulic jumps & fast flow (per cell, from prep) + moving shoreline fronts.
     let foamNoise = rA.z * 0.55 + rB.z * 0.3 * fineFade + rM.z * 0.35;
     let shoreFoam = (1.0 - smoothstep(0.0, 0.18, in.thick)) * (0.25 + 0.75 * smoothstep(0.2, 1.2, speed)) * 0.7;
-    let foamAmt = clamp(s.a + shoreFoam, 0.0, 1.0) * select(1.0, 0.0, in.skirt > 0.5);
-    let foamMask = smoothstep(1.05 - foamAmt, 1.25 - foamAmt * 0.8, foamNoise) * foamAmt;
-    let foamCol = vec3f(0.72, 0.68, 0.60) * (skyAmbient(n) + F.sunColor * max(dot(n, F.sunDir), 0.0) * sunVis);
-    rgb = mix(rgb, foamCol, foamMask * 0.85);
-    alpha = mix(alpha, 1.0, foamMask * 0.85);
+    let foamAmt = clamp(s.a * 0.8 + shoreFoam, 0.0, 0.9) * select(1.0, 0.0, in.skirt > 0.5);
+    let foamMask = smoothstep(1.1 - foamAmt, 1.3 - foamAmt * 0.7, foamNoise) * foamAmt;
+    let foamCol = vec3f(0.62, 0.59, 0.53) * (skyAmbient(n) + F.sunColor * max(dot(n, F.sunDir), 0.0) * sunVis);
+    rgb = mix(rgb, foamCol, foamMask * 0.75);
+    alpha = mix(alpha, 1.0, foamMask * 0.75);
   } else {
     // ── Hazard colormap: discrete bands (anti-aliased edges), gently lit, semi-opaque ──────
     let band = hazardColor(hazardValue, hazardFw);

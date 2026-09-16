@@ -47,6 +47,8 @@ export class GpuWorkBudget {
   private readonly resolveBuf: GPUBuffer | null = null;
   private readonly freeReadBufs: GPUBuffer[] = [];
   private readonly allReadBufs: GPUBuffer[] = [];
+  /** Read buffers with a mapAsync in flight (destroyed only once it settles; see destroy()). */
+  private readonly mapping = new Set<GPUBuffer>();
   private fallbackBusy = false;
   private destroyed = false;
 
@@ -94,9 +96,15 @@ export class GpuWorkBudget {
           encoder.copyBufferToBuffer(resolveBuf, 0, readBuf, 0, 16);
         },
         submitted: () => {
+          this.mapping.add(readBuf);
           readBuf.mapAsync(GPUMapMode.READ).then(
             () => {
-              if (this.destroyed) return;
+              this.mapping.delete(readBuf);
+              if (this.destroyed) {
+                readBuf.unmap();
+                readBuf.destroy();
+                return;
+              }
               const t = new BigInt64Array(readBuf.getMappedRange());
               const ns = Number(t[1] - t[0]);
               readBuf.unmap();
@@ -105,7 +113,9 @@ export class GpuWorkBudget {
               if (ns > 0) this.addSample(ns / 1e6 / work);
             },
             () => {
-              /* destroyed or device lost */
+              // Device lost.
+              this.mapping.delete(readBuf);
+              if (this.destroyed) readBuf.destroy();
             },
           );
         },
@@ -148,10 +158,15 @@ export class GpuWorkBudget {
     this.samples++;
   }
 
+  /**
+   * Free GPU resources. Buffers with a mapAsync in flight are destroyed when it settles: destroying a buffer
+   * mid-map rejects the map promise, which is harmless in browsers but crashes Dawn-for-Node.
+   */
   destroy(): void {
+    if (this.destroyed) return;
     this.destroyed = true;
     this.querySet?.destroy();
     this.resolveBuf?.destroy();
-    for (const b of this.allReadBufs) b.destroy();
+    for (const b of this.allReadBufs) if (!this.mapping.has(b)) b.destroy();
   }
 }

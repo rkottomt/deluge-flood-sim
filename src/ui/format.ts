@@ -24,10 +24,23 @@ export function groupThousands(intStr: string): string {
   return intStr.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 }
 
+/** Compact scientific notation for runaway values (the stability demo): "3.4e6", "−1.3e18". */
+function sci(v: number): string {
+  return v.toExponential(1).replace('e+', 'e').replace(/-/g, '−');
+}
+
+/**
+ * Beyond these magnitudes formatters switch to scientific notation (only reachable when the solver is
+ * unstable): plain grouped numbers above ten billion, SI-suffixed ones above a quadrillion.
+ */
+const SCI_LIMIT_PLAIN = 1e10;
+const SCI_LIMIT = 1e15;
+
 /** Fixed decimals with thousands separators and a real minus sign. */
 export function fmtNum(v: number | null | undefined, decimals = 0): string {
   const b = bad(v);
   if (b) return b;
+  if (Math.abs(v as number) >= SCI_LIMIT_PLAIN) return sci(v as number);
   const s = Math.abs(v as number).toFixed(decimals);
   const [i, f] = s.split('.');
   const neg = (v as number) < 0 && Number(s) !== 0;
@@ -65,6 +78,7 @@ export function formatClock(seconds: number | null | undefined): string {
 /** SI-suffixed magnitude: 950 → "950", 12 300 → "12.3 k", 4.56e6 → "4.56 M". */
 export function siParts(v: number): { num: string; suffix: string } {
   const a = Math.abs(v);
+  if (a >= SCI_LIMIT) return { num: sci(v), suffix: '' };
   const units: Array<[number, string]> = [
     [1e12, 'T'],
     [1e9, 'G'],
@@ -125,11 +139,6 @@ export function formatPools(m3: number | null | undefined): string {
   }
   const n = fmtNum(pools, a >= 10 ? 0 : 1);
   return `${n} Olympic pool${n === '1.0' || n === '1' ? '' : 's'}`;
-}
-
-/** Compact scientific notation for runaway values (the stability demo): "3.4e6". */
-function sci(v: number): string {
-  return v.toExponential(1).replace('e+', 'e').replace('-', '−');
 }
 
 export function formatMeters(m: number | null | undefined, decimals?: number): string {
