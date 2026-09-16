@@ -293,16 +293,23 @@ async function bake(def: PresetDef) {
     }
     initialFill.push({ seeds, level: normalLevel });
   } else {
-    // Sloping rivers: ONE fill for the whole connected system, seeds every 10 path cells with their own level.
+    // Sloping rivers: ONE fill for the whole connected system, seeds along each centerline with their own
+    // level — every 10 path cells, and more densely where the surface drops quickly (> 0.2 m between seeds).
     const seeds: Array<{ gx: number; gy: number; level: number }> = [];
     for (const r of burn.rivers) {
       const npts = r.centerline.length / 2;
-      for (let q = 0; q < npts; q += 10) {
+      let lastQ = -Infinity;
+      let lastLevel = Infinity;
+      for (let q = 0; q < npts; q++) {
         const gx = r.centerline[q * 2];
         const gy = r.centerline[q * 2 + 1];
         const k = Math.floor(gy) * N + Math.floor(gx);
         const lvl = burn.owner[k] ? burn.waterLevel[k] : r.levels[q];
-        seeds.push({ gx: r1(gx), gy: r1(gy), level: r2(lvl) });
+        if (q - lastQ >= 10 || Math.abs(lvl - lastLevel) > 0.2 || q === npts - 1) {
+          seeds.push({ gx: r1(gx), gy: r1(gy), level: r2(lvl) });
+          lastQ = q;
+          lastLevel = lvl;
+        }
       }
     }
     initialFill.push({ seeds, level: Math.min(...seeds.map((s) => s.level)) });

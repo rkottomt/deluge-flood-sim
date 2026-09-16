@@ -172,9 +172,16 @@ async function main() {
     console.log('  [page] CRASHED');
   });
 
-  const ctx = { baseUrl };
+  const url = new URL(baseUrl);
+  if (PRESET !== 'pittsburgh') url.searchParams.set('preset', PRESET);
+  const ctx = { baseUrl, appUrl: url.href };
   for (const flow of FLOWS) {
     if (only && !only.has(flow.id)) continue;
+    if (!flow.resetsPage && page.url() === 'about:blank') {
+      // Flow 1 was skipped: open the app first.
+      await page.goto(ctx.appUrl, { waitUntil: 'domcontentloaded' });
+      await waitReady(120_000);
+    }
     await runFlow(flow, ctx);
   }
 }
@@ -329,9 +336,6 @@ const FLOWS = [
     resetsPage: true,
     async run(r, ctx) {
       // Warm-up navigation: lets Vite transform modules / pre-bundle deps so the timed load reflects the app.
-      const url = new URL(ctx.baseUrl);
-      if (PRESET !== 'pittsburgh') url.searchParams.set('preset', PRESET);
-      ctx.appUrl = url.href;
       const coldT0 = Date.now();
       await page.goto(ctx.appUrl, { waitUntil: 'domcontentloaded' });
       await waitReady(120_000);
