@@ -61,7 +61,9 @@ fn vsRibbon(v: RIn) -> ROut {
     // overview stays readable, while wet/flooded roads always stand out.
     let importance = smoothstep(3.0, 11.0, v.attr.z);
     let d0 = length(gridToWorld(v.center, s.r) - F.camPos);
-    let fade = mix(1.0 - smoothstep(F.domainSize * 0.35, F.domainSize * 1.1, d0), 1.0, importance);
+    // Without imagery the ribbons are the only sign of the town, so they stay visible over the whole domain.
+    let far = mix(vec2f(1.0, 2.6), vec2f(0.35, 1.1), F.opts.x) * F.domainSize;
+    let fade = mix(1.0 - smoothstep(far.x, far.y, d0), 1.0, importance);
     if (st == 0u) { color = vec4f(0.93, 0.92, 0.88, O.roadAlpha * fade); minHalfPx = mix(0.7, 1.1, importance); }
     else if (st == 1u) { color = vec4f(1.0, 0.55, 0.05, 0.95); minHalfPx = 1.4; }
     else { color = vec4f(1.0, 0.07, 0.05, 0.9); minHalfPx = 1.7; }
@@ -232,7 +234,12 @@ fn fsMarker(in: MOut, @builtin(front_facing) front: bool) -> @location(0) vec4f 
       let streak = mix(0.35, fall * across, detail);
       let facing = abs(dot(n, V));
       let edge = pow(1.0 - facing, 1.5) * 0.6 + 0.4;
-      let a = in.color.a * (0.45 + 0.8 * streak) * edge;
+      // Camera inside the curtain: every wall fragment lies between the eye and the flooded ground the user came
+      // to look at, so the curtain thins to a light veil (it still marks the storm from outside).
+      let axis = in.world - in.local;
+      let camR = length((F.camPos - axis).xz) / max(length(in.local.xz), 1.0);
+      let inside = 1.0 - smoothstep(0.85, 1.15, camR);
+      let a = in.color.a * (0.45 + 0.8 * streak) * edge * mix(1.0, 0.3, inside);
       let rgb = in.color.rgb * (0.75 + 0.5 * streak) * (skyAmbient(vec3f(0.0, 1.0, 0.0)) * 0.9 + 0.1);
       return vec4f(rgb * a, a);
     }
@@ -243,7 +250,16 @@ fn fsMarker(in: MOut, @builtin(front_facing) front: bool) -> @location(0) vec4f 
       let nz = vnoise(in.local.xz / max(in.size, 1.0) * 3.0 + vec2f(t, -t * 0.7)) * 0.6
              + vnoise(in.local.xz / max(in.size, 1.0) * 9.0 - vec2f(t * 1.7, t)) * 0.4;
       let edge = 1.0 - smoothstep(0.45, 1.0, rr + (nz - 0.5) * 0.35);
-      let a = in.color.a * edge * (0.65 + 0.35 * nz);
+      // The deck is a marker, not a ceiling: seen from above (camera over the deck and within/near its footprint,
+      // or looking steeply down on it) it thins to a veil so the storm's flooding underneath stays readable.
+      // From the side / below it keeps its full body.
+      let center = in.world - in.local;
+      let rel = F.camPos - center;
+      let above = smoothstep(0.0, 0.08, rel.y / max(in.size, 1.0));
+      let over = 1.0 - smoothstep(0.9, 1.8, length(rel.xz) / max(in.size, 1.0));
+      let steep = smoothstep(0.3, 0.85, V.y);
+      let seeThrough = above * max(over, steep);
+      let a = in.color.a * edge * (0.65 + 0.35 * nz) * mix(1.0, 0.14, seeThrough);
       let top = max(n.y, 0.0);
       let lum = luminance(F.skyHorizon);
       let rgb = in.color.rgb * lum * (0.55 + 0.9 * top + 0.35 * nz) + F.sunColor * top * 0.04 * (1.0 - F.opts.w);

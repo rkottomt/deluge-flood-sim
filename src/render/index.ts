@@ -117,6 +117,8 @@ interface SceneGPU {
   hf: HeightField;
   lod: LodTree;
   wetTex: GPUTexture;
+  /** The wet pyramid holds a completed build (usable as a hint by the next prep). */
+  wetValid: boolean;
   /** [base (from vtxTex), down 0→1, down 1→2, …] */
   wetBGs: GPUBindGroup[];
   groundMin: number;
@@ -176,6 +178,7 @@ class DelugeRenderer implements DelugeRendererAPI {
   private prevRenderCallDrew = false;
   private lastPrepState: GPUTexture | null = null;
   private lastPrepUseMax = -1;
+  private lastPrepUseMaxBuilt = -1;
   private framesSincePrep = 1e9;
   private ctx: GPUCanvasContext;
   private frameBuf: GPUBuffer;
@@ -452,6 +455,7 @@ class DelugeRenderer implements DelugeRendererAPI {
       hf,
       lod,
       wetTex,
+      wetValid: false,
       wetBGs,
       groundMin: gMin,
       groundMax: gMax,
@@ -731,7 +735,7 @@ class DelugeRenderer implements DelugeRendererAPI {
     const verts = d.createBindGroup({
       label: 'prep-verts',
       layout: this.P.prepVerts.getBindGroupLayout(0),
-      entries: [...common, { binding: 4, resource: s.vtxTex.createView() }],
+      entries: [...common, { binding: 4, resource: s.vtxTex.createView() }, { binding: 5, resource: s.wetTex.createView() }],
     });
     const entry = { bed, barrier, cells, verts };
     s.prepCache.set(state, entry);
@@ -866,6 +870,10 @@ class DelugeRenderer implements DelugeRendererAPI {
         pf[6] = 0.01;
         pf[7] = s.terrain.cellSize;
         pf[8] = 0.05;
+        // The previous wet pyramid is a valid hint only if it was built from the same displayed field.
+        pf[9] = s.wetValid && this.lastPrepUseMaxBuilt === useMax ? 1 : 0;
+        s.wetValid = true;
+        this.lastPrepUseMaxBuilt = useMax;
         d.queue.writeBuffer(s.prepParams, 0, prep);
         const bgs = this.prepBindGroups(s);
         const cp = enc.beginComputePass({ label: 'prep', timestampWrites: this.timer.writes('prep') });

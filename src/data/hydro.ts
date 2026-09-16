@@ -725,6 +725,78 @@ export function fillSmallHoles(owner: Uint8Array, waterLevel: Float32Array, nx: 
 // Source placement helpers
 // ──────────────────────────────────────────────────────────────────────────────────────────────
 
+export type DomainEdge = 'north' | 'south' | 'west' | 'east';
+
+/** Largest distance (cells) a boundary stage disc reaches into the domain. */
+export const STAGE_DISC_MAX_PENETRATION = 32;
+
+/**
+ * Footprint of a STAGE source that holds the water level along a whole edge crossing of a river or lake: the run of
+ * wet edge cells t0…t1 (inclusive, cell indices along the edge). A stage source is a boundary condition: every
+ * boundary cell of the crossing must lie inside the disc, otherwise the open (free-outflow) boundary drains the
+ * uncovered part and the river draws down toward the edge with spurious fast flow.
+ *
+ * Narrow crossings get a disc centred on the edge itself. For wide or oblique crossings a disc that spans the chord
+ * would reach deep into the domain (and at a raised stage impose the level on land far from the boundary), so the
+ * centre moves OUTSIDE the domain: the disc then cuts the crossing as a shallow lens reaching at most
+ * `maxPenetration` cells inward. Footprint cells outside the domain simply don't exist for the solver.
+ */
+export function edgeStageDisc(
+  edge: DomainEdge,
+  t0: number,
+  t1: number,
+  nx: number,
+  ny: number,
+  maxPenetration = STAGE_DISC_MAX_PENETRATION,
+): { gx: number; gy: number; radius: number } {
+  // Half chord that must be fully covered at the first row of cell centres (+1.5 cells so the smooth rim of the
+  // footprint lies beyond the crossing's last wet cell).
+  const half = (t1 - t0 + 1) / 2 + 1.5;
+  const mid = (t0 + t1 + 1) / 2;
+  const P = Math.max(4, maxPenetration);
+  // Disc centre at distance d outside the edge: radius R with R − d = penetration p and R² = half² + d².
+  let d = 0;
+  let R = half;
+  if (half > P) {
+    d = (half * half - P * P) / (2 * P);
+    R = P + d;
+  }
+  // Full footprint weight needs distance ≤ R − 0.5 at the row of cell centres 0.5 inside the edge.
+  R = Math.sqrt(half * half + (d + 0.5) * (d + 0.5)) + 0.5;
+  const r2 = (v: number) => Math.round(v * 100) / 100;
+  switch (edge) {
+    case 'north':
+      return { gx: r2(mid), gy: r2(-d), radius: r2(R) };
+    case 'south':
+      return { gx: r2(mid), gy: r2(ny + d), radius: r2(R) };
+    case 'west':
+      return { gx: r2(-d), gy: r2(mid), radius: r2(R) };
+    default:
+      return { gx: r2(nx + d), gy: r2(mid), radius: r2(R) };
+  }
+}
+
+/**
+ * Runs of consecutive cells along one domain edge for which `wet(k)` holds (k = row-major cell index), as
+ * inclusive [t0, t1] positions along the edge (x for north/south, y for west/east).
+ */
+export function edgeRuns(edge: DomainEdge, nx: number, ny: number, wet: (k: number) => boolean): Array<[number, number]> {
+  const len = edge === 'north' || edge === 'south' ? nx : ny;
+  const cell = (t: number) =>
+    edge === 'north' ? t : edge === 'south' ? (ny - 1) * nx + t : edge === 'west' ? t * nx : t * nx + nx - 1;
+  const runs: Array<[number, number]> = [];
+  let start = -1;
+  for (let t = 0; t <= len; t++) {
+    const on = t < len && wet(cell(t));
+    if (on && start < 0) start = t;
+    if (!on && start >= 0) {
+      runs.push([start, t - 1]);
+      start = -1;
+    }
+  }
+  return runs;
+}
+
 export interface RiverEnd {
   river: number;
   /** Which end of the traced centerline: 'upstream' (inflow) or 'downstream' (outflow). */

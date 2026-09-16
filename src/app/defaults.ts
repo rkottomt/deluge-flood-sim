@@ -13,9 +13,10 @@ export const APP_CONFIG = {
    * Solver tunables beyond the SimParams contract (4th createSolver argument of src/sim; ignored by a
    * contract-only implementation). Both were measured on the M4 with the Pittsburgh preset:
    *
-   *  • gpuBudgetMs — effectively disabled: the app's frame-time governor (governor.ts) is the work budget.
-   *    The solver estimates GPU cost per substep as (onSubmittedWorkDone latency) / substeps, and in Chrome
-   *    that latency is ~70 ms regardless of the work, so any budget below it collapses the solver to one
+   *  • gpuBudgetMs — effectively disabled: the app's work budget (governor.ts: frame time + GPU latency) is in
+   *    charge. The solver estimates GPU cost per substep as (onSubmittedWorkDone latency) / substeps; that
+   *    latency includes the render work and queueing (14–70+ ms measured), and a one-substep frame is charged
+   *    all of it, so the estimate self-reinforces: with the default 10 ms budget it pinned the solver at one
    *    substep per frame (~12 sim-s per real second instead of the requested 60).
    *  • stageRelaxSeconds — 0 = stage sources SET the river level in their footprint (DESIGN §3.2 "or direct
    *    set"). With relaxation (τ = 10 s) the open boundary drains the footprint faster than it refills: at the
@@ -23,7 +24,7 @@ export const APP_CONFIG = {
    *    reaches 223.6 m with downtown, the Strip and the North Shore under water (4.6 km²), mass error < 0.001 %.
    */
   solverOptions: { gpuBudgetMs: 1000, stageRelaxSeconds: 0 },
-  /** Input or camera motion within this window counts as "interacting" (smooth-frames work budget). */
+  /** Canvas input or camera motion within this window counts as "interacting" (low-latency work budget). */
   interactionHoldMs: 1500,
   /** Store updates that drive the HUD (stats, stepInfo, fps) are throttled to this interval. */
   hudIntervalMs: 200,

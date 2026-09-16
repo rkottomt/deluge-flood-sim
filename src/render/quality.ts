@@ -27,7 +27,7 @@ export interface QualityPreset {
 
 export const QUALITY_PRESETS: Record<Exclude<RendererQuality, 'auto'>, QualityPreset> = {
   high: { maxDpr: 2, maxPixels: 2560 * 1600, bloom: true, prepInterval: 1, idleFps: 60, rainDrops: 16000, lodQuadPixels: 2.5 },
-  balanced: { maxDpr: 1.5, maxPixels: 1920 * 1200, bloom: true, prepInterval: 1, idleFps: 30, rainDrops: 12000, lodQuadPixels: 3.5 },
+  balanced: { maxDpr: 1.5, maxPixels: 1920 * 1200, bloom: true, prepInterval: 2, idleFps: 30, rainDrops: 12000, lodQuadPixels: 3.5 },
   low: { maxDpr: 1, maxPixels: 1440 * 900, bloom: false, prepInterval: 2, idleFps: 30, rainDrops: 6000, lodQuadPixels: 5 },
 };
 
@@ -37,8 +37,8 @@ export const QUALITY_PRESETS: Record<Exclude<RendererQuality, 'auto'>, QualityPr
  */
 export const AUTO_LADDER: QualityPreset[] = [
   { maxDpr: 2, maxPixels: 2560 * 1600, bloom: true, prepInterval: 1, idleFps: 30, rainDrops: 16000, lodQuadPixels: 2.5 },
-  { maxDpr: 1.5, maxPixels: 1920 * 1200, bloom: true, prepInterval: 1, idleFps: 30, rainDrops: 14000, lodQuadPixels: 3 },
-  { maxDpr: 1.25, maxPixels: 1680 * 1050, bloom: true, prepInterval: 1, idleFps: 30, rainDrops: 12000, lodQuadPixels: 3.5 },
+  { maxDpr: 1.5, maxPixels: 1920 * 1200, bloom: true, prepInterval: 2, idleFps: 30, rainDrops: 14000, lodQuadPixels: 3 },
+  { maxDpr: 1.25, maxPixels: 1680 * 1050, bloom: true, prepInterval: 2, idleFps: 30, rainDrops: 12000, lodQuadPixels: 3.5 },
   { maxDpr: 1, maxPixels: 1600 * 1000, bloom: true, prepInterval: 2, idleFps: 30, rainDrops: 10000, lodQuadPixels: 4 },
   { maxDpr: 1, maxPixels: 1440 * 900, bloom: false, prepInterval: 2, idleFps: 30, rainDrops: 8000, lodQuadPixels: 5 },
   { maxDpr: 0.8, maxPixels: 1280 * 800, bloom: false, prepInterval: 3, idleFps: 30, rainDrops: 6000, lodQuadPixels: 6 },

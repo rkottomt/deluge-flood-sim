@@ -59,40 +59,63 @@ interface PolyInfo {
   s: number; // 0..1 along the polyline
 }
 
+/** A polyline prepared for fast repeated distance queries (flat typed arrays, precomputed segment data). */
+interface PreparedPolyline {
+  /** Per segment: ax, ay, dx, dy, 1/len², len, cumulative start length. */
+  seg: Float64Array;
+  count: number;
+  total: number;
+  /** Scratch: per-segment distance and parameter of the last query. */
+  d: Float64Array;
+  s: Float64Array;
+}
+
+function preparePolyline(pts: Array<[number, number]>): PreparedPolyline {
+  const count = pts.length - 1;
+  const seg = new Float64Array(count * 7);
+  let cum = 0;
+  for (let k = 0; k < count; k++) {
+    const dx = pts[k + 1][0] - pts[k][0];
+    const dy = pts[k + 1][1] - pts[k][1];
+    const len = Math.hypot(dx, dy);
+    seg.set([pts[k][0], pts[k][1], dx, dy, 1 / (len * len), len, cum], k * 7);
+    cum += len;
+  }
+  return { seg, count, total: cum, d: new Float64Array(count), s: new Float64Array(count) };
+}
+
 /**
- * Distance to a polyline and the normalized arc-length parameter of the nearest point. The parameter is a
+ * Distance (cells) to a polyline and the normalized arc-length parameter of the nearest point. The parameter is a
  * soft-min blend over segments (weights fall off over ~12 cells of extra distance): the plain nearest-segment
  * parameter jumps across the bisector on the inside of a bend, which would crease any terrain built from it.
  */
-function polylineInfo(px: number, py: number, pts: Array<[number, number]>, cum: number[]): PolyInfo {
-  const total = cum[cum.length - 1];
-  const nseg = pts.length - 1;
-  const ds = SCRATCH_D.length >= nseg ? SCRATCH_D : (SCRATCH_D = new Float64Array(nseg));
-  const ss = SCRATCH_S.length >= nseg ? SCRATCH_S : (SCRATCH_S = new Float64Array(nseg));
+function polylineInfo(px: number, py: number, P: PreparedPolyline): PolyInfo {
+  const { seg, count, d, s } = P;
   let best = Infinity;
-  for (let k = 0; k < nseg; k++) {
-    const [ax, ay] = pts[k];
-    const [bx, by] = pts[k + 1];
-    const dx = bx - ax;
-    const dy = by - ay;
-    const l2 = dx * dx + dy * dy;
-    const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / l2));
-    const d = Math.hypot(px - (ax + dx * t), py - (ay + dy * t));
-    ds[k] = d;
-    ss[k] = (cum[k] + t * Math.sqrt(l2)) / total;
-    if (d < best) best = d;
+  for (let k = 0; k < count; k++) {
+    const o = k * 7;
+    const dx = seg[o + 2];
+    const dy = seg[o + 3];
+    let t = ((px - seg[o]) * dx + (py - seg[o + 1]) * dy) * seg[o + 4];
+    t = t < 0 ? 0 : t > 1 ? 1 : t;
+    const ex = px - (seg[o] + dx * t);
+    const ey = py - (seg[o + 1] + dy * t);
+    const dist = Math.sqrt(ex * ex + ey * ey);
+    d[k] = dist;
+    s[k] = (seg[o + 6] + t * seg[o + 5]) / P.total;
+    if (dist < best) best = dist;
   }
   let wsum = 0;
-  let s = 0;
-  for (let k = 0; k < nseg; k++) {
-    const w = Math.exp(-(ds[k] - best) / 12);
+  let acc = 0;
+  for (let k = 0; k < count; k++) {
+    const extra = d[k] - best;
+    if (extra > 120) continue; // weight < e^-10
+    const w = Math.exp(-extra / 12);
     wsum += w;
-    s += w * ss[k];
+    acc += w * s[k];
   }
-  return { dist: best, s: s / wsum };
+  return { dist: best, s: acc / wsum };
 }
-let SCRATCH_D = new Float64Array(8);
-let SCRATCH_S = new Float64Array(8);
 
 /**
  * A smooth field evaluated on a lattice every `step` cells and bilinearly interpolated at cell centers — the
@@ -153,6 +176,7 @@ export function generateSandbox(opts: SandboxOptions = {}): TerrainData {
   ];
   const tribCum = cumulative(trib);
   const tribLen = tribCum[tribCum.length - 1];
+  const tribPoly = preparePolyline(trib);
   const damS = (tribCum[1] + 0.1 * (tribCum[2] - tribCum[1])) / tribLen;
   const lakeEndS = (tribCum[2] + 0.35 * (tribCum[3] - tribCum[2])) / tribLen;
   const confLevel = riverLevel(yConf);
@@ -201,7 +225,7 @@ export function generateSandbox(opts: SandboxOptions = {}): TerrainData {
         0.6 * detail * smoothstep(60, 200, d);
 
       // Tributary valley (+ reservoir behind the dam).
-      const t = polylineInfo(xc, yc, trib, tribCum);
+      const t = polylineInfo(xc, yc, tribPoly);
       const dt = t.dist * cs;
       const bed = tribBed(t.s);
       const tz = bed + 1.2 + 0.004 * dt + 70 * smoothstep(120, 650, dt) + 22 * hills * smoothstep(200, 600, dt) + 0.4 * detail;
@@ -256,7 +280,7 @@ export function generateSandbox(opts: SandboxOptions = {}): TerrainData {
   const inTown = (x: number, y: number) => {
     const dx = x - riverX(y);
     if (dx < 90 / cs || dx > 780 / cs) return false;
-    if (polylineInfo(x, y, trib, tribCum).dist * cs < 30) return false;
+    if (polylineInfo(x, y, tribPoly).dist * cs < 30) return false;
     return elevAt(x, y) < riverLevel(y) + 26;
   };
   const rowStep = 110 / cs;
@@ -376,8 +400,8 @@ export function generateSandbox(opts: SandboxOptions = {}): TerrainData {
   // ── Scenario.
   const levelSouth = riverLevel(N - 6);
   const sources: WaterSource[] = [
-    { id: 'river-in', type: 'inflow', gx: riverX(8) + 0, gy: 8, radius: riverHalfW * 0.8, discharge: 180, label: 'Clear River inflow' },
-    { id: 'river-stage', type: 'stage', gx: riverX(N - 8), gy: N - 8, radius: riverHalfW * 0.8, level: levelSouth, label: 'Riverside gauge' },
+    { id: 'river-in', type: 'inflow', gx: riverX(8) + 0, gy: 8, radius: Math.round(riverHalfW * 8) / 10, discharge: 180, label: 'Clear River inflow' },
+    { id: 'river-stage', type: 'stage', gx: riverX(N - 8), gy: N - 8, radius: Math.round(riverHalfW * 8) / 10, level: levelSouth, label: 'Riverside gauge' },
   ];
   const riverSeeds: Array<{ gx: number; gy: number; level: number }> = [];
   for (let y = 4; y < N - 4; y += 12) riverSeeds.push({ gx: riverX(y + 0.5), gy: y + 0.5, level: riverLevel(y + 0.5) });

@@ -184,19 +184,10 @@ export class SceneManager {
   }
 }
 
-/**
- * Optional router capabilities beyond the EvacuationRouter contract (implemented by src/routing):
- * the grid size up front, and the standing water at load so bridges over full rivers aren't "flooded".
- */
-interface RouterExtensions {
-  setNetwork(net: TerrainData['roads'], cellSize: number, grid?: { nx: number; ny: number }): void;
-  setBaselineWater?(depth: Float32Array | null, nx: number, ny: number): void;
-}
-
+/** Bind the road network; the standing water at load is the baseline so bridges over full rivers aren't "flooded". */
 function bindRouter(router: EvacuationRouter, terrain: TerrainData, initialWater: Float32Array): void {
-  const ext = router as EvacuationRouter & RouterExtensions;
-  ext.setNetwork(terrain.roads, terrain.cellSize, { nx: terrain.nx, ny: terrain.ny });
-  ext.setBaselineWater?.(initialWater, terrain.nx, terrain.ny);
+  router.setNetwork(terrain.roads, terrain.cellSize, { nx: terrain.nx, ny: terrain.ny });
+  router.setBaselineWater?.(initialWater, terrain.nx, terrain.ny);
 }
 
 /**

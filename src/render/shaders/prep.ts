@@ -22,7 +22,7 @@ struct Prep {
   hWet: f32,       // depth that counts as wet (m)
   cellSize: f32,
   collapse: f32,   // how far dry vertices sink below the bed (m)
-  pad0: f32,
+  wetHint: f32,    // 1 → the previous frame's wet pyramid is valid for this field (lets dry areas skip work)
   pad1: f32,
   pad2: f32,
 }
@@ -38,11 +38,28 @@ fn cl(p: vec2i) -> vec2i {
 fn bed(p: vec2i) -> f32 {
   return textureLoad(bedTex, cl(p), 0).r;
 }
+/**
+ * Numerically blown-up cell (the naive stability-demo scheme): non-finite values, or values no flood can reach
+ * (robust mode caps speeds at 15 m/s and never produces negative depth). NaN fails every comparison, so the tests
+ * are written as "not within range".
+ */
+fn blownState(s: vec4f) -> bool {
+  return !(s.r > -0.25 && s.r < 1000.0) || !(abs(s.g) < 150.0) || !(abs(s.b) < 150.0) || !(s.a < 1e4);
+}
+/** Sentinel written to the foam channel of blown-up cells (real foam is ≤ 1.5); the water shader paints it. */
+const BLOWN_FOAM: f32 = 8.0;
+fn cellHash(p: vec2i) -> f32 {
+  var q = fract(vec2f(p) * vec2f(0.1031, 0.1030));
+  q += dot(q, q.yx + 33.33);
+  return fract((q.x + q.y) * q.x);
+}
 fn state(p: vec2i) -> vec4f {
-  let s = textureLoad(stateTex, cl(p), 0);
-  // NaN/inf guard (the naive stability-demo mode can blow up): treat as dry, no flow.
-  if (!(abs(s.r) < 1e6) || !(abs(s.g) < 1e6) || !(abs(s.b) < 1e6)) {
-    return vec4f(0.0);
+  let c = cl(p);
+  let s = textureLoad(stateTex, c, 0);
+  if (blownState(s)) {
+    // Show the blow-up as what it is — a jagged field of spikes — instead of silently hiding the cell.
+    let spike = 1.0 + 9.0 * cellHash(c);
+    return vec4f(spike, 0.0, 0.0, spike);
   }
   return s;
 }
@@ -108,7 +125,8 @@ fn cells(@builtin(global_invocation_id) gid: vec3u) {
          + rapids * smoothstep(0.3, 1.5, speed) * 0.6;
   }
   let vel = select(s.gb, vec2f(0.0), P.useMax == 1 && s.r <= P.hWet);
-  textureStore(surfOut, c, vec4f(h, vel, clamp(foam, 0.0, 1.5)));
+  let foamOut = select(clamp(foam, 0.0, 1.5), BLOWN_FOAM, blownState(textureLoad(stateTex, c, 0)));
+  textureStore(surfOut, c, vec4f(h, vel, foamOut));
   textureStore(normOut, c, vec4f(clamp(sbx, -60.0, 60.0), clamp(sbz, -60.0, 60.0), sex, sez));
   let barrier = textureLoad(barrierTex, c, 0).r;
   textureStore(miscOut, c, vec4f(max(barrier, 0.0), max(s.a, 0.0), speed, 0.0));
@@ -117,6 +135,22 @@ fn cells(@builtin(global_invocation_id) gid: vec3u) {
 
 export const PREP_VERTS_WGSL = /* wgsl */ `
 @group(0) @binding(4) var vtxOut: texture_storage_2d<rgba32float, write>;
+@group(0) @binding(5) var wetPrev: texture_2d<f32>;
+
+/** Was there water within ~4 base quads of this vertex last frame? (conservative; 1 when no hint is available) */
+fn nearWaterLastFrame(kl: vec2i) -> bool {
+  if (P.wetHint < 0.5) { return true; }
+  let lv = min(2, i32(textureNumLevels(wetPrev)) - 1);
+  let size = vec2i(textureDimensions(wetPrev, lv));
+  let t = kl >> vec2u(u32(lv));
+  var w = 0.0;
+  for (var oy = -1; oy <= 0; oy++) {
+    for (var ox = -1; ox <= 0; ox++) {
+      w = max(w, textureLoad(wetPrev, clamp(t + vec2i(ox, oy), vec2i(0), size - 1), lv).r);
+    }
+  }
+  return w > 0.5;
+}
 
 @compute @workgroup_size(16, 16)
 fn verts(@builtin(global_invocation_id) gid: vec3u) {
@@ -152,7 +186,7 @@ fn verts(@builtin(global_invocation_id) gid: vec3u) {
   var surface = bedV - P.collapse;
   if (wetCount > 0.0) {
     surface = min(etaWet / wetCount, bedV + depthMax);
-  } else {
+  } else if (nearWaterLastFrame(kl)) {
     // Dry vertex next to water: extend the neighbouring water plane underneath it instead of snapping the surface
     // to the bed. The flat plane then meets the terrain mesh exactly along the terrain's contour at the water level,
     // so shorelines follow the land instead of zig-zagging along triangle diagonals. Clamping below the bed means

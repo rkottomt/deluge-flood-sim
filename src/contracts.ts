@@ -100,8 +100,10 @@ export interface ScenarioPreset {
   /**
    * Water bodies to pre-fill at load: every cell connected to a seed with bed elevation below
    * `level` gets h = level - bed. Used so rivers/lakes start full.
+   * A seed may carry its own surface `level` (sloping rivers): seeds of one fill then compete and the
+   * nearest seed sets each connected cell's level (see computeInitialWater in src/data).
    */
-  initialFill: { seeds: Array<{ gx: number; gy: number }>; level: number }[];
+  initialFill: { seeds: Array<{ gx: number; gy: number; level?: number }>; level: number }[];
   /** Suggested camera framing. */
   camera?: CameraPose;
 }
@@ -406,7 +408,10 @@ export interface CameraController {
 
 export interface RouteResult {
   state: 'ok' | 'blocked' | 'none';
-  /** Polyline in grid coords when state === 'ok'. */
+  /**
+   * Polyline in grid coords. 'ok': the route to the shelter. 'blocked': the route the flood cut (drawn red,
+   * pulsing) when one exists, else null. 'none': null. lengthMeters/etaSeconds/shelter are 0/0/null unless 'ok'.
+   */
   polyline: Float32Array | null;
   lengthMeters: number;
   /** Estimated travel time in seconds (driving, slowed on wet roads). */
@@ -417,9 +422,20 @@ export interface RouteResult {
 }
 
 export interface EvacuationRouter {
-  /** Rebuild the graph for a new road network. */
-  setNetwork(net: RoadNetwork | null, cellSize: number): void;
-  /** Recompute per-edge water depth + status from a depth field (nx*ny). Cheap enough for 2–4 Hz. */
+  /**
+   * Rebuild the graph for a new road network. `grid` declares the terrain grid the network refers to
+   * (otherwise it is taken from the first updateFlood call).
+   */
+  setNetwork(net: RoadNetwork | null, cellSize: number, grid?: { nx: number; ny: number }): void;
+  /**
+   * Standing water at load (rivers, lakes: computeInitialWater's output) so roads on bridges over it are not
+   * treated as flooded. null = judge every cell by depth alone. Call after setNetwork.
+   */
+  setBaselineWater?(depth: Float32Array | null, nx: number, ny: number): void;
+  /**
+   * Recompute per-edge water depth + status from a depth field (nx*ny). Cheap enough for 2–4 Hz.
+   * Returns a NEW array instance exactly when some status changed (buffers are recycled: read only the latest).
+   */
   updateFlood(depth: Float32Array, nx: number, ny: number): RoadStatusArray | null;
   /** Shortest safe path from `start` to the nearest reachable shelter given the last updateFlood. */
   route(start: { gx: number; gy: number } | null, shelters: Shelter[]): RouteResult;
@@ -458,10 +474,13 @@ export interface DelugeDebugAPI {
 //
 //  src/sim/index.ts:
 //    export function createSolver(device: GPUDevice, terrain: SolverTerrainInput,
-//                                 params?: Partial<SimParams>): Promise<FloodSolver>;
+//                                 params?: Partial<SimParams>, options?: Partial<SolverOptions>): Promise<FloodSolver>;
+//    (options = numerical tunables, see src/sim/constants.ts; the concrete GpuFloodSolver also exposes a
+//     settable `gpuBudgetMs` — GPU compute ms per frame measured with timestamp queries.)
 //  src/render/index.ts:
 //    export function createRenderer(device: GPUDevice, canvas: HTMLCanvasElement,
-//                                   format: GPUTextureFormat): Promise<FloodRenderer>;
+//                                   format: GPUTextureFormat, options?: RendererOptions): Promise<FloodRenderer>;
+//    (options.quality 'auto'|'high'|'balanced'|'low'; the concrete DelugeRendererAPI adds setQuality() + stats.)
 //  src/routing/index.ts:
 //    export function createRouter(): EvacuationRouter;
 //  src/data/index.ts:

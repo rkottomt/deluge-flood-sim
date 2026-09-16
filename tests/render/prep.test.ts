@@ -128,7 +128,13 @@ test('prep: water surface, shoreline extension, walls and wet pyramid', async ()
   );
   cp.dispatchWorkgroups(N / 16, N / 16);
   cp.setPipeline(P.prepVerts);
-  cp.setBindGroup(0, device.createBindGroup({ layout: P.prepVerts.getBindGroupLayout(0), entries: [...common, { binding: 4, resource: vtx.createView() }] }));
+  cp.setBindGroup(
+    0,
+    device.createBindGroup({
+      layout: P.prepVerts.getBindGroupLayout(0),
+      entries: [...common, { binding: 4, resource: vtx.createView() }, { binding: 5, resource: wet.createView() }],
+    }),
+  );
   cp.dispatchWorkgroups(Math.ceil(V / 16), Math.ceil(V / 16));
   cp.setPipeline(P.wetBase);
   cp.setBindGroup(
@@ -205,6 +211,26 @@ test('prep: water surface, shoreline extension, walls and wet pyramid', async ()
   assert.equal(w3[(20 >> 3) * (N >> 3) + (45 >> 3)], 0);
   const wTop = await readTexture(device, wet, 1, 1, wetMips - 1);
   assert.equal(wTop[0], 1);
+
+  // Second prep using the pyramid as a hint (the renderer's steady state) must give identical vertices.
+  pf[9] = 1;
+  device.queue.writeBuffer(params, 0, pb);
+  const vtx2 = out('rgba32float', V, V);
+  const enc2 = device.createCommandEncoder();
+  const cp2 = enc2.beginComputePass();
+  cp2.setPipeline(P.prepVerts);
+  cp2.setBindGroup(
+    0,
+    device.createBindGroup({
+      layout: P.prepVerts.getBindGroupLayout(0),
+      entries: [...common, { binding: 4, resource: vtx2.createView() }, { binding: 5, resource: wet.createView() }],
+    }),
+  );
+  cp2.dispatchWorkgroups(Math.ceil(V / 16), Math.ceil(V / 16));
+  cp2.end();
+  device.queue.submit([enc2.finish()]);
+  const v2 = await readTexture(device, vtx2, V, V);
+  for (let i = 0; i < v.length; i++) assert.equal(v2[i], v[i], `hinted prep differs at ${i}`);
 
   // Surface texture: depth and velocity pass through; the dry side has no foam.
   const s = await readTexture(device, surf, N, N);

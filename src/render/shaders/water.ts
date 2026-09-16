@@ -34,6 +34,37 @@ fn wetAt(mip: i32, t: vec2i) -> f32 {
   return textureLoad(wetTex, clamp(tt, vec2i(0), size - 1), lv).r;
 }
 
+/** How far the prep pass sinks dry vertices below the bed (m); must match pf[8] in index.ts. */
+const DRY_COLLAPSE: f32 = 0.05;
+
+/**
+ * Water surface of one LOD vertex sample \`t\` (vtxTex texel at grid position g) for a mesh whose vertices are
+ * q cells apart. The prep pass already extends the water plane under dry vertices within about one base cell of
+ * water; on a coarse LOD level a dry vertex several cells up the bank misses that, so its water triangles slope
+ * from the river surface up to the bank and cut the terrain in a saw-tooth. Here a dry vertex instead takes the
+ * mean surface of its wet neighbours in THIS mesh (the six vertices it shares triangles with), clamped below its
+ * own bed: every water triangle touching it is then flat and meets the terrain along the terrain's own contour.
+ * Low dry ground (bed below the neighbours' water, e.g. behind a levee) stays collapsed by the clamp.
+ */
+fn lodSurface(g: vec2f, t: vec4f, q: f32) -> f32 {
+  if (t.a > 0.5) { return t.g; }
+  var sum = 0.0;
+  var cnt = 0.0;
+  let offs = array<vec2f, 6>(vec2f(1.0, 0.0), vec2f(-1.0, 0.0), vec2f(0.0, 1.0), vec2f(0.0, -1.0), vec2f(1.0, -1.0), vec2f(-1.0, 1.0));
+  for (var i = 0; i < 6; i++) {
+    let gn = g + offs[i] * q;
+    if (any(gn < vec2f(0.0)) || any(gn > F.grid)) { continue; }
+    let tn = vtxAtGrid(gn);
+    if (tn.a > 0.5) {
+      sum += tn.g;
+      cnt += 1.0;
+    }
+  }
+  if (cnt < 0.5) { return t.g; }
+  // Never raise a vertex the prep pass already placed higher (its own local extension is the more accurate one).
+  return max(t.g, min(sum / cnt, t.r - DRY_COLLAPSE));
+}
+
 @vertex
 fn vsWater(@builtin(vertex_index) vi: u32, n: NodeIn) -> WOut {
   var o: WOut;
@@ -47,7 +78,10 @@ fn vsWater(@builtin(vertex_index) vi: u32, n: NodeIn) -> WOut {
   }
   let v = lodVertex(vi, n);
   let bed = mix(v.a.r, v.b.r, v.m);
-  var surface = mix(v.a.g, v.b.g, v.m);
+  // Sample a lives on this node's mesh (spacing q), sample b on the parent mesh it morphs toward (spacing 2q).
+  let surfA = lodSurface(v.g0, v.a, n.node.z);
+  let surfB = select(lodSurface(v.gp, v.b, 2.0 * n.node.z), surfA, v.m <= 0.0);
+  var surface = mix(surfA, surfB, v.m);
   // No water within two quads of this vertex (covers its morph range): sink it far below the terrain. No visible
   // water triangle can touch it, and its dry triangles are then rejected by the depth test instead of shaded.
   let f = vec2i(floor(v.g0 / (2.0 * n.node.z)));
@@ -246,6 +280,17 @@ fn fsWater(in: WOut) -> @location(0) vec4f {
     }
     rgb += spec * 0.2 + skyReflection(R) * fres * 0.3;
     alpha = 0.82;
+  }
+
+  // Numerical blow-up (stability demo): the prep pass marks non-finite cells with foam = 8. Paint them as hot,
+  // flickering magenta "garbage" (HDR, so it blooms) — visible from any distance, in every view mode.
+  let blown = smoothstep(2.0, 6.0, s.a);
+  if (blown > 0.0) {
+    let cellId = floor(in.grid);
+    let flicker = step(0.5, fract(F.time * 7.0 + hash12(cellId) * 3.0));
+    let glitch = mix(vec3f(2.8, 0.15, 1.4), vec3f(3.2, 1.6, 0.2), flicker * hash12(cellId + vec2f(7.0, 3.0)));
+    rgb = mix(rgb, glitch, blown);
+    alpha = mix(alpha, 1.0, blown);
   }
 
   alpha = clamp(alpha, 0.0, 1.0) * shore;

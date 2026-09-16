@@ -170,6 +170,7 @@ struct NodeIn {
 struct LodVertex {
   g: vec2f,          // morphed grid position
   g0: vec2f,         // unmorphed grid position (clamped to the domain)
+  gp: vec2f,         // parent-grid position the vertex morphs toward
   a: vec4f,          // base-grid texel at g0
   b: vec4f,          // base-grid texel at the parent-grid position
   m: f32,            // morph factor
@@ -190,6 +191,7 @@ fn lodVertex(vi: u32, n: NodeIn) -> LodVertex {
   let gp = min(n.node.xy + (kl - odd) * q, F.grid);
   var o: LodVertex;
   o.g0 = g0;
+  o.gp = gp;
   o.a = vtxAtGrid(g0);
   o.b = vtxAtGrid(gp);
   let w0 = gridToWorld(g0, o.a.r);
