@@ -167,30 +167,19 @@ export function createTopBar(ctx: UIContext, opts: { onTogglePanel(): void; isPa
 
   const right = h('div', { class: 'dl-island dl-actions' }, perf, howBtn, helpBtn, panelBtn);
 
-  // Achieved speed: d(simTime)/d(wallclock), smoothed; stats arrive at a few Hz.
-  let lastSim: number | null = null;
-  let lastWall = 0;
+  // Achieved speed (sim seconds per real second). The sampled frame's simulated seconds × the smoothed
+  // frame rate is a direct, low-jitter estimate (it is exactly timeScale unless the GPU budget throttles
+  // the solver); simTime deltas between asynchronous readbacks would wobble ±20%.
   let achieved: number | null = null;
   bind(
-    (s) => s.stats?.simTime ?? null,
-    (simTime) => {
-      const now = performance.now();
-      if (simTime === null) {
-        lastSim = null;
+    (s) => s.stepInfo,
+    (si, s) => {
+      if (!si || s.paused || !(s.fps > 0) || !Number.isFinite(si.simSecondsAdvanced)) {
         achieved = null;
         return;
       }
-      if (lastSim !== null && simTime >= lastSim) {
-        const dw = (now - lastWall) / 1000;
-        if (dw > 0.05) {
-          const inst = (simTime - lastSim) / dw;
-          achieved = achieved === null ? inst : achieved + (inst - achieved) * 0.35;
-        }
-      } else {
-        achieved = null;
-      }
-      lastSim = simTime;
-      lastWall = now;
+      const inst = si.simSecondsAdvanced * s.fps;
+      achieved = achieved === null ? inst : achieved + (inst - achieved) * 0.4;
     },
   );
 

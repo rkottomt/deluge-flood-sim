@@ -19,6 +19,7 @@ import { createHelp } from './help';
 import { createHowItWorks } from './howItWorks';
 import { createLocationPicker } from './locationPicker';
 import { installKeyboard } from './keyboard';
+import { createWelcome } from './welcome';
 
 export { createToolController } from './tools';
 export { renderUnsupported } from './overlays';
@@ -65,7 +66,7 @@ export function mountUI(root: HTMLElement, store: Store, actions: AppActions): v
   const { toolbar, options } = createToolbar(ctx);
   const hud = createHud(ctx, topbar.achievedSpeed);
   const probe = createProbeTooltip(ctx);
-  const notices = createNotices(ctx);
+  const notices = createNotices(ctx, [createWelcome(ctx)]);
   const loading = createLoadingOverlay(ctx);
   const help = createHelp(ctx);
   const how = createHowItWorks(ctx);

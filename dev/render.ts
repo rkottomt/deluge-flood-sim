@@ -57,6 +57,17 @@ declare global {
     __pick: (x: number, y: number) => unknown;
     __renderer: DelugeRendererAPI;
     __errors: string[];
+    /** Change harness settings without reloading (automation). */
+    __set: (o: {
+      mode?: WaterViewMode;
+      rain?: number;
+      contours?: boolean;
+      imagery?: boolean;
+      overlays?: boolean;
+      cam?: string;
+      pose?: Partial<CameraPose> & { target?: Partial<CameraPose['target']> };
+      exag?: number;
+    }) => void;
   }
 }
 window.__errors = [];
@@ -113,7 +124,7 @@ async function main() {
   let contours = flag('contours', false);
   let imagery = flag('imagery', true);
   let overlaysOn = flag('overlays', true);
-  const exag = num('exag', 1.5);
+  let exag = num('exag', 1.5);
   let cursor = scene.cursor;
 
   let lastWall: { gx: number; gy: number } | null = null;
@@ -147,6 +158,24 @@ async function main() {
   });
 
   window.__pick = (x, y) => renderer.pick(x, y);
+  window.__set = (o) => {
+    if (o.mode) waterMode = o.mode;
+    if (o.rain !== undefined) rain = o.rain;
+    if (o.contours !== undefined) contours = o.contours;
+    if (o.imagery !== undefined) imagery = o.imagery;
+    if (o.overlays !== undefined) overlaysOn = o.overlays;
+    if (o.exag !== undefined) exag = o.exag;
+    if (o.cam || o.pose) {
+      const b = o.cam ? (scene.cameras[o.cam] ?? renderer.camera.pose) : renderer.camera.pose;
+      const t = { ...b.target, ...(o.pose?.target ?? {}) };
+      renderer.camera.pose = {
+        target: t,
+        distance: o.pose?.distance ?? b.distance,
+        yaw: o.pose?.yaw ?? b.yaw,
+        pitch: o.pose?.pitch ?? b.pitch,
+      };
+    }
+  };
 
   const emptyOverlay: OverlayState = {
     roadStatus: null,

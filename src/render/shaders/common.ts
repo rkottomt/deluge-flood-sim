@@ -31,8 +31,8 @@ struct Frame {
   near: f32,
   bandCount: f32,
   domainSize: f32,
-  pad0: f32,
-  pad1: f32,
+  flowVis: f32,       // on-screen exaggeration of flow advection (scales with camera distance)
+  rainBox: f32,       // rain particle box size (m)
   bands: array<vec4f, 8>, // rgb (linear) + upper threshold in .a
 }
 `;
@@ -79,18 +79,39 @@ fn skyRadiance(dirIn: vec3f) -> vec3f {
   let overcast = F.opts.w;
   let y = dir.y;
   let up = clamp(y, 0.0, 1.0);
-  var col = mix(F.skyHorizon, F.skyZenith, pow(up, 0.55));
-  // Below the horizon: fade to a hazy ground-bounce tone so the diorama floats in atmosphere.
-  let below = smoothstep(0.0, -0.35, y);
-  col = mix(col, F.skyHorizon * vec3f(0.62, 0.64, 0.66), below);
-  // Sun glow (Mie-like forward scattering), stronger near the horizon.
+  var col = mix(F.skyHorizon, F.skyZenith, pow(up, 0.45));
+  // Brighter, whiter band right at the horizon (aerosols).
+  col = mix(col, F.skyHorizon * 1.12 + vec3f(0.04), exp(-abs(y) * 14.0) * 0.6);
+  // Below the horizon: a studio-like backdrop, hazy near the horizon and deepening downward, so the diorama floats
+  // in atmosphere without a hard edge.
+  let below = smoothstep(0.0, -0.08, y);
+  let backdrop = mix(F.skyHorizon * vec3f(0.84, 0.88, 0.93), F.skyZenith * 0.28 + vec3f(0.035, 0.04, 0.048), smoothstep(-0.02, -0.75, y));
+  col = mix(col, backdrop, below);
+  // Sun glow (Mie-like forward scattering).
   let mu = max(dot(dir, F.sunDir), 0.0);
-  let glow = pow(mu, 6.0) * 0.18 + pow(mu, 48.0) * 0.45;
+  let glow = pow(mu, 8.0) * 0.22 + pow(mu, 64.0) * 0.5;
   col += F.sunColor * glow * (1.0 - overcast * 0.85);
   // Overcast storm sky: desaturate + darken.
   let grey = vec3f(luminance(col));
-  col = mix(col, grey * vec3f(0.72, 0.76, 0.82), overcast * 0.9);
+  col = mix(col, grey * vec3f(0.62, 0.66, 0.72), overcast * 0.9);
   return col;
+}
+
+/** Soft high cloud layer (upper hemisphere only). */
+fn cloudLayer(dir: vec3f, col: vec3f) -> vec3f {
+  if (dir.y <= 0.0) { return col; }
+  let cp = dir.xz / (dir.y + 0.15) * 1.3 + vec2f(F.time * 0.003, F.time * 0.001);
+  let c = vnoise(cp) * 0.55 + vnoise(cp * 2.3 + 7.1) * 0.3 + vnoise(cp * 5.3 + 3.7) * 0.15;
+  let cover = mix(0.56, 0.3, F.opts.w);
+  let cloud = smoothstep(cover, cover + 0.3, c) * smoothstep(0.0, 0.2, dir.y);
+  let lum = luminance(F.skyHorizon);
+  let cloudCol = mix(vec3f(1.0, 0.98, 0.95) * lum * 1.45, vec3f(0.42, 0.44, 0.48) * lum, F.opts.w);
+  return mix(col, cloudCol, cloud * 0.7);
+}
+
+/** What calm water reflects: sky + clouds (no sun disk; the specular lobe handles the sun). */
+fn skyReflection(dir: vec3f) -> vec3f {
+  return cloudLayer(dir, skyRadiance(dir));
 }
 
 fn sunDisk(dir: vec3f) -> vec3f {
@@ -99,24 +120,23 @@ fn sunDisk(dir: vec3f) -> vec3f {
   return F.sunColor * disk * 60.0 * (1.0 - F.opts.w);
 }
 
-/** Aerial perspective: blend toward the sky seen along the view ray (with sun inscatter). */
-fn applyHaze(color: vec3f, worldPos: vec3f) -> vec3f {
-  let v = worldPos - F.camPos;
-  let dist = length(v);
-  let dir = v / max(dist, 1e-3);
-  // Thicker haze in the valleys: density falls off with height above the lowest terrain.
-  let hRel = max(worldPos.y - F.elev.x * F.exag, 0.0) / max(F.domainSize * 0.08, 1.0);
-  let density = F.hazeDensity * (0.55 + 0.45 * exp(-hRel));
-  let amount = 1.0 - exp(-dist * density);
-  let hazeCol = skyRadiance(vec3f(dir.x, max(dir.y, 0.0) * 0.35 + 0.02, dir.z));
-  return mix(color, hazeCol, clamp(amount, 0.0, 1.0));
-}
-
+/**
+ * Aerial perspective with an exponential atmosphere: haze density falls off as exp(−h/H) above the lowest terrain,
+ * integrated analytically along the view ray. Looking straight down through thin air stays crisp, while long
+ * low-angle views across valleys pick up realistic haze.
+ */
 fn hazeAmount(worldPos: vec3f) -> f32 {
   let dist = length(worldPos - F.camPos);
-  let hRel = max(worldPos.y - F.elev.x * F.exag, 0.0) / max(F.domainSize * 0.08, 1.0);
-  let density = F.hazeDensity * (0.55 + 0.45 * exp(-hRel));
-  return clamp(1.0 - exp(-dist * density), 0.0, 1.0);
+  let H = max(F.domainSize * 0.16, 250.0);
+  let y0 = F.elev.x * F.exag;
+  let hc = max(F.camPos.y - y0, 0.0) / H;
+  let hp = max(worldPos.y - y0, 0.0) / H;
+  let dh = hc - hp;
+  var rho = exp(-hp);
+  if (abs(dh) > 1e-3) {
+    rho = (exp(-hp) - exp(-hc)) / dh;
+  }
+  return clamp(1.0 - exp(-dist * rho * F.hazeDensity), 0.0, 1.0);
 }
 
 /** Ambient sky light for a surface normal (hemisphere approximation). */

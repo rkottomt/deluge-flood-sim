@@ -86,7 +86,10 @@ function checkScenario(
         if (h0[(Math.floor(src.gy) + dj) * nx + Math.floor(src.gx) + di] > 0.05) wet++;
       }
     }
-    assert.ok(wet >= cells * 0.8, `${label}: source ${src.id} footprint only ${wet}/${cells} wet`);
+    // Stage footprints must sit inside the water; an inflow may overlap a narrow channel's banks a little (the
+    // injected water simply drains into the channel).
+    const need = src.type === 'stage' ? 0.8 : 0.7;
+    assert.ok(wet >= cells * need, `${label}: source ${src.id} footprint only ${wet}/${cells} wet`);
     if (src.type === 'stage' && s.stage) {
       assert.ok(Math.abs(src.level - s.stage.normalLevel) < 0.6, `${label}: stage source ${src.id} level ${src.level} vs normal ${s.stage.normalLevel}`);
     }
@@ -101,10 +104,18 @@ function checkScenario(
   assert.ok(wet > 0, `${label}: rivers start empty`);
   assert.ok(wet < nx * ny * 0.15, `${label}: initial water covers ${((100 * wet) / (nx * ny)).toFixed(1)} % of the domain`);
   assert.ok(maxDepth < 20, `${label}: initial max depth ${maxDepth}`);
-  if (s.stage) {
-    for (let k = 0; k < h0.length; k++) {
-      if (h0[k] > 0.01) assert.ok(elevation[k] < s.stage.normalLevel, `${label}: water above a bed higher than the pool`);
-    }
+  // Every wet cell's bed is below the highest fill level (fill.level or a seed's own level).
+  let maxLevel = -Infinity;
+  for (const f of s.initialFill) {
+    maxLevel = Math.max(maxLevel, f.level);
+    for (const sd of f.seeds as Array<{ level?: number }>) if (typeof sd.level === 'number') maxLevel = Math.max(maxLevel, sd.level);
+  }
+  for (let k = 0; k < h0.length; k++) {
+    if (h0[k] > 0.01) assert.ok(elevation[k] < maxLevel, `${label}: water on a bed above every fill level`);
+  }
+  if (s.stage && s.initialFill.every((f) => f.seeds.every((sd) => typeof (sd as { level?: number }).level !== 'number'))) {
+    // Flat pool presets: nothing wet above the pool.
+    for (let k = 0; k < h0.length; k++) if (h0[k] > 0.01) assert.ok(elevation[k] < s.stage.normalLevel + 0.01, `${label}: wet cell above the pool`);
   }
 
   // Shelters: dry, high, and on (or next to) the road network.
@@ -224,7 +235,7 @@ test('sandbox: valid scenario, connected roads, reachable high shelters', () => 
   assert.equal(roots.size, 1, `sandbox road graph has ${roots.size} components`);
   assert.ok(net.edges.length > 200);
   // Reservoir starts full behind the dam, river starts full.
-  assert.ok(Math.max(...h0) > 8, 'reservoir filled');
+  assert.ok(h0.reduce((m, v) => Math.max(m, v), 0) > 8, 'reservoir filled');
 });
 
 // ── Real loader over HTTP (fetch → validate → decode), as the browser does.

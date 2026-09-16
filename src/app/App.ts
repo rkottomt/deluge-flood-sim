@@ -27,7 +27,7 @@ export type LoadOutcome = 'ok' | 'failed' | 'superseded';
  * Application orchestrator: creates the GPU device, renderer, router, UI and tool controller, owns the
  * current scene (terrain + solver), and runs the frame loop. The heavy lifting lives in focused helpers:
  *   SceneManager (load sequence) · SimSync (store → solver) · FrameDriver (per-frame work) ·
- *   SubstepGovernor (frame-time work budget) · RenderPacer (power-aware rendering) ·
+ *   WorkBudget (frame-time substep governor) · RenderPacer (power-aware rendering) ·
  *   EvacController (routing) · RunForScheduler (automation) · createActions · createDebugApi.
  */
 export class App {
@@ -53,17 +53,6 @@ export class App {
   tools: ToolController | null = null;
   probe: ProbeSampler | null = null;
 
-  /** Frame-time substep governor on (default). Off = the user's maxSubstepsPerFrame only (benchmarks). */
-  get adaptiveBudget(): boolean {
-    return this.adaptiveBudgetOn;
-  }
-  set adaptiveBudget(on: boolean) {
-    this.adaptiveBudgetOn = on;
-    this.budget.restart();
-    this.sim.setOverride('governor', on ? { maxSubstepsPerFrame: this.budget.cap } : null);
-  }
-  private adaptiveBudgetOn = true;
-
   /** Stability demo ("Break it") state; the CFL to restore when it is switched off. */
   stabilityDemo = false;
   preDemoCfl: number = APP_CONFIG.robustCfl;
@@ -75,6 +64,7 @@ export class App {
   /** performance.now() of the last user input event anywhere in the page. */
   private lastInputAt = -Infinity;
   private resizePending = true;
+  private adaptiveBudgetOn = true;
 
   constructor(
     private readonly canvas: HTMLCanvasElement,
@@ -249,6 +239,16 @@ export class App {
     } catch (err) {
       this.errors.report('sim', `${what} failed: ${errorMessage(err)}`, err);
     }
+  }
+
+  /** Frame-time substep governor on (default). Off = only the user's maxSubstepsPerFrame applies (benchmarks). */
+  get adaptiveBudget(): boolean {
+    return this.adaptiveBudgetOn;
+  }
+  set adaptiveBudget(on: boolean) {
+    this.adaptiveBudgetOn = on;
+    this.budget.restart();
+    this.sim.setOverride('governor', on ? { maxSubstepsPerFrame: this.budget.cap } : null);
   }
 
   /** Something changed the picture outside the store / input paths: render at full rate for a moment. */

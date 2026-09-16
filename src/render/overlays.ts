@@ -464,7 +464,7 @@ export function buildMarkers(
       opaque.disc(0.24, 0.72, a, 18, st);
       blended.lathe([
         { r: 0.09, y: 0, anchor: a, n: [1, 0] },
-        { r: 0.09, y: 8, anchor: a, n: [1, 0] },
+        { r: 0.09, y: 3.5, anchor: a, n: [1, 0] },
       ], 16, { scaleMode: ScaleMode.Marker, kind: MarkerKind.Beam, size, phase, color: C.beam });
       blended.disc(1.6, 0.03, a, 32, { scaleMode: ScaleMode.Marker, kind: MarkerKind.Pulse, size, phase, color: [0.3, 0.7, 1.0, 1.0] });
     } else {
@@ -502,9 +502,9 @@ export function buildMarkers(
       { r: R, y: 0, anchor: hi, n: [1, 0] },
     ], 48, col);
     // Cloud cap: flattened ellipsoid.
-    const cap: MarkerStyle = { scaleMode: ScaleMode.Meters, kind: MarkerKind.Cloud, size: 1, phase: i * 0.3, color: [0.33, 0.35, 0.4, 0.55 + 0.3 * k] };
-    const profile: ProfilePoint[] = [];
     const Rc = R * 1.3;
+    const cap: MarkerStyle = { scaleMode: ScaleMode.Meters, kind: MarkerKind.Cloud, size: Rc, phase: i * 0.3, color: [0.62, 0.65, 0.72, 0.5 + 0.3 * k] };
+    const profile: ProfilePoint[] = [];
     const th = Math.max(R * 0.18, 40);
     for (let j = 0; j <= 8; j++) {
       const t = -Math.PI / 2 + (j / 8) * Math.PI;

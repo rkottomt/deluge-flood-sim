@@ -37,7 +37,14 @@ export interface SolverOptions {
   uMax: number;
   /** Robust mode Froude-number cap. */
   froudeMax: number;
-  /** Minimum bed slope used by the open (free outflow) boundary ghost cell. */
+  /**
+   * Minimum slope S of the open (free outflow) boundary: outflow is normal flow q = h^{5/3}·√S/n with
+   * S = max(local bed slope, boundaryMinSlope). Where terrain is flat at the edge — rivers, whose channels
+   * are flat after hydro-conditioning — this IS the river's energy slope and it sets the discharge leaving
+   * the domain. 1e-4 is typical of large rivers: a 6 m deep Ohio at Pittsburgh then carries ~2,000 m³/s at
+   * ~1 m/s (real mean flow ≈ 900 m³/s) and ~11,000 m³/s at the 1936 stage (record ≈ 16,000 m³/s); 1e-3 would
+   * drain ~7,000 m³/s at normal pool. Steep edges use their own (larger) local slope.
+   */
   boundaryMinSlope: number;
   /** Robust mode Froude cap on open-boundary outflow; 1 = critical flow over a free edge (see bflux in shaders/common.ts). */
   boundaryFroudeMax: number;
@@ -73,14 +80,14 @@ export const DEFAULT_SOLVER_OPTIONS: SolverOptions = {
   hMin: 1e-4,
   uMax: 15,
   froudeMax: 8,
-  boundaryMinSlope: 0.001,
+  boundaryMinSlope: 1e-4,
   boundaryFroudeMax: 1,
   stageRelaxSeconds: 10,
   robustCflMax: 0.85,
   dtMin: 0.001,
   dtMax: 5,
   readbackIntervalMs: 300,
-  gpuBudgetMs: 10,
+  gpuBudgetMs: 8,
   cflDepthMargin: 1.15,
   cflSpeedMargin: 1.25,
 };

@@ -1,3 +1,4 @@
+/// <reference types="node" />
 /**
  * Bake real-world presets into public/presets/<id>/{meta.json, elevation.f32, imagery.jpg, roads.json}.
  *
@@ -19,7 +20,7 @@ import { burnRivers, findRiverEnds, flatThreshold, localRelief, type BurnResult,
 import { fetchImageryBytes, IMAGERY_ATTRIBUTION } from '../src/data/imagery';
 import { computeInitialWater } from '../src/data/initialWater';
 import { type PresetMeta, PRESETS, validatePresetMeta } from '../src/data/presets';
-import { buildRoadNetwork, encodeRoads, fetchTigerRoads, ROADS_ATTRIBUTION_TIGER, roadStats } from '../src/data/roads';
+import { buildRoadNetwork, encodeRoads, fetchTigerRoads, type RawRoad, ROADS_ATTRIBUTION_TIGER, roadStats } from '../src/data/roads';
 import { makeGeoToGrid } from '../src/data/geo';
 
 const FT = 0.3048;
@@ -91,7 +92,9 @@ const PRESET_DEFS: PresetDef[] = [
     ],
     stage: {
       label: 'Ohio River at Pittsburgh (Point gauge, USGS 03085152)',
-      // Gauge datum 693.6 ft NAVD88 (previously published as 694.23 ft NGVD29, i.e. NAVD88 ≈ NGVD29 − 0.63 ft here).
+      // USGS 03085152 gage datum: 693.6 ft above NAVD88 (GNSS survey). NOAA VERTCON 3.0 at the Point gives
+      // NAVD88 = NGVD29 − 0.161 m (−0.53 ft), so the Emsworth pool's 710.0 ft NGVD29 is 216.25 m NAVD88 — the
+      // bake measures the flat pool surface in the DEM (≈ 216.3 m) and it reads ≈ 16 ft on this gauge.
       gaugeDatum: 693.6 * FT,
       floodStageFt: 25,
       marks: [
@@ -114,9 +117,10 @@ const PRESET_DEFS: PresetDef[] = [
     description: ({ normalLevel, gaugeDatum }) =>
       "Downtown Pittsburgh sits on the Point, where the Allegheny and Monongahela rivers meet to form the Ohio. " +
       `Normal pool here is about ${(((normalLevel ?? 0) - (gaugeDatum ?? 0)) / FT).toFixed(1)} ft on the Point gauge; ` +
-      'flood stage is 25 ft, when the Parkway East "bathtub" closes. On March 18, 1936 — the St. Patrick\'s Day ' +
-      'flood — snowmelt and heavy rain drove the river to a record 46 ft, with up to 15 ft of water in the Golden ' +
-      'Triangle. Hurricane Agnes crested at 35.8 ft in June 1972 and Hurricane Ivan at 31 ft in September 2004. ' +
+      'flood stage is 25 ft, about where the Parkway East "bathtub" goes under. On March 18, 1936 — the St. ' +
+      'Patrick\'s Day flood — snowmelt and heavy rain drove the river to a record 46 ft and flooded most of the ' +
+      'Golden Triangle. The remnants of Agnes crested at 35.8 ft in June 1972 and Hurricane Ivan at 31 ft in ' +
+      'September 2004. ' +
       'Raise the river stage to replay those crests and watch the Strip District, the North Shore stadiums and ' +
       'downtown go under — then try a levee.',
   },
@@ -143,7 +147,7 @@ const PRESET_DEFS: PresetDef[] = [
       },
       {
         name: 'Little Conemaugh River',
-        path: [[-78.87388, 40.35385], [-78.87952, 40.35355], [-78.88113, 40.34974], [-78.88435, 40.34483], [-78.89176, 40.34188], [-78.89982, 40.33378], [-78.90787, 40.3304], [-78.91593, 40.32886], [-78.92237, 40.32886], [-78.92479, 40.32905]],
+        path: [[-78.87396, 40.35281], [-78.87726, 40.35361], [-78.88048, 40.35158], [-78.88113, 40.34974], [-78.88435, 40.34483], [-78.89176, 40.34188], [-78.89982, 40.33378], [-78.90787, 40.3304], [-78.91593, 40.32886], [-78.92237, 40.32886], [-78.92479, 40.32905]],
         depth: 2,
         bankCells: 2,
         snapRadius: 8,
@@ -161,12 +165,13 @@ const PRESET_DEFS: PresetDef[] = [
     camera: { at: [-78.921, 40.3262], distance: 3400, yaw: 0.85, pitch: 0.55 },
     description: () =>
       'Johnstown fills a narrow valley where the Little Conemaugh and Stonycreek rivers join to form the ' +
-      'Conemaugh. On May 31, 1889 the South Fork Dam, 14 miles up the Little Conemaugh, failed after heavy rain ' +
-      'and the flood wave killed 2,209 people. The St. Patrick\'s Day flood of March 17, 1936 swamped the city ' +
-      'again, and the Army Corps of Engineers then rebuilt the rivers as the concrete flood-control channels you ' +
-      'see here. In July 1977 nearly a foot of rain fell overnight, several dams failed and more than 80 people ' +
-      'died. The inflows start at the 1936 peaks measured by USGS — 59,000 ft³/s on the Stonycreek at Ferndale and ' +
-      '28,800 ft³/s on the Little Conemaugh at East Conemaugh. Can the channels hold it?',
+      'Conemaugh. On May 31, 1889 the South Fork Dam, about 14 miles upstream, failed after heavy rain and the ' +
+      'flood wave killed 2,209 people. The St. Patrick\'s Day flood of March 1936 swamped the city again (25 ' +
+      'deaths), and by 1943 the Army Corps of Engineers had rebuilt the rivers into the concrete-lined ' +
+      'flood-control channels you see here, sized for a flood like 1936. In July 1977 up to a foot of rain fell ' +
+      'overnight, several dams upstream failed and more than 80 people died. The inflows start at the 1936 peaks: ' +
+      'about 59,000 ft³/s on the Stonycreek (USGS, Ferndale) and 28,800 ft³/s on the Little Conemaugh. ' +
+      'Can the channels hold it?',
   },
   {
     id: 'ellicott',
@@ -180,7 +185,7 @@ const PRESET_DEFS: PresetDef[] = [
         depth: 2,
         bankCells: 2,
         snapRadius: 12,
-        upstream: { type: 'inflow', discharge: Math.round(22800 * CFS), label: 'Patapsco River — July 2016 peak (22,800 ft³/s at Hollofield)' },
+        upstream: { type: 'inflow', discharge: Math.round(22800 * CFS), label: 'Patapsco River — July 30, 2016 peak (22,800 ft³/s at Hollofield)' },
       },
     ],
     shelters: [
@@ -189,22 +194,45 @@ const PRESET_DEFS: PresetDef[] = [
       { name: 'Fire Station 2 (Montgomery Rd)', at: [-76.82045, 39.25557], search: 250 },
       { name: 'Oella (east bank ridge)', at: [-76.78667, 39.27413], search: 350 },
     ],
-    storms: [{ id: 'tiber-hudson', at: [-76.8074, 39.2718], radiusMeters: 1400, intensity: 60 }],
+    // Centered on the 3.7 mi² Tiber–Hudson–New Cut watershed west of Main Street (USGS FS 2021–3025, fig. 2).
+    // 75 mm/hr ≈ the 2016 storm's peak two hours (5.96 in between 6:50 and 8:50 p.m.).
+    storms: [{ id: 'tiber-hudson', at: [-76.8115, 39.2665], radiusMeters: 1900, intensity: 75 }],
     rainRate: 0,
     camera: { at: [-76.8015, 39.2683], distance: 1900, yaw: Math.PI / 2, pitch: 0.5 },
     description: () =>
-      'Historic Ellicott City was built where the Tiber, Hudson and New Cut branches plunge down steep valleys ' +
-      'into the Patapsco River — and Main Street runs right along the Tiber. On July 30, 2016 about 6.6 inches ' +
-      'of rain fell in three hours; the branches turned Main Street into a torrent and two people died. On ' +
-      'May 27, 2018 it happened again (about 6.6 inches in three hours at the gauge, and radar estimates over ' +
-      '9 inches nearby), killing one man. A storm cell of 60 mm/hr — that 2016 three-hour average — sits over the ' +
-      'Tiber and Hudson headwaters while the Patapsco runs at its 2016 peak. Try walls or a detention pond upstream.',
+      'Historic Ellicott City sits at the bottom of a hill where the Hudson, Tiber and New Cut branches converge ' +
+      'and empty into the Patapsco River — and Main Street is the overflow channel when they flash. On July 30, ' +
+      '2016, 6.6 inches of rain fell in three hours (nearly 6 in two); the branches tore down Main Street, the ' +
+      'Patapsco rose over the lower town, and two people died. On May 27, 2018 almost the same rain fell again ' +
+      '(6.56 inches in three hours at the gauge, heavier just to the south) and one man died — two roughly ' +
+      '1-in-1,000-year storms in 22 months. A 75 mm/hr storm cell (the 2016 peak two-hour rate) sits over the ' +
+      'branches while the Patapsco runs at its 2016 peak of 22,800 ft³/s. Try walls or a detention pond upstream.',
   },
 ];
 
 // ────────────────────────────────────────────────────────────────────────────────────────────────
 
-const OUT = path.resolve(import.meta.dirname ?? path.dirname(new URL(import.meta.url).pathname), '../public/presets');
+const HERE = import.meta.dirname ?? path.dirname(new URL(import.meta.url).pathname);
+const OUT = path.resolve(HERE, '../public/presets');
+/** Raw downloads are cached here (gitignored) so re-bakes are fast and reproducible; pass --refresh to refetch. */
+const CACHE = path.resolve(HERE, '../artifacts/bake-cache');
+const REFRESH = process.argv.includes('--refresh');
+
+/** Return cached bytes for `name` under a preset + request key, or fetch and store them. */
+async function cachedBytes(id: string, key: string, name: string, fetcher: () => Promise<Uint8Array>): Promise<Uint8Array> {
+  const dir = path.join(CACHE, id);
+  const file = path.join(dir, name);
+  const keyFile = `${file}.key`;
+  if (!REFRESH && fs.existsSync(file) && fs.existsSync(keyFile) && fs.readFileSync(keyFile, 'utf8') === key) {
+    log(id, `  (cached ${name})`);
+    return new Uint8Array(fs.readFileSync(file));
+  }
+  const bytes = await fetcher();
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(file, bytes);
+  fs.writeFileSync(keyFile, key);
+  return bytes;
+}
 const r2 = (v: number) => Math.round(v * 100) / 100;
 const r1 = (v: number) => Math.round(v * 10) / 10;
 
@@ -227,7 +255,18 @@ async function bake(def: PresetDef) {
   const toGrid = (ll: LonLat) => geoToGrid(grid, ll[0], ll[1]);
 
   // ── DEM
-  const dem = await fetchDEM(merc, N, N, cellSize);
+  const requestKey = JSON.stringify({ center: def.center, sizeMeters: def.sizeMeters, n: N });
+  let demInfo = { source: 'usgs3dep' as 'usgs3dep' | 'terrarium', filled: 0 };
+  const demBytes = await cachedBytes(def.id, requestKey, 'dem.f32', async () => {
+    const d = await fetchDEM(merc, N, N, cellSize);
+    demInfo = { source: d.source, filled: d.filled };
+    fs.mkdirSync(path.join(CACHE, def.id), { recursive: true });
+    fs.writeFileSync(path.join(CACHE, def.id, 'dem.json'), JSON.stringify(demInfo));
+    return new Uint8Array(d.elevation.buffer, d.elevation.byteOffset, d.elevation.byteLength);
+  });
+  const demInfoFile = path.join(CACHE, def.id, 'dem.json');
+  if (fs.existsSync(demInfoFile)) demInfo = JSON.parse(fs.readFileSync(demInfoFile, 'utf8'));
+  const dem = { elevation: new Float32Array(demBytes.slice().buffer), ...demInfo };
   log(def.id, `DEM ${dem.source}, repaired ${dem.filled} cells`);
   const raw = dem.elevation;
 
@@ -284,34 +323,62 @@ async function bake(def: PresetDef) {
   });
 
   // ── Initial fill
+  // Seeds sit on the channel SPINE (the cell of the same river farthest from the shore within a few cells of the
+  // traced centerline) and take that cell's own water level. Where a trace hugs a bank, a seed on the bank would
+  // otherwise carry the bank's (higher) capped level into the channel and start an over-deep pool.
+  const spineCell = (gx: number, gy: number, river: number, reach = 6): number => {
+    const ci = Math.floor(gx);
+    const cj = Math.floor(gy);
+    let best = -1;
+    let bestScore = -Infinity;
+    for (let dj = -reach; dj <= reach; dj++) {
+      for (let di = -reach; di <= reach; di++) {
+        const i = ci + di;
+        const j = cj + dj;
+        if (i < 0 || j < 0 || i >= N || j >= N) continue;
+        const k = j * N + i;
+        if (burn.owner[k] !== river + 1) continue;
+        const score = burn.dist[k] - 0.05 * Math.hypot(di, dj);
+        if (score > bestScore) {
+          bestScore = score;
+          best = k;
+        }
+      }
+    }
+    return best;
+  };
   const initialFill: ScenarioPreset['initialFill'] = [];
   if (normalLevel !== null) {
     const seeds: Array<{ gx: number; gy: number }> = [];
-    for (const r of burn.rivers) {
+    burn.rivers.forEach((r, ri) => {
       const npts = r.centerline.length / 2;
-      for (let q = 0; q < npts; q += 80) seeds.push({ gx: r1(r.centerline[q * 2]), gy: r1(r.centerline[q * 2 + 1]) });
-    }
+      for (let q = 0; q < npts; q += 80) {
+        const k = spineCell(r.centerline[q * 2], r.centerline[q * 2 + 1], ri);
+        if (k >= 0) seeds.push({ gx: (k % N) + 0.5, gy: ((k / N) | 0) + 0.5 });
+      }
+    });
     initialFill.push({ seeds, level: normalLevel });
   } else {
     // Sloping rivers: ONE fill for the whole connected system, seeds along each centerline with their own
     // level — every 10 path cells, and more densely where the surface drops quickly (> 0.2 m between seeds).
     const seeds: Array<{ gx: number; gy: number; level: number }> = [];
-    for (const r of burn.rivers) {
+    burn.rivers.forEach((r, ri) => {
       const npts = r.centerline.length / 2;
       let lastQ = -Infinity;
       let lastLevel = Infinity;
+      let lastK = -1;
       for (let q = 0; q < npts; q++) {
-        const gx = r.centerline[q * 2];
-        const gy = r.centerline[q * 2 + 1];
-        const k = Math.floor(gy) * N + Math.floor(gx);
-        const lvl = burn.owner[k] ? burn.waterLevel[k] : r.levels[q];
+        const k = spineCell(r.centerline[q * 2], r.centerline[q * 2 + 1], ri);
+        if (k < 0 || k === lastK) continue;
+        const lvl = burn.waterLevel[k];
         if (q - lastQ >= 10 || Math.abs(lvl - lastLevel) > 0.2 || q === npts - 1) {
-          seeds.push({ gx: r1(gx), gy: r1(gy), level: r2(lvl) });
+          seeds.push({ gx: (k % N) + 0.5, gy: ((k / N) | 0) + 0.5, level: r2(lvl) });
           lastQ = q;
           lastLevel = lvl;
+          lastK = k;
         }
       }
-    }
+    });
     initialFill.push({ seeds, level: Math.min(...seeds.map((s) => s.level)) });
   }
   const h0 = computeInitialWater({ nx: N, ny: N, elevation }, { initialFill });
@@ -329,7 +396,11 @@ async function bake(def: PresetDef) {
   if (leak > wet * 0.01) throw new Error(`${def.id}: initial fill leaks outside the channel (${leak} cells)`);
 
   // ── Roads
-  const rawRoads = await fetchTigerRoads(bounds);
+  const rawRoads = JSON.parse(
+    new TextDecoder().decode(
+      await cachedBytes(def.id, requestKey, 'roads-raw.json', async () => new TextEncoder().encode(JSON.stringify(await fetchTigerRoads(bounds)))),
+    ),
+  ) as RawRoad[];
   const roads = buildRoadNetwork(rawRoads, { nx: N, ny: N, cellSize, toGrid: makeGeoToGrid(grid) });
   log(def.id, 'roads', roadStats(roads));
 
@@ -413,7 +484,7 @@ async function bake(def: PresetDef) {
   };
 
   // ── Imagery
-  const jpg = await fetchImageryBytes(merc, 2048);
+  const jpg = await cachedBytes(def.id, requestKey, 'imagery.jpg', () => fetchImageryBytes(merc, 2048));
 
   // ── Write
   const dir = path.join(OUT, def.id);

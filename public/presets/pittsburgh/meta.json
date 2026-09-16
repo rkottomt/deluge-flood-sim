@@ -14,7 +14,7 @@
  },
  "attribution": "Elevation: USGS 3DEP · Imagery © Esri, Maxar, Earthstar Geographics · Roads: U.S. Census Bureau TIGER/Line",
  "scenario": {
-  "description": "Downtown Pittsburgh sits on the Point, where the Allegheny and Monongahela rivers meet to form the Ohio. Normal pool here is about 16.0 ft on the Point gauge; flood stage is 25 ft, when the Parkway East \"bathtub\" closes. On March 18, 1936 — the St. Patrick's Day flood — snowmelt and heavy rain drove the river to a record 46 ft, with up to 15 ft of water in the Golden Triangle. Hurricane Agnes crested at 35.8 ft in June 1972 and Hurricane Ivan at 31 ft in September 2004. Raise the river stage to replay those crests and watch the Strip District, the North Shore stadiums and downtown go under — then try a levee.",
+  "description": "Downtown Pittsburgh sits on the Point, where the Allegheny and Monongahela rivers meet to form the Ohio. Normal pool here is about 16.0 ft on the Point gauge; flood stage is 25 ft, about where the Parkway East \"bathtub\" goes under. On March 18, 1936 — the St. Patrick's Day flood — snowmelt and heavy rain drove the river to a record 46 ft and flooded most of the Golden Triangle. The remnants of Agnes crested at 35.8 ft in June 1972 and Hurricane Ivan at 31 ft in September 2004. Raise the river stage to replay those crests and watch the Strip District, the North Shore stadiums and downtown go under — then try a levee.",
   "sources": [
    {
     "id": "allegheny-stage",
@@ -98,96 +98,96 @@
    {
     "seeds": [
      {
-      "gx": 790.5,
-      "gy": 5.5
+      "gx": 796.5,
+      "gy": 10.5
      },
      {
-      "gx": 735.5,
-      "gy": 85.5
+      "gx": 741.5,
+      "gy": 91.5
      },
      {
-      "gx": 699.5,
-      "gy": 165.5
+      "gx": 705.5,
+      "gy": 171.5
      },
      {
-      "gx": 652.5,
-      "gy": 245.5
+      "gx": 658.5,
+      "gy": 251.5
      },
      {
-      "gx": 602.5,
-      "gy": 319.5
+      "gx": 596.5,
+      "gy": 313.5
      },
      {
-      "gx": 522.5,
-      "gy": 374.5
+      "gx": 527.5,
+      "gy": 379.5
      },
      {
-      "gx": 442.5,
-      "gy": 447.5
+      "gx": 447.5,
+      "gy": 452.5
      },
      {
-      "gx": 362.5,
-      "gy": 496.5
+      "gx": 368.5,
+      "gy": 491.5
      },
      {
-      "gx": 915.5,
-      "gy": 1020.5
+      "gx": 919.5,
+      "gy": 1023.5
      },
      {
-      "gx": 915.5,
-      "gy": 940.5
+      "gx": 909.5,
+      "gy": 939.5
      },
      {
-      "gx": 915.5,
-      "gy": 860.5
+      "gx": 909.5,
+      "gy": 863.5
      },
      {
-      "gx": 880.5,
-      "gy": 780.5
+      "gx": 874.5,
+      "gy": 786.5
      },
      {
-      "gx": 800.5,
-      "gy": 718.5
+      "gx": 803.5,
+      "gy": 712.5
      },
      {
-      "gx": 720.5,
-      "gy": 680.5
+      "gx": 725.5,
+      "gy": 675.5
      },
      {
-      "gx": 640.5,
-      "gy": 660.5
+      "gx": 634.5,
+      "gy": 656.5
      },
      {
-      "gx": 560.5,
+      "gx": 566.5,
+      "gy": 667.5
+     },
+     {
+      "gx": 477.5,
+      "gy": 668.5
+     },
+     {
+      "gx": 416.5,
       "gy": 661.5
      },
      {
-      "gx": 480.5,
-      "gy": 662.5
+      "gx": 344.5,
+      "gy": 619.5
      },
      {
-      "gx": 422.5,
-      "gy": 655.5
+      "gx": 244.5,
+      "gy": 529.5
      },
      {
-      "gx": 342.5,
-      "gy": 622.5
+      "gx": 174.5,
+      "gy": 507.5
      },
      {
-      "gx": 250.5,
-      "gy": 535.5
+      "gx": 87.5,
+      "gy": 456.5
      },
      {
-      "gx": 170.5,
-      "gy": 505.5
-     },
-     {
-      "gx": 93.5,
-      "gy": 450.5
-     },
-     {
-      "gx": 32.5,
-      "gy": 370.5
+      "gx": 26.5,
+      "gy": 376.5
      }
     ],
     "level": 216.3
@@ -210,7 +210,7 @@
   "roads": "roads.json"
  },
  "bake": {
-  "bakedAt": "2026-09-16T21:09:15.733Z",
+  "bakedAt": "2026-09-16T22:12:47.704Z",
   "demSource": "usgs3dep",
   "demRepairedCells": 0,
   "center": {

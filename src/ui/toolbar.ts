@@ -158,6 +158,7 @@ export function createToolbar(ctx: UIContext): { toolbar: HTMLElement; options: 
       if (tool === 'wall') controls.append(wallHeight.el);
       if (tool === 'inflow') controls.append(discharge.el);
       if (tool === 'storm') controls.append(storm.el);
+      brush?.destroy();
       if (def.brush) {
         const spec = def.brush;
         brush = slider({

@@ -993,7 +993,7 @@ class DelugeRenderer implements DelugeRendererAPI {
 
     const overcast = smoothstep(1, 60, settings.rainRate);
     const srgbOut = this.format.endsWith('-srgb') ? 0 : 1;
-    d.queue.writeBuffer(this.postBuf, 0, new Float32Array([0.62 * (1 + overcast * 0.35), srgbOut, 0.35, preset.bloom ? 1 : 0]));
+    d.queue.writeBuffer(this.postBuf, 0, new Float32Array([0.7 * (1 + overcast * 0.35), srgbOut, 0.3, preset.bloom ? 1 : 0]));
     const tp = enc.beginRenderPass({
       label: 'tonemap',
       colorAttachments: [{ view: this.ctx.getCurrentTexture().createView(), loadOp: 'clear', storeOp: 'store', clearValue: [0, 0, 0, 1] }],
@@ -1034,9 +1034,10 @@ class DelugeRenderer implements DelugeRendererAPI {
     const rain = Math.max(0, settings.rainRate || 0);
     const stormBoost = (this.overlays?.storms.length ?? 0) > 0 ? 0.25 : 0;
     const overcast = Math.min(0.92, smoothstep(0.5, 60, rain) * 0.92 + stormBoost * (1 - smoothstep(0.5, 60, rain)));
-    // Sun from the south-west, 36° high (consistent with typical aerial-imagery shadows).
-    const az = (218 * Math.PI) / 180;
-    const el = (36 * Math.PI) / 180;
+    // Late-morning sun from the south-south-east, 40° high: consistent with the shadows baked into typical
+    // (mid-morning) satellite imagery, so hillshading and photo shadows agree.
+    const az = (155 * Math.PI) / 180;
+    const el = (40 * Math.PI) / 180;
     f[36] = Math.cos(el) * Math.sin(az);
     f[37] = Math.sin(el);
     f[38] = -Math.cos(el) * Math.cos(az);
@@ -1046,15 +1047,15 @@ class DelugeRenderer implements DelugeRendererAPI {
     f[41] = 0.93 * sunI;
     f[42] = 0.8 * sunI;
     f[43] = s?.terrain.cellSize ?? 8;
-    f[44] = 0.13;
-    f[45] = 0.3;
-    f[46] = 0.68;
+    f[44] = 0.15;
+    f[45] = 0.33;
+    f[46] = 0.78;
     f[47] = rain;
-    f[48] = 0.58;
-    f[49] = 0.7;
-    f[50] = 0.86;
+    f[48] = 0.66;
+    f[49] = 0.78;
+    f[50] = 0.94;
     const domain = s ? Math.max(s.nx, s.ny) * s.terrain.cellSize : 8000;
-    f[51] = (1 / (domain * 2.6)) * (1 + overcast * 2.5);
+    f[51] = (1 / (domain * 2.6)) * (1 + overcast * 1.2);
     f[52] = s?.nx ?? 1;
     f[53] = s?.ny ?? 1;
     f[54] = s?.vx ?? 2;
@@ -1080,8 +1081,9 @@ class DelugeRenderer implements DelugeRendererAPI {
     const bands = bandsForMode(settings.waterMode) ?? [];
     f[72] = Math.max(1, Math.min(8, bands.length));
     f[73] = domain;
-    f[74] = 0;
-    f[75] = 0;
+    f[74] = clamp(this.camera.pose.distance / 250, 3, 40);
+    // Rain particles live in a camera-centred box that scales with zoom so rain reads at every distance.
+    f[75] = clamp(this.camera.pose.distance * 0.1, 30, 1200);
     for (let i = 0; i < 8; i++) {
       const b = bands[Math.min(i, Math.max(0, bands.length - 1))];
       const c = b ? cssToLinear(b.color) : [0, 0, 0];

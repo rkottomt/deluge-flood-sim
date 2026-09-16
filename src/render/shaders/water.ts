@@ -138,109 +138,114 @@ fn fsWater(in: WOut) -> @location(0) vec4f {
 
   let mode = i32(F.waterMode + 0.5);
   let flow = s.gb;
-  let speed = misc.b;
-
-  // ── Flow-advected ripple detail: two-phase flow map ─────────────────────────────────────
-  let period = 2.4;
-  let ph0 = fract(F.time / period);
-  let ph1 = fract(F.time / period + 0.5);
-  let blend = abs(ph0 - 0.5) * 2.0;
-  let scaleA = 1.0 / 11.0;
-  let scaleB = 1.0 / 3.7;
-  let pa = in.world.xz * scaleA;
-  let pb = in.world.xz * scaleB;
-  let flowA = flow * scaleA * period * 0.9;
-  let flowB = flow * scaleB * period * 0.9;
-  let wind = vec2f(0.21, 0.13) * F.time;
-  let a0 = rippleSample(pa - flowA * ph0 + wind * scaleA * 3.0);
-  let a1 = rippleSample(pa - flowA * ph1 + vec2f(0.37, 0.61) + wind * scaleA * 3.0);
-  let b0 = rippleSample(pb - flowB * ph0 - wind * scaleB * 2.0);
-  let b1 = rippleSample(pb - flowB * ph1 + vec2f(0.53, 0.19) - wind * scaleB * 2.0);
-  let rA = mix(a0, a1, blend);
-  let rB = mix(b0, b1, blend);
-  let rainSlope = rainRipple(in.world.xz / 1.6);
+  let speed = length(flow);
 
   let V0 = F.camPos - in.world;
   let dist = length(V0);
   let V = V0 / max(dist, 1e-3);
+  // Derivatives in uniform control flow (before any discard).
   let thickFw = fwidth(in.thick);
   let valueDepth = select(s.r, misc.g, mode == 2);
-  let hazardValue = select(valueDepth, speed, mode == 3);
+  let hazardValue = select(valueDepth, misc.b, mode == 3);
   let hazardFw = fwidth(hazardValue);
   let pixelFoot = dist * F.elev.w;
 
+  // ── Flow-advected detail: two-phase flow map (Vlachos 2010) ─────────────────────────────
+  // Texture coordinates are pushed downstream by u·k·t and reset every period; two phases half a period apart
+  // are cross-faded so the reset is never visible. k exaggerates the (slow, physical) flow so motion reads on screen.
+  let period = 3.0;
+  let ph0 = fract(F.time / period);
+  let ph1 = fract(F.time / period + 0.5);
+  let blend = abs(ph0 - 0.5) * 2.0;
+  let adv = flow * F.flowVis * period;
+  let pA = in.world.xz / 13.0;
+  let pB = in.world.xz / 4.1;
+  let pM = in.world.xz / 70.0;
+  let a0 = rippleSample(pA - adv * ph0 / 13.0);
+  let a1 = rippleSample(pA - adv * ph1 / 13.0 + vec2f(0.37, 0.61));
+  let b0 = rippleSample(pB - adv * ph0 / 4.1 + vec2f(0.21, 0.13) * F.time * 0.12);
+  let b1 = rippleSample(pB - adv * ph1 / 4.1 + vec2f(0.53, 0.19) + vec2f(0.21, 0.13) * F.time * 0.12);
+  let m0 = rippleSample(pM - adv * ph0 / 70.0);
+  let m1 = rippleSample(pM - adv * ph1 / 70.0 + vec2f(0.71, 0.29));
+  let rA = mix(a0, a1, blend);
+  let rB = mix(b0, b1, blend);
+  let rM = mix(m0, m1, blend);
+  let slickFar = textureSample(rippleTex, repSamp, in.world.xz / 233.0 + vec2f(0.31, 0.77)).a;
   if (in.thick <= 0.0) {
     discard;
   }
 
-  // Soft shoreline: fade over a few cm, widened by the pixel footprint to stay anti-aliased.
-  let shore = smoothstep(0.0, max(0.035, thickFw * 1.5), in.thick);
+  // Soft shoreline: fade over a few cm, widened by the pixel footprint to stay anti-aliased at any distance.
+  let shore = smoothstep(0.0, max(0.03, thickFw * 1.5), in.thick);
 
+  // ── Normal: macro η slope + advected ripples (roughness grows with distance instead of aliasing) ─────
   let macroSlope = nrm.ba * F.exag;
-  let chop = 0.06 + 0.32 * smoothstep(0.15, 2.5, speed);
-  let rainAmt = smoothstep(0.5, 25.0, F.rainRate) * (1.0 - smoothstep(0.02, 0.12, pixelFoot));
-  let detailFade = 1.0 - smoothstep(0.5, 6.0, pixelFoot);
-  var slopes = macroSlope + (rA.xy * chop + rB.xy * chop * 0.55) * mix(0.35, 1.0, detailFade) + rainSlope * 0.35 * rainAmt;
+  let turbulence = smoothstep(0.2, 3.0, speed);
+  let chop = 0.05 + 0.3 * turbulence;
+  let detailFade = 1.0 - smoothstep(0.6, 5.0, pixelFoot);
+  let fineFade = 1.0 - smoothstep(0.15, 1.5, pixelFoot);
+  let rainAmt = smoothstep(0.5, 25.0, F.rainRate) * (1.0 - smoothstep(0.03, 0.15, pixelFoot));
+  let rainSlope = rainRipple(in.world.xz / 1.6);
+  var slopes = macroSlope + rA.xy * chop * mix(0.25, 1.0, detailFade) + rB.xy * chop * 0.6 * fineFade + rM.xy * 0.035
+             + rainSlope * 0.4 * rainAmt;
   if (in.skirt > 0.5) {
     slopes = vec2f(0.0);
   }
   let n = normalize(vec3f(-slopes.x, 1.0, -slopes.y));
 
-  let sunVis = 1.0 - F.opts.w * 0.8;
-  let lightIn = F.sunColor * max(F.sunDir.y, 0.0) * 0.75 * sunVis + skyAmbient(vec3f(0.0, 1.0, 0.0)) * 0.9;
+  let sunVis = 1.0 - F.opts.w * 0.85;
+  let lightIn = F.sunColor * max(F.sunDir.y, 0.0) * sunVis + skyAmbient(vec3f(0.0, 1.0, 0.0));
   let nv = max(dot(n, V), 0.0);
   let fres = 0.02 + 0.98 * pow(1.0 - nv, 5.0);
   var R = reflect(-V, n);
-  R.y = max(R.y, 0.02);
+  R.y = abs(R.y) + 0.01;
   let H = normalize(F.sunDir + V);
   let nh = max(dot(n, H), 0.0);
-  let spec = F.sunColor * sunVis * (pow(nh, 900.0) * 55.0 + pow(nh, 90.0) * 0.9) * smoothstep(0.0, 0.08, F.sunDir.y);
+  // Glossiness drops with distance (unresolved ripples widen the lobe) so far water gets a broad sheen.
+  let gloss = mix(60.0, 900.0, detailFade);
+  let spec = F.sunColor * sunVis * pow(nh, gloss) * (gloss + 8.0) / 25.0 * fres * smoothstep(0.0, 0.08, F.sunDir.y);
 
   var rgb = vec3f(0.0);
   var alpha = 0.0;
 
   if (mode == 0) {
-    // ── Photoreal muddy floodwater ──────────────────────────────────────────────────────
-    let path = in.thick / max(nv, 0.25);
-    let sigma = vec3f(1.1, 1.35, 1.9);
-    let T = exp(-sigma * path);
+    // ── Photoreal floodwater ─────────────────────────────────────────────────────────────
+    // Turbid water: short absorption length, sediment-laden inscatter. Deep channels read darker and greener.
+    let path = in.thick / max(nv, 0.2);
+    let T = exp(-vec3f(2.0, 2.4, 3.1) * path);
     let tAvg = dot(T, vec3f(0.3333));
-    let scatterAlbedo = vec3f(0.30, 0.25, 0.16);
-    // Deep channels read slightly greener/darker than sheet flow over streets.
-    let deep = smoothstep(1.0, 6.0, in.thick);
-    let body = mix(scatterAlbedo, vec3f(0.17, 0.18, 0.12), deep) * lightIn * 0.55;
-    let sky = skyRadiance(R) * 0.9;
+    let deep = smoothstep(0.8, 6.0, in.thick);
+    // Large-scale advected slicks/streaks: brightness variation that shows the current from far away.
+    // Advected slicks / sediment plumes: low-frequency brightness variation that makes the current visible from afar.
+    // Two incommensurate scales so the tiling never lines up.
+    let slick = ((rM.w - 0.5) * 0.6 + (slickFar - 0.5) * 0.8 + (rA.w - 0.5) * 0.3 * detailFade) * 0.55;
+    let sediment = mix(vec3f(0.115, 0.088, 0.054), vec3f(0.032, 0.040, 0.027), deep) * (1.0 + slick * mix(0.6, 1.0, turbulence));
+    let body = sediment * lightIn;
+    let sky = skyReflection(R);
     rgb = body * (1.0 - tAvg) * (1.0 - fres) + sky * fres + spec;
     alpha = (1.0 - tAvg) * (1.0 - fres) + fres;
 
-    // Foam / whitewater: Froude & speed (per cell) + moving shoreline fronts.
-    let foamNoise = mix(rA.z, rB.z, 0.45) * 0.75 + rB.w * 0.35;
-    let shoreFoam = (1.0 - smoothstep(0.0, 0.22, in.thick)) * smoothstep(0.25, 1.2, speed) * 0.85;
+    // Foam / whitewater: hydraulic jumps & fast flow (per cell, from prep) + moving shoreline fronts.
+    let foamNoise = rA.z * 0.55 + rB.z * 0.3 * fineFade + rM.z * 0.35;
+    let shoreFoam = (1.0 - smoothstep(0.0, 0.18, in.thick)) * (0.25 + 0.75 * smoothstep(0.2, 1.2, speed)) * 0.7;
     let foamAmt = clamp(s.a + shoreFoam, 0.0, 1.0) * select(1.0, 0.0, in.skirt > 0.5);
-    let foamMask = smoothstep(1.0 - foamAmt, 1.0 - foamAmt + 0.3, foamNoise) * foamAmt;
-    let foamCol = vec3f(0.78, 0.76, 0.70) * (lightIn * 0.9 + F.sunColor * max(dot(n, F.sunDir), 0.0) * 0.25 * sunVis);
-    rgb = mix(rgb, foamCol, foamMask * 0.9);
-    alpha = mix(alpha, 1.0, foamMask * 0.9);
+    let foamMask = smoothstep(1.05 - foamAmt, 1.25 - foamAmt * 0.8, foamNoise) * foamAmt;
+    let foamCol = vec3f(0.72, 0.68, 0.60) * (skyAmbient(n) + F.sunColor * max(dot(n, F.sunDir), 0.0) * sunVis);
+    rgb = mix(rgb, foamCol, foamMask * 0.85);
+    alpha = mix(alpha, 1.0, foamMask * 0.85);
   } else {
-    // ── Hazard colormap: flat bands, gently lit, semi-opaque ────────────────────────────
-    var band = hazardColor(hazardValue, hazardFw);
+    // ── Hazard colormap: discrete bands (anti-aliased edges), gently lit, semi-opaque ──────
+    let band = hazardColor(hazardValue, hazardFw);
     let mn = normalize(vec3f(-macroSlope.x, 1.0, -macroSlope.y));
-    let lit = 0.78 + 0.28 * max(dot(mn, F.sunDir), 0.0);
-    rgb = band * lit * (0.9 + 0.6 * luminance(F.skyHorizon));
+    let lit = 0.82 + 0.22 * max(dot(mn, F.sunDir), 0.0);
+    rgb = band * lit * 1.9;
     if (mode == 3) {
-      // Animated flow streaks so direction is readable.
-      let dir = flow / max(length(flow), 1e-3);
-      let along = dot(in.world.xz, dir);
-      let across = dot(in.world.xz, vec2f(-dir.y, dir.x));
-      let lane = floor(across / 14.0);
-      let phase = fract((along - F.time * min(speed, 6.0) * 12.0) / 90.0 + hash11(lane));
-      let streak = smoothstep(0.0, 0.08, phase) * (1.0 - smoothstep(0.08, 0.5, phase))
-                 * (1.0 - smoothstep(0.1, 0.45, abs(fract(across / 14.0) - 0.5)))
-                 * smoothstep(0.15, 0.8, speed) * detailFade;
-      rgb = mix(rgb, vec3f(1.0), streak * 0.35);
+      // Flow-advected speckles (same two-phase flow map as the realistic mode): their motion shows direction.
+      let speck = smoothstep(0.5, 0.8, mix(rA.z, rM.z, smoothstep(0.5, 3.0, pixelFoot))) * smoothstep(0.1, 0.6, speed);
+      rgb = mix(rgb, vec3f(2.4), speck * 0.35);
     }
-    rgb += spec * 0.15 + skyRadiance(R) * fres * 0.25;
-    alpha = 0.8;
+    rgb += spec * 0.2 + skyReflection(R) * fres * 0.3;
+    alpha = 0.82;
   }
 
   alpha = clamp(alpha, 0.0, 1.0) * shore;

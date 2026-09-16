@@ -25,15 +25,7 @@ ${FULLSCREEN_VS}
 fn fsSky(in: FsOut) -> @location(0) vec4f {
   let p = F.invViewProj * vec4f(in.ndc, 1.0, 1.0);
   let dir = normalize(p.xyz / p.w - F.camPos);
-  var col = skyRadiance(dir) + sunDisk(dir);
-  // Soft high-altitude cloud bands.
-  if (dir.y > 0.0) {
-    let cp = dir.xz / (dir.y + 0.12) * 1.6 + vec2f(F.time * 0.004, 0.0);
-    let c = vnoise(cp) * 0.6 + vnoise(cp * 2.3) * 0.3 + vnoise(cp * 5.1) * 0.1;
-    let cloud = smoothstep(0.52, 0.85, c) * smoothstep(0.0, 0.25, dir.y) * (0.55 + 0.45 * F.opts.w);
-    let cloudCol = mix(vec3f(1.0, 0.98, 0.95) * luminance(F.skyHorizon) * 1.35, vec3f(0.35, 0.37, 0.40) * luminance(F.skyHorizon), F.opts.w);
-    col = mix(col, cloudCol, cloud * 0.55);
-  }
+  let col = cloudLayer(dir, skyRadiance(dir)) + sunDisk(dir);
   return vec4f(col, 1.0);
 }
 `;
@@ -87,6 +79,8 @@ fn fsTonemap(in: FsOut) -> @location(0) vec4f {
   // Guard against NaN/inf from any pass.
   if (!(dot(hdr, vec3f(1.0)) < 1e7)) { hdr = vec3f(0.0); }
   var c = aces(max(hdr, vec3f(0.0)) * P.exposure);
+  // ACES desaturates midtones slightly; restore a touch of color.
+  c = clamp(mix(vec3f(dot(c, vec3f(0.2126, 0.7152, 0.0722))), c, 1.1), vec3f(0.0), vec3f(1.0));
   let d = uv - 0.5;
   c *= 1.0 - P.vignette * dot(d, d) * 1.2;
   if (P.srgbOut > 0.5) { c = toSrgb(c); }
@@ -165,30 +159,32 @@ struct ROut {
 
 @vertex
 fn vsRain(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> ROut {
-  let box = 34.0;
+  let box = F.rainBox;
   let fi = f32(ii);
   let seed = vec3f(hash11(fi * 1.37), hash11(fi * 2.71 + 5.0), hash11(fi * 0.73 + 11.0));
-  let fallSpeed = 8.0 + 3.0 * hash11(fi * 4.1);
-  let wind = vec3f(1.6, 0.0, 0.9);
+  // Real drops fall at ~9 m/s; scale the animation with the box so streaks move at a similar on-screen speed
+  // whether the camera is 50 m or 10 km away.
+  let k = box / 34.0;
+  let fallSpeed = (8.0 + 3.0 * hash11(fi * 4.1)) * k;
+  let wind = vec3f(1.6, 0.0, 0.9) * k;
   let vel = vec3f(wind.x, -fallSpeed, wind.z);
   // Position inside a camera-centred box, animated and wrapped.
   let rel = fract(seed + vel * F.time / box - F.camPos / box) - 0.5;
   let p = F.camPos + rel * box;
-  let len = 0.05 * fallSpeed;
   let p0 = F.viewProj * vec4f(p, 1.0);
-  let p1 = F.viewProj * vec4f(p - vel * len * 0.1, 1.0);
+  let p1 = F.viewProj * vec4f(p - vel * 0.022, 1.0);
   var o: ROut;
-  if (p0.w < 0.3 || p1.w < 0.3) {
+  if (p0.w < box * 0.02 || p1.w < box * 0.02) {
     o.pos = vec4f(2.0, 2.0, -1.0, 1.0);
     return o;
   }
   let s0 = p0.xy / p0.w;
   let s1 = p1.xy / p1.w;
   let aspect = F.viewport.x / F.viewport.y;
-  var d = (s1 - s0) * vec2f(aspect, 1.0);
+  let d = (s1 - s0) * vec2f(aspect, 1.0);
   let dl = max(length(d), 1e-5);
   let perp = vec2f(-d.y, d.x) / dl / vec2f(aspect, 1.0);
-  let widthPx = clamp(2.2 / p0.w * 6.0, 0.7, 2.0);
+  let widthPx = clamp(box * 0.12 / p0.w * F.viewport.y * 0.02, 0.7, 2.2);
   let halfW = widthPx / F.viewport.y;
   let corner = vi % 4u;
   let isEnd = corner >= 2u;

@@ -9,7 +9,7 @@
  * row. Returns the label's left edge offset from the tick (px) and its row.
  */
 export function layoutTickLabels(trackWidth: number, labels: Array<{ t: number; width: number }>): Array<{ dx: number; row: 0 | 1 }> {
-  const GAP = 6;
+  const GAP = 8;
   const EDGE = 8; // the tick strip is inset 8px (thumb radius); labels may use that margin
   const out: Array<{ dx: number; row: 0 | 1; l: number; r: number; c: number; w: number }> = [];
   const lastOnRow: Array<number> = [-1, -1];

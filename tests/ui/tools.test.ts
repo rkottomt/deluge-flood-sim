@@ -188,3 +188,28 @@ test('selectTool remembers brush radius per tool; scaleBrush clamps', () => {
   for (let k = 0; k < 20; k++) scaleBrush(store, 1.25);
   assert.equal(store.get().brushRadius, TOOL_BY_ID.storm.brush!.max);
 });
+
+test('hover picking is skipped while pointer and camera are still', () => {
+  const { canvas, renderer, ctl } = setup({ tool: 'water' });
+  let picks = 0;
+  const pick = renderer.pick.bind(renderer);
+  renderer.pick = (x: number, y: number) => {
+    picks++;
+    return pick(x, y);
+  };
+  canvas.dispatchEvent(pointer('pointerenter', 300, 300));
+  canvas.dispatchEvent(pointer('pointermove', 310, 300));
+  ctl.update(1 / 60);
+  const afterMove = picks;
+  assert.ok(afterMove >= 1);
+  for (let k = 0; k < 5; k++) ctl.update(1 / 60); // same instant-ish: no movement, camera still
+  assert.ok(picks - afterMove <= 1, `expected no re-picks while idle, got ${picks - afterMove}`);
+  renderer.camera.pose = { ...renderer.camera.pose, yaw: 0.5 };
+  ctl.update(1 / 60);
+  assert.ok(picks > afterMove, 'camera motion re-picks');
+  const n = picks;
+  canvas.dispatchEvent(pointer('pointermove', 320, 305));
+  ctl.update(1 / 60);
+  assert.equal(picks, n + 1);
+  ctl.destroy();
+});

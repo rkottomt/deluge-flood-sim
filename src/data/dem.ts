@@ -231,6 +231,83 @@ export function markPits(elev: Float32Array, nx: number, ny: number, threshold =
   return total;
 }
 
+/** Near-zero band used to recognize clamped cells, m. */
+const CLAMP_EPS = 0.02;
+
+/**
+ * Fraction of cells within ±2 cm of zero, or 0 if the DEM has genuinely negative values. The USGS 3DEP
+ * ImageServer serves some request pixel sizes (observed ≈ 4–8 m) from a source layer that clamps below-sea-level
+ * ground to 0 — e.g. New Orleans comes back as a flat plain at 0.00 m, while the same bbox at ~2 m or ≥ 10 m
+ * pixels has the true −2 … −5 m. A large near-zero fraction with no negatives is that signature.
+ */
+export function zeroClampFraction(elev: Float32Array): number {
+  let near = 0;
+  for (let k = 0; k < elev.length; k++) {
+    const v = elev[k];
+    if (v < -CLAMP_EPS) return 0;
+    if (v <= CLAMP_EPS && v >= -CLAMP_EPS) near++;
+  }
+  return near / elev.length;
+}
+
+/**
+ * Repair a 3DEP DEM whose below-sea-level ground was clamped to 0 (see `zeroClampFraction`): refetch the same bbox
+ * at ≥ 10.5 m pixels (a source layer that keeps negative elevations) and replace the clamped cells with its
+ * bilinear upsampling. Detail elsewhere is untouched. Returns the number of cells replaced (0 if not needed).
+ */
+export async function repairZeroClamp(
+  elev: Float32Array,
+  m: MercatorBBox,
+  nx: number,
+  ny: number,
+  cellSize: number,
+  onProgress?: ProgressFn,
+  signal?: AbortSignal,
+): Promise<number> {
+  if (zeroClampFraction(elev) < 0.02) return 0;
+  const groundW = nx * cellSize;
+  const cx = Math.max(32, Math.min(4000, Math.ceil(groundW / 10.5 / 16) * 16));
+  const cy = Math.max(32, Math.min(4000, Math.round((cx * ny) / nx / 16) * 16));
+  if (groundW / cx < 10) return 0; // domain too small for a coarser request to differ
+  onProgress?.('Repairing below-sea-level elevations…', 0.95);
+  let coarse: Float32Array;
+  try {
+    coarse = await fetch3DEPTile(m, cx, cy, signal);
+  } catch (e) {
+    if (signal?.aborted) throw e;
+    console.warn('[data] could not refetch coarse 3DEP for zero-clamp repair:', e);
+    return 0;
+  }
+  let hasNegative = false;
+  for (let k = 0; k < coarse.length && !hasNegative; k++) if (coarse[k] < -CLAMP_EPS && !isNoData(coarse[k])) hasNegative = true;
+  if (!hasNegative) return 0; // the ground really is at sea level
+  let replaced = 0;
+  for (let j = 0; j < ny; j++) {
+    const fy = Math.min(Math.max(((j + 0.5) / ny) * cy - 0.5, 0), cy - 1);
+    const j0 = Math.floor(fy);
+    const j1 = Math.min(j0 + 1, cy - 1);
+    const ty = fy - j0;
+    for (let i = 0; i < nx; i++) {
+      const k = j * nx + i;
+      const v = elev[k];
+      if (!(v <= CLAMP_EPS && v >= -CLAMP_EPS)) continue;
+      const fx = Math.min(Math.max(((i + 0.5) / nx) * cx - 0.5, 0), cx - 1);
+      const i0 = Math.floor(fx);
+      const i1 = Math.min(i0 + 1, cx - 1);
+      const tx = fx - i0;
+      const a = coarse[j0 * cx + i0];
+      const b = coarse[j0 * cx + i1];
+      const c = coarse[j1 * cx + i0];
+      const d = coarse[j1 * cx + i1];
+      if ([a, b, c, d].some(isNoData)) continue;
+      // Only lower: clamping only ever raised values to 0.
+      elev[k] = Math.min(v, (a * (1 - tx) + b * tx) * (1 - ty) + (c * (1 - tx) + d * tx) * ty);
+      replaced++;
+    }
+  }
+  return replaced;
+}
+
 /** Full DEM clean-up: zero seams, pits, then no-data fill. Returns the number of repaired cells. */
 export function cleanDEM(elev: Float32Array, nx: number, ny: number): number {
   markZeroSeams(elev);
@@ -350,6 +427,10 @@ export async function fetchDEM(
     elevation = await fetchTerrarium(m, nx, ny, cellSize, onProgress, signal);
     if (noDataFraction(elevation) > 0.5) throw new Error('No elevation data available for this area');
   }
-  const filled = cleanDEM(elevation, nx, ny);
+  let filled = 0;
+  if (source === 'usgs3dep') {
+    filled += await repairZeroClamp(elevation, m, nx, ny, cellSize, onProgress, signal);
+  }
+  filled += cleanDEM(elevation, nx, ny);
   return { elevation, source, filled };
 }

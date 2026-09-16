@@ -33,6 +33,7 @@ import {
 } from './scales';
 import { legendBands, legendTitle } from './legend';
 import { selectTool } from './toolDefs';
+import { blockedAdvice, routeDetail } from './routeText';
 
 export interface Panel {
   el: HTMLElement;
@@ -66,16 +67,6 @@ function section(
     head.setAttribute('aria-expanded', String(open));
   });
   return el;
-}
-
-/**
- * The router's blocked message usually starts with "No safe route — …", which the alarm heading already
- * says in capitals; keep only the advice.
- */
-export function blockedAdvice(message: string | undefined): string {
-  const rest = (message ?? '').replace(/^\s*no safe route\s*[—–:-]*\s*/i, '').trim();
-  if (!rest) return 'Every road to a shelter is flooded. Shelter in place or move to higher floors.';
-  return rest[0].toUpperCase() + rest.slice(1);
 }
 
 const label = (text: string, extra?: HTMLElement | null) =>
@@ -261,6 +252,7 @@ export function createPanel(ctx: UIContext): Panel {
     stageCtrl = ctrl;
     jumpButtons.length = 0;
     stageSlot.replaceChildren();
+    stageSlider?.destroy();
     stageSlider = null;
     stageSlot.hidden = !ctrl;
     if (!ctrl) return;
@@ -337,8 +329,9 @@ export function createPanel(ctx: UIContext): Panel {
     ' and click the map.',
   );
   bind(
-    (s) => [s.sources, s.storms, s.grid] as const,
+    (s) => [s.sources, s.storms, s.grid, s.scenario] as const,
     ([sources, storms, grid]) => {
+      // Rebuilt only when the lists themselves change (rare), never on the stats stream.
       sourcesList.replaceChildren();
       const cell = grid?.cellSize ?? 0;
       const row = (ic: IconName, kind: string, name: string, value: string, onRemove: () => void, tip: string) =>
@@ -361,7 +354,14 @@ export function createPanel(ctx: UIContext): Panel {
           );
         } else {
           sourcesList.append(
-            row('gauge', 'stage', src.label ?? 'River boundary', 'river level', () => store.set({ sources: store.get().sources.filter((x) => x.id !== src.id) }), 'Remove river boundary'),
+            row(
+              'gauge',
+              'stage',
+              src.label ?? 'River boundary',
+              store.get().scenario?.stage ? 'follows stage' : 'fixed level',
+              () => store.set({ sources: store.get().sources.filter((x) => x.id !== src.id) }),
+              'Remove this river boundary (the river will drain)',
+            ),
           );
         }
       }
@@ -425,7 +425,7 @@ export function createPanel(ctx: UIContext): Panel {
           h('div', { class: 'dl-metric' }, h('span', { class: 'dl-metric-value' }, formatDistance(route.lengthMeters)), h('span', { class: 'dl-metric-label' }, 'Distance')),
           h('div', { class: 'dl-metric' }, h('span', { class: 'dl-metric-value' }, formatDuration(route.etaSeconds)), h('span', { class: 'dl-metric-label' }, 'Drive time')),
         ),
-        ...(route.message ? [h('p', { class: 'dl-evac-msg' }, route.message)] : []),
+        ...((detail) => (detail ? [h('p', { class: 'dl-evac-msg' }, detail)] : []))(routeDetail(route.message, route.shelter?.name)),
       );
     } else if (state === 'blocked') {
       evacCard.replaceChildren(

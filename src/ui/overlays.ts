@@ -64,7 +64,7 @@ export function createLoadingOverlay(ctx: UIContext): HTMLElement {
   return el;
 }
 
-export function createNotices(ctx: UIContext): HTMLElement {
+export function createNotices(ctx: UIContext, extra: HTMLElement[] = []): HTMLElement {
   const { bind, store, actions } = ctx;
 
   // Stability demo banner.
@@ -120,7 +120,7 @@ export function createNotices(ctx: UIContext): HTMLElement {
     },
   );
 
-  return h('div', { class: 'dl-notices' }, banner, toast);
+  return h('div', { class: 'dl-notices' }, banner, toast, ...extra);
 }
 
 /** Full-screen friendly message for browsers without WebGPU (used by the app on device failure). */

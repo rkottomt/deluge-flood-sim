@@ -152,6 +152,28 @@ fn verts(@builtin(global_invocation_id) gid: vec3u) {
   var surface = bedV - P.collapse;
   if (wetCount > 0.0) {
     surface = min(etaWet / wetCount, bedV + depthMax);
+  } else {
+    // Dry vertex next to water: extend the neighbouring water plane underneath it instead of snapping the surface
+    // to the bed. The flat plane then meets the terrain mesh exactly along the terrain's contour at the water level,
+    // so shorelines follow the land instead of zig-zagging along triangle diagonals. Clamping below the bed means
+    // low ground behind a wall or levee is never covered by this extension.
+    var etaN = 0.0;
+    var nN = 0.0;
+    let r = P.stride;
+    for (var oy = -r - 1; oy <= r; oy++) {
+      for (var ox = -r - 1; ox <= r; ox++) {
+        if (oy >= -1 && oy <= 0 && ox >= -1 && ox <= 0) { continue; }
+        let p = cl(base + vec2i(ox, oy));
+        let d = depthOf(state(p));
+        if (d > P.hWet) {
+          etaN += bed(p) + d;
+          nN += 1.0;
+        }
+      }
+    }
+    if (nN > 0.0) {
+      surface = min(etaN / nN, bedV - P.collapse);
+    }
   }
   textureStore(vtxOut, kl, vec4f(bedV, surface, depthSum * 0.25, select(0.0, 1.0, wetCount > 0.0)));
 }

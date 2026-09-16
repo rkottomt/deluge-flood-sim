@@ -318,8 +318,8 @@ export async function buildMockImagery(t: MockTerrain, size = 2048): Promise<Ima
           [120, 128, 72], [98, 118, 60], [150, 140, 96], [84, 104, 58], [132, 122, 80],
         ];
         const c = crops[Math.floor(k * crops.length)];
-        const rows = 0.92 + 0.08 * Math.sin((u * 1400 + (k > 0.5 ? v * 600 : 0)));
-        r = c[0] * rows; g = c[1] * rows; b = c[2] * rows;
+        const tex = 0.9 + 0.2 * fbm(u * 300, v * 300, 2, 9);
+        r = c[0] * tex; g = c[1] * tex; b = c[2] * tex;
         if (dRiver < 160) {
           // Riparian trees along the banks.
           const tr = nForest > 0.45 ? 1 : 0.7;
@@ -327,9 +327,10 @@ export async function buildMockImagery(t: MockTerrain, size = 2048): Promise<Ima
         }
       } else {
         // Forest with clearings on the hills.
-        const clearing = fbm(u * 9, v * 9, 3, 77) > 0.35;
-        if (clearing && slope < 0.25) {
-          r = 124; g = 128; b = 82;
+        const clearing = fbm(u * 9, v * 9, 3, 77) > 0.5;
+        if (clearing && slope < 0.18) {
+          const k = 0.85 + 0.3 * fbm(u * 90, v * 90, 2, 78);
+          r = 96 * k; g = 104 * k; b = 66 * k;
         } else {
           const k = 0.65 + 0.45 * nForest + 0.2 * (fine - 0.5);
           r = 44 * k; g = 62 * k; b = 36 * k;

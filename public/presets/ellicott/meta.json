@@ -14,7 +14,7 @@
  },
  "attribution": "Elevation: USGS 3DEP · Imagery © Esri, Maxar, Earthstar Geographics · Roads: U.S. Census Bureau TIGER/Line",
  "scenario": {
-  "description": "Historic Ellicott City was built where the Tiber, Hudson and New Cut branches plunge down steep valleys into the Patapsco River — and Main Street runs right along the Tiber. On July 30, 2016 about 6.6 inches of rain fell in three hours; the branches turned Main Street into a torrent and two people died. On May 27, 2018 it happened again (about 6.6 inches in three hours at the gauge, and radar estimates over 9 inches nearby), killing one man. A storm cell of 60 mm/hr — that 2016 three-hour average — sits over the Tiber and Hudson headwaters while the Patapsco runs at its 2016 peak. Try walls or a detention pond upstream.",
+  "description": "Historic Ellicott City sits at the bottom of a hill where the Hudson, Tiber and New Cut branches converge and empty into the Patapsco River — and Main Street is the overflow channel when they flash. On July 30, 2016, 6.6 inches of rain fell in three hours (nearly 6 in two); the branches tore down Main Street, the Patapsco rose over the lower town, and two people died. On May 27, 2018 almost the same rain fell again (6.56 inches in three hours at the gauge, heavier just to the south) and one man died — two roughly 1-in-1,000-year storms in 22 months. A 75 mm/hr storm cell (the 2016 peak two-hour rate) sits over the branches while the Patapsco runs at its 2016 peak of 22,800 ft³/s. Try walls or a detention pond upstream.",
   "sources": [
    {
     "id": "patapsco-inflow",
@@ -23,16 +23,16 @@
     "gy": 11.5,
     "radius": 4,
     "discharge": 646,
-    "label": "Patapsco River — July 2016 peak (22,800 ft³/s at Hollofield)"
+    "label": "Patapsco River — July 30, 2016 peak (22,800 ft³/s at Hollofield)"
    }
   ],
   "storms": [
    {
     "id": "tiber-hudson",
-    "gx": 469.6,
-    "gy": 471,
-    "radius": 286.7,
-    "intensity": 60
+    "gx": 397.3,
+    "gy": 591.8,
+    "radius": 389.1,
+    "intensity": 75
    }
   ],
   "shelters": [
@@ -63,139 +63,144 @@
    {
     "seeds": [
      {
-      "gx": 866.5,
-      "gy": 11.5,
-      "level": 49.15
-     },
-     {
-      "gx": 863.5,
-      "gy": 20.5,
-      "level": 48.93
+      "gx": 864.5,
+      "gy": 16.5,
+      "level": 49.05
      },
      {
       "gx": 862.5,
-      "gy": 29.5,
-      "level": 48.73
+      "gy": 21.5,
+      "level": 48.89
+     },
+     {
+      "gx": 860.5,
+      "gy": 30.5,
+      "level": 48.68
      },
      {
       "gx": 861.5,
-      "gy": 39.5,
+      "gy": 38.5,
       "level": 48.53
      },
      {
+      "gx": 861.5,
+      "gy": 48.5,
+      "level": 48.4
+     },
+     {
+      "gx": 862.5,
+      "gy": 57.5,
+      "level": 48.16
+     },
+     {
+      "gx": 862.5,
+      "gy": 63.5,
+      "level": 47.94
+     },
+     {
       "gx": 863.5,
-      "gy": 49.5,
-      "level": 48.34
+      "gy": 69.5,
+      "level": 47.71
      },
      {
-      "gx": 864.5,
-      "gy": 58.5,
-      "level": 48.11
-     },
-     {
-      "gx": 864.5,
-      "gy": 64.5,
-      "level": 47.87
-     },
-     {
-      "gx": 864.5,
-      "gy": 71.5,
-      "level": 47.67
-     },
-     {
-      "gx": 864.5,
+      "gx": 863.5,
       "gy": 77.5,
       "level": 47.4
      },
      {
-      "gx": 864.5,
-      "gy": 87.5,
-      "level": 47.19
+      "gx": 863.5,
+      "gy": 78.5,
+      "level": 47.4
      },
      {
-      "gx": 864.5,
+      "gx": 862.5,
+      "gy": 86.5,
+      "level": 47.23
+     },
+     {
+      "gx": 862.5,
       "gy": 97.5,
       "level": 47.02
      },
      {
-      "gx": 864.5,
-      "gy": 101.5,
-      "level": 46.79
+      "gx": 862.5,
+      "gy": 98.5,
+      "level": 46.95
      },
      {
-      "gx": 864.5,
-      "gy": 106.5,
-      "level": 46.56
+      "gx": 863.5,
+      "gy": 103.5,
+      "level": 46.75
      },
      {
-      "gx": 864.5,
+      "gx": 865.5,
       "gy": 113.5,
       "level": 46.24
      },
      {
-      "gx": 864.5,
-      "gy": 123.5,
-      "level": 46.13
+      "gx": 865.5,
+      "gy": 117.5,
+      "level": 46.19
+     },
+     {
+      "gx": 865.5,
+      "gy": 130.5,
+      "level": 46.06
      },
      {
       "gx": 864.5,
-      "gy": 133.5,
-      "level": 46
+      "gy": 136.5,
+      "level": 45.83
      },
      {
-      "gx": 864.5,
-      "gy": 137.5,
-      "level": 45.8
+      "gx": 863.5,
+      "gy": 142.5,
+      "level": 45.6
      },
      {
-      "gx": 864.5,
-      "gy": 143.5,
-      "level": 45.56
+      "gx": 862.5,
+      "gy": 150.5,
+      "level": 45.31
      },
      {
-      "gx": 864.5,
-      "gy": 148.5,
-      "level": 45.33
-     },
-     {
-      "gx": 864.5,
-      "gy": 158.5,
+      "gx": 862.5,
+      "gy": 157.5,
       "level": 45.3
      },
      {
-      "gx": 864.5,
-      "gy": 168.5,
+      "gx": 862.5,
+      "gy": 167.5,
       "level": 45.3
      },
      {
-      "gx": 864.5,
-      "gy": 178.5,
+      "gx": 862.5,
+      "gy": 177.5,
       "level": 45.28
      },
      {
+      "gx": 862.5,
+      "gy": 183.5,
+      "level": 45.27
+     },
+     {
+      "gx": 862.5,
+      "gy": 199.5,
+      "level": 45.27
+     },
+     {
+      "gx": 862.5,
+      "gy": 201.5,
+      "level": 45.27
+     },
+     {
       "gx": 861.5,
-      "gy": 188.5,
+      "gy": 216.5,
       "level": 45.27
      },
      {
       "gx": 860.5,
-      "gy": 198.5,
-      "level": 45.27
-     },
-     {
-      "gx": 860.5,
-      "gy": 208.5,
-      "level": 45.27
-     },
-     {
-      "gx": 860.5,
-      "gy": 218.5,
-      "level": 45.27
-     },
-     {
-      "gx": 856.5,
-      "gy": 228.5,
-      "level": 45.11
+      "gy": 221.5,
+      "level": 45.25
      },
      {
       "gx": 852.5,
@@ -203,488 +208,423 @@
       "level": 44.9
      },
      {
-      "gx": 850.5,
+      "gx": 851.5,
       "gy": 237.5,
-      "level": 44.67
+      "level": 44.75
      },
      {
-      "gx": 847.5,
-      "gy": 247.5,
-      "level": 44.61
+      "gx": 844.5,
+      "gy": 253.5,
+      "level": 44.56
      },
      {
-      "gx": 842.5,
-      "gy": 257.5,
-      "level": 44.51
+      "gx": 841.5,
+      "gy": 259.5,
+      "level": 44.5
      },
      {
-      "gx": 837.5,
-      "gy": 267.5,
-      "level": 44.46
+      "gx": 834.5,
+      "gy": 274.5,
+      "level": 44.31
      },
      {
-      "gx": 833.5,
-      "gy": 273.5,
-      "level": 44.26
-     },
-     {
-      "gx": 831.5,
-      "gy": 281.5,
-      "level": 44.05
+      "gx": 832.5,
+      "gy": 277.5,
+      "level": 44.09
      },
      {
       "gx": 829.5,
-      "gy": 289.5,
-      "level": 43.83
+      "gy": 287.5,
+      "level": 43.9
      },
      {
       "gx": 827.5,
-      "gy": 299.5,
-      "level": 43.71
+      "gy": 295.5,
+      "level": 43.76
      },
      {
       "gx": 822.5,
-      "gy": 309.5,
-      "level": 43.51
+      "gy": 306.5,
+      "level": 43.59
      },
      {
-      "gx": 819.5,
-      "gy": 314.5,
-      "level": 43.31
+      "gx": 820.5,
+      "gy": 310.5,
+      "level": 43.47
      },
      {
-      "gx": 810.5,
-      "gy": 324.5,
+      "gx": 813.5,
+      "gy": 325.5,
       "level": 43.29
      },
      {
-      "gx": 807.5,
-      "gy": 329.5,
-      "level": 43.08
+      "gx": 810.5,
+      "gy": 330.5,
+      "level": 43.07
      },
      {
       "gx": 801.5,
-      "gy": 339.5,
-      "level": 42.94
+      "gy": 341.5,
+      "level": 42.91
      },
      {
-      "gx": 800.5,
-      "gy": 349.5,
-      "level": 42.78
+      "gx": 799.5,
+      "gy": 345.5,
+      "level": 42.82
      },
      {
-      "gx": 800.5,
+      "gx": 797.5,
       "gy": 357.5,
       "level": 42.56
      },
      {
-      "gx": 800.5,
+      "gx": 798.5,
       "gy": 363.5,
       "level": 42.33
      },
      {
-      "gx": 800.5,
+      "gx": 798.5,
       "gy": 371.5,
       "level": 42.1
      },
      {
-      "gx": 800.5,
-      "gy": 378.5,
-      "level": 41.88
+      "gx": 798.5,
+      "gy": 375.5,
+      "level": 41.97
      },
      {
-      "gx": 800.5,
-      "gy": 381.5,
-      "level": 41.63
+      "gx": 798.5,
+      "gy": 380.5,
+      "level": 41.71
      },
      {
-      "gx": 800.5,
+      "gx": 797.5,
       "gy": 385.5,
       "level": 41.43
      },
      {
-      "gx": 799.5,
+      "gx": 796.5,
       "gy": 392.5,
       "level": 41.15
      },
      {
-      "gx": 798.5,
+      "gx": 796.5,
       "gy": 394.5,
       "level": 40.82
      },
      {
-      "gx": 796.5,
-      "gy": 397.5,
-      "level": 40.41
+      "gx": 794.5,
+      "gy": 399.5,
+      "level": 40.21
      },
      {
-      "gx": 796.5,
-      "gy": 400.5,
-      "level": 40.17
-     },
-     {
-      "gx": 790.5,
-      "gy": 410.5,
+      "gx": 789.5,
+      "gy": 414.5,
       "level": 40.08
      },
      {
-      "gx": 785.5,
+      "gx": 787.5,
       "gy": 420.5,
       "level": 40.08
      },
      {
-      "gx": 778.5,
-      "gy": 430.5,
-      "level": 40.07
+      "gx": 775.5,
+      "gy": 433.5,
+      "level": 39.94
      },
      {
-      "gx": 773.5,
-      "gy": 435.5,
-      "level": 39.78
+      "gx": 767.5,
+      "gy": 444.5,
+      "level": 39.44
      },
      {
-      "gx": 768.5,
-      "gy": 441.5,
+      "gx": 765.5,
+      "gy": 456.5,
       "level": 39.54
      },
      {
-      "gx": 766.5,
-      "gy": 443.5,
-      "level": 39.29
-     },
-     {
-      "gx": 764.5,
-      "gy": 445.5,
-      "level": 39
-     },
-     {
-      "gx": 764.5,
-      "gy": 447.5,
-      "level": 38.78
-     },
-     {
-      "gx": 757.5,
-      "gy": 455.5,
-      "level": 38.55
-     },
-     {
-      "gx": 755.5,
-      "gy": 460.5,
-      "level": 38.32
+      "gx": 758.5,
+      "gy": 463.5,
+      "level": 39.54
      },
      {
       "gx": 752.5,
-      "gy": 463.5,
-      "level": 38.07
+      "gy": 469.5,
+      "level": 37.96
      },
      {
-      "gx": 751.5,
-      "gy": 467.5,
-      "level": 37.83
+      "gx": 749.5,
+      "gy": 472.5,
+      "level": 37.47
      },
      {
-      "gx": 750.5,
-      "gy": 468.5,
-      "level": 37.57
+      "gx": 742.5,
+      "gy": 477.5,
+      "level": 37.13
      },
      {
-      "gx": 745.5,
-      "gy": 471.5,
-      "level": 37.35
-     },
-     {
-      "gx": 740.5,
-      "gy": 474.5,
-      "level": 37.12
+      "gx": 741.5,
+      "gy": 478.5,
+      "level": 36.92
      },
      {
       "gx": 739.5,
-      "gy": 474.5,
-      "level": 36.9
+      "gy": 479.5,
+      "level": 36.4
      },
      {
-      "gx": 735.5,
-      "gy": 477.5,
-      "level": 36.6
-     },
-     {
-      "gx": 734.5,
-      "gy": 478.5,
-      "level": 36.34
-     },
-     {
-      "gx": 730.5,
-      "gy": 480.5,
-      "level": 36.08
-     },
-     {
-      "gx": 729.5,
-      "gy": 481.5,
-      "level": 35.84
+      "gx": 731.5,
+      "gy": 484.5,
+      "level": 36.13
      },
      {
       "gx": 728.5,
-      "gy": 482.5,
+      "gy": 486.5,
       "level": 35.61
      },
      {
-      "gx": 718.5,
-      "gy": 492.5,
+      "gx": 715.5,
+      "gy": 493.5,
       "level": 35.61
      },
      {
-      "gx": 708.5,
-      "gy": 502.5,
+      "gx": 709.5,
+      "gy": 498.5,
       "level": 35.61
-     },
-     {
-      "gx": 700.5,
-      "gy": 512.5,
-      "level": 35.56
-     },
-     {
-      "gx": 698.5,
-      "gy": 516.5,
-      "level": 35.36
-     },
-     {
-      "gx": 698.5,
-      "gy": 526.5,
-      "level": 35.17
-     },
-     {
-      "gx": 698.5,
-      "gy": 536.5,
-      "level": 35.17
      },
      {
       "gx": 699.5,
-      "gy": 546.5,
+      "gy": 508.5,
+      "level": 35.61
+     },
+     {
+      "gx": 696.5,
+      "gy": 518.5,
+      "level": 35.32
+     },
+     {
+      "gx": 700.5,
+      "gy": 531.5,
       "level": 35.17
      },
      {
       "gx": 701.5,
-      "gy": 556.5,
-      "level": 34.97
+      "gy": 538.5,
+      "level": 35.17
      },
      {
-      "gx": 702.5,
+      "gx": 703.5,
+      "gy": 553.5,
+      "level": 35.03
+     },
+     {
+      "gx": 703.5,
+      "gy": 558.5,
+      "level": 34.88
+     },
+     {
+      "gx": 700.5,
       "gy": 566.5,
       "level": 34.84
      },
      {
-      "gx": 702.5,
-      "gy": 568.5,
-      "level": 34.6
+      "gx": 699.5,
+      "gy": 569.5,
+      "level": 34.52
      },
      {
-      "gx": 702.5,
-      "gy": 571.5,
-      "level": 34.32
+      "gx": 698.5,
+      "gy": 577.5,
+      "level": 33.86
      },
      {
-      "gx": 701.5,
-      "gy": 575.5,
-      "level": 33.92
+      "gx": 699.5,
+      "gy": 587.5,
+      "level": 32.83
      },
      {
-      "gx": 701.5,
-      "gy": 582.5,
-      "level": 33.7
-     },
-     {
-      "gx": 701.5,
-      "gy": 585.5,
-      "level": 33.28
-     },
-     {
-      "gx": 701.5,
-      "gy": 586.5,
-      "level": 32.95
-     },
-     {
-      "gx": 704.5,
-      "gy": 596.5,
+      "gx": 703.5,
+      "gy": 598.5,
       "level": 32.81
      },
      {
-      "gx": 714.5,
-      "gy": 603.5,
-      "level": 32.81
+      "gx": 710.5,
+      "gy": 604.5,
+      "level": 32.57
      },
      {
-      "gx": 724.5,
-      "gy": 605.5,
-      "level": 32.81
+      "gx": 722.5,
+      "gy": 608.5,
+      "level": 32.57
      },
      {
-      "gx": 734.5,
-      "gy": 609.5,
-      "level": 32.81
+      "gx": 725.5,
+      "gy": 610.5,
+      "level": 32.28
+     },
+     {
+      "gx": 727.5,
+      "gy": 611.5,
+      "level": 32.06
+     },
+     {
+      "gx": 731.5,
+      "gy": 611.5,
+      "level": 31.77
      },
      {
       "gx": 744.5,
-      "gy": 614.5,
-      "level": 32.81
+      "gy": 618.5,
+      "level": 31.66
      },
      {
-      "gx": 751.5,
-      "gy": 617.5,
-      "level": 32.29
-     },
-     {
-      "gx": 754.5,
-      "gy": 619.5,
-      "level": 31.26
-     },
-     {
-      "gx": 755.5,
+      "gx": 748.5,
       "gy": 620.5,
-      "level": 30.9
+      "level": 31.36
      },
      {
-      "gx": 758.5,
+      "gx": 753.5,
       "gy": 623.5,
-      "level": 30.67
+      "level": 31.24
      },
      {
-      "gx": 768.5,
+      "gx": 761.5,
+      "gy": 628.5,
+      "level": 30.65
+     },
+     {
+      "gx": 769.5,
       "gy": 633.5,
       "level": 30.53
      },
      {
-      "gx": 778.5,
+      "gx": 782.5,
+      "gy": 641.5,
+      "level": 30.3
+     },
+     {
+      "gx": 786.5,
       "gy": 643.5,
-      "level": 30.5
+      "level": 30.07
      },
      {
-      "gx": 783.5,
-      "gy": 643.5,
-      "level": 30.24
+      "gx": 794.5,
+      "gy": 648.5,
+      "level": 29.81
      },
      {
-      "gx": 787.5,
-      "gy": 643.5,
-      "level": 29.91
+      "gx": 806.5,
+      "gy": 663.5,
+      "level": 29.69
      },
      {
-      "gx": 797.5,
-      "gy": 652.5,
-      "level": 29.78
-     },
-     {
-      "gx": 807.5,
-      "gy": 662.5,
-      "level": 29.58
-     },
-     {
-      "gx": 817.5,
-      "gy": 672.5,
+      "gx": 810.5,
+      "gy": 668.5,
       "level": 29.53
      },
      {
-      "gx": 827.5,
+      "gx": 822.5,
       "gy": 682.5,
       "level": 29.53
      },
      {
-      "gx": 837.5,
-      "gy": 689.5,
+      "gx": 830.5,
+      "gy": 691.5,
       "level": 29.53
      },
      {
-      "gx": 847.5,
-      "gy": 699.5,
+      "gx": 842.5,
+      "gy": 698.5,
       "level": 29.53
      },
      {
       "gx": 857.5,
-      "gy": 709.5,
+      "gy": 708.5,
       "level": 29.37
      },
      {
-      "gx": 867.5,
-      "gy": 719.5,
+      "gx": 869.5,
+      "gy": 718.5,
       "level": 29.35
      },
      {
-      "gx": 877.5,
-      "gy": 729.5,
+      "gx": 875.5,
+      "gy": 724.5,
       "level": 29.35
      },
      {
-      "gx": 887.5,
-      "gy": 739.5,
-      "level": 29.35
+      "gx": 886.5,
+      "gy": 734.5,
+      "level": 29.1
      },
      {
-      "gx": 897.5,
-      "gy": 749.5,
-      "level": 29.35
+      "gx": 900.5,
+      "gy": 747.5,
+      "level": 29.1
      },
      {
-      "gx": 906.5,
-      "gy": 758.5,
-      "level": 28.88
+      "gx": 903.5,
+      "gy": 750.5,
+      "level": 29.12
      },
      {
-      "gx": 907.5,
-      "gy": 759.5,
-      "level": 28.55
+      "gx": 913.5,
+      "gy": 765.5,
+      "level": 28.52
      },
      {
       "gx": 917.5,
-      "gy": 769.5,
+      "gy": 771.5,
       "level": 28.52
      },
      {
-      "gx": 927.5,
-      "gy": 779.5,
+      "gx": 926.5,
+      "gy": 782.5,
       "level": 28.52
      },
      {
-      "gx": 937.5,
-      "gy": 789.5,
+      "gx": 938.5,
+      "gy": 795.5,
       "level": 28.52
      },
      {
-      "gx": 947.5,
-      "gy": 799.5,
+      "gx": 943.5,
+      "gy": 800.5,
       "level": 28.52
      },
      {
-      "gx": 957.5,
-      "gy": 805.5,
-      "level": 28.52
-     },
-     {
-      "gx": 967.5,
+      "gx": 956.5,
       "gy": 808.5,
+      "level": 28.52
+     },
+     {
+      "gx": 972.5,
+      "gy": 812.5,
       "level": 28.47
      },
      {
-      "gx": 977.5,
-      "gy": 809.5,
+      "gx": 981.5,
+      "gy": 814.5,
       "level": 28.43
      },
      {
-      "gx": 987.5,
-      "gy": 812.5,
+      "gx": 985.5,
+      "gy": 815.5,
       "level": 28.38
      },
      {
-      "gx": 997.5,
-      "gy": 813.5,
+      "gx": 995.5,
+      "gy": 815.5,
       "level": 28.3
      },
      {
-      "gx": 1007.5,
-      "gy": 813.5,
+      "gx": 1009.5,
+      "gy": 815.5,
       "level": 28.3
      },
      {
       "gx": 1012.5,
-      "gy": 813.5,
+      "gy": 815.5,
       "level": 28.3
      }
     ],
@@ -708,7 +648,7 @@
   "roads": "roads.json"
  },
  "bake": {
-  "bakedAt": "2026-09-16T21:11:35.267Z",
+  "bakedAt": "2026-09-16T22:13:39.506Z",
   "demSource": "usgs3dep",
   "demRepairedCells": 36,
   "center": {
@@ -726,7 +666,7 @@
     "surfaceMin": 28.3
    }
   ],
-  "initialWetCells": 8406,
+  "initialWetCells": 8409,
   "roads": {
    "nodes": 1031,
    "edges": 1224,

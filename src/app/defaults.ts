@@ -10,13 +10,19 @@ export const APP_CONFIG = {
    */
   minFrameIntervalMs: 1000 / 60 - 4,
   /**
-   * GPU time budget handed to the solver's own substep limiter (ms). Effectively disabled: the app's
-   * frame-time governor (governor.ts) is the work budget. The solver estimates GPU cost per substep as
-   * (onSubmittedWorkDone latency) / substeps, and in Chrome that latency is ~70 ms regardless of the work
-   * (measured on the M4), so any budget below the latency collapses the solver to 1 substep per frame
-   * (~12 sim-s per real second instead of the requested 60).
+   * Solver tunables beyond the SimParams contract (4th createSolver argument of src/sim; ignored by a
+   * contract-only implementation). Both were measured on the M4 with the Pittsburgh preset:
+   *
+   *  • gpuBudgetMs — effectively disabled: the app's frame-time governor (governor.ts) is the work budget.
+   *    The solver estimates GPU cost per substep as (onSubmittedWorkDone latency) / substeps, and in Chrome
+   *    that latency is ~70 ms regardless of the work, so any budget below it collapses the solver to one
+   *    substep per frame (~12 sim-s per real second instead of the requested 60).
+   *  • stageRelaxSeconds — 0 = stage sources SET the river level in their footprint (DESIGN §3.2 "or direct
+   *    set"). With relaxation (τ = 10 s) the open boundary drains the footprint faster than it refills: at the
+   *    1936 crest (225.4 m) the Point only reached 219.4 m after 105 sim-min and 0.46 km² flooded; direct set
+   *    reaches 223.6 m with downtown, the Strip and the North Shore under water (4.6 km²), mass error < 0.001 %.
    */
-  solverGpuBudgetMs: 1000,
+  solverOptions: { gpuBudgetMs: 1000, stageRelaxSeconds: 0 },
   /** Input or camera motion within this window counts as "interacting" (smooth-frames work budget). */
   interactionHoldMs: 1500,
   /** Store updates that drive the HUD (stats, stepInfo, fps) are throttled to this interval. */

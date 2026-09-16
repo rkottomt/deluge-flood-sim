@@ -99,7 +99,7 @@ export class SceneManager {
       store.set({ loading: { message: 'Building GPU solver…', progress: 0.88 } });
       this.clear();
 
-      const solver = await createSolverWithBudget(device, terrain, store.get().sim);
+      const solver = await createSolverWithOptions(device, terrain, store.get().sim);
       pending = solver;
       if (!isCurrent()) throw new SupersededLoadError();
 
@@ -200,18 +200,18 @@ function bindRouter(router: EvacuationRouter, terrain: TerrainData, initialWater
 }
 
 /**
- * createSolver with the app's solver options. The 4th `options` argument is an extra of src/sim beyond the
- * contract factory signature; it is passed through a loose signature so the app still compiles (and the
- * option is simply ignored) against a contract-only implementation.
+ * createSolver with the app's solver options (APP_CONFIG.solverOptions). The 4th `options` argument is an
+ * extra of src/sim beyond the contract factory signature; it is passed through a loose signature so the app
+ * still compiles (and the options are simply ignored) against a contract-only implementation.
  */
-function createSolverWithBudget(device: GPUDevice, terrain: TerrainData, params: SimParams): Promise<FloodSolver> {
+function createSolverWithOptions(device: GPUDevice, terrain: TerrainData, params: SimParams): Promise<FloodSolver> {
   const create = createSolver as unknown as (
     device: GPUDevice,
     terrain: SolverTerrainInput,
     params?: Partial<SimParams>,
-    options?: { gpuBudgetMs?: number },
+    options?: Record<string, unknown>,
   ) => Promise<FloodSolver>;
-  return create(device, terrain, params, { gpuBudgetMs: APP_CONFIG.solverGpuBudgetMs });
+  return create(device, terrain, params, { ...APP_CONFIG.solverOptions });
 }
 
 function validateTerrain(t: TerrainData): void {

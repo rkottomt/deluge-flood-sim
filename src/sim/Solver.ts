@@ -9,8 +9,11 @@
  *                                                     infiltration, stage relaxation, open boundaries)
  * ── Per frame ──────────────────────────────────────────────────────────────────────────────────────────
  *   Export  state ──▶ stateTexture (h, u, v, maxDepth)   for the renderer
- *   Readback (every ~300 ms, never blocking): copy stateTexture + accounting buffer to MAP_READ buffers and
- *            zero the accounting buffer IN THE SAME ENCODER, then mapAsync → stats in Float64.
+ *   Readback (every ~300 ms, never blocking): a reduction pass (shaders/stats.ts) writes depth + per-16×16-block
+ *            sums/maxima of the accounting buffer and state, the accounting buffer is ZEROED IN THE SAME ENCODER
+ *            (no substep lost or counted twice), both are copied to MAP_READ buffers → mapAsync → Float64 stats.
+ *   Budget   the frame's compute pass carries timestamp queries; measured GPU ms/substep caps the substeps per
+ *            frame so solver work stays within ~8 ms (budget.ts) — sim speed degrades, frame rate does not.
  *
  * ── Why it stays stable (the short version for judges) ──────────────────────────────────────────────────
  *   1. CFL-adaptive timestep  dt = Cr·dx / (√2·(√(g·h_max) + |u|_max)) — the 2-D Courant condition of the
@@ -35,9 +38,9 @@ import {
   type WaterSource,
 } from '../contracts';
 import { applyBrushCPU, brushOpValid, brushRect, packBrushUniform } from './brush';
+import { GpuWorkBudget } from './budget';
 import {
   DEFAULT_SOLVER_OPTIONS,
-  FLOODED_DEPTH,
   GRAVITY,
   MAX_SOURCES,
   MAX_STORMS,
@@ -52,13 +55,14 @@ import { FORCING_UNIFORM_BYTES, SIM_UNIFORM_BYTES } from './shaders/common';
 import { continuityWGSL } from './shaders/continuity';
 import { exportWGSL } from './shaders/exportState';
 import { momentumWGSL } from './shaders/momentum';
+import { STAT, STATS_PER_BLOCK, statsWGSL } from './shaders/stats';
 
 const WG = 16;
 const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
 
 interface StagingSet {
-  state: GPUBuffer;
-  acc: GPUBuffer;
+  depth: GPUBuffer;
+  blocks: GPUBuffer;
   busy: boolean;
 }
 
@@ -101,6 +105,11 @@ export class GpuFloodSolver implements FloodSolver {
   private readonly fluxTex: GPUTexture;
   private readonly exportTex: [GPUTexture, GPUTexture];
   private readonly accBuf: GPUBuffer;
+  /** Readback reduction outputs (shaders/stats.ts) and the dry-at-reset bitmask it reads. */
+  private readonly depthBuf: GPUBuffer;
+  private readonly blocksBuf: GPUBuffer;
+  private readonly dryMaskBuf: GPUBuffer;
+  private readonly nBlocks: number;
   private readonly simBuf: GPUBuffer;
   private readonly forcingBuf: GPUBuffer;
   private readonly brushBuf: GPUBuffer;
@@ -112,11 +121,14 @@ export class GpuFloodSolver implements FloodSolver {
   private readonly continuityPipe: GPUComputePipeline;
   private readonly exportPipe: GPUComputePipeline;
   private readonly brushPipe: GPUComputePipeline;
+  private readonly statsPipe: GPUComputePipeline;
   private readonly brushLayout: GPUBindGroupLayout;
   private readonly bgMomentum: GPUBindGroup[];
   private readonly bgContinuity: GPUBindGroup[];
   /** [statePartity][exportParity] */
   private readonly bgExport: GPUBindGroup[][];
+  /** [exportParity] */
+  private readonly bgStats: GPUBindGroup[];
   private brushRes: { tex: GPUTexture[]; bg: GPUBindGroup[] } | null = null;
   private readonly gx: number;
   private readonly gy: number;
@@ -157,8 +169,8 @@ export class GpuFloodSolver implements FloodSolver {
   private hBoostSeq = 0;
   private editSeq = 0;
 
-  /** Adaptive substep budget: EMA of measured GPU milliseconds per substep. */
-  private msPerSubstep: number;
+  /** Adaptive substep budget (measured GPU ms per substep → substeps per frame). */
+  private readonly budget: GpuWorkBudget;
   private inflight = 0;
   private inflightSince = 0;
   private destroyed = false;
@@ -174,6 +186,7 @@ export class GpuFloodSolver implements FloodSolver {
       exportP: GPUComputePipeline;
       brush: GPUComputePipeline;
       brushLayout: GPUBindGroupLayout;
+      stats: GPUComputePipeline;
     },
   ) {
     const { nx, ny, cellSize } = terrain;
@@ -187,7 +200,9 @@ export class GpuFloodSolver implements FloodSolver {
     this.cellArea = cellSize * cellSize;
     this.gx = Math.ceil(nx / WG);
     this.gy = Math.ceil(ny / WG);
-    this.msPerSubstep = Math.max(0.05, this.N * 1.2e-6);
+    this.nBlocks = (nx / 16) * (ny / 16);
+    // Conservative initial guess (~2 ns per cell); replaced by measurements within a few frames.
+    this.budget = new GpuWorkBudget(device, options.gpuBudgetMs, Math.max(0.05, this.N * 2e-6));
 
     // Terrain mirrors. Non-finite elevations (contract says none) are replaced by the minimum.
     let zmin = Infinity;
@@ -226,6 +241,13 @@ export class GpuFloodSolver implements FloodSolver {
       size: this.N * 8,
       usage: B.STORAGE | B.COPY_SRC | B.COPY_DST,
     });
+    this.depthBuf = device.createBuffer({ label: 'sim.readback.depth', size: this.N * 4, usage: B.STORAGE | B.COPY_SRC });
+    this.blocksBuf = device.createBuffer({
+      label: 'sim.readback.blocks',
+      size: this.nBlocks * STATS_PER_BLOCK * 4,
+      usage: B.STORAGE | B.COPY_SRC,
+    });
+    this.dryMaskBuf = device.createBuffer({ label: 'sim.dryMask', size: Math.ceil(this.N / 32) * 4, usage: B.STORAGE | B.COPY_DST });
     this.simBuf = device.createBuffer({ label: 'sim.uniform', size: SIM_UNIFORM_BYTES, usage: B.UNIFORM | B.COPY_DST });
     this.forcingBuf = device.createBuffer({
       label: 'sim.forcing',
@@ -239,6 +261,7 @@ export class GpuFloodSolver implements FloodSolver {
     this.exportPipe = pipes.exportP;
     this.brushPipe = pipes.brush;
     this.brushLayout = pipes.brushLayout;
+    this.statsPipe = pipes.stats;
 
     // ── Bind groups for both ping-pong parities (never created per substep) ──
     const ub = (buffer: GPUBuffer) => ({ buffer });
@@ -282,8 +305,24 @@ export class GpuFloodSolver implements FloodSolver {
       ),
     );
 
+    this.bgStats = [0, 1].map((e) =>
+      device.createBindGroup({
+        label: `sim.stats${e}`,
+        layout: this.statsPipe.getBindGroupLayout(0),
+        entries: [
+          { binding: 0, resource: ub(this.simBuf) },
+          { binding: 1, resource: this.exportTex[e].createView() },
+          { binding: 2, resource: ub(this.accBuf) },
+          { binding: 3, resource: ub(this.dryMaskBuf) },
+          { binding: 4, resource: ub(this.depthBuf) },
+          { binding: 5, resource: ub(this.blocksBuf) },
+        ],
+      }),
+    );
+
     this.forcing = this.packForcingNow();
     this.uploadTerrain();
+    this.uploadDryMask();
     this.reset();
   }
 
@@ -326,10 +365,10 @@ export class GpuFloodSolver implements FloodSolver {
       visibility: C,
       storageTexture: { access: 'write-only', format, viewDimension: '2d' },
     });
-    const storageBuf = (binding: number): GPUBindGroupLayoutEntry => ({
+    const storageBuf = (binding: number, type: GPUBufferBindingType = 'storage'): GPUBindGroupLayoutEntry => ({
       binding,
       visibility: C,
-      buffer: { type: 'storage' },
+      buffer: { type },
     });
 
     const make = async (label: string, code: string, entries: GPUBindGroupLayoutEntry[]) => {
@@ -376,12 +415,20 @@ export class GpuFloodSolver implements FloodSolver {
         storageTex(7, 'r32float'),
         storageBuf(8),
       ]),
+      make('sim.stats', statsWGSL, [
+        uniform(0, SIM_UNIFORM_BYTES),
+        sampled(1),
+        storageBuf(2, 'read-only-storage'),
+        storageBuf(3, 'read-only-storage'),
+        storageBuf(4),
+        storageBuf(5),
+      ]),
       ]);
     } catch (e) {
       await device.popErrorScope();
       throw e;
     }
-    const [momentum, continuity, exportP, brush] = built;
+    const [momentum, continuity, exportP, brush, stats] = built;
     let solver: GpuFloodSolver;
     try {
       solver = new GpuFloodSolver(
@@ -395,6 +442,7 @@ export class GpuFloodSolver implements FloodSolver {
         exportP: exportP.pipeline,
         brush: brush.pipeline,
         brushLayout: brush.layout,
+        stats: stats.pipeline,
       },
       );
     } catch (e) {
@@ -542,6 +590,7 @@ export class GpuFloodSolver implements FloodSolver {
       vol += this.initialDepth[c];
     }
     this.initialVolume = vol * this.cellArea;
+    this.uploadDryMask();
     this.reset();
   }
 
@@ -564,11 +613,14 @@ export class GpuFloodSolver implements FloodSolver {
       t.destroy();
     }
     for (const t of this.brushRes?.tex ?? []) t.destroy();
-    for (const b of [this.accBuf, this.simBuf, this.forcingBuf, this.brushBuf]) b.destroy();
-    for (const s of this.staging) {
-      s.state.destroy();
-      s.acc.destroy();
+    for (const b of [this.accBuf, this.simBuf, this.forcingBuf, this.brushBuf, this.depthBuf, this.blocksBuf, this.dryMaskBuf]) {
+      b.destroy();
     }
+    for (const s of this.staging) {
+      s.depth.destroy();
+      s.blocks.destroy();
+    }
+    this.budget.destroy();
     this.snapshot = null;
   }
 
@@ -588,7 +640,23 @@ export class GpuFloodSolver implements FloodSolver {
 
   /** Measured GPU cost per substep (ms, EMA) used by the adaptive substep budget. */
   get gpuMsPerSubstep(): number {
-    return this.msPerSubstep;
+    return this.budget.msPerSubstep;
+  }
+
+  /** True if the budget measures with GPU timestamp queries (else queue-latency fallback). */
+  get gpuBudgetUsesTimestamps(): boolean {
+    return this.budget.usesTimestamps;
+  }
+
+  /**
+   * GPU compute budget per frame, ms (default options.gpuBudgetMs = 8). The app may raise it while fast-forwarding
+   * (automation) or lower it on battery; substeps per frame = budget / measured ms-per-substep.
+   */
+  get gpuBudgetMs(): number {
+    return this.budget.budgetMs;
+  }
+  set gpuBudgetMs(ms: number) {
+    if (Number.isFinite(ms) && ms > 0) this.budget.budgetMs = ms;
   }
 
   /**
@@ -714,7 +782,9 @@ export class GpuFloodSolver implements FloodSolver {
     const { device } = this;
     this.writeSimUniform(dt);
     const enc = device.createCommandEncoder({ label: 'sim.frame' });
-    const pass = enc.beginComputePass({ label: 'sim.substeps' });
+    // Frames driven by step() are timed on the GPU to keep the substep budget current.
+    const probe = fromStep ? this.budget.beginFrame(n) : null;
+    const pass = enc.beginComputePass({ label: 'sim.substeps', timestampWrites: probe?.timestampWrites });
     for (let k = 0; k < n; k++) {
       pass.setPipeline(this.momentumPipe);
       pass.setBindGroup(0, this.bgMomentum[this.cur]);
@@ -728,6 +798,7 @@ export class GpuFloodSolver implements FloodSolver {
     pass.setBindGroup(0, this.bgExport[this.cur][this.exportCur]);
     pass.dispatchWorkgroups(this.gx, this.gy);
     pass.end();
+    probe?.resolve(enc);
     this.exportCur = 1 - this.exportCur;
     // resetMax only applies to the first export after a reset; the uniform above already carried it.
     this.resetMaxPending = false;
@@ -736,20 +807,15 @@ export class GpuFloodSolver implements FloodSolver {
     this.windowDtMax = Math.max(this.windowDtMax, dt);
     this.lastDt = dt;
     const map = fromStep ? this.maybeEncodeReadback(enc, false) : null;
-    const t0 = now();
-    const idle = this.inflight === 0;
-    if (idle) this.inflightSince = t0;
+    if (this.inflight === 0) this.inflightSince = now();
     this.inflight++;
     device.queue.submit([enc.finish()]);
+    probe?.submitted();
     map?.();
     device.queue.onSubmittedWorkDone().then(
       () => {
         this.inflight = Math.max(0, this.inflight - 1);
-        if (idle && fromStep) {
-          // Includes any render work queued before us, so this over-estimates slightly: conservative.
-          const sample = (now() - t0) / n;
-          this.msPerSubstep = this.msPerSubstep * 0.8 + sample * 0.2;
-        }
+        if (this.inflight > 0) this.inflightSince = now();
       },
       () => {
         this.inflight = Math.max(0, this.inflight - 1);
@@ -771,7 +837,7 @@ export class GpuFloodSolver implements FloodSolver {
   /** Substeps allowed this frame: user cap ∩ measured GPU budget; 0 if the GPU queue is backed up. */
   private substepCap(): number {
     const userCap = Math.max(1, Math.floor(Number.isFinite(this.params.maxSubstepsPerFrame) ? this.params.maxSubstepsPerFrame : 1));
-    const budget = Math.max(1, Math.floor(this.options.gpuBudgetMs / Math.max(1e-3, this.msPerSubstep)));
+    const budget = this.budget.cap();
     if (this.inflight >= 3) {
       // Several frames of solver work still queued on the GPU: skip a frame so latency cannot build up.
       // (Self-heal if a completion callback was somehow lost.)
@@ -878,9 +944,11 @@ export class GpuFloodSolver implements FloodSolver {
   }
 
   /**
-   * If a readback is due (or forced) and a staging set is free, encode: copy stateTexture → staging,
-   * copy accounting → staging, ZERO the accounting buffer — all in `enc`, so no substep is ever lost or
-   * double-counted. Returns a function to call right AFTER queue.submit (mapAsync must follow the submit).
+   * If a readback is due (or forced) and a staging set is free, encode — all in `enc`, after the frame's export
+   * pass: the reduction pass (depth + per-block stats incl. the accounting sums), ZERO the accounting buffer,
+   * copy both results to the staging buffers. Because the zeroing is in the same command buffer as the reduction,
+   * no substep's in/out volume is ever lost or counted twice. Returns a function to call right AFTER
+   * queue.submit (mapAsync must follow the submit).
    */
   private maybeEncodeReadback(enc: GPUCommandEncoder, force: boolean): (() => Promise<void>) | null {
     const t = now();
@@ -889,8 +957,12 @@ export class GpuFloodSolver implements FloodSolver {
     if (!set && this.staging.length < 2) {
       const B = GPUBufferUsage;
       set = {
-        state: this.device.createBuffer({ label: 'sim.staging.state', size: this.N * 16, usage: B.MAP_READ | B.COPY_DST }),
-        acc: this.device.createBuffer({ label: 'sim.staging.acc', size: this.N * 8, usage: B.MAP_READ | B.COPY_DST }),
+        depth: this.device.createBuffer({ label: 'sim.staging.depth', size: this.N * 4, usage: B.MAP_READ | B.COPY_DST }),
+        blocks: this.device.createBuffer({
+          label: 'sim.staging.blocks',
+          size: this.nBlocks * STATS_PER_BLOCK * 4,
+          usage: B.MAP_READ | B.COPY_DST,
+        }),
         busy: false,
       };
       this.staging.push(set);
@@ -899,13 +971,15 @@ export class GpuFloodSolver implements FloodSolver {
     const staging = set;
     staging.busy = true;
     this.lastReadbackMs = t;
-    enc.copyTextureToBuffer(
-      { texture: this.exportTex[this.exportCur] },
-      { buffer: staging.state, bytesPerRow: this.nx * 16 },
-      { width: this.nx, height: this.ny },
-    );
-    enc.copyBufferToBuffer(this.accBuf, 0, staging.acc, 0, this.N * 8);
+    const pass = enc.beginComputePass({ label: 'sim.stats' });
+    pass.setPipeline(this.statsPipe);
+    // exportCur was flipped after the last export: the latest exported texture is exportTex[exportCur].
+    pass.setBindGroup(0, this.bgStats[this.exportCur]);
+    pass.dispatchWorkgroups(Math.ceil(this.nx / 16 / WG), Math.ceil(this.ny / 16 / WG));
+    pass.end();
     enc.clearBuffer(this.accBuf);
+    enc.copyBufferToBuffer(this.depthBuf, 0, staging.depth, 0, this.N * 4);
+    enc.copyBufferToBuffer(this.blocksBuf, 0, staging.blocks, 0, this.nBlocks * STATS_PER_BLOCK * 4);
     const meta: ReadbackMeta = {
       gen: this.generation,
       simTime: this.simTime,
@@ -923,82 +997,63 @@ export class GpuFloodSolver implements FloodSolver {
 
   private async mapReadback(set: StagingSet, meta: ReadbackMeta): Promise<void> {
     try {
-      await Promise.all([set.state.mapAsync(GPUMapMode.READ), set.acc.mapAsync(GPUMapMode.READ)]);
+      await Promise.all([set.depth.mapAsync(GPUMapMode.READ), set.blocks.mapAsync(GPUMapMode.READ)]);
     } catch {
       // Destroyed / device lost while mapping.
+      set.busy = false;
       return;
     }
     if (this.destroyed) return;
     try {
       if (meta.gen === this.generation) {
-        this.processReadback(new Float32Array(set.state.getMappedRange()), new Float32Array(set.acc.getMappedRange()), meta);
+        this.processReadback(set.depth.getMappedRange(), new Float32Array(set.blocks.getMappedRange()), meta);
       }
     } finally {
-      set.state.unmap();
-      set.acc.unmap();
+      set.depth.unmap();
+      set.blocks.unmap();
       set.busy = false;
     }
   }
 
-  /** Turn a mapped readback into SimStats + SimSnapshot (Float64 sums; ~a few ms at 1024²). */
-  private processReadback(s: Float32Array, a: Float32Array, meta: ReadbackMeta): void {
+  /** Turn a mapped readback into SimStats + SimSnapshot: one memcpy + a Float64 loop over N/256 blocks. */
+  private processReadback(depthRange: ArrayBuffer, b: Float32Array, meta: ReadbackMeta): void {
     const t0 = now();
-    const { N, dryAtReset } = this;
-    const depth = new Float32Array(N);
+    // The mapped range is detached on unmap: the snapshot owns a copy.
+    const depth = new Float32Array(depthRange.slice(0, this.N * 4));
+    let accIn = 0;
+    let accOut = 0;
     let vol = 0;
-    let wet = 0;
-    let flooded = 0;
     let maxH = 0;
     let minH = 0;
     let maxSp2Wet = 0;
-    let maxSp2All = 0;
+    let maxSp2 = 0;
     let maxWave = 0;
+    let wet = 0;
+    let flooded = 0;
     let nonFinite = 0;
-    for (let c = 0, o = 0; c < N; c++, o += 4) {
-      const h = s[o];
-      depth[c] = h;
-      if (h > 0) {
-        if (h === Infinity) {
-          nonFinite++;
-          continue;
-        }
-        vol += h;
-        if (h > maxH) maxH = h;
-        if (h >= VELOCITY_DEPTH) {
-          const u = s[o + 1];
-          const v = s[o + 2];
-          const sp2 = u * u + v * v;
-          if (sp2 > maxSp2All) maxSp2All = sp2;
-          const wave = Math.sqrt(GRAVITY * h) + Math.sqrt(sp2);
-          if (wave > maxWave) maxWave = wave;
-          if (h > WET_DEPTH) {
-            wet++;
-            if (sp2 > maxSp2Wet) maxSp2Wet = sp2;
-            if (h > FLOODED_DEPTH && dryAtReset[c]) flooded++;
-          }
-        }
-      } else if (h !== 0) {
-        if (h < 0) {
-          vol += h;
-          if (h < minH) minH = h;
-        } else nonFinite++;
-      }
-    }
-    let accIn = 0;
-    let accOut = 0;
-    for (let k = 0; k < a.length; k += 2) {
-      accIn += a[k];
-      accOut += a[k + 1];
+    for (let o = 0; o < b.length; o += STATS_PER_BLOCK) {
+      accIn += b[o + STAT.accIn];
+      accOut += b[o + STAT.accOut];
+      vol += b[o + STAT.volume];
+      if (b[o + STAT.maxDepth] > maxH) maxH = b[o + STAT.maxDepth];
+      if (b[o + STAT.minDepth] < minH) minH = b[o + STAT.minDepth];
+      if (b[o + STAT.maxSpeed2Wet] > maxSp2Wet) maxSp2Wet = b[o + STAT.maxSpeed2Wet];
+      if (b[o + STAT.maxSpeed2] > maxSp2) maxSp2 = b[o + STAT.maxSpeed2];
+      if (b[o + STAT.maxWave] > maxWave) maxWave = b[o + STAT.maxWave];
+      wet += b[o + STAT.wetCells];
+      flooded += b[o + STAT.floodedCells];
+      nonFinite += b[o + STAT.nonFiniteCells];
     }
     const area = this.cellArea;
     this.volumeIn += accIn * area;
     this.volumeOut += accOut * area;
     const volume = vol * area;
     const expected = this.initialVolume + this.volumeIn - this.volumeOut;
+    const blownUp = nonFinite > 0;
     const stats: SimStats = {
       simTime: meta.simTime,
-      maxDepth: nonFinite > 0 ? Infinity : maxH,
-      maxSpeed: nonFinite > 0 ? Infinity : Math.sqrt(maxSp2Wet),
+      maxDepth: blownUp ? Infinity : maxH,
+      maxSpeed: blownUp ? Infinity : Math.sqrt(maxSp2Wet),
       volume,
       wetArea: wet * area,
       floodedArea: flooded * area,
@@ -1006,14 +1061,21 @@ export class GpuFloodSolver implements FloodSolver {
       volumeOut: this.volumeOut,
       massError: Math.abs(volume - expected) / Math.max(1, this.initialVolume + this.volumeIn),
       // 2-D Courant number (see computeDt): stable below 1 (below √θ ≈ 0.89 with smoothing).
-      courant: (Math.SQRT2 * maxWave * meta.dtMax) / this.cellSize,
+      courant: blownUp ? Infinity : (Math.SQRT2 * maxWave * meta.dtMax) / this.cellSize,
     };
     this.snapshot = { simTime: meta.simTime, nx: this.nx, ny: this.ny, depth, stats };
 
     // CFL inputs. Keep a brush-induced depth boost until a readback taken after that edit arrives.
     this.hRead = maxH;
-    this.uRead = Math.sqrt(maxSp2All);
+    this.uRead = Math.sqrt(maxSp2);
     if (meta.seq >= this.hBoostSeq) this.hBoost = 0;
     this.diagnostics = { nonFiniteCells: nonFinite, minDepth: minH, processMs: now() - t0 };
+  }
+
+  /** Upload the dry-at-reset bitmask read by the stats pass (bit c = 1 ⇔ cell c had h < WET_DEPTH). */
+  private uploadDryMask(): void {
+    const words = new Uint32Array(Math.ceil(this.N / 32));
+    for (let c = 0; c < this.N; c++) if (this.dryAtReset[c]) words[c >>> 5] |= 1 << (c & 31);
+    this.device.queue.writeBuffer(this.dryMaskBuf, 0, words);
   }
 }

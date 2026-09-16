@@ -59,7 +59,7 @@ fn vsRibbon(v: RIn) -> ROut {
     if (O.hasStatus > 0.5) { st = roadStatus[id]; }
     if (st == 0u) { color = vec4f(0.72, 0.70, 0.66, O.roadAlpha); }
     else if (st == 1u) { color = vec4f(1.0, 0.52, 0.04, 0.95); minHalfPx = 1.3; }
-    else { color = vec4f(1.0, 0.06, 0.05, 1.0); minHalfPx = 1.6; }
+    else { color = vec4f(1.0, 0.06, 0.05, 0.85); minHalfPx = 1.6; }
   } else if (kind == 1u) {
     lift = 1.2;
     minHalfPx = 7.0;
@@ -149,6 +149,7 @@ struct MOut {
   @location(3) @interpolate(flat) kind: u32,
   @location(4) @interpolate(flat) color: vec4f,
   @location(5) @interpolate(flat) phase: f32,
+  @location(6) @interpolate(flat) size: f32,
 }
 
 @vertex
@@ -179,6 +180,7 @@ fn vsMarker(v: MIn) -> MOut {
   o.kind = u32(v.params.y + 0.5);
   o.color = v.color;
   o.phase = v.params.w;
+  o.size = v.params.z;
   return o;
 }
 
@@ -203,7 +205,7 @@ fn fsMarker(in: MOut, @builtin(front_facing) front: bool) -> @location(0) vec4f 
     case 1u: {
       // Light beam (additive): brightest at the core of the cylinder silhouette, fades with height.
       let facing = abs(dot(n, V));
-      let h = clamp(in.local.y / 8.0, 0.0, 1.0);
+      let h = clamp(in.local.y / 3.5, 0.0, 1.0);
       let fade = (1.0 - h) * (1.0 - h);
       let pulse = 0.75 + 0.25 * sin(F.time * 3.0 + in.phase);
       let rgb = in.color.rgb * pow(facing, 1.5) * fade * pulse * in.color.a;
@@ -224,11 +226,16 @@ fn fsMarker(in: MOut, @builtin(front_facing) front: bool) -> @location(0) vec4f 
       return vec4f(rgb * a, a);
     }
     case 3u: {
-      // Storm cloud cap.
-      let r = length(in.local.xz);
-      let nz = vnoise(in.local.xz * 0.004 + vec2f(F.time * 0.05, 0.0)) * 0.6 + vnoise(in.local.xz * 0.013) * 0.4;
-      let a = in.color.a * (0.55 + 0.45 * nz);
-      let rgb = in.color.rgb * (0.7 + 0.5 * nz) * (skyAmbient(vec3f(0.0, -1.0, 0.0)) + 0.2);
+      // Storm cloud: soft-edged, noisy, lit from above (params.z carries the cloud radius in meters).
+      let rr = length(in.local.xz) / max(in.size, 1.0);
+      let t = F.time * 0.02;
+      let nz = vnoise(in.local.xz / max(in.size, 1.0) * 3.0 + vec2f(t, -t * 0.7)) * 0.6
+             + vnoise(in.local.xz / max(in.size, 1.0) * 9.0 - vec2f(t * 1.7, t)) * 0.4;
+      let edge = 1.0 - smoothstep(0.45, 1.0, rr + (nz - 0.5) * 0.35);
+      let a = in.color.a * edge * (0.65 + 0.35 * nz);
+      let top = max(n.y, 0.0);
+      let lum = luminance(F.skyHorizon);
+      let rgb = in.color.rgb * lum * (0.55 + 0.9 * top + 0.35 * nz) + F.sunColor * top * 0.04 * (1.0 - F.opts.w);
       return vec4f(rgb * a, a);
     }
     case 4u: {

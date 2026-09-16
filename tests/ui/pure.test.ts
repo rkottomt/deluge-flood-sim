@@ -129,3 +129,20 @@ test('tick labels: centered when roomy, re-anchored or staggered when crowded', 
   // Labels stay within the strip (±8 px inset margin).
   for (const x of spans(200, [{ t: 0, width: 50 }, { t: 1, width: 50 }])) assert.ok(x.l >= -8 && x.r <= 208);
 });
+
+test('evacuation card text drops what the card already shows', async () => {
+  const { routeDetail, blockedAdvice } = await import('../../src/ui/routeText');
+  assert.equal(
+    routeDetail('Via I-279 → Penn Lincoln Pkwy to Mount Washington — Grandview Ave — 2.9 km, 3 min', 'Mount Washington — Grandview Ave'),
+    'Via I-279 → Penn Lincoln Pkwy',
+  );
+  assert.equal(
+    routeDetail('Route to Cathedral of Learning — 850 m, < 1 min (120 m through shallow water — drive slowly)', 'Cathedral of Learning'),
+    '120 m through shallow water — drive slowly',
+  );
+  assert.equal(routeDetail('Via Liberty Ave to Pitt — 3.4 km, 1 h 05 min', 'Pitt'), 'Via Liberty Ave');
+  assert.equal(routeDetail('Via Forbes Ave and Boulevard of the Allies — avoid Smithfield St (flooded).', 'X'), 'Via Forbes Ave and Boulevard of the Allies — avoid Smithfield St (flooded).');
+  assert.equal(routeDetail('', 'X'), '');
+  assert.equal(blockedAdvice('No safe route — every shelter is flooded. Shelter in place on higher floors.'), 'Every shelter is flooded. Shelter in place on higher floors.');
+  assert.match(blockedAdvice(undefined), /Shelter in place/);
+});

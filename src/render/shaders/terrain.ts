@@ -69,20 +69,21 @@ fn vsSkirt(@builtin(vertex_index) vi: u32) -> VOut {
   return o;
 }
 
+/** Classic hypsometric tint (linear colors): valley greens → yellow-tan → browns → pale uplands. */
 fn hypsometric(elev: f32, slope: f32) -> vec3f {
   let range = max(F.elev.y - F.elev.x, 1.0);
   let t = clamp((elev - F.elev.x) / range, 0.0, 1.0);
-  let c0 = vec3f(0.095, 0.16, 0.070);  // lowland green
-  let c1 = vec3f(0.20, 0.25, 0.10);    // meadow
-  let c2 = vec3f(0.36, 0.30, 0.17);    // tan uplands
-  let c3 = vec3f(0.30, 0.22, 0.15);    // brown ridges
-  let c4 = vec3f(0.62, 0.60, 0.57);    // bare summits
-  var c = mix(c0, c1, smoothstep(0.0, 0.3, t));
-  c = mix(c, c2, smoothstep(0.3, 0.6, t));
-  c = mix(c, c3, smoothstep(0.6, 0.85, t));
-  c = mix(c, c4, smoothstep(0.88, 1.0, t));
-  let rock = vec3f(0.26, 0.24, 0.22);
-  return mix(c, rock, smoothstep(0.45, 1.0, slope) * 0.8);
+  let c0 = vec3f(0.085, 0.20, 0.090);
+  let c1 = vec3f(0.24, 0.34, 0.12);
+  let c2 = vec3f(0.52, 0.47, 0.22);
+  let c3 = vec3f(0.40, 0.27, 0.14);
+  let c4 = vec3f(0.55, 0.50, 0.45);
+  var c = mix(c0, c1, smoothstep(0.0, 0.35, t));
+  c = mix(c, c2, smoothstep(0.35, 0.65, t));
+  c = mix(c, c3, smoothstep(0.65, 0.9, t));
+  c = mix(c, c4, smoothstep(0.9, 1.05, t));
+  let rock = vec3f(0.30, 0.27, 0.24);
+  return mix(c, rock, smoothstep(0.5, 1.2, slope) * 0.7);
 }
 
 struct Shade {
@@ -113,9 +114,13 @@ fn fsTerrain(in: VOut) -> @location(0) vec4f {
   albedo *= mix(1.0, 0.58, wet);
 
   // ── Walls: sandbags (≤ 2.5 m) or concrete floodwall ──────────────────────────────────────
+  // Walls are at most a couple of cells wide, so they are rendered as a distinct material with exaggerated face
+  // lighting, a contact shadow at the foot and a bright crest, which keeps them legible from far away.
   let barrier = misc.r;
   let wallAmt = smoothstep(0.05, 0.3, barrier);
+  let foot = smoothstep(0.0, 0.04, barrier) * (1.0 - wallAmt);
   var rim = 0.0;
+  var nLight = n;
   if (wallAmt > 0.001) {
     let concrete = smoothstep(2.3, 2.8, barrier);
     // Sandbag courses every ~0.3 m of height, staggered bags ~0.7 m long.
@@ -127,28 +132,31 @@ fn fsTerrain(in: VOut) -> @location(0) vec4f {
     let detailFade = 1.0 - smoothstep(0.08, 0.3, wallCoordFw);
     let bag = mix(1.0, (0.72 + 0.28 * (1.0 - pow(rowEdge, 6.0))) * (0.8 + 0.2 * (1.0 - pow(bagEdge, 8.0))), detailFade);
     let jitter = 0.9 + 0.2 * hash12(vec2f(row, floor(along)));
-    let sandbag = vec3f(0.50, 0.41, 0.27) * bag * mix(1.0, jitter, detailFade);
+    let sandbag = vec3f(0.56, 0.44, 0.26) * bag * mix(1.0, jitter, detailFade);
     // Concrete: light grey with panel joints every 5 m.
     let joint = 1.0 - (1.0 - smoothstep(0.0, 0.04, abs(fract((in.world.x - in.world.z) / 5.0) - 0.5) * 2.0)) * 0.35 * detailFade;
-    let concreteCol = vec3f(0.60, 0.60, 0.58) * joint;
+    let concreteCol = vec3f(0.66, 0.66, 0.63) * joint;
     let wallCol = mix(sandbag, concreteCol, concrete);
     albedo = mix(albedo, wallCol, wallAmt);
-    // Shoulder highlight where the flat top meets the steep face.
-    let topness = smoothstep(0.55, 0.8, n.y) * (1.0 - smoothstep(0.9, 0.99, n.y));
-    rim = wallAmt * (topness + smoothstep(0.93, 1.0, n.y) * 0.35);
+    nLight = normalize(vec3f(-slopeVec.x * (1.0 + 2.5 * wallAmt), 1.0, -slopeVec.y * (1.0 + 2.5 * wallAmt)));
+    // Crest highlight where the flat top meets the faces.
+    let topness = smoothstep(0.55, 0.85, nLight.y) * (1.0 - smoothstep(0.93, 0.995, nLight.y));
+    rim = wallAmt * (topness + smoothstep(0.97, 1.0, nLight.y) * 0.5);
   }
+  albedo *= 1.0 - 0.4 * foot;
 
   // ── Lighting ───────────────────────────────────────────────────────────────────────────
   let L = F.sunDir;
-  var ndl = max(dot(n, L), 0.0);
+  var ndl = max(dot(nLight, L), 0.0);
   if (useImagery) {
-    // Aerial photos already contain shading: apply a softened hillshade relative to flat ground.
+    // Aerial photos already contain shading: apply a softened hillshade relative to flat ground (walls are not in
+    // the photo, so they get full lighting).
     let flatNdl = max(L.y, 0.2);
-    ndl = mix(flatNdl, ndl, 0.62);
+    ndl = mix(mix(flatNdl, ndl, 0.62), ndl, wallAmt);
   }
   let sunK = F.sunColor * (1.0 - F.opts.w * 0.75);
-  var color = albedo * (sunK * ndl + skyAmbient(n) * 0.85);
-  color += vec3f(1.0, 0.94, 0.82) * rim * 0.22 * (0.5 + ndl);
+  var color = albedo * (sunK * ndl + skyAmbient(nLight) * 0.85);
+  color += vec3f(1.0, 0.95, 0.85) * rim * 0.4 * (0.4 + ndl);
 
   // ── Contours ───────────────────────────────────────────────────────────────────────────
   if (F.opts.y > 0.5 || !useImagery) {

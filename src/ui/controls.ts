@@ -41,6 +41,8 @@ export interface Slider {
   set(value: number): void;
   setDisabled(disabled: boolean): void;
   setSubClass(cls: string): void;
+  /** Release observers (for sliders that are rebuilt, e.g. per scenario). */
+  destroy(): void;
 }
 
 const RES = 1000;
@@ -122,6 +124,7 @@ export function slider(o: SliderOptions): Slider {
   }
   trackWrap.append(input);
 
+  const disposers: Array<() => void> = [];
   let ticks: HTMLElement | null = null;
   if (o.ticks?.length) {
     const container = h('div', { class: 'dl-slider-ticks', 'aria-hidden': 'true' });
@@ -154,6 +157,7 @@ export function slider(o: SliderOptions): Slider {
       toggleClass(container, 'dl-ticks-staggered', alt);
     });
     ro.observe(container);
+    disposers.push(() => ro.disconnect());
   }
 
   const head = h(
@@ -187,6 +191,9 @@ export function slider(o: SliderOptions): Slider {
     },
     setSubClass(cls: string) {
       if (sub && sub.dataset.sev !== cls) sub.dataset.sev = cls;
+    },
+    destroy() {
+      disposers.splice(0).forEach((fn) => fn());
     },
   };
 }

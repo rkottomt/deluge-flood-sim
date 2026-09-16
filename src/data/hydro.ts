@@ -793,6 +793,18 @@ export interface DetectOptions {
   minRimHigher?: number;
   /** Shoreline tolerance: ring cells within ± this of the adjacent surface level join the body, m. Default 0.3. */
   tolerance?: number;
+  /** Diagnostics: called for every flat component large enough to be considered, with the verdict. */
+  onCandidate?: (info: {
+    cells: number;
+    level: number;
+    spread: number;
+    allowedSpread: number;
+    /** Fractions of the rim just beyond the shoreline that are ≥ +0.25 m / below −0.25 m of the local level. */
+    rimHigher: number;
+    rimLower: number;
+    accepted: boolean;
+    bbox: [number, number, number, number];
+  }) => void;
 }
 
 /**
@@ -830,13 +842,17 @@ export function detectWaterBodies(
     nb[2] = j > 0 ? k - nx : -1;
     nb[3] = j < ny - 1 ? k + nx : -1;
   };
-  const bodies: WaterBody[] = [];
-  const comp: number[] = [];
-  let nextLabel = 0;
+  // Pass 1: label every flat component (4-connected cells whose neighbor steps are within flatTol) and record
+  // its size and bounding box. Knowing all components up front lets the rim test treat a boundary with another
+  // substantial flat surface (the next reach of a river, just above or below a riffle or dam) as neutral.
+  const startOf: number[] = [];
+  const sizeOf: number[] = [];
+  const bboxOf: Array<[number, number, number, number]> = [];
   for (let s = 0; s < n; s++) {
-    if (label[s] !== -1 || relief[s] > flatTol || inBody[s]) continue;
-    const lab = nextLabel++;
-    comp.length = 0;
+    if (label[s] !== -1 || relief[s] > flatTol) continue;
+    const lab = startOf.length;
+    startOf.push(s);
+    let size = 0;
     let sp = 0;
     stack[sp++] = s;
     label[s] = lab;
@@ -846,7 +862,7 @@ export function detectWaterBodies(
     let j1 = 0;
     while (sp > 0) {
       const k = stack[--sp];
-      comp.push(k);
+      size++;
       const ci = k % nx;
       const cj = (k / nx) | 0;
       if (ci < i0) i0 = ci;
@@ -857,10 +873,41 @@ export function detectWaterBodies(
       nb4(k);
       for (let q = 0; q < 4; q++) {
         const m = nb[q];
-        if (m < 0 || label[m] !== -1 || relief[m] > flatTol || inBody[m]) continue;
+        if (m < 0 || label[m] !== -1 || relief[m] > flatTol) continue;
         if (Math.abs(elev[m] - z) > flatTol) continue;
         label[m] = lab;
         stack[sp++] = m;
+      }
+    }
+    sizeOf.push(size);
+    bboxOf.push([i0, j0, i1, j1]);
+  }
+  const neutralSize = Math.max(15, minCells / 2);
+
+  // Pass 2: evaluate each large component.
+  const bodies: WaterBody[] = [];
+  const comp: number[] = [];
+  for (let lab = 0; lab < startOf.length; lab++) {
+    if (sizeOf[lab] < minCells) continue;
+    const [i0, j0, i1, j1] = bboxOf[lab];
+    comp.length = 0;
+    {
+      let sp = 0;
+      const s0 = startOf[lab];
+      if (!inBody[s0]) {
+        stack[sp++] = s0;
+        inSet[s0] = lab;
+      }
+      while (sp > 0) {
+        const k = stack[--sp];
+        comp.push(k);
+        nb4(k);
+        for (let q = 0; q < 4; q++) {
+          const m = nb[q];
+          if (m < 0 || label[m] !== lab || inSet[m] === lab || inBody[m]) continue;
+          inSet[m] = lab;
+          stack[sp++] = m;
+        }
       }
     }
     if (comp.length < minCells) continue;
@@ -874,18 +921,35 @@ export function detectWaterBodies(
     const p02 = zs[Math.floor(zs.length * 0.02)];
     const p98 = zs[Math.min(zs.length - 1, Math.floor(zs.length * 0.98))];
     const extent = Math.hypot(i1 - i0 + 1, j1 - j0 + 1) * cellSize;
-    if (p98 - p02 > maxSpread + maxGradient * extent) continue;
+    const report = (rimHigherFrac: number, rimLowerFrac: number, accepted: boolean) =>
+      opts.onCandidate?.({
+        cells: comp.length,
+        level,
+        spread: p98 - p02,
+        allowedSpread: maxSpread + maxGradient * extent,
+        rimHigher: rimHigherFrac,
+        rimLower: rimLowerFrac,
+        accepted,
+        bbox: [i0, j0, i1, j1],
+      });
+    if (p98 - p02 > maxSpread + maxGradient * extent) {
+      report(NaN, NaN, false);
+      continue;
+    }
 
-    // Core cells carry their own (hydro-flattened) elevation as the surface level; grow up to two shoreline
-    // rings of cells within ± tol of the adjacent level (resampled shore cells that failed the flatness test).
+    // Core cells carry their own (hydro-flattened) elevation as the surface level. Grow the shoreline: two rings
+    // within ± tol of the adjacent level (resampled shore cells that failed the flatness test), then up to six
+    // more within a tighter ± 0.12 m (riffles, gravel bars and unflattened patches inside wide rivers).
     for (const k of comp) {
       inSet[k] = lab;
       levelOf[k] = elev[k];
     }
     const indices = comp.slice();
     let frontStart = 0;
-    for (let ring = 0; ring < 2; ring++) {
+    for (let ring = 0; ring < 8; ring++) {
+      const ringTol = ring < 2 ? tol : Math.min(tol, 0.12);
       const frontEnd = indices.length;
+      if (frontEnd === frontStart) break;
       for (let q = frontStart; q < frontEnd; q++) {
         const k = indices[q];
         const L = levelOf[k];
@@ -893,7 +957,7 @@ export function detectWaterBodies(
         for (let r = 0; r < 4; r++) {
           const m = nb[r];
           if (m < 0 || inSet[m] === lab || inBody[m]) continue;
-          if (Math.abs(elev[m] - L) > tol) continue;
+          if (Math.abs(elev[m] - L) > ringTol) continue;
           inSet[m] = lab;
           levelOf[m] = L;
           indices.push(m);
@@ -904,6 +968,7 @@ export function detectWaterBodies(
     // Rim just beyond the shoreline: mostly higher than the adjacent surface. Domain-edge neighbors are neutral.
     let rim = 0;
     let rimHigher = 0;
+    let rimLower = 0;
     let touchesEdge = false;
     for (const k of indices) {
       nb4(k);
@@ -914,11 +979,21 @@ export function detectWaterBodies(
           continue;
         }
         if (inSet[m] === lab) continue;
+        // Another substantial flat surface (adjacent river reach, lake arm) is neutral, like the domain edge.
+        if (label[m] >= 0 && label[m] !== lab && sizeOf[label[m]] >= neutralSize) continue;
         rim++;
         if (elev[m] >= levelOf[k] + 0.25) rimHigher++;
+        else if (elev[m] < levelOf[k] - 0.25) rimLower++;
       }
     }
-    if (rim > 0 && rimHigher / rim < minRim) continue;
+    // Accept a clear basin (rim mostly higher), or a large surface nothing drains out of (no rim cells markedly
+    // lower — a flat terrace or hilltop field always has a downhill side) whose rim is at least roughly half
+    // higher: big rivers have long low banks, bars and islands that sit only a few cm above the water.
+    const rimFrac = rim > 0 ? rimHigher / rim : 1;
+    const lowerFrac = rim > 0 ? rimLower / rim : 0;
+    const accepted = rimFrac >= minRim || (comp.length >= 4 * minCells && lowerFrac <= 0.03 && rimFrac >= 0.45);
+    report(rimFrac, lowerFrac, accepted);
+    if (!accepted) continue;
 
     const id = bodies.length + 1;
     const levels = new Float32Array(indices.length);

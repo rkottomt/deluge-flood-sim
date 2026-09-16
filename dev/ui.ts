@@ -52,6 +52,29 @@ function fbm(x: number, y: number) {
   }
   return s;
 }
+/**
+ * Low-frequency noise is sampled on coarse grids and bilinearly upsampled: the harness must boot fast even on
+ * a busy machine (it is screenshotted dozens of times per iteration).
+ */
+function coarseField(res: number, fn: (gx: number, gy: number) => number): (gx: number, gy: number) => number {
+  const vals = new Float32Array((res + 1) * (res + 1));
+  const step = NX / res;
+  for (let j = 0; j <= res; j++) for (let i = 0; i <= res; i++) vals[j * (res + 1) + i] = fn(i * step, j * step);
+  return (gx, gy) => {
+    const x = Math.min(res - 1e-6, Math.max(0, gx / step));
+    const y = Math.min(res - 1e-6, Math.max(0, gy / step));
+    const i = Math.floor(x), j = Math.floor(y);
+    const fx = x - i, fy = y - j;
+    const r = res + 1;
+    const a = vals[j * r + i], b = vals[j * r + i + 1], c = vals[(j + 1) * r + i], d = vals[(j + 1) * r + i + 1];
+    return a + (b - a) * fx + (c - a) * fy + (a - b - c + d) * fx * fy;
+  };
+}
+const wiggle = coarseField(64, (x, y) => (fbm(x * 0.004, y * 0.004) - 0.5) * 60);
+const hillsAt = coarseField(128, (x, y) => fbm(x * 0.006, y * 0.006) * 110);
+const urbanAt = coarseField(128, (x, y) => fbm(x * 0.01, y * 0.01));
+const grainAt = coarseField(256, (x, y) => fbm(x * 0.05, y * 0.05));
+
 /** Distance (cells) to a Pittsburgh-like confluence: two rivers join into one flowing west. */
 function riverDist(gx: number, gy: number) {
   const px = 470, py = 520;
@@ -60,14 +83,16 @@ function riverDist(gx: number, gy: number) {
     const t = Math.max(0, Math.min(1, ((gx - ax) * dx + (gy - ay) * dy) / (dx * dx + dy * dy)));
     return Math.hypot(gx - ax - t * dx, gy - ay - t * dy);
   };
-  const wig = (fbm(gx * 0.004, gy * 0.004) - 0.5) * 60;
+  const wig = wiggle(gx, gy);
   return Math.min(seg(px, py, 1100, 250 + wig), seg(px, py, 1100, 760 - wig), seg(-80, 470 + wig * 0.5, px, py));
 }
 const elevation = new Float32Array(NX * NY);
+const riverD = new Float32Array(NX * NY);
 for (let j = 0; j < NY; j++) {
   for (let i = 0; i < NX; i++) {
     const d = riverDist(i, j);
-    const hills = fbm(i * 0.006, j * 0.006) * 110;
+    riverD[j * NX + i] = d;
+    const hills = hillsAt(i, j);
     const valley = Math.min(1, Math.max(0, (d - 18) / 170));
     elevation[j * NX + i] = 212 + (d < 18 ? -4 : 0) + valley * valley * 0.6 * hills + valley * 25;
   }
@@ -84,15 +109,15 @@ const terrainImage = (() => {
     for (let i = 0; i < NX; i++) {
       const k = j * NX + i;
       const e = elevation[k];
-      const d = riverDist(i, j);
-      const n = fbm(i * 0.05, j * 0.05);
+      const d = riverD[k];
+      const n = grainAt(i, j) + (hash(i >> 1, j >> 1) - 0.5) * 0.25;
       let r: number, gg: number, b: number;
       if (d < 18) {
         r = 38 + n * 20; gg = 52 + n * 18; b = 48 + n * 12; // murky river
       } else {
         const t = Math.min(1, (e - 214) / 80);
         r = 52 + t * 30 + n * 30; gg = 70 + t * 18 + n * 34; b = 44 + n * 16; // vegetation
-        const urban = d < 170 && hash(Math.floor(i / 6), Math.floor(j / 6)) > 0.3 && fbm(i * 0.01, j * 0.01) > 0.42;
+        const urban = d < 170 && hash(Math.floor(i / 6), Math.floor(j / 6)) > 0.3 && urbanAt(i, j) > 0.42;
         if (urban) {
           const roof = hash(Math.floor(i / 5), Math.floor(j / 5));
           r = 78 + roof * 55; gg = 76 + roof * 50; b = 74 + roof * 48;
@@ -352,7 +377,12 @@ setInterval(() => {
   const massError = naive ? (blow > 1e12 ? NaN : 3e-5 * blow) : 2.1e-5 + Math.random() * 1.2e-5;
   store.set({
     fps: 58 + Math.random() * 4,
-    stepInfo: { simSecondsAdvanced: (s.sim.timeScale / 60) * (s.paused ? 0 : 1), substeps: s.paused ? 0 : substeps, dt: 0.84 + Math.random() * 0.05, throttled: throttled && !s.paused },
+    stepInfo: {
+      simSecondsAdvanced: s.paused ? 0 : (throttled ? 880 : s.sim.timeScale) / 60,
+      substeps: s.paused ? 0 : substeps,
+      dt: 0.84 + Math.random() * 0.05,
+      throttled: throttled && !s.paused,
+    },
     stats: {
       simTime,
       maxDepth: Math.max(0, level - 204) + (naive ? blow * 0.1 : 0),

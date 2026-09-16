@@ -198,13 +198,43 @@ async function main() {
   const ctx = { baseUrl, appUrl: url.href };
   for (const flow of FLOWS) {
     if (only ? !only.has(flow.id) : flow.optIn && !args[flow.optIn]) continue;
-    if (!flow.resetsPage && page.url() === 'about:blank') {
-      // Flow 1 was skipped: open the app first.
-      await page.goto(ctx.appUrl, { waitUntil: 'domcontentloaded' });
-      await waitReady(120_000);
+    if (!flow.resetsPage) {
+      // Every later flow starts from a running app (also recovers from a crash / unexpected reload).
+      const problem = await ensureApp(ctx);
+      if (problem) {
+        skipFlow(flow, `app not running: ${problem}`);
+        continue;
+      }
     }
     await runFlow(flow, ctx);
   }
+}
+
+/** Last startup failure (module load error, fallback screen…); later flows fail fast instead of cascading. */
+let startupFailure = null;
+
+/** Make sure the app is up and `ready`; navigate (once) if not. Returns a problem description or null. */
+async function ensureApp(ctx) {
+  if (startupFailure) return startupFailure;
+  try {
+    if (page.url() === 'about:blank') await page.goto(ctx.appUrl, { waitUntil: 'domcontentloaded' });
+    await waitReady(60_000);
+    return null;
+  } catch (e) {
+    try {
+      await page.goto(ctx.appUrl, { waitUntil: 'domcontentloaded' });
+      await waitReady(90_000);
+      return null;
+    } catch (e2) {
+      startupFailure = e2.message.split('\n')[0];
+      return startupFailure;
+    }
+  }
+}
+
+function skipFlow(flow, reason) {
+  console.log(`\n[e2e] (${flow.id}) ${flow.name}\n  ✗ ${reason}`);
+  results.push({ id: flow.id, name: flow.name, pass: false, checks: [], metrics: {}, notes: [`exception: ${reason}`], errors: [], seconds: 0 });
 }
 
 /** Run one flow with timeout + per-flow error collection. */
@@ -217,8 +247,6 @@ async function runFlow(flow, ctx) {
   allowNetwork = !!flow.network;
   const t0 = Date.now();
   let threw = false;
-  // Every flow after the first starts from a ready app (also covers an unexpected page reload).
-  if (!flow.resetsPage) await waitReady(60_000).catch(() => {});
   const errBase = await delugeErrorCount();
   try {
     await withTimeout(flow.run(r, ctx), flow.timeoutMs ?? 300_000, `flow ${flow.id}`);
@@ -335,8 +363,8 @@ async function calm() {
 }
 
 /**
- * The "control" flood: Pittsburgh at the 1936 crest for 1800 s without walls. Records the initial and
- * flooded depth fields (stride 4) in the page as window.__e2e for later flows.
+ * The "control" flood: Pittsburgh at the 1936 crest without walls. Records the initial depth field and the
+ * flooded fields after 900 s and 1800 s (stride 4, max per block) in the page as window.__e2e for later flows.
  */
 async function ensureControlFlood(r) {
   const have = await D(() => !!window.__e2e?.control);
@@ -349,11 +377,15 @@ async function ensureControlFlood(r) {
     window.__e2e = { initial: window.__deluge.sampleGrid('depth', 4) };
   });
   await D((o) => window.__deluge.setStageOffset(o), crest.offset);
-  await runFor(1800);
+  await runFor(900);
+  await D(() => {
+    window.__e2e.control900 = window.__deluge.sampleGrid('depth', 4);
+  });
+  await runFor(900);
   await D(() => {
     window.__e2e.control = window.__deluge.sampleGrid('depth', 4);
   });
-  r?.notes.push('computed control flood (crest, 1800 s)');
+  r?.notes.push('computed control flood (crest, 900 s + 1800 s)');
 }
 
 // ─── flows ─────────────────────────────────────────────────────────────────────────────────────
@@ -407,19 +439,22 @@ const FLOWS = [
       });
       const before = await stats();
       await D((o) => window.__deluge.setStageOffset(o), crest.offset);
-      const t600 = await runFor(600);
+      const t900 = await runFor(900);
       const mid = await stats();
-      await shot('02a-crest-600s');
-      const t1800 = await runFor(1200);
+      await D(() => {
+        window.__e2e.control900 = window.__deluge.sampleGrid('depth', 4);
+      });
+      await shot('02a-crest-900s');
+      const t1800 = await runFor(900);
       const after = await stats();
       await D(() => {
         window.__e2e.control = window.__deluge.sampleGrid('depth', 4);
       });
       await shot('02b-crest-1800s');
-      r.metrics = { before: before?.floodedArea, at600: mid?.floodedArea, at1800: after?.floodedArea, runSeconds: t600 + t1800 };
+      r.metrics = { before: before?.floodedArea, at900: mid?.floodedArea, at1800: after?.floodedArea, runSeconds: t900 + t1800 };
       const grown = (after?.floodedArea ?? 0) - (before?.floodedArea ?? 0);
       check(r, 'flooded area grows substantially (≥ 0.25 km²)', grown >= 250_000, `${km2(before?.floodedArea ?? 0)} → ${km2(mid?.floodedArea ?? 0)} → ${km2(after?.floodedArea ?? 0)}`);
-      check(r, 'flooding is progressive (600 s < 1800 s)', (mid?.floodedArea ?? 0) <= (after?.floodedArea ?? 0) && (mid?.floodedArea ?? 0) > (before?.floodedArea ?? 0), `sim 1800 s in ${(t600 + t1800).toFixed(1)} s real`);
+      check(r, 'flooding is progressive (900 s < 1800 s)', (mid?.floodedArea ?? 0) <= (after?.floodedArea ?? 0) && (mid?.floodedArea ?? 0) > (before?.floodedArea ?? 0), `sim 1800 s in ${(t900 + t1800).toFixed(1)} s real`);
       check(r, 'mass balance error < 1 %', (after?.massError ?? 1) < 0.01, `${num((after?.massError ?? NaN) * 100, 4)} %`);
     },
   },
@@ -430,44 +465,82 @@ const FLOWS = [
     async run(r) {
       await ensureControlFlood(r);
       const crest = await crestOffset();
-      // Pick a wall site on land that floods in the control run, at the flood edge nearest the domain center.
+      // Pick a wall site on DRY land between a river and neighborhood that floods in the control run:
+      // multi-source BFS from the initially wet cells (rivers) gives, for every land sample, the distance and
+      // direction to the nearest river; the wall goes across that direction, the protected land lies inland.
       const site = await D(() => {
-        const { initial, control } = window.__e2e;
+        const d = window.__deluge;
+        const { initial, control } = window.__e2e; // stride 4, max depth per block
         const { w, h, stride } = control;
-        const at = (g, x, y) => g.data[y * w + x];
-        let best = null;
-        for (let y = 2; y < h - 2; y++) {
-          for (let x = 2; x < w - 2; x++) {
-            const d = at(control, x, y);
-            if (!(d > 0.5 && d < 4) || at(initial, x, y) > 0.01) continue;
-            // Direction toward dry land (unflooded in control) among the 8 neighbors at distance 3.
-            let dx = 0, dy = 0, dry = 0;
-            for (let oy = -1; oy <= 1; oy++)
-              for (let ox = -1; ox <= 1; ox++) {
-                if (!ox && !oy) continue;
-                const xx = x + ox * 2, yy = y + oy * 2;
-                if (xx < 0 || yy < 0 || xx >= w || yy >= h) continue;
-                if (at(control, xx, yy) < 0.05) { dx += ox; dy += oy; dry++; }
-              }
-            if (dry < 2 || (dx === 0 && dy === 0)) continue;
-            const cx = (x + 0.5) * stride, cy = (y + 0.5) * stride;
-            const dist = Math.hypot(cx - (w * stride) / 2, cy - (h * stride) / 2);
-            if (!best || dist < best.dist) best = { cx, cy, dx, dy, dist, depth: d };
-          }
+        const N = w * h;
+        const wet0 = (k) => initial.data[k] > 0.05;
+        const dist = new Int32Array(N).fill(-1);
+        const src = new Int32Array(N).fill(-1);
+        const queue = new Int32Array(N);
+        let qh = 0;
+        let qt = 0;
+        for (let k = 0; k < N; k++) if (wet0(k)) { dist[k] = 0; src[k] = k; queue[qt++] = k; }
+        while (qh < qt) {
+          const k = queue[qh++];
+          const x = k % w, y = (k / w) | 0;
+          for (let oy = -1; oy <= 1; oy++)
+            for (let ox = -1; ox <= 1; ox++) {
+              const xx = x + ox, yy = y + oy;
+              if ((!ox && !oy) || xx < 0 || yy < 0 || xx >= w || yy >= h) continue;
+              const kk = yy * w + xx;
+              if (dist[kk] >= 0) continue;
+              dist[kk] = dist[k] + 1;
+              src[kk] = src[k];
+              queue[qt++] = kk;
+            }
         }
-        if (!best) return null;
-        const len = Math.hypot(best.dx, best.dy);
-        const ux = best.dx / len, uy = best.dy / len; // toward dry land
-        // Wall inside the flooded zone, perpendicular to the flow toward the dry land; "behind" is flooded land
-        // between the wall and the control flood edge (what the wall is meant to protect).
-        const c = { gx: best.cx - ux * 14, gy: best.cy - uy * 14 };
-        const half = 32;
-        const a = { gx: c.gx - uy * half, gy: c.gy + ux * half };
-        const b = { gx: c.gx + uy * half, gy: c.gy - ux * half };
-        const behind = { gx: c.gx + ux * 8, gy: c.gy + uy * 8 };
-        return { a, b, c, behind, ux, uy, controlDepth: best.depth };
+        // "Floods" = dry at the start, ≥ 30 cm after 900 s at the crest (the with-wall run is also 900 s).
+        const c900 = window.__e2e.control900 ?? control;
+        const floods = (k) => c900.data[k] > 0.3 && initial.data[k] < 0.01;
+        const HALF = 11; // wall half-length in samples (44 cells)
+        let best = null;
+        for (let y = 14; y < h - 14; y++)
+          for (let x = 14; x < w - 14; x++) {
+            const k = y * w + x;
+            if (dist[k] < 2 || dist[k] > 5 || initial.data[k] > 0.01) continue; // land, 8–20 cells from a river
+            const sx = src[k] % w, sy = (src[k] / w) | 0;
+            let ux = x - sx, uy = y - sy;
+            const len = Math.hypot(ux, uy);
+            if (len < 1) continue;
+            ux /= len; uy /= len; // inland
+            // The wall itself must stand on dry land (not across the river or a flooded park).
+            let dryWall = 0;
+            for (let l = -HALF; l <= HALF; l++) {
+              const wx = Math.round(x - uy * l), wy = Math.round(y + ux * l);
+              if (wx >= 0 && wy >= 0 && wx < w && wy < h && initial.data[wy * w + wx] < 0.01) dryWall++;
+            }
+            if (dryWall < 0.85 * (2 * HALF + 1)) continue;
+            // Streets behind it that flood without the wall.
+            const behindPts = [];
+            for (let t = 2; t <= 10; t++)
+              for (let l = -8; l <= 8; l++) {
+                const bx = Math.round(x + ux * t - uy * l), by = Math.round(y + uy * t + ux * l);
+                if (bx >= 0 && by >= 0 && bx < w && by < h && floods(by * w + bx)) behindPts.push([bx, by]);
+              }
+            const score = behindPts.length - 30 * (Math.hypot(x - w / 2, y - h / 2) / w);
+            if (!best || score > best.score) best = { x, y, ux, uy, behindPts, score };
+          }
+        if (!best || best.behindPts.length < 10) return null;
+        const c = { gx: (best.x + 0.5) * stride, gy: (best.y + 0.5) * stride };
+        const half = HALF * stride;
+        const a = { gx: c.gx - best.uy * half, gy: c.gy + best.ux * half };
+        const b = { gx: c.gx + best.uy * half, gy: c.gy - best.ux * half };
+        const pts = best.behindPts.map(([bx, by]) => ({ gx: (bx + 0.5) * stride, gy: (by + 0.5) * stride }));
+        const behind = {
+          gx: pts.reduce((acc, p) => acc + p.gx, 0) / pts.length,
+          gy: pts.reduce((acc, p) => acc + p.gy, 0) / pts.length,
+        };
+        const g = d.getState().grid;
+        const inside = (p) => p.gx > 1 && p.gy > 1 && p.gx < g.nx - 1 && p.gy < g.ny - 1;
+        if (![a, b, behind].every(inside)) return null;
+        return { a, b, c, behind, behindPts: pts, ux: best.ux, uy: best.uy, floodedBehindSamples: pts.length };
       });
-      check(r, 'found a flooding street site', !!site, site ? `center (${num(site.c.gx, 0)}, ${num(site.c.gy, 0)})` : 'none');
+      check(r, 'found a levee site (dry land between river and flooding streets)', !!site, site ? `center (${num(site.c.gx, 0)}, ${num(site.c.gy, 0)}), ${site.floodedBehindSamples} flooded samples behind` : 'none');
       if (!site) return;
 
       await calm();
@@ -479,30 +552,36 @@ const FLOWS = [
 
       await D((o) => window.__deluge.setStageOffset(o), crest.offset);
       const secs = await runFor(900);
+      // Mean depth over the protected streets (each a 4×4-cell block, max depth) with vs without the wall.
       const behind = await D((s) => {
         const d = window.__deluge;
-        let with_ = 0;
-        let n = 0;
-        for (let oy = -2; oy <= 2; oy++)
-          for (let ox = -2; ox <= 2; ox++) {
-            with_ += d.sampleAt(s.behind.gx + ox, s.behind.gy + oy).depth;
-            n++;
-          }
-        const { control } = window.__e2e;
-        const cx = Math.floor(s.behind.gx / control.stride), cy = Math.floor(s.behind.gy / control.stride);
-        return { withWall: with_ / n, control: control.data[cy * control.w + cx] };
+        const withWall = d.sampleGrid('depth', 4);
+        const control = window.__e2e.control900;
+        let w = 0;
+        let c = 0;
+        for (const p of s.behindPts) {
+          const k = Math.floor(p.gy / 4) * withWall.w + Math.floor(p.gx / 4);
+          w += withWall.data[k];
+          c += control.data[k];
+        }
+        return { withWall: w / s.behindPts.length, control: c / s.behindPts.length };
       }, site);
-      r.metrics = { site, behind, runSeconds: secs };
-      check(r, 'protected side drier than without the wall', behind.withWall <= behind.control + 1e-3, `${num(behind.withWall)} m with wall vs ${num(behind.control)} m without`, { soft: true });
+      r.metrics = { site: { ...site, behindPts: site.behindPts.length }, behind, runSeconds: secs };
+      check(r, 'protected streets drier than without the wall (same 900 s at the crest)', behind.withWall < behind.control - 0.05, `mean ${num(behind.withWall)} m with wall vs ${num(behind.control)} m without (${site.behindPts.length} blocks)`, { soft: true });
 
       const ground = await D((s) => window.__deluge.sampleAt(s.c.gx, s.c.gy).ground, site);
-      const yaw = Math.atan2(site.ux, -site.uy); // look from the wet side toward the protected land
+      // Look from the river side across the wall toward the protected land.
+      const yaw = Math.atan2(site.ux, -site.uy);
       await D(
-        (p) => window.__deluge.setCamera({ target: { gx: p.gx, gy: p.gy, elevation: p.elev }, distance: 650, yaw: p.yaw, pitch: 0.62 }),
-        { gx: site.c.gx, gy: site.c.gy, elev: ground, yaw },
+        (p) => window.__deluge.setCamera({ target: { gx: p.gx, gy: p.gy, elevation: p.elev }, distance: 1500, yaw: p.yaw, pitch: 0.78 }),
+        { gx: site.behind.gx, gy: site.behind.gy, elev: ground, yaw },
       );
       await sleep(600);
-      await shot('03-levee');
+      await shot('03a-levee');
+      await D(() => window.__deluge.setWaterMode('maxDepth'));
+      await sleep(400);
+      await shot('03b-levee-max-depth');
+      await D(() => window.__deluge.setWaterMode('realistic'));
     },
   },
   {
@@ -510,19 +589,27 @@ const FLOWS = [
     name: 'Crank the rain → streets pond',
     timeoutMs: 300_000,
     async run(r) {
+      // Rivers keep draining toward their steady state after a reset, so "volume went up" alone is not a
+      // valid test. Compare against a no-rain control run from the same initial state instead.
+      const grid = (await state(['grid'])).grid;
+      await calm();
+      await runFor(60);
+      const base = await stats();
+      const controlSecs = await runFor(900);
+      const control = await stats();
       await calm();
       await runFor(60);
       const before = await stats();
-      const grid = (await state(['grid'])).grid;
       await D(() => window.__deluge.setRain(100));
       const secs = await runFor(900);
       const after = await stats();
       const expectedRain = (100 / 1000 / 3600) * 900 * grid.nx * grid.ny * grid.cellSize ** 2;
-      const dv = (after?.volume ?? 0) - (before?.volume ?? 0);
-      r.metrics = { before, after, expectedRainVolume: expectedRain, runSeconds: secs };
-      check(r, 'water volume increases', dv > 0, `${m3(before?.volume)} → ${m3(after?.volume)} (Δ ${m3(dv)}, rain delivered ≈ ${m3(expectedRain)})`);
-      check(r, 'volume gain ≥ 20 % of rain delivered (rest drains / leaves domain)', dv >= 0.2 * expectedRain, `${num((dv / expectedRain) * 100, 1)} %`, { soft: true });
-      check(r, 'wet area grows', (after?.wetArea ?? 0) > (before?.wetArea ?? 0), `${km2(before?.wetArea ?? 0)} → ${km2(after?.wetArea ?? 0)}`);
+      const gain = (after?.volume ?? 0) - (control?.volume ?? 0);
+      r.metrics = { base, control, before, after, expectedRainVolume: expectedRain, runSeconds: secs + controlSecs };
+      check(r, 'rain adds water vs a no-rain control', gain > 0, `${m3(control?.volume)} without rain → ${m3(after?.volume)} with 100 mm/hr (Δ ${m3(gain)}, rain delivered ≈ ${m3(expectedRain)})`);
+      check(r, 'retained ≥ 20 % of the rain after 15 min (rest drains / leaves domain)', gain >= 0.2 * expectedRain, `${num((gain / expectedRain) * 100, 1)} %`, { soft: true });
+      check(r, 'rain is accounted as inflow', (after?.volumeIn ?? 0) - (before?.volumeIn ?? 0) >= 0.9 * expectedRain, `volumeIn +${m3((after?.volumeIn ?? 0) - (before?.volumeIn ?? 0))}`);
+      check(r, 'wet area grows (streets pond)', (after?.wetArea ?? 0) > (control?.wetArea ?? 0), `${km2(control?.wetArea ?? 0)} → ${km2(after?.wetArea ?? 0)}`);
       check(r, 'mass balance error < 1 %', (after?.massError ?? 1) < 0.01, `${num((after?.massError ?? NaN) * 100, 4)} %`);
       await D(() => window.__deluge.setWaterMode('depth'));
       await D(() => window.__deluge.actions.cameraFrameAll());
@@ -646,17 +733,27 @@ const FLOWS = [
       await calm();
       await runFor(30);
       await D(() => window.__deluge.actions.cameraFrameAll());
-      // Prefer the real UI button when it is visible; otherwise use the debug API.
+      await sleep(1600); // camera flight
+      // Use the real UI: "How it works" → "Break it" (falls back to the debug API if the UI changed).
       let via = 'debug API';
-      const button = page.locator('button', { hasText: /break it/i }).first();
-      if (await button.isVisible().catch(() => false)) {
-        await button.click();
-        via = 'UI button';
+      await D(() => window.__deluge.store.set({ panels: { ...window.__deluge.getState().panels, howItWorks: true } }));
+      const button = page.locator('button.dl-break-btn').first();
+      if (!(await button.isVisible({ timeout: 1500 }).catch(() => false))) {
+        // The explainer may be tabbed: open its "Break it" section first.
+        const tab = page.locator('button:has-text("Break it"):not(.dl-break-btn)').first();
+        if (await tab.isVisible().catch(() => false)) await tab.click();
       }
+      await button.scrollIntoViewIfNeeded({ timeout: 2000 }).catch(() => {});
+      if (await button.isVisible({ timeout: 2000 }).catch(() => false)) {
+        await button.click();
+        via = 'How it works → Break it';
+      }
+      await sleep(600); // the dialog closes itself so the blow-up is visible
       if (!(await D(() => window.__deluge.isStabilityDemo()))) {
         await D(() => window.__deluge.actions.setStabilityDemo(true));
-        via = via === 'UI button' ? 'UI button (did not toggle) → debug API' : via;
+        via = via === 'debug API' ? via : `${via} (did not toggle) → debug API`;
       }
+      await D(() => window.__deluge.store.set({ panels: { ...window.__deluge.getState().panels, howItWorks: false } }));
       const params = await D(() => window.__deluge.getState().sim);
       check(r, 'naive mode active', params.stabilityMode === 'naive' && params.cfl > 1, `${params.stabilityMode}, CFL ${params.cfl} via ${via}`);
       let runNote = 'completed';
@@ -675,7 +772,15 @@ const FLOWS = [
       check(r, 'instability evident', blewUp, `maxSpeed ${broken?.maxSpeed}, maxDepth ${broken?.maxDepth}, massError ${broken?.massError} (${runNote})`);
       await shot('06a-stability-blowup');
 
-      await D(() => window.__deluge.actions.setStabilityDemo(false));
+      // Restore through the banner's button (debug API fallback).
+      const restore = page.locator('.dl-naive-banner button').first();
+      let restoredVia = 'debug API';
+      if (await restore.isVisible({ timeout: 2000 }).catch(() => false)) {
+        await restore.click();
+        restoredVia = 'banner button';
+      }
+      if (await D(() => window.__deluge.isStabilityDemo())) await D(() => window.__deluge.actions.setStabilityDemo(false));
+      r.notes.push(`restored via ${restoredVia}`);
       await runFor(60);
       const healed = await stats();
       r.metrics.recovered = healed;

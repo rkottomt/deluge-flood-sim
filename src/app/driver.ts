@@ -177,10 +177,12 @@ export class FrameDriver {
     this.detectBlowup(snap.stats);
   }
 
-  /** In the stability demo, tell the user when the naive scheme has visibly exploded (once per activation). */
+  /**
+   * In the stability demo, log when the naive scheme has visibly exploded (once per activation). The UI shows
+   * it to the user (demo banner + NaN/unstable HUD); an error toast would make an intended demo look broken.
+   */
   private detectBlowup(stats: SimStats): void {
-    const { store, errors } = this.app;
-    if (this.blowupNotified || store.get().sim.stabilityMode !== 'naive') return;
+    if (this.blowupNotified || this.app.store.get().sim.stabilityMode !== 'naive') return;
     const exploded =
       !Number.isFinite(stats.maxSpeed) ||
       !Number.isFinite(stats.maxDepth) ||
@@ -188,12 +190,11 @@ export class FrameDriver {
       stats.maxSpeed > BLOWUP_SPEED;
     if (!exploded) return;
     this.blowupNotified = true;
-    const speed = Number.isFinite(stats.maxSpeed) ? `${stats.maxSpeed.toExponential(1)} m/s` : 'NaN';
-    const msg =
-      `Numerical blow-up: the naive explicit scheme diverged (max speed ${speed}). This is why Deluge uses ` +
-      `semi-implicit friction and a positivity-preserving flux limiter — restore the robust solver to recover.`;
-    console.warn(`[deluge] ${msg}`);
-    errors.toast(msg, true);
+    const speed = Number.isFinite(stats.maxSpeed) ? `${stats.maxSpeed.toExponential(1)} m/s` : String(stats.maxSpeed);
+    console.info(
+      `[deluge] stability demo: the naive explicit scheme diverged at sim t=${stats.simTime.toFixed(1)} s ` +
+        `(max speed ${speed}); restoring the robust solver resets the water.`,
+    );
   }
 
   /** HUD store updates (stats, stepInfo, fps) at ~5 Hz. */

@@ -354,9 +354,16 @@ export function createHowItWorks(ctx: UIContext): Modal {
   // ── 6. Break it ──
   const breakBtn = h('button', { type: 'button', class: 'dl-break-btn' });
   const breakState = h('div', { class: 'dl-break-state' });
+  let closeTimer = 0;
   breakBtn.addEventListener('click', () => {
     const naive = store.get().sim.stabilityMode === 'naive';
     actions.setStabilityDemo(!naive);
+    if (!naive) {
+      // The point is to watch it happen: make sure the clock runs and get the dialog out of the way.
+      if (store.get().paused) store.set({ paused: false });
+      clearTimeout(closeTimer);
+      closeTimer = window.setTimeout(() => ctx.setPanel('howItWorks', false), 450);
+    }
   });
   bind(
     (s) => s.sim.stabilityMode === 'naive',
@@ -390,7 +397,7 @@ export function createHowItWorks(ctx: UIContext): Modal {
       h('li', null, 'They grow into spikes of impossible depth and speed, then NaNs spread across the map.'),
       h('li', null, 'The mass-balance error in the HUD explodes — water is being created from nothing.'),
     ),
-    h('p', null, 'Switch it back and the water resets: the robust solver recovers instantly.'),
+    h('p', null, 'This dialog closes so you can watch. Switch back from the red banner at the top — the water resets and the robust solver recovers instantly.'),
     h('div', { class: 'dl-break-actions' }, breakBtn, breakState),
   );
 

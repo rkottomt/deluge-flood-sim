@@ -37,6 +37,11 @@ export const DIG_RATE = 3;
 const PROBE_HZ = 15;
 /** Pixels a pointer may travel between down and up and still count as a click. */
 const CLICK_SLOP_PX = 7;
+/**
+ * The hover pick (a CPU ray march) is repeated only when the pointer or camera moved, or at this interval so
+ * water depth under a still cursor (and ground being dug) stays fresh.
+ */
+const HOVER_REFRESH_MS = 150;
 
 type Transient = Pick<OverlayState, 'wallPreview' | 'cursor'>;
 
@@ -129,6 +134,8 @@ export function createToolController(canvas: HTMLCanvasElement, deps: ToolContro
   let lastTerrain = deps.getTerrain();
   let rect = canvas.getBoundingClientRect();
   let lastProbeAt = -Infinity;
+  let lastHoverPickAt = -Infinity;
+  const lastPose = { gx: NaN, gy: NaN, elevation: NaN, distance: NaN, yaw: NaN, pitch: NaN };
   let probeShown = false;
   let transient: Transient = { wallPreview: null, cursor: null };
   let transientDirty = true;
@@ -154,6 +161,33 @@ export function createToolController(canvas: HTMLCanvasElement, deps: ToolContro
   }
   function removeDistance(g: { nx: number; ny: number }) {
     return REMOVE_FRACTION * Math.max(g.nx, g.ny);
+  }
+
+  /** True (and remembers the pose) when the camera moved since the last call. */
+  function cameraMoved(): boolean {
+    let p;
+    try {
+      p = renderer.camera.pose;
+    } catch {
+      return false;
+    }
+    if (!p) return false;
+    const moved =
+      p.target.gx !== lastPose.gx ||
+      p.target.gy !== lastPose.gy ||
+      p.target.elevation !== lastPose.elevation ||
+      p.distance !== lastPose.distance ||
+      p.yaw !== lastPose.yaw ||
+      p.pitch !== lastPose.pitch;
+    if (moved) {
+      lastPose.gx = p.target.gx;
+      lastPose.gy = p.target.gy;
+      lastPose.elevation = p.target.elevation;
+      lastPose.distance = p.distance;
+      lastPose.yaw = p.yaw;
+      lastPose.pitch = p.pitch;
+    }
+    return moved;
   }
 
   function pickAt(x: number, y: number): PickResult | null {
@@ -499,11 +533,19 @@ export function createToolController(canvas: HTMLCanvasElement, deps: ToolContro
       cancelGesture();
     }
 
-    // Hover pick for the cursor ring / probe / held brushes (once per frame at most).
+    // Hover pick for the cursor ring / probe / held brushes: at most once per frame, and only when something
+    // that affects it changed (no wasted CPU on a fanless laptop while the cursor rests).
     const wantsHover = tool !== 'orbit';
-    if (wantsHover && pointer.inside && (gesture.kind === 'none' || gesture.kind === 'hold' || gesture.kind === 'click')) {
+    const t = now();
+    if (
+      wantsHover &&
+      pointer.inside &&
+      (gesture.kind === 'none' || gesture.kind === 'hold' || gesture.kind === 'click') &&
+      (pointer.moved || cameraMoved() || t - lastHoverPickAt >= HOVER_REFRESH_MS)
+    ) {
       const prevHover = hover;
       hover = pickAt(pointer.x, pointer.y);
+      lastHoverPickAt = t;
       pointer.moved = false;
       if (
         !prevHover !== !hover ||
@@ -532,7 +574,6 @@ export function createToolController(canvas: HTMLCanvasElement, deps: ToolContro
 
     // Probe readout (throttled).
     if (tool === 'probe') {
-      const t = now();
       if (hover && t - lastProbeAt >= 1000 / PROBE_HZ) {
         lastProbeAt = t;
         const geo = terrain ? gridToGeoLocal(terrain, hover.gx, hover.gy) : { lat: NaN, lon: NaN };
