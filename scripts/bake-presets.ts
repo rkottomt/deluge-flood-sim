@@ -16,7 +16,7 @@ import path from 'node:path';
 import type { CameraPose, ScenarioPreset, Shelter, StageControl, StormCell, WaterSource } from '../src/contracts';
 import { fetchDEM } from '../src/data/dem';
 import { geoToGrid, squareDomain } from '../src/data/geo';
-import { burnRivers, findRiverEnds, flatThreshold, localRelief, type BurnResult, type RiverSpec } from '../src/data/hydro';
+import { burnRivers, edgeRuns, edgeStageDisc, findRiverEnds, flatThreshold, localRelief, type BurnResult, type RiverSpec } from '../src/data/hydro';
 import { fetchImageryBytes, IMAGERY_ATTRIBUTION } from '../src/data/imagery';
 import { computeInitialWater } from '../src/data/initialWater';
 import { type PresetMeta, PRESETS, validatePresetMeta } from '../src/data/presets';
@@ -302,26 +302,6 @@ async function bake(def: PresetDef) {
   }
   log(def.id, `burned cells: ${burn.burnedCells} (${((100 * burn.burnedCells) / (N * N)).toFixed(2)} % of domain)`);
 
-  // ── Sources on the channel spine at the domain edges
-  const ends = findRiverEnds(burn, N, N, 12);
-  const sources: WaterSource[] = [];
-  def.rivers.forEach((r, ri) => {
-    for (const which of ['upstream', 'downstream'] as const) {
-      const cfg = r[which];
-      if (!cfg) continue;
-      const end = ends.find((e) => e.river === ri && e.end === which);
-      if (!end) throw new Error(`${def.id}: ${r.name} ${which} end does not reach the domain edge`);
-      const id = `${r.name.toLowerCase().replace(/[^a-z]+/g, '-').replace(/-river$/, '')}-${cfg.type}`;
-      if (cfg.type === 'inflow') {
-        const p = inflowPlacement(burn, ri, which, end, N);
-        sources.push({ id, type: 'inflow', gx: r2(p.gx), gy: r2(p.gy), radius: r1(p.radius), discharge: cfg.discharge, label: cfg.label });
-      } else {
-        sources.push({ id, type: 'stage', gx: r2(end.gx), gy: r2(end.gy), radius: r1(end.radius), level: normalLevel ?? r2(end.level), label: cfg.label });
-      }
-      log(def.id, `  source ${id} at (${end.gx.toFixed(1)}, ${end.gy.toFixed(1)}) edge=${end.edge} level=${end.level.toFixed(2)}`);
-    }
-  });
-
   // ── Initial fill
   // Seeds sit on the channel SPINE (the cell of the same river farthest from the shore within a few cells of the
   // traced centerline) and take that cell's own water level. Where a trace hugs a bank, a seed on the bank would
@@ -394,6 +374,35 @@ async function bake(def: PresetDef) {
   }
   log(def.id, `initial fill: ${wet} wet cells, ${leak} outside the channel mask, max depth ${maxDepth.toFixed(2)} m`);
   if (leak > wet * 0.01) throw new Error(`${def.id}: initial fill leaks outside the channel (${leak} cells)`);
+
+  // ── Sources at the domain edges
+  // Inflows sit on the channel spine just inside the edge. Stage sources are boundary conditions: their disc covers
+  // the river's whole wet crossing of the edge (see edgeStageDisc), so the open boundary cannot drain the part of
+  // the crossing a small disc would miss.
+  const ends = findRiverEnds(burn, N, N, 12);
+  const sources: WaterSource[] = [];
+  def.rivers.forEach((r, ri) => {
+    for (const which of ['upstream', 'downstream'] as const) {
+      const cfg = r[which];
+      if (!cfg) continue;
+      const end = ends.find((e) => e.river === ri && e.end === which);
+      if (!end) throw new Error(`${def.id}: ${r.name} ${which} end does not reach the domain edge`);
+      const id = `${r.name.toLowerCase().replace(/[^a-z]+/g, '-').replace(/-river$/, '')}-${cfg.type}`;
+      if (cfg.type === 'inflow') {
+        const p = inflowPlacement(burn, ri, which, end, N);
+        sources.push({ id, type: 'inflow', gx: r2(p.gx), gy: r2(p.gy), radius: r1(p.radius), discharge: cfg.discharge, label: cfg.label });
+        log(def.id, `  source ${id} at (${p.gx.toFixed(1)}, ${p.gy.toFixed(1)}) r=${p.radius} edge=${end.edge}`);
+      } else {
+        const along = end.edge === 'north' || end.edge === 'south' ? end.gx : end.gy;
+        const runs = edgeRuns(end.edge, N, N, (k) => h0[k] > 0.01);
+        const run = runs.sort((a, b) => distToRun(a, along) - distToRun(b, along))[0];
+        if (!run || distToRun(run, along) > 24) throw new Error(`${def.id}: ${r.name} has no wet crossing of the ${end.edge} edge`);
+        const disc = edgeStageDisc(end.edge, run[0], run[1], N, N);
+        sources.push({ id, type: 'stage', ...disc, level: normalLevel ?? r2(end.level), label: cfg.label });
+        log(def.id, `  source ${id} covers ${end.edge} edge cells ${run[0]}..${run[1]}: disc (${disc.gx}, ${disc.gy}) r=${disc.radius}`);
+      }
+    }
+  });
 
   // ── Roads
   const rawRoads = JSON.parse(
@@ -521,6 +530,11 @@ async function bake(def: PresetDef) {
   fs.writeFileSync(path.join(dir, 'roads.json'), JSON.stringify(encodeRoads(roads)));
   const sizes = ['meta.json', 'elevation.f32', 'imagery.jpg', 'roads.json'].map((f) => `${f} ${(fs.statSync(path.join(dir, f)).size / 1e6).toFixed(2)} MB`);
   log(def.id, `wrote ${sizes.join(', ')} in ${((performance.now() - t0) / 1000).toFixed(1)} s`);
+}
+
+/** Cells between a position along an edge and a run [t0, t1] of edge cells (0 inside the run). */
+function distToRun(run: [number, number], t: number): number {
+  return t < run[0] ? run[0] - t : t > run[1] + 1 ? t - run[1] - 1 : 0;
 }
 
 /**

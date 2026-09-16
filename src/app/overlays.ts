@@ -35,7 +35,8 @@ export class OverlayComposer {
     const route = state.route;
     const next: OverlayState = {
       roadStatus,
-      route: route?.state === 'ok' ? route.polyline : null,
+      // 'blocked' may carry the route the flood cut (the renderer draws it red and pulsing); 'none' never has one.
+      route: route && route.state !== 'none' ? route.polyline : null,
       routeState: route?.state ?? 'none',
       sources: state.sources,
       storms: state.storms,

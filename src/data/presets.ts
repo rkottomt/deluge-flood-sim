@@ -84,9 +84,19 @@ export function validatePresetMeta(m: PresetMeta): string[] {
   if (!s) return errs.concat('missing scenario');
   const inside = (gx: number, gy: number) => gx >= 0 && gy >= 0 && gx <= m.nx && gy <= m.ny;
   for (const src of s.sources) {
-    if (!inside(src.gx, src.gy)) errs.push(`source ${src.id} outside grid`);
-    if (src.gx - src.radius < 0 || src.gy - src.radius < 0 || src.gx + src.radius > m.nx || src.gy + src.radius > m.ny) {
-      errs.push(`source ${src.id} footprint crosses the domain edge`);
+    if (!isNum(src.gx) || !isNum(src.gy) || !(src.radius > 0)) errs.push(`source ${src.id} has a bad position or radius`);
+    if (src.type === 'inflow') {
+      // The whole discharge must land inside the domain.
+      if (!inside(src.gx, src.gy)) errs.push(`source ${src.id} outside grid`);
+      if (src.gx - src.radius < 0 || src.gy - src.radius < 0 || src.gx + src.radius > m.nx || src.gy + src.radius > m.ny) {
+        errs.push(`source ${src.id} footprint crosses the domain edge`);
+      }
+    } else {
+      // A stage source is a boundary condition: its disc may (and at a river's edge crossing should) extend past
+      // the edge — its centre may even lie outside — but it must overlap the domain.
+      const dx = Math.max(0, -src.gx, src.gx - m.nx);
+      const dy = Math.max(0, -src.gy, src.gy - m.ny);
+      if (Math.hypot(dx, dy) >= src.radius - 0.5) errs.push(`stage ${src.id} footprint does not overlap the grid`);
     }
     if (src.type === 'inflow' && !(src.discharge > 0)) errs.push(`inflow ${src.id} has no discharge`);
     if (src.type === 'stage' && !isNum(src.level)) errs.push(`stage ${src.id} has no level`);

@@ -360,6 +360,9 @@ export interface MarkerScene {
   minElev: number;
   maxElev: number;
   domainSize: number;
+  /** Grid size (cells): markers of boundary sources whose footprint centre lies outside are drawn at the edge. */
+  nx: number;
+  ny: number;
 }
 
 export interface MarkerGeometry {
@@ -468,8 +471,12 @@ export function buildMarkers(
       ], 16, { scaleMode: ScaleMode.Marker, kind: MarkerKind.Beam, size, phase, color: C.beam });
       blended.disc(1.6, 0.03, a, 32, { scaleMode: ScaleMode.Marker, kind: MarkerKind.Pulse, size, phase, color: [0.3, 0.7, 1.0, 1.0] });
     } else {
-      const g: Anchor = { gx: src.gx, gy: src.gy, elev: 0, mode: AnchorMode.Ground };
-      const lv: Anchor = { gx: src.gx, gy: src.gy, elev: src.level, mode: AnchorMode.Absolute };
+      // A boundary stage disc may be centred outside the domain (see edgeStageDisc in src/data): put the gauge at the
+      // nearest point just inside the edge, i.e. in the middle of the river crossing it holds.
+      const gx = Math.min(scene.nx - 1.5, Math.max(1.5, src.gx));
+      const gy = Math.min(scene.ny - 1.5, Math.max(1.5, src.gy));
+      const g: Anchor = { gx, gy, elev: 0, mode: AnchorMode.Ground };
+      const lv: Anchor = { gx, gy, elev: src.level, mode: AnchorMode.Absolute };
       const pole: MarkerStyle = { scaleMode: ScaleMode.Marker, kind: MarkerKind.Gauge, size, phase, color: C.white };
       opaque.lathe([
         { r: 0.045, y: -0.1, anchor: g, n: [1, 0] },

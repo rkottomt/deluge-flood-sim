@@ -11,7 +11,7 @@
  */
 import type { CameraPose, GeoBounds, RoadClass, ScenarioPreset, Shelter, TerrainData, WaterSource } from '../contracts';
 import { squareDomain } from './geo';
-import { smoothstep } from './hydro';
+import { edgeStageDisc, smoothstep } from './hydro';
 import { buildRoadNetwork, nodeCrossings, type RawRoad } from './roads';
 
 export const SANDBOX_NAME = 'Riverside — synthetic valley';
@@ -401,7 +401,15 @@ export function generateSandbox(opts: SandboxOptions = {}): TerrainData {
   const levelSouth = riverLevel(N - 6);
   const sources: WaterSource[] = [
     { id: 'river-in', type: 'inflow', gx: riverX(8) + 0, gy: 8, radius: Math.round(riverHalfW * 8) / 10, discharge: 180, label: 'Clear River inflow' },
-    { id: 'river-stage', type: 'stage', gx: riverX(N - 8), gy: N - 8, radius: Math.round(riverHalfW * 8) / 10, level: levelSouth, label: 'Riverside gauge' },
+    // Downstream boundary: the stage disc covers the river's whole crossing of the south edge (see edgeStageDisc).
+    {
+      id: 'river-stage',
+      type: 'stage',
+      // (the wetted channel reaches ~1.2 half-widths from the centreline, see the bank profile above)
+      ...edgeStageDisc('south', Math.floor(riverX(N - 0.5) - 1.5 * riverHalfW), Math.ceil(riverX(N - 0.5) + 1.5 * riverHalfW) - 1, N, N),
+      level: levelSouth,
+      label: 'Riverside gauge',
+    },
   ];
   const riverSeeds: Array<{ gx: number; gy: number; level: number }> = [];
   for (let y = 4; y < N - 4; y += 12) riverSeeds.push({ gx: riverX(y + 0.5), gy: y + 0.5, level: riverLevel(y + 0.5) });

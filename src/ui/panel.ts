@@ -233,10 +233,21 @@ export function createPanel(ctx: UIContext): Panel {
     (s) => s.sim.rainRate,
     (v) => {
       rain.set(v);
-      const c = rainCategory(v);
-      rain.setSubClass(c.severity);
-      setText(rainBadge, v > 0 ? formatRain(v) : 'Dry');
-      rainBadge.dataset.sev = c.severity;
+      rain.setSubClass(rainCategory(v).severity);
+    },
+  );
+  // Section badge: global rain, or the strongest storm cell when it is heavier (a storm is not "Dry").
+  bind(
+    (s) => {
+      const storm = s.storms.reduce((m, st) => Math.max(m, st.intensity), 0);
+      return `${s.sim.rainRate}|${storm}`;
+    },
+    () => {
+      const s = ctx.store.get();
+      const storm = s.storms.reduce((m, st) => Math.max(m, st.intensity), 0);
+      const v = Math.max(s.sim.rainRate, storm);
+      setText(rainBadge, v <= 0 ? 'Dry' : storm > s.sim.rainRate ? `Storm ${formatRain(storm)}` : formatRain(v));
+      rainBadge.dataset.sev = rainCategory(v).severity;
     },
   );
 

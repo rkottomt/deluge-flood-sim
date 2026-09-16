@@ -133,7 +133,8 @@ export function createHud(ctx: UIContext, achievedSpeed: () => number | null): H
     (s) => {
       const p = s.probe;
       if (!p) return '';
-      return `${formatMeters(p.elevation, 1)} ground · ${p.depth > 0.01 ? formatMeters(p.depth) + ' deep' : 'dry'}${p.speed > 0 ? ' · ' + formatSpeed(p.speed) : ''}`;
+      const wet = p.depth > 0.01;
+      return `${formatMeters(p.elevation, 1)} ground · ${wet ? formatMeters(p.depth) + ' deep' : 'dry'}${wet && p.speed > 0 ? ' · ' + formatSpeed(p.speed) : ''}`;
     },
     (v) => {
       setText(probeText, v);
@@ -227,7 +228,8 @@ export function createProbeTooltip(ctx: UIContext): { el: HTMLElement; destroy()
       setText(hazard, wet ? hz.label : '');
       el.dataset.sev = hz.severity;
       setText(elev, `${formatMeters(p.elevation, 1)} · ${formatFeet(p.elevation, 0)}`);
-      speedRow.hidden = !(p.speed > 0);
+      // Thin runoff films (< 1 cm) still carry a velocity in the solver export; the card calls them dry ground.
+      speedRow.hidden = !(wet && p.speed > 0);
       setText(speed, formatSpeed(p.speed));
       setText(coords, formatLatLon(p.lat, p.lon));
       // Measure once per content change (not per pointer move).

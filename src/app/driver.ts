@@ -3,6 +3,16 @@ import type { App } from './App';
 import { APP_CONFIG } from './defaults';
 import { errorMessage } from './errors';
 import { NO_TRANSIENT, OverlayComposer } from './overlays';
+import { footprintRadius, stormWeight } from '../sim/forcing';
+
+/** Rain rate (mm/hr) at grid position (gx, gy): global rain plus storm cells, with the solver's storm profile. */
+export function rainAt(state: Pick<AppState, 'sim' | 'storms'>, gx: number, gy: number): number {
+  let rain = Math.max(0, state.sim.rainRate);
+  for (const st of state.storms) {
+    rain += Math.max(0, st.intensity) * stormWeight(Math.hypot(gx - st.gx, gy - st.gy), footprintRadius(st.radius));
+  }
+  return rain;
+}
 
 /** Treat speeds above this as a numerical blow-up (no real flood flows at > 100 m/s). */
 const BLOWUP_SPEED = 100;
@@ -124,7 +134,8 @@ export class FrameDriver {
       rendered = this.guard('render', () =>
         renderer.render({
           ...state.render,
-          rainRate: running ? state.sim.rainRate : 0,
+          // Rain the viewer is standing in: global rain plus any storm cell over the camera target.
+          rainRate: running ? rainAt(state, camera.pose.target.gx, camera.pose.target.gy) : 0,
           time: pacer.animTime,
         }),
       );

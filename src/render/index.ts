@@ -545,6 +545,8 @@ class DelugeRenderer implements DelugeRendererAPI {
       minElev: s.groundMin,
       maxElev: s.groundMax,
       domainSize: Math.max(s.nx, s.ny) * s.terrain.cellSize,
+      nx: s.nx,
+      ny: s.ny,
     };
 
     // Road status: upload only when the contents change.

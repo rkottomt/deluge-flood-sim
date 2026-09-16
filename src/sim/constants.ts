@@ -53,7 +53,12 @@ export interface SolverOptions {
   boundaryMinSlope: number;
   /** Robust mode Froude cap on open-boundary outflow; 1 = critical flow over a free edge (see bflux in shaders/common.ts). */
   boundaryFroudeMax: number;
-  /** Relaxation time constant for stage sources, s (0 = set level directly). */
+  /**
+   * Relaxation time constant for stage sources, s (0 = set the level directly, DESIGN §3.2 "or direct set").
+   * Stage sources are boundary conditions (their discs cover a river's edge crossing, see edgeStageDisc in
+   * src/data/hydro.ts): with relaxation the open boundary drains the footprint faster than it refills — at
+   * Pittsburgh's 1936 crest τ = 10 s left the Point ~6 m below the stage after 105 sim-minutes.
+   */
   stageRelaxSeconds: number;
   /**
    * Largest Courant number robust mode will use, whatever SimParams.cfl says. Courant numbers in Deluge are
@@ -87,7 +92,7 @@ export const DEFAULT_SOLVER_OPTIONS: SolverOptions = {
   froudeMax: 8,
   boundaryMinSlope: 1e-4,
   boundaryFroudeMax: 1,
-  stageRelaxSeconds: 10,
+  stageRelaxSeconds: 0,
   robustCflMax: 0.85,
   dtMin: 0.001,
   dtMax: 5,

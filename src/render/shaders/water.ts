@@ -1,5 +1,5 @@
 /** Water surface shaders: photoreal floodwater and hazard colormaps. */
-import { COMMON_WGSL, FRAME_WGSL, LOD_WGSL } from './common';
+import { COMMON_WGSL, FRAME_WGSL, LOD_WGSL, VTX_SAMPLE_WGSL } from './common';
 
 export const WATER_WGSL = /* wgsl */ `
 ${FRAME_WGSL}
@@ -14,6 +14,7 @@ ${FRAME_WGSL}
 @group(0) @binding(8) var wetTex: texture_2d<f32>;
 ${COMMON_WGSL}
 ${LOD_WGSL}
+${VTX_SAMPLE_WGSL}
 
 struct WOut {
   @builtin(position) pos: vec4f,
@@ -177,8 +178,14 @@ fn fsWater(in: WOut) -> @location(0) vec4f {
   let V0 = F.camPos - in.world;
   let dist = length(V0);
   let V = V0 / max(dist, 1e-3);
+  // Water thickness from the BASE-resolution vertex field (same triangulation as the finest mesh), not the coarse
+  // LOD triangle: on a coarse level a narrow island or bank falls between vertices, the coarse terrain dips under
+  // the (flat, extended) water plane and water would show over land. Deciding wet/dry per fragment from the fine
+  // field keeps the shoreline identical at every LOD level; the coarse geometry only has to be above the terrain.
+  let fineV = vtxBilinear(in.grid);
+  let thick = select(fineV.g - fineV.r, in.thick, in.skirt > 0.5);
   // Derivatives in uniform control flow (before any discard).
-  let thickFw = fwidth(in.thick);
+  let thickFw = fwidth(thick);
   let valueDepth = select(s.r, misc.g, mode == 2);
   let hazardValue = select(valueDepth, misc.b, mode == 3);
   let hazardFw = fwidth(hazardValue);
@@ -205,12 +212,12 @@ fn fsWater(in: WOut) -> @location(0) vec4f {
   let rB = mix(b0, b1, blend);
   let rM = mix(m0, m1, blend);
   let slickFar = textureSample(rippleTex, repSamp, in.world.xz / 233.0 + vec2f(0.31, 0.77)).a;
-  if (in.thick <= 0.0) {
+  if (thick <= 0.0 || in.thick <= -30.0) {
     discard;
   }
 
   // Soft shoreline: fade over a few cm, widened by the pixel footprint to stay anti-aliased at any distance.
-  let shore = smoothstep(0.0, max(0.03, thickFw * 1.5), in.thick);
+  let shore = smoothstep(0.0, max(0.03, thickFw * 1.5), thick);
 
   // ── Normal: macro η slope + advected ripples (roughness grows with distance instead of aliasing) ─────
   let macroSlope = nrm.ba * F.exag;
@@ -245,10 +252,10 @@ fn fsWater(in: WOut) -> @location(0) vec4f {
   if (mode == 0) {
     // ── Photoreal floodwater ─────────────────────────────────────────────────────────────
     // Turbid water: short absorption length, sediment-laden inscatter. Deep channels read darker and greener.
-    let path = in.thick / max(nv, 0.2);
+    let path = thick / max(nv, 0.2);
     let T = exp(-vec3f(2.0, 2.4, 3.1) * path);
     let tAvg = dot(T, vec3f(0.3333));
-    let deep = smoothstep(0.8, 6.0, in.thick);
+    let deep = smoothstep(0.8, 6.0, thick);
     // Large-scale advected slicks/streaks: brightness variation that shows the current from far away.
     // Advected slicks / sediment plumes: low-frequency brightness variation that makes the current visible from afar.
     // Two incommensurate scales so the tiling never lines up.
@@ -261,7 +268,7 @@ fn fsWater(in: WOut) -> @location(0) vec4f {
 
     // Foam / whitewater: hydraulic jumps & fast flow (per cell, from prep) + moving shoreline fronts.
     let foamNoise = rA.z * 0.55 + rB.z * 0.3 * fineFade + rM.z * 0.35;
-    let shoreFoam = (1.0 - smoothstep(0.0, 0.18, in.thick)) * (0.25 + 0.75 * smoothstep(0.2, 1.2, speed)) * 0.7;
+    let shoreFoam = (1.0 - smoothstep(0.0, 0.18, thick)) * (0.25 + 0.75 * smoothstep(0.2, 1.2, speed)) * 0.7;
     let foamAmt = clamp(s.a * 0.8 + shoreFoam, 0.0, 0.9) * select(1.0, 0.0, in.skirt > 0.5);
     let foamMask = smoothstep(1.1 - foamAmt, 1.3 - foamAmt * 0.7, foamNoise) * foamAmt;
     let foamCol = vec3f(0.62, 0.59, 0.53) * (skyAmbient(n) + F.sunColor * max(dot(n, F.sunDir), 0.0) * sunVis);

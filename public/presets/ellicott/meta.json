@@ -648,7 +648,7 @@
   "roads": "roads.json"
  },
  "bake": {
-  "bakedAt": "2026-09-16T22:13:39.506Z",
+  "bakedAt": "2026-09-16T23:09:10.395Z",
   "demSource": "usgs3dep",
   "demRepairedCells": 36,
   "center": {

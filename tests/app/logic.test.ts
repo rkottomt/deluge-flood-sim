@@ -224,6 +224,10 @@ test('overlays: only report changes, including in-place mutation of tool transie
   const next = composer.compose({ ...state, route }, null, 1, wall);
   assert.equal(next?.routeState, 'blocked');
   assert.equal(next?.route, null);
+  // A blocked result that carries the cut route passes it on (drawn red); 'none' never shows a route.
+  const cut = Float32Array.of(1, 2, 3, 4);
+  assert.equal(composer.compose({ ...state, route: { ...route, polyline: cut } }, null, 1, wall)?.route, cut);
+  assert.equal(composer.compose({ ...state, route: { ...route, state: 'none', polyline: cut } }, null, 1, wall)?.route, null);
 });
 
 // ─── runFor ──────────────────────────────────────────────────────────────────────────────────

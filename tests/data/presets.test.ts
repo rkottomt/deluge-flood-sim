@@ -13,7 +13,8 @@ import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import type { AddressInfo } from 'node:net';
-import type { RoadNetwork, ScenarioPreset, TerrainData } from '../../src/contracts';
+import type { RoadNetwork, ScenarioPreset, TerrainData, WaterSource } from '../../src/contracts';
+import { type DomainEdge, edgeRuns, STAGE_DISC_MAX_PENETRATION } from '../../src/data/hydro';
 import { cellSizeFor } from '../../src/data/geo';
 import { computeInitialWater } from '../../src/data/initialWater';
 import { listPresets, loadPreset } from '../../src/data/index';
@@ -65,6 +66,38 @@ function jpegSize(b: Buffer): { width: number; height: number } {
 
 const elevAt = (e: Float32Array, nx: number, gx: number, gy: number) => e[Math.floor(gy) * nx + Math.floor(gx)];
 
+/**
+ * A stage source is a boundary condition at a water body's edge crossing: its disc must reach the domain edge, the
+ * edge cell nearest its centre must start full, and EVERY wet cell of that crossing must get full footprint weight
+ * (otherwise the open boundary drains the uncovered part). It must not reach far into the domain either.
+ */
+function checkStageBoundary(label: string, src: WaterSource & { type: 'stage' }, nx: number, ny: number, h0: Float32Array) {
+  const R = src.radius - 0.5; // full-weight radius (smooth one-cell rim)
+  const edges: Array<{ edge: DomainEdge; dist: number }> = [
+    { edge: 'north', dist: src.gy },
+    { edge: 'south', dist: ny - src.gy },
+    { edge: 'west', dist: src.gx },
+    { edge: 'east', dist: nx - src.gx },
+  ];
+  // Signed distance from the nearest edge (negative: centre outside the domain); the disc reaches R + dist cells in.
+  const { edge, dist } = edges.sort((a, b) => a.dist - b.dist)[0];
+  assert.ok(Math.abs(dist) < R, `${label}: stage source ${src.id} does not reach the ${edge} edge`);
+  const reach = src.radius + dist;
+  assert.ok(reach <= STAGE_DISC_MAX_PENETRATION + 2, `${label}: stage source ${src.id} reaches ${reach.toFixed(1)} cells into the domain`);
+  const horizontal = edge === 'north' || edge === 'south';
+  const along = horizontal ? src.gx : src.gy;
+  const cellOf = (t: number) => (edge === 'north' ? t : edge === 'south' ? (ny - 1) * nx + t : edge === 'west' ? t * nx : t * nx + nx - 1);
+  const centre = Math.min((horizontal ? nx : ny) - 1, Math.max(0, Math.floor(along)));
+  assert.ok(h0[cellOf(centre)] > 0.5, `${label}: stage source ${src.id} is not centred on a full edge crossing`);
+  const run = edgeRuns(edge, nx, ny, (k) => h0[k] > 0.01).find(([t0, t1]) => centre >= t0 && centre <= t1)!;
+  for (let t = run[0]; t <= run[1]; t++) {
+    const k = cellOf(t);
+    const cx = (k % nx) + 0.5;
+    const cy = Math.floor(k / nx) + 0.5;
+    assert.ok(Math.hypot(cx - src.gx, cy - src.gy) <= R, `${label}: stage source ${src.id} misses wet edge cell ${t} of crossing ${run[0]}..${run[1]}`);
+  }
+}
+
 function checkScenario(
   label: string,
   t: Pick<TerrainData, 'nx' | 'ny' | 'cellSize' | 'elevation'> & { roads: RoadNetwork | null },
@@ -74,6 +107,13 @@ function checkScenario(
   const { nx, ny, elevation } = t;
   // Sources: on water that starts full, with most of the footprint wet.
   for (const src of s.sources) {
+    if (src.type === 'stage') {
+      checkStageBoundary(label, src, nx, ny, h0);
+      if (s.stage) {
+        assert.ok(Math.abs(src.level - s.stage.normalLevel) < 0.6, `${label}: stage source ${src.id} level ${src.level} vs normal ${s.stage.normalLevel}`);
+      }
+      continue;
+    }
     const k = Math.floor(src.gy) * nx + Math.floor(src.gx);
     assert.ok(h0[k] > 0.5, `${label}: source ${src.id} center depth ${h0[k].toFixed(2)} m — not on a full river`);
     let cells = 0;
@@ -86,13 +126,8 @@ function checkScenario(
         if (h0[(Math.floor(src.gy) + dj) * nx + Math.floor(src.gx) + di] > 0.05) wet++;
       }
     }
-    // Stage footprints must sit inside the water; an inflow may overlap a narrow channel's banks a little (the
-    // injected water simply drains into the channel).
-    const need = src.type === 'stage' ? 0.8 : 0.7;
-    assert.ok(wet >= cells * need, `${label}: source ${src.id} footprint only ${wet}/${cells} wet`);
-    if (src.type === 'stage' && s.stage) {
-      assert.ok(Math.abs(src.level - s.stage.normalLevel) < 0.6, `${label}: stage source ${src.id} level ${src.level} vs normal ${s.stage.normalLevel}`);
-    }
+    // An inflow may overlap a narrow channel's banks a little (the injected water simply drains into the channel).
+    assert.ok(wet >= cells * 0.7, `${label}: source ${src.id} footprint only ${wet}/${cells} wet`);
   }
   // Initial water is confined: small fraction of the domain and depths that match a burned channel.
   let wet = 0;

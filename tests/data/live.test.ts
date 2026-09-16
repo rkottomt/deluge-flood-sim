@@ -73,9 +73,16 @@ test('live scenario: stage sources on the river at both edges, shelters high, dr
   for (const src of stages) {
     assert.ok(src.type === 'stage');
     assert.ok(Math.abs(src.gy - 128) <= 6, `stage source on the river (gy ${src.gy})`);
-    assert.ok(src.gx - src.radius >= 0 && src.gx + src.radius <= N, 'footprint inside the domain');
-    assert.ok(h0[Math.floor(src.gy) * N + Math.floor(src.gx)] > 2, 'river starts full at the source');
-    const expected = 100.4 - 0.4 * (src.gx / N);
+    // A boundary condition: the disc reaches the edge and covers every wet cell of the river's edge crossing.
+    const edgeCol = src.gx < N / 2 ? 0 : N - 1;
+    assert.ok(Math.abs(edgeCol + 0.5 - src.gx) < src.radius - 0.5, 'footprint reaches the domain edge');
+    assert.ok(h0[Math.floor(src.gy) * N + edgeCol] > 2, 'river starts full at the crossing');
+    for (let j = 0; j < N; j++) {
+      if (h0[j * N + edgeCol] > 0.01) {
+        assert.ok(Math.hypot(edgeCol + 0.5 - src.gx, j + 0.5 - src.gy) <= src.radius - 0.5, `edge cell ${j} of the crossing covered`);
+      }
+    }
+    const expected = 100.4 - 0.4 * (Math.min(N, Math.max(0, src.gx)) / N);
     assert.ok(Math.abs(src.level - expected) < 0.1, `local level ${src.level} vs ${expected.toFixed(2)}`);
   }
   assert.ok(s.stage && s.stage.maxOffset > 0);

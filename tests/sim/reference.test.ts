@@ -65,7 +65,8 @@ async function compare(c: Case) {
     robust,
     boundaryMinSlope: o.boundaryMinSlope,
     boundaryFroudeMax: o.boundaryFroudeMax,
-    stageAlpha: Math.fround(1 - Math.exp(-dt / o.stageRelaxSeconds)),
+    // Same rule as the GPU uniform (Solver.writeSimUniform): τ = 0 sets the level directly.
+    stageAlpha: o.stageRelaxSeconds > 0 ? Math.fround(1 - Math.exp(-dt / o.stageRelaxSeconds)) : 1,
     forcing: packForcing(c.sources ?? [], c.storms ?? [], nx, ny, dx, z0, (k) => elevation[k]),
   };
   const v0 = cpu.volume(dx);

@@ -10,20 +10,14 @@ export const APP_CONFIG = {
    */
   minFrameIntervalMs: 1000 / 60 - 4,
   /**
-   * Solver tunables beyond the SimParams contract (4th createSolver argument of src/sim; ignored by a
-   * contract-only implementation). Both were measured on the M4 with the Pittsburgh preset:
+   * Solver tunables beyond the SimParams contract (4th createSolver argument, see src/contracts.ts):
    *
-   *  • gpuBudgetMs — effectively disabled: the app's work budget (governor.ts: frame time + GPU latency) is in
-   *    charge. The solver estimates GPU cost per substep as (onSubmittedWorkDone latency) / substeps; that
-   *    latency includes the render work and queueing (14–70+ ms measured), and a one-substep frame is charged
-   *    all of it, so the estimate self-reinforces: with the default 10 ms budget it pinned the solver at one
-   *    substep per frame (~12 sim-s per real second instead of the requested 60).
-   *  • stageRelaxSeconds — 0 = stage sources SET the river level in their footprint (DESIGN §3.2 "or direct
-   *    set"). With relaxation (τ = 10 s) the open boundary drains the footprint faster than it refills: at the
-   *    1936 crest (225.4 m) the Point only reached 219.4 m after 105 sim-min and 0.46 km² flooded; direct set
-   *    reaches 223.6 m with downtown, the Strip and the North Shore under water (4.6 km²), mass error < 0.001 %.
+   *  • gpuBudgetMs — the solver's own per-frame GPU budget (timestamp-query measured) is switched off: the app's
+   *    work budget (governor.ts) owns pacing because it sees what the user feels — frame time AND GPU queue latency
+   *    including the renderer — and it picks a different trade-off per interaction mode. Two independent
+   *    controllers over the same GPU would fight (each backs off when the other's work shows up).
    */
-  solverOptions: { gpuBudgetMs: 1000, stageRelaxSeconds: 0 },
+  solverOptions: { gpuBudgetMs: 1000 },
   /** Canvas input or camera motion within this window counts as "interacting" (low-latency work budget). */
   interactionHoldMs: 1500,
   /** Store updates that drive the HUD (stats, stepInfo, fps) are throttled to this interval. */

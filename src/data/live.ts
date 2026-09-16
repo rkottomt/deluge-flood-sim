@@ -6,7 +6,7 @@
 import type { LiveAreaRequest, ProgressFn, RoadNetwork, ScenarioPreset, Shelter, TerrainData, WaterSource } from '../contracts';
 import { fetchDEM } from './dem';
 import { isLikelyUS, squareDomain } from './geo';
-import { burnWaterBodies, detectWaterBodies, distanceTransform, type WaterBody } from './hydro';
+import { burnWaterBodies, detectWaterBodies, distanceTransform, edgeRuns, edgeStageDisc, type WaterBody } from './hydro';
 import { fetchImagery, IMAGERY_ATTRIBUTION } from './imagery';
 import { fetchRoadNetwork } from './roads';
 
@@ -116,8 +116,8 @@ export function buildLiveScenario(
   const MAX_STAGE_SOURCES = 8;
   for (const c of candidates) {
     if (sources.length >= MAX_STAGE_SOURCES) break;
-    // Skip near-duplicates (a wide river crossing a corner shows up on two edges).
-    if (sources.some((s) => Math.hypot(s.gx - c.gx, s.gy - c.gy) < 2 * (s.radius + c.radius))) continue;
+    // Skip near-duplicates (a wide river crossing a corner shows up on two edges as overlapping discs).
+    if (sources.some((s) => Math.hypot(s.gx - c.gx, s.gy - c.gy) < 0.8 * (s.radius + c.radius))) continue;
     sources.push({
       id: `stage-${sources.length + 1}`,
       type: 'stage',
@@ -169,7 +169,10 @@ export function buildLiveScenario(
   };
 }
 
-/** Points on the water body just inside each place it crosses the domain edge. */
+/**
+ * Stage-source footprints for every place the water body crosses the domain edge: one disc per run of the body's
+ * edge cells, covering the whole run (see edgeStageDisc), at the body's surface level in the middle of the run.
+ */
 function edgeSourcePoints(b: WaterBody, nx: number, ny: number): Array<{ gx: number; gy: number; radius: number; level: number }> {
   const mask = new Uint8Array(nx * ny);
   const levelAt = new Float32Array(nx * ny);
@@ -177,46 +180,13 @@ function edgeSourcePoints(b: WaterBody, nx: number, ny: number): Array<{ gx: num
     mask[k] = 1;
     levelAt[k] = b.levels[q];
   });
-  const dist = distanceTransform(nx, ny, (k) => mask[k] === 0);
   const out: Array<{ gx: number; gy: number; radius: number; level: number }> = [];
-  const edges = [
-    { len: nx, cell: (t: number, d: number) => d * nx + t },
-    { len: nx, cell: (t: number, d: number) => (ny - 1 - d) * nx + t },
-    { len: ny, cell: (t: number, d: number) => t * nx + d },
-    { len: ny, cell: (t: number, d: number) => t * nx + (nx - 1 - d) },
-  ];
-  for (const e of edges) {
-    let t = 0;
-    while (t < e.len) {
-      if (!mask[e.cell(t, 0)]) {
-        t++;
-        continue;
-      }
-      let t1 = t;
-      while (t1 + 1 < e.len && mask[e.cell(t1 + 1, 0)]) t1++;
-      const width = t1 - t + 1;
-      if (width >= 4) {
-        let best = -1;
-        let bestScore = -Infinity;
-        let bestR = 0;
-        for (let d = 1; d <= Math.min(40, Math.max(8, width)); d++) {
-          for (let s = Math.max(0, t - width); s <= Math.min(e.len - 1, t1 + width); s++) {
-            const k = e.cell(s, d);
-            if (!mask[k]) continue;
-            const r = Math.min(12, dist[k] * 0.85, d - 0.5);
-            const score = r - 0.05 * d;
-            if (score > bestScore) {
-              bestScore = score;
-              best = k;
-              bestR = r;
-            }
-          }
-        }
-        if (best >= 0 && bestR >= 1) {
-          out.push({ gx: (best % nx) + 0.5, gy: ((best / nx) | 0) + 0.5, radius: Math.round(bestR * 10) / 10, level: levelAt[best] });
-        }
-      }
-      t = t1 + 1;
+  for (const edge of ['north', 'south', 'west', 'east'] as const) {
+    for (const [t0, t1] of edgeRuns(edge, nx, ny, (k) => mask[k] === 1)) {
+      if (t1 - t0 + 1 < 4) continue;
+      const mid = (t0 + t1) >> 1;
+      const k = edge === 'north' ? mid : edge === 'south' ? (ny - 1) * nx + mid : edge === 'west' ? mid * nx : mid * nx + nx - 1;
+      out.push({ ...edgeStageDisc(edge, t0, t1, nx, ny), level: levelAt[k] });
     }
   }
   return out;
