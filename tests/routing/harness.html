@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Deluge · routing harness</title>
+    <style>
+      :root { color-scheme: dark; }
+      body { margin: 0; background: #0b1016; color: #dfe7ef; font: 13px/1.45 system-ui, -apple-system, sans-serif; display: flex; gap: 16px; padding: 16px; }
+      canvas { width: 960px; height: 960px; border-radius: 8px; background: #111; cursor: crosshair; flex: none; }
+      aside { width: 560px; display: flex; flex-direction: column; gap: 10px; }
+      h1 { font-size: 18px; margin: 0; letter-spacing: 0.02em; }
+      .card { background: #141c26; border: 1px solid #243140; border-radius: 8px; padding: 10px 12px; }
+      .msg { font-size: 16px; font-weight: 600; }
+      .ok { color: #5ee8ff; } .blocked { color: #ff5a5a; } .none { color: #a9b6c3; }
+      button { background: #1d2a38; color: #dfe7ef; border: 1px solid #33475c; border-radius: 6px; padding: 5px 10px; cursor: pointer; }
+      button:hover { background: #26384b; }
+      .row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+      code { color: #9fb3c8; }
+      .legend span { display: inline-block; width: 22px; height: 4px; border-radius: 2px; vertical-align: middle; margin: 0 4px 0 10px; }
+    </style>
+  </head>
+  <body>
+    <canvas id="c" width="1024" height="1024"></canvas>
+    <aside>
+      <h1>Evacuation routing harness</h1>
+      <div class="card"><div id="msg" class="msg">…</div><div id="detail"></div></div>
+      <div class="card row" id="controls"></div>
+      <div class="card legend">Roads:<span style="background:#8a96a3"></span>dry<span style="background:#ffb020"></span>wet (slow)<span style="background:#ff3b3b"></span>flooded
+        <br />Click the map to set the start point.</div>
+      <div class="card"><code id="timing"></code></div>
+    </aside>
+    <script type="module" src="./harness.ts"></script>
+  </body>
+</html>

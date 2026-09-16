@@ -1,0 +1,190 @@
+import type { AppState, FloodSolver, SimSnapshot, SimStats, StepInfo } from '../contracts';
+import type { App } from './App';
+import { APP_CONFIG } from './defaults';
+import { errorMessage } from './errors';
+import { NO_TRANSIENT, OverlayComposer } from './overlays';
+
+/** Treat speeds above this as a numerical blow-up (no real flood flows at > 100 m/s). */
+const BLOWUP_SPEED = 100;
+/** How long ready() waits for the first readback after the first rendered frame. */
+const READY_SNAPSHOT_WAIT_MS = 3000;
+
+/**
+ * Per-frame work: step the solver, consume readbacks (stats → HUD, depth → routing), compose overlays
+ * and render. Also tracks the sim clock used by runFor() and resolves the debug API's `ready` promise.
+ */
+export class FrameDriver {
+  /** Sim seconds advanced since the last reset / scene load (sum of StepInfo.simSecondsAdvanced). */
+  simClock = 0;
+  frameCount = 0;
+  lastSnapshot: SimSnapshot | null = null;
+
+  private lastSnapTime = NaN;
+  private lastStepInfo: StepInfo | null = null;
+  private lastAdvance = 0;
+  private pendingStats: SimStats | null = null;
+  private lastHud = -Infinity;
+  private sceneFrames = 0;
+  private sceneReadyAt = 0;
+  private blowupNotified = false;
+  private readonly overlays = new OverlayComposer();
+
+  constructor(private readonly app: App) {}
+
+  /** New scene bound: drop everything derived from the previous solver. */
+  onSceneChanged(now: number): void {
+    this.simClock = 0;
+    this.lastSnapshot = null;
+    this.lastSnapTime = NaN;
+    this.lastStepInfo = null;
+    this.lastAdvance = 0;
+    this.pendingStats = null;
+    this.sceneFrames = 0;
+    this.sceneReadyAt = now;
+    this.blowupNotified = false;
+    this.overlays.invalidate();
+    this.app.runner.onReset();
+  }
+
+  /** solver.reset() was called. */
+  onSolverReset(): void {
+    this.simClock = 0;
+    this.blowupNotified = false;
+    this.app.runner.onReset();
+  }
+
+  /** Announce the next numerical blow-up again (stability demo re-enabled). */
+  rearmBlowupNotice(): void {
+    this.blowupNotified = false;
+  }
+
+  frame(realDt: number, now: number): void {
+    const { store, renderer, runner, scenes, evac } = this.app;
+    const scene = scenes?.scene;
+    if (!scene || !renderer) {
+      this.publishHud(now, store.get());
+      return;
+    }
+    const { solver } = scene;
+    let state = store.get();
+
+    // Each stage is isolated: a module that throws every frame (reported once, deduplicated) must not
+    // stop the others — above all, rendering must keep going.
+
+    // 1. Simulation. The old scene may still be shown while a new one loads — never step it then.
+    const running = (!state.paused || runner.active) && !state.loading && !document.hidden;
+    this.lastAdvance = 0;
+    if (running) {
+      this.guard('solver.step', () => {
+        const info = solver.step(realDt);
+        this.lastStepInfo = info;
+        // A blown-up solver (stability demo) may report NaN; count the requested time so runFor can't hang.
+        const requested = realDt * this.app.sim.effectiveParams().timeScale;
+        const advance = Number.isFinite(info.simSecondsAdvanced) ? info.simSecondsAdvanced : requested;
+        this.lastAdvance = advance;
+        this.simClock += advance;
+        runner.onStep(advance, this.simClock, now, this.lastSnapshot);
+      });
+    } else if (this.lastStepInfo && this.lastStepInfo.substeps !== 0) {
+      this.lastStepInfo = { ...this.lastStepInfo, simSecondsAdvanced: 0, substeps: 0, throttled: false };
+    }
+    const tools = this.app.tools;
+    if (tools && !state.loading) this.guard('tools.update', () => tools.update(realDt));
+
+    // 2. Readbacks → stats, road status, route; probe sampling; runFor completion.
+    const snap = this.pollSnapshot(solver, now);
+    this.guard('evac', () => evac.tick(now));
+    if (!state.loading) this.guard('probe', () => this.app.probe?.tick(now, solver));
+    runner.onFrame(snap, this.lastAdvance, now);
+
+    // 3. Overlays + render.
+    state = store.get();
+    this.guard('overlays', () => {
+      const transient = tools?.getTransientOverlay() ?? NO_TRANSIENT;
+      const overlay = this.overlays.compose(state, evac.roadStatus, evac.statusVersion, transient);
+      if (overlay) renderer.setOverlays(overlay);
+    });
+    const rendered = this.guard('render', () =>
+      renderer.render({
+        ...state.render,
+        rainRate: running ? state.sim.rainRate : 0,
+        time: now / 1000,
+      }),
+    );
+    this.frameCount++;
+    if (rendered) this.sceneFrames++;
+
+    // 4. First frame with terrain + water → debug API ready.
+    if (this.sceneFrames >= 2 && (this.lastSnapshot || now - this.sceneReadyAt > READY_SNAPSHOT_WAIT_MS)) {
+      this.app.markReady();
+    }
+
+    this.publishHud(now, state);
+  }
+
+  /** Run one frame stage; report (deduplicated) instead of throwing. Returns false if it threw. */
+  private guard(stage: string, fn: () => void): boolean {
+    try {
+      fn();
+      return true;
+    } catch (err) {
+      this.app.errors.report('frame', `${stage}: ${errorMessage(err)}`, err);
+      return false;
+    }
+  }
+
+  /** Latest readback; triggers onSnapshot when it is new (identity or sim time changed). */
+  private pollSnapshot(solver: FloodSolver, now: number): SimSnapshot | null {
+    let snap: SimSnapshot | null = null;
+    try {
+      snap = solver.getSnapshot();
+    } catch (err) {
+      this.app.errors.report('frame', `getSnapshot: ${errorMessage(err)}`, err);
+      return null;
+    }
+    if (snap && (snap !== this.lastSnapshot || !Object.is(snap.simTime, this.lastSnapTime))) {
+      this.guard('snapshot', () => this.onSnapshot(snap, now));
+    }
+    return snap;
+  }
+
+  private onSnapshot(snap: SimSnapshot, now: number): void {
+    this.lastSnapshot = snap;
+    this.lastSnapTime = snap.simTime;
+    this.pendingStats = { ...snap.stats };
+    this.app.evac.onSnapshot(snap, now);
+    this.detectBlowup(snap.stats);
+  }
+
+  /** In the stability demo, tell the user when the naive scheme has visibly exploded (once per activation). */
+  private detectBlowup(stats: SimStats): void {
+    const { store, errors } = this.app;
+    if (this.blowupNotified || store.get().sim.stabilityMode !== 'naive') return;
+    const exploded =
+      !Number.isFinite(stats.maxSpeed) ||
+      !Number.isFinite(stats.maxDepth) ||
+      !Number.isFinite(stats.volume) ||
+      stats.maxSpeed > BLOWUP_SPEED;
+    if (!exploded) return;
+    this.blowupNotified = true;
+    const speed = Number.isFinite(stats.maxSpeed) ? `${stats.maxSpeed.toExponential(1)} m/s` : 'NaN';
+    const msg =
+      `Numerical blow-up: the naive explicit scheme diverged (max speed ${speed}). This is why Deluge uses ` +
+      `semi-implicit friction and a positivity-preserving flux limiter — restore the robust solver to recover.`;
+    console.warn(`[deluge] ${msg}`);
+    errors.toast(msg, true);
+  }
+
+  /** HUD store updates (stats, stepInfo, fps) at ~5 Hz. */
+  private publishHud(now: number, state: AppState): void {
+    if (now - this.lastHud < APP_CONFIG.hudIntervalMs) return;
+    this.lastHud = now;
+    const patch: Partial<AppState> = { fps: Math.round(this.app.loop.fps * 10) / 10 };
+    if (this.pendingStats) {
+      patch.stats = this.pendingStats;
+      this.pendingStats = null;
+    }
+    if (this.lastStepInfo !== state.stepInfo) patch.stepInfo = this.lastStepInfo;
+    this.app.store.set(patch);
+  }
+}

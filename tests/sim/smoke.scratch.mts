@@ -1,0 +1,14 @@
+import { makeSolver, gpuErrors, stepAndSnapshot } from '../helpers/gpu.ts';
+import { roughTerrain } from '../helpers/terrain.ts';
+const nx = 64, ny = 64;
+const elev = roughTerrain(nx, ny, 1, 20);
+const depth = new Float32Array(nx*ny);
+for (let j=20;j<40;j++) for (let i=20;i<40;i++) depth[j*nx+i] = 5;
+const s = await makeSolver({ nx, ny, cellSize: 10, elevation: elev, depth, params: { boundary: 'wall' } });
+console.log('dt', s.computeDt());
+const snap0 = await s.readbackNow();
+console.log('snap0', snap0.stats);
+const snap = await stepAndSnapshot(s, 500);
+console.log('snap', snap.stats, s.readbackDiagnostics);
+console.log('errors', gpuErrors());
+process.exit(0);

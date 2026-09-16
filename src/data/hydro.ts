@@ -1,0 +1,920 @@
+/**
+ * Hydro-conditioning of hydro-flattened DEMs.
+ *
+ * USGS 3DEP DEMs are "hydro-flattened": a river is a flat (or gently, monotonically sloping) surface at the
+ * water level with no bathymetry, so a simulation would start with dry rivers. We carve ("burn") a channel:
+ *
+ *   1. Trace the river centerline between hand-placed waypoints with a least-cost path that prefers cells at
+ *      or below the interpolated water level (it follows the flat water surface, not the valley floor).
+ *   2. Estimate the water-surface profile along that centerline (median filter + monotone non-increasing
+ *      downstream via isotonic regression) — or use a known flat pool level.
+ *   3. Grow the water region outward from the centerline (multi-source BFS, each cell inheriting the level of
+ *      its nearest centerline cell) through cells that are FLAT and within `tolerance` of that level, then add
+ *      one ring of shoreline cells that are within tolerance but not flat (bilinear-resampled edges).
+ *      Floodplain land is excluded by all three tests: elevation, flatness and connectivity.
+ *   4. Lower the bed by `depth` with a smooth bank profile: depth·smoothstep(0, bankCells, d) where d is the
+ *      Euclidean distance (cells) to the nearest dry cell.
+ *
+ * Live areas (no hand-placed waypoints) use `detectWaterBodies`: large flat connected regions whose
+ * surroundings are higher (lakes, pools, wide rivers) get a 3 m burn.
+ */
+
+export interface GridPoint {
+  gx: number;
+  gy: number;
+}
+
+export interface RiverSpec {
+  name: string;
+  /** Centerline waypoints in grid coords, ordered UPSTREAM → DOWNSTREAM. At least one. */
+  path: GridPoint[];
+  /** Burn depth at the channel center, meters. */
+  depth: number;
+  /** Width of the smooth bank transition, cells. Default 3. */
+  bankCells?: number;
+  /** Max height above the local water level still considered water, meters. Default 0.3. */
+  tolerance?: number;
+  /** Max lateral growth distance from the centerline, cells. Default 120. */
+  maxHalfWidth?: number;
+  /** If set, the river is a flat pool at exactly this level (e.g. a navigation pool). */
+  flatLevel?: number;
+  /** Radius (cells) to search for the lowest cell when snapping waypoints. Default 5. */
+  snapRadius?: number;
+}
+
+export interface RiverResult {
+  name: string;
+  /** Number of cells assigned to this river (first river wins at confluences). */
+  cells: number;
+  /** Dense centerline in grid coords (cell centers) [gx, gy, ...], upstream → downstream. */
+  centerline: Float32Array;
+  /** Water-surface level at each centerline vertex, meters. */
+  levels: Float32Array;
+  minLevel: number;
+  maxLevel: number;
+  depth: number;
+}
+
+export interface BurnResult {
+  /** Conditioned elevation (new array). */
+  elevation: Float32Array;
+  /** 0 = land, k+1 = channel cell belonging to river k. */
+  owner: Uint8Array;
+  /** Water-surface level per channel cell (NaN on land). */
+  waterLevel: Float32Array;
+  /** Bed lowering per cell, meters (0 on land). */
+  burn: Float32Array;
+  /** EDT distance (cells) from each channel cell to the nearest land cell (0 on land). */
+  dist: Float32Array;
+  burnedCells: number;
+  rivers: RiverResult[];
+}
+
+export const smoothstep = (e0: number, e1: number, x: number): number => {
+  const t = Math.min(1, Math.max(0, (x - e0) / (e1 - e0)));
+  return t * t * (3 - 2 * t);
+};
+
+// ──────────────────────────────────────────────────────────────────────────────────────────────
+// Small data structures
+// ──────────────────────────────────────────────────────────────────────────────────────────────
+
+/** Binary min-heap of (key, value) with typed arrays; duplicates allowed (lazy deletion by caller). */
+export class MinHeap {
+  private keys: Float64Array;
+  private vals: Int32Array;
+  size = 0;
+  constructor(capacity = 1024) {
+    this.keys = new Float64Array(capacity);
+    this.vals = new Int32Array(capacity);
+  }
+  push(key: number, val: number): void {
+    if (this.size === this.keys.length) {
+      const k = new Float64Array(this.size * 2);
+      const v = new Int32Array(this.size * 2);
+      k.set(this.keys);
+      v.set(this.vals);
+      this.keys = k;
+      this.vals = v;
+    }
+    let i = this.size++;
+    const K = this.keys;
+    const V = this.vals;
+    while (i > 0) {
+      const p = (i - 1) >> 1;
+      if (K[p] <= key) break;
+      K[i] = K[p];
+      V[i] = V[p];
+      i = p;
+    }
+    K[i] = key;
+    V[i] = val;
+  }
+  /** Key of the top element. */
+  peekKey(): number {
+    return this.keys[0];
+  }
+  /** Removes the top element and returns its value. */
+  pop(): number {
+    const K = this.keys;
+    const V = this.vals;
+    const top = V[0];
+    const n = --this.size;
+    if (n > 0) {
+      const key = K[n];
+      const val = V[n];
+      let i = 0;
+      for (;;) {
+        let c = 2 * i + 1;
+        if (c >= n) break;
+        if (c + 1 < n && K[c + 1] < K[c]) c++;
+        if (K[c] >= key) break;
+        K[i] = K[c];
+        V[i] = V[c];
+        i = c;
+      }
+      K[i] = key;
+      V[i] = val;
+    }
+    return top;
+  }
+}
+
+/**
+ * Exact Euclidean distance transform (Felzenszwalb & Huttenlocher). Returns, for every cell, the distance in
+ * cells to the nearest cell where `isSite` is true. Cells beyond the grid are not sites.
+ */
+export function distanceTransform(nx: number, ny: number, isSite: (k: number) => boolean): Float32Array {
+  const INF = 1e20;
+  const n = Math.max(nx, ny);
+  const f = new Float64Array(n);
+  const d = new Float64Array(n);
+  const v = new Int32Array(n);
+  const z = new Float64Array(n + 1);
+  const g = new Float64Array(nx * ny);
+  for (let k = 0; k < nx * ny; k++) g[k] = isSite(k) ? 0 : INF;
+
+  const pass = (len: number) => {
+    let k = 0;
+    v[0] = 0;
+    z[0] = -INF;
+    z[1] = INF;
+    for (let q = 1; q < len; q++) {
+      let s = (f[q] + q * q - (f[v[k]] + v[k] * v[k])) / (2 * q - 2 * v[k]);
+      while (s <= z[k]) {
+        k--;
+        s = (f[q] + q * q - (f[v[k]] + v[k] * v[k])) / (2 * q - 2 * v[k]);
+      }
+      k++;
+      v[k] = q;
+      z[k] = s;
+      z[k + 1] = INF;
+    }
+    k = 0;
+    for (let q = 0; q < len; q++) {
+      while (z[k + 1] < q) k++;
+      d[q] = (q - v[k]) * (q - v[k]) + f[v[k]];
+    }
+  };
+  // Columns.
+  for (let i = 0; i < nx; i++) {
+    for (let j = 0; j < ny; j++) f[j] = g[j * nx + i];
+    pass(ny);
+    for (let j = 0; j < ny; j++) g[j * nx + i] = d[j];
+  }
+  // Rows.
+  const out = new Float32Array(nx * ny);
+  for (let j = 0; j < ny; j++) {
+    for (let i = 0; i < nx; i++) f[i] = g[j * nx + i];
+    pass(nx);
+    for (let i = 0; i < nx; i++) out[j * nx + i] = Math.sqrt(Math.min(d[i], INF));
+  }
+  return out;
+}
+
+/** Max absolute elevation difference to the 4 neighbors (edge cells use available neighbors). */
+export function localRelief(elev: Float32Array, nx: number, ny: number): Float32Array {
+  const out = new Float32Array(nx * ny);
+  for (let j = 0; j < ny; j++) {
+    for (let i = 0; i < nx; i++) {
+      const k = j * nx + i;
+      const z = elev[k];
+      let m = 0;
+      if (i > 0) m = Math.max(m, Math.abs(elev[k - 1] - z));
+      if (i < nx - 1) m = Math.max(m, Math.abs(elev[k + 1] - z));
+      if (j > 0) m = Math.max(m, Math.abs(elev[k - nx] - z));
+      if (j < ny - 1) m = Math.max(m, Math.abs(elev[k + nx] - z));
+      out[k] = m;
+    }
+  }
+  return out;
+}
+
+/** Flatness threshold for water surfaces: ~0.4 % slope, at least 3 cm per cell. */
+export function flatThreshold(cellSize: number): number {
+  return Math.max(0.03, 0.004 * cellSize);
+}
+
+// ──────────────────────────────────────────────────────────────────────────────────────────────
+// Centerline tracing
+// ──────────────────────────────────────────────────────────────────────────────────────────────
+
+const clampI = (v: number, n: number) => Math.min(n - 1, Math.max(0, Math.floor(v)));
+
+/**
+ * Snap a point to the lowest cell within `radius` cells, preferring flat (water-like) cells: non-flat cells are
+ * penalized by 1 m so a waypoint beside a river snaps onto the water surface rather than into a ditch.
+ */
+export function snapToLowest(
+  elev: Float32Array,
+  nx: number,
+  ny: number,
+  p: GridPoint,
+  radius: number,
+  relief?: Float32Array,
+  flatTol = Infinity,
+): number {
+  const ci = clampI(p.gx, nx);
+  const cj = clampI(p.gy, ny);
+  let best = cj * nx + ci;
+  let bestZ = Infinity;
+  let bestD = Infinity;
+  for (let dj = -radius; dj <= radius; dj++) {
+    for (let di = -radius; di <= radius; di++) {
+      const d2 = di * di + dj * dj;
+      if (d2 > radius * radius) continue;
+      const i = ci + di;
+      const j = cj + dj;
+      if (i < 0 || j < 0 || i >= nx || j >= ny) continue;
+      const k = j * nx + i;
+      const z = elev[k] + (relief && relief[k] > flatTol ? 1 : 0);
+      if (z < bestZ - 1e-3 || (Math.abs(z - bestZ) <= 1e-3 && d2 < bestD)) {
+        best = k;
+        bestZ = z;
+        bestD = d2;
+      }
+    }
+  }
+  return best;
+}
+
+/**
+ * Least-cost 8-connected path between two cells that prefers cells at or below the water level interpolated
+ * between the endpoints' levels. Returns cell indices from a to b (inclusive).
+ */
+export function traceChannel(
+  elev: Float32Array,
+  nx: number,
+  ny: number,
+  a: number,
+  b: number,
+  levelA: number,
+  levelB: number,
+): number[] {
+  const ai = a % nx;
+  const aj = (a / nx) | 0;
+  const bi = b % nx;
+  const bj = (b / nx) | 0;
+  const segLen = Math.hypot(bi - ai, bj - aj);
+  const margin = Math.max(40, Math.ceil(segLen * 0.6));
+  const i0 = Math.max(0, Math.min(ai, bi) - margin);
+  const i1 = Math.min(nx - 1, Math.max(ai, bi) + margin);
+  const j0 = Math.max(0, Math.min(aj, bj) - margin);
+  const j1 = Math.min(ny - 1, Math.max(aj, bj) + margin);
+  const w = i1 - i0 + 1;
+  const h = j1 - j0 + 1;
+  const dist = new Float64Array(w * h).fill(Infinity);
+  const prev = new Int32Array(w * h).fill(-1);
+  const heap = new MinHeap(4096);
+  const local = (k: number) => (((k / nx) | 0) - j0) * w + ((k % nx) - i0);
+  const dx = bi - ai;
+  const dy = bj - aj;
+  const len2 = Math.max(1e-9, dx * dx + dy * dy);
+  const KAPPA = 25; // cost multiplier per meter above the interpolated water level
+  const cellCost = (i: number, j: number) => {
+    const t = Math.min(1, Math.max(0, ((i - ai) * dx + (j - aj) * dy) / len2));
+    const lvl = levelA + (levelB - levelA) * t;
+    const above = Math.max(0, elev[j * nx + i] - lvl - 0.05);
+    return 1 + KAPPA * above;
+  };
+  dist[local(a)] = 0;
+  heap.push(0, local(a));
+  const target = local(b);
+  const DI = [1, -1, 0, 0, 1, 1, -1, -1];
+  const DJ = [0, 0, 1, -1, 1, -1, 1, -1];
+  while (heap.size > 0) {
+    const key = heap.peekKey();
+    const u = heap.pop();
+    if (key > dist[u]) continue;
+    if (u === target) break;
+    const ui = (u % w) + i0;
+    const uj = ((u / w) | 0) + j0;
+    const cu = cellCost(ui, uj);
+    for (let s = 0; s < 8; s++) {
+      const vi = ui + DI[s];
+      const vj = uj + DJ[s];
+      if (vi < i0 || vi > i1 || vj < j0 || vj > j1) continue;
+      const v = (vj - j0) * w + (vi - i0);
+      const step = s < 4 ? 1 : Math.SQRT2;
+      const nd = key + step * 0.5 * (cu + cellCost(vi, vj));
+      if (nd < dist[v]) {
+        dist[v] = nd;
+        prev[v] = u;
+        heap.push(nd, v);
+      }
+    }
+  }
+  const out: number[] = [];
+  for (let u = target; u !== -1; u = prev[u]) out.push(((u / w) | 0) * nx + j0 * nx + (u % w) + i0);
+  out.reverse();
+  return out;
+}
+
+/** Median filter of radius r over a 1-D array. */
+function median1d(src: ArrayLike<number>, r: number): Float64Array {
+  const n = src.length;
+  const out = new Float64Array(n);
+  const buf: number[] = [];
+  for (let k = 0; k < n; k++) {
+    buf.length = 0;
+    for (let q = Math.max(0, k - r); q <= Math.min(n - 1, k + r); q++) buf.push(src[q]);
+    buf.sort((x, y) => x - y);
+    out[k] = buf[buf.length >> 1];
+  }
+  return out;
+}
+
+/** Weighted isotonic regression (pool adjacent violators) producing a NON-INCREASING sequence. */
+export function monotoneNonIncreasing(values: ArrayLike<number>, weights?: ArrayLike<number>): Float64Array {
+  const n = values.length;
+  const mean: number[] = [];
+  const wsum: number[] = [];
+  const count: number[] = [];
+  for (let k = 0; k < n; k++) {
+    mean.push(values[k]);
+    wsum.push(Math.max(weights ? weights[k] : 1, 1e-9));
+    count.push(1);
+    while (mean.length > 1 && mean[mean.length - 2] < mean[mean.length - 1]) {
+      const m2 = mean.pop()!;
+      const w2 = wsum.pop()!;
+      const c2 = count.pop()!;
+      const m1 = mean.pop()!;
+      const w1 = wsum.pop()!;
+      const c1 = count.pop()!;
+      mean.push((m1 * w1 + m2 * w2) / (w1 + w2));
+      wsum.push(w1 + w2);
+      count.push(c1 + c2);
+    }
+  }
+  const out = new Float64Array(n);
+  let o = 0;
+  for (let b = 0; b < mean.length; b++) for (let c = 0; c < count[b]; c++) out[o++] = mean[b];
+  return out;
+}
+
+/**
+ * Water-surface profile along a traced centerline: median filter, then a weighted monotone (non-increasing
+ * downstream) fit where non-flat cells count little and cells far above the fit (bridge decks, banks where the
+ * path cut a corner) are rejected iteratively.
+ */
+export function riverLevelProfile(z: ArrayLike<number>, flat: ArrayLike<boolean>): Float64Array {
+  const n = z.length;
+  const zm = median1d(z, 6);
+  const w = new Float64Array(n);
+  for (let k = 0; k < n; k++) w[k] = flat[k] ? 1 : 0.05;
+  let L = monotoneNonIncreasing(zm, w);
+  for (let iter = 0; iter < 4; iter++) {
+    let changed = false;
+    for (let k = 0; k < n; k++) {
+      const r = zm[k] - L[k];
+      if (w[k] > 0.001 && (r > 0.4 || r < -1.5)) {
+        w[k] = 0.001;
+        changed = true;
+      }
+    }
+    if (!changed) break;
+    L = monotoneNonIncreasing(zm, w);
+  }
+  return L;
+}
+
+/** Local water-surface slope (m per cell of path) along a level profile. */
+function profileSlope(levels: ArrayLike<number>, cells: number[], nx: number, half = 8): Float32Array {
+  const n = levels.length;
+  const out = new Float32Array(n);
+  for (let k = 0; k < n; k++) {
+    const a = Math.max(0, k - half);
+    const b = Math.min(n - 1, k + half);
+    if (a === b) continue;
+    const ka = cells[a];
+    const kb = cells[b];
+    const len = Math.max(1, Math.hypot((ka % nx) - (kb % nx), ((ka / nx) | 0) - ((kb / nx) | 0)));
+    out[k] = Math.abs(levels[a] - levels[b]) / len;
+  }
+  return out;
+}
+
+// ──────────────────────────────────────────────────────────────────────────────────────────────
+// Channel burning
+// ──────────────────────────────────────────────────────────────────────────────────────────────
+
+export function burnRivers(
+  elevation: Float32Array,
+  nx: number,
+  ny: number,
+  cellSize: number,
+  specs: RiverSpec[],
+): BurnResult {
+  const n = nx * ny;
+  const elev = elevation; // read-only source
+  const relief = localRelief(elev, nx, ny);
+  const flatTol = flatThreshold(cellSize);
+  const owner = new Uint8Array(n);
+  const waterLevel = new Float32Array(n).fill(NaN);
+  const depthOf = new Float32Array(n);
+  const bankOf = new Float32Array(n);
+  const rivers: RiverResult[] = [];
+
+  // 1–2. Centerlines and level profiles for every river.
+  const centerCells: number[][] = [];
+  const centerLevels: Float64Array[] = [];
+  const centerSlopes: Float32Array[] = [];
+  specs.forEach((spec) => {
+    const snapR = spec.snapRadius ?? 5;
+    const wp = spec.path.map((p) => snapToLowest(elev, nx, ny, p, snapR, relief, flatTol));
+    let cells: number[] = [wp[0]];
+    for (let s = 1; s < wp.length; s++) {
+      const la = spec.flatLevel ?? elev[wp[s - 1]];
+      const lb = spec.flatLevel ?? elev[wp[s]];
+      cells = cells.concat(traceChannel(elev, nx, ny, wp[s - 1], wp[s], la, lb).slice(1));
+    }
+    const levels =
+      spec.flatLevel !== undefined
+        ? new Float64Array(cells.length).fill(spec.flatLevel)
+        : riverLevelProfile(
+            cells.map((k) => elev[k]),
+            cells.map((k) => relief[k] <= flatTol),
+          );
+    centerCells.push(cells);
+    centerLevels.push(levels);
+    centerSlopes.push(profileSlope(levels, cells, nx));
+  });
+
+  // 3. Joint multi-source BFS from all centerlines: each water cell belongs to (and takes the level and local
+  //    surface slope of) the geodesically nearest centerline cell, so confluences split cleanly between rivers.
+  const queue = new Int32Array(n);
+  const hops = new Uint16Array(n);
+  const slopeOf = new Float32Array(n);
+  let qh = 0;
+  let qt = 0;
+  specs.forEach((_, r) => {
+    centerCells[r].forEach((k, idx) => {
+      if (owner[k]) return;
+      owner[k] = r + 1;
+      waterLevel[k] = centerLevels[r][idx];
+      slopeOf[k] = centerSlopes[r][idx];
+      queue[qt++] = k;
+    });
+  });
+  const tolOf = specs.map((s) => s.tolerance ?? 0.3);
+  const hwOf = specs.map((s) => s.maxHalfWidth ?? 120);
+  const nb4 = (k: number, out: Int32Array) => {
+    const i = k % nx;
+    const j = (k / nx) | 0;
+    out[0] = i > 0 ? k - 1 : -1;
+    out[1] = i < nx - 1 ? k + 1 : -1;
+    out[2] = j > 0 ? k - nx : -1;
+    out[3] = j < ny - 1 ? k + nx : -1;
+  };
+  const nb = new Int32Array(4);
+  while (qh < qt) {
+    const k = queue[qh++];
+    const r = owner[k] - 1;
+    const L = waterLevel[k];
+    const sl = slopeOf[k];
+    if (hops[k] + 1 > hwOf[r]) continue;
+    nb4(k, nb);
+    for (let q = 0; q < 4; q++) {
+      const m = nb[q];
+      if (m < 0 || owner[m]) continue;
+      // Water must be within tolerance of the local level AND flat (relative to the river's own surface
+      // slope) — except cells hugging the level itself, which lets the fill squeeze through narrow side
+      // channels whose cells all touch a bank.
+      if (elev[m] > L + tolOf[r] + 2 * sl) continue;
+      if (relief[m] > Math.max(flatTol, 2.5 * sl + 0.01) && elev[m] > L + Math.min(tolOf[r], 0.2) + sl) continue;
+      owner[m] = r + 1;
+      waterLevel[m] = L;
+      slopeOf[m] = sl;
+      hops[m] = hops[k] + 1;
+      queue[qt++] = m;
+    }
+  }
+  // Shoreline ring: non-flat cells adjacent to the water that are still within tolerance of its level.
+  for (let q = 0; q < qt; q++) {
+    const k = queue[q];
+    const r = owner[k] - 1;
+    nb4(k, nb);
+    for (let s = 0; s < 4; s++) {
+      const m = nb[s];
+      if (m < 0 || owner[m]) continue;
+      if (elev[m] <= waterLevel[k] + tolOf[r] + 2 * slopeOf[k]) {
+        owner[m] = r + 1;
+        waterLevel[m] = waterLevel[k];
+      }
+    }
+  }
+
+  fillSmallHoles(owner, waterLevel, nx, ny, 8);
+
+  // A cell far below its inherited level (steep reach, weir, or a profile outlier) would start with an
+  // artificial pond on top of it; cap the local water surface at 0.5 m above the DEM surface there.
+  for (let k = 0; k < n; k++) {
+    if (owner[k] && waterLevel[k] > elev[k] + 0.5) waterLevel[k] = elev[k] + 0.5;
+  }
+
+  // Per-cell depth / bank width, smoothed across confluences so beds don't step where rivers meet.
+  for (let k = 0; k < n; k++) {
+    if (!owner[k]) continue;
+    const spec = specs[owner[k] - 1];
+    depthOf[k] = spec.depth;
+    bankOf[k] = spec.bankCells ?? 3;
+  }
+  if (specs.length > 1) {
+    maskedBlur(depthOf, owner, nx, ny, 6);
+    maskedBlur(bankOf, owner, nx, ny, 6);
+    maskedBlur(waterLevel, owner, nx, ny, 3);
+  }
+
+  specs.forEach((spec, r) => {
+    const cells = centerCells[r];
+    const levels = centerLevels[r];
+    let count = 0;
+    for (let k = 0; k < n; k++) if (owner[k] === r + 1) count++;
+    const cl = new Float32Array(cells.length * 2);
+    cells.forEach((k, idx) => {
+      cl[idx * 2] = (k % nx) + 0.5;
+      cl[idx * 2 + 1] = ((k / nx) | 0) + 0.5;
+    });
+    let minL = Infinity;
+    let maxL = -Infinity;
+    for (const v of levels) {
+      minL = Math.min(minL, v);
+      maxL = Math.max(maxL, v);
+    }
+    rivers.push({
+      name: spec.name,
+      cells: count,
+      centerline: cl,
+      levels: Float32Array.from(levels),
+      minLevel: minL,
+      maxLevel: maxL,
+      depth: spec.depth,
+    });
+  });
+
+
+  // 4. Burn with smooth banks.
+  const dist = distanceTransform(nx, ny, (k) => owner[k] === 0);
+  const out = new Float32Array(elev);
+  const burn = new Float32Array(n);
+  let burned = 0;
+  for (let k = 0; k < n; k++) {
+    if (!owner[k]) {
+      dist[k] = 0;
+      continue;
+    }
+    const b = depthOf[k] * smoothstep(0, bankOf[k], dist[k]);
+    const bed = Math.min(elev[k], waterLevel[k]) - b;
+    burn[k] = elev[k] - bed;
+    out[k] = bed;
+    burned++;
+  }
+  return { elevation: out, owner, waterLevel, burn, dist, burnedCells: burned, rivers };
+}
+
+/** Separable box blur of `field` restricted to cells where mask ≠ 0 (normalized by in-mask weight). */
+export function maskedBlur(field: Float32Array, mask: Uint8Array, nx: number, ny: number, radius: number): void {
+  const tmp = new Float32Array(field.length);
+  const pass = (horizontal: boolean) => {
+    const len = horizontal ? nx : ny;
+    const lines = horizontal ? ny : nx;
+    for (let a = 0; a < lines; a++) {
+      let sum = 0;
+      let cnt = 0;
+      const idx = (t: number) => (horizontal ? a * nx + t : t * nx + a);
+      // sliding window over [t - radius, t + radius]
+      for (let t = -radius; t < len; t++) {
+        const add = t + radius;
+        if (add < len) {
+          const k = idx(add);
+          if (mask[k]) {
+            sum += field[k];
+            cnt++;
+          }
+        }
+        const rem = t - radius - 1;
+        if (rem >= 0) {
+          const k = idx(rem);
+          if (mask[k]) {
+            sum -= field[k];
+            cnt--;
+          }
+        }
+        if (t >= 0) {
+          const k = idx(t);
+          tmp[k] = mask[k] && cnt > 0 ? sum / cnt : field[k];
+        }
+      }
+    }
+    field.set(tmp);
+  };
+  pass(true);
+  pass(false);
+}
+
+/**
+ * Fill enclosed land pockets of at most `maxCells` cells inside channel masks (lidar speckle, bridge-pier
+ * artifacts). Real islands are larger and are kept.
+ */
+export function fillSmallHoles(owner: Uint8Array, waterLevel: Float32Array, nx: number, ny: number, maxCells: number): number {
+  const seen = new Uint8Array(nx * ny);
+  const stack: number[] = [];
+  const comp: number[] = [];
+  let filled = 0;
+  for (let s = 0; s < nx * ny; s++) {
+    if (owner[s] || seen[s]) continue;
+    comp.length = 0;
+    stack.push(s);
+    seen[s] = 1;
+    let touchesEdge = false;
+    let big = false;
+    let ownerNb = 0;
+    let levelNb = NaN;
+    while (stack.length) {
+      const k = stack.pop()!;
+      if (!big) comp.push(k);
+      if (comp.length > maxCells) big = true;
+      const i = k % nx;
+      const j = (k / nx) | 0;
+      if (i === 0 || j === 0 || i === nx - 1 || j === ny - 1) touchesEdge = true;
+      const nb = [i > 0 ? k - 1 : -1, i < nx - 1 ? k + 1 : -1, j > 0 ? k - nx : -1, j < ny - 1 ? k + nx : -1];
+      for (const m of nb) {
+        if (m < 0) continue;
+        if (owner[m]) {
+          ownerNb = owner[m];
+          levelNb = waterLevel[m];
+          continue;
+        }
+        if (!seen[m]) {
+          seen[m] = 1;
+          stack.push(m);
+        }
+      }
+    }
+    if (!big && !touchesEdge && ownerNb) {
+      for (const k of comp) {
+        owner[k] = ownerNb;
+        waterLevel[k] = levelNb;
+        filled++;
+      }
+    }
+  }
+  return filled;
+}
+
+// ──────────────────────────────────────────────────────────────────────────────────────────────
+// Source placement helpers
+// ──────────────────────────────────────────────────────────────────────────────────────────────
+
+export interface RiverEnd {
+  river: number;
+  /** Which end of the traced centerline: 'upstream' (inflow) or 'downstream' (outflow). */
+  end: 'upstream' | 'downstream';
+  edge: 'north' | 'south' | 'west' | 'east';
+  /** Channel-spine point just inside the domain edge, grid coords. */
+  gx: number;
+  gy: number;
+  /** Footprint radius (cells) that fits inside both the channel and the domain. */
+  radius: number;
+  /** Local water-surface level, m. */
+  level: number;
+}
+
+/**
+ * For each river whose traced centerline starts/ends within `edgeReach` cells of the domain boundary, find the
+ * best source location near that edge: the channel cell that fits the largest footprint (≤ maxRadius) fully
+ * inside the channel and the domain, preferring cells close to the edge.
+ */
+export function findRiverEnds(res: BurnResult, nx: number, ny: number, maxRadius = 12, edgeReach = 16): RiverEnd[] {
+  const out: RiverEnd[] = [];
+  res.rivers.forEach((river, r) => {
+    const cl = river.centerline;
+    const npts = cl.length / 2;
+    if (npts === 0) return;
+    const ends: Array<{ end: RiverEnd['end']; gx: number; gy: number }> = [
+      { end: 'upstream', gx: cl[0], gy: cl[1] },
+      { end: 'downstream', gx: cl[(npts - 1) * 2], gy: cl[(npts - 1) * 2 + 1] },
+    ];
+    for (const e of ends) {
+      const dN = e.gy;
+      const dS = ny - e.gy;
+      const dW = e.gx;
+      const dE = nx - e.gx;
+      const dMin = Math.min(dN, dS, dW, dE);
+      if (dMin > edgeReach) continue;
+      const edge: RiverEnd['edge'] = dMin === dN ? 'north' : dMin === dS ? 'south' : dMin === dW ? 'west' : 'east';
+      const R = 48;
+      let best = -1;
+      let bestScore = -Infinity;
+      let bestRadius = 0;
+      const ci = Math.floor(e.gx);
+      const cj = Math.floor(e.gy);
+      for (let j = Math.max(0, cj - R); j <= Math.min(ny - 1, cj + R); j++) {
+        for (let i = Math.max(0, ci - R); i <= Math.min(nx - 1, ci + R); i++) {
+          const k = j * nx + i;
+          if (res.owner[k] !== r + 1) continue;
+          const toEdge = Math.min(i + 0.5, nx - i - 0.5, j + 0.5, ny - j - 0.5);
+          const radius = Math.min(maxRadius, res.dist[k] * 0.85, toEdge - 1);
+          if (radius < 1) continue;
+          const score = radius - 0.06 * toEdge - 0.02 * Math.hypot(i + 0.5 - e.gx, j + 0.5 - e.gy);
+          if (score > bestScore) {
+            bestScore = score;
+            best = k;
+            bestRadius = radius;
+          }
+        }
+      }
+      if (best < 0) continue;
+      out.push({
+        river: r,
+        end: e.end,
+        edge,
+        gx: (best % nx) + 0.5,
+        gy: ((best / nx) | 0) + 0.5,
+        radius: Math.max(1.5, bestRadius),
+        level: res.waterLevel[best],
+      });
+    }
+  });
+  return out;
+}
+
+// ──────────────────────────────────────────────────────────────────────────────────────────────
+// Automatic water-body detection (live areas)
+// ──────────────────────────────────────────────────────────────────────────────────────────────
+
+export interface WaterBody {
+  /** Water surface elevation, m. */
+  level: number;
+  cells: number;
+  /** A representative interior cell (max distance to shore), grid coords. */
+  seed: GridPoint;
+  /** Cell indices of the body (including the shoreline ring). */
+  indices: Int32Array;
+}
+
+export interface DetectOptions {
+  /** Minimum area, m². Default 20 000 m² (≈ 2 ha). */
+  minArea?: number;
+  /** Max elevation spread (p90 − p10) within the flat region, m. Default 0.15. */
+  maxSpread?: number;
+  /** Fraction of the surrounding ring that must be ≥ level + 0.25 m. Default 0.7. */
+  minRimHigher?: number;
+  tolerance?: number;
+}
+
+/**
+ * Detect likely water bodies: large 4-connected regions of flat cells, nearly constant elevation, whose rim
+ * is mostly higher (a local minimum). Works on hydro-flattened DEMs (lakes, reservoirs, pools, wide rivers).
+ */
+export function detectWaterBodies(
+  elev: Float32Array,
+  nx: number,
+  ny: number,
+  cellSize: number,
+  opts: DetectOptions = {},
+): WaterBody[] {
+  const n = nx * ny;
+  const relief = localRelief(elev, nx, ny);
+  const flatTol = Math.max(0.01, 0.0015 * cellSize);
+  const minCells = Math.max(30, Math.ceil((opts.minArea ?? 20000) / (cellSize * cellSize)));
+  const maxSpread = opts.maxSpread ?? 0.15;
+  const minRim = opts.minRimHigher ?? 0.7;
+  const tol = opts.tolerance ?? 0.3;
+  const label = new Int32Array(n).fill(-1);
+  const bodies: WaterBody[] = [];
+  const stack = new Int32Array(n);
+  const comp: number[] = [];
+  let nextLabel = 0;
+  for (let s = 0; s < n; s++) {
+    if (label[s] !== -1 || relief[s] > flatTol) continue;
+    const lab = nextLabel++;
+    comp.length = 0;
+    let sp = 0;
+    stack[sp++] = s;
+    label[s] = lab;
+    while (sp > 0) {
+      const k = stack[--sp];
+      comp.push(k);
+      const i = k % nx;
+      const j = (k / nx) | 0;
+      const z = elev[k];
+      const nb = [i > 0 ? k - 1 : -1, i < nx - 1 ? k + 1 : -1, j > 0 ? k - nx : -1, j < ny - 1 ? k + nx : -1];
+      for (const m of nb) {
+        if (m < 0 || label[m] !== -1 || relief[m] > flatTol) continue;
+        if (Math.abs(elev[m] - z) > flatTol) continue;
+        label[m] = lab;
+        stack[sp++] = m;
+      }
+    }
+    if (comp.length < minCells) continue;
+    // Elevation statistics (sampled for big components).
+    const step = Math.max(1, Math.floor(comp.length / 20000));
+    const zs: number[] = [];
+    for (let q = 0; q < comp.length; q += step) zs.push(elev[comp[q]]);
+    zs.sort((a, b) => a - b);
+    const p10 = zs[Math.floor(zs.length * 0.1)];
+    const p90 = zs[Math.floor(zs.length * 0.9)];
+    const level = zs[zs.length >> 1];
+    if (p90 - p10 > maxSpread) continue;
+    // Rim test.
+    let rim = 0;
+    let rimHigher = 0;
+    for (const k of comp) {
+      const i = k % nx;
+      const j = (k / nx) | 0;
+      const nb = [i > 0 ? k - 1 : -1, i < nx - 1 ? k + 1 : -1, j > 0 ? k - nx : -1, j < ny - 1 ? k + nx : -1];
+      for (const m of nb) {
+        if (m < 0 || label[m] === lab) continue;
+        rim++;
+        if (elev[m] >= level + 0.25) rimHigher++;
+      }
+    }
+    // Domain-edge cells count as neutral (a river leaving the domain has no rim there).
+    if (rim > 0 && rimHigher / rim < minRim) continue;
+    // Shoreline ring within tolerance.
+    const indices = comp.slice();
+    for (const k of comp) {
+      const i = k % nx;
+      const j = (k / nx) | 0;
+      const nb = [i > 0 ? k - 1 : -1, i < nx - 1 ? k + 1 : -1, j > 0 ? k - nx : -1, j < ny - 1 ? k + nx : -1];
+      for (const m of nb) {
+        if (m < 0 || label[m] === lab || label[m] === -2) continue;
+        if (elev[m] <= level + tol && label[m] === -1) {
+          label[m] = -2; // claimed ring cell (not a flat seed any more)
+          indices.push(m);
+        }
+      }
+    }
+    bodies.push({ level, cells: indices.length, seed: { gx: 0, gy: 0 }, indices: Int32Array.from(indices) });
+  }
+  // Seeds: interior-most cell of each body.
+  if (bodies.length) {
+    const mask = new Uint8Array(n);
+    for (const b of bodies) for (const k of b.indices) mask[k] = 1;
+    const dist = distanceTransform(nx, ny, (k) => mask[k] === 0);
+    for (const b of bodies) {
+      let best = b.indices[0];
+      for (const k of b.indices) if (dist[k] > dist[best]) best = k;
+      b.seed = { gx: (best % nx) + 0.5, gy: ((best / nx) | 0) + 0.5 };
+    }
+  }
+  bodies.sort((a, b) => b.cells - a.cells);
+  return bodies;
+}
+
+/**
+ * Burn detected water bodies (live areas): lower each by `depth` with smooth banks, bed = min(z, level) − burn.
+ * Returns the conditioned elevation and one initial-fill entry per body.
+ */
+export function burnWaterBodies(
+  elevation: Float32Array,
+  nx: number,
+  ny: number,
+  bodies: WaterBody[],
+  depth = 3,
+  bankCells = 2,
+): { elevation: Float32Array; burnedCells: number; fills: { seeds: GridPoint[]; level: number }[] } {
+  const n = nx * ny;
+  const mask = new Uint8Array(n);
+  const level = new Float32Array(n);
+  for (const b of bodies) {
+    for (const k of b.indices) {
+      mask[k] = 1;
+      level[k] = b.level;
+    }
+  }
+  const dist = distanceTransform(nx, ny, (k) => mask[k] === 0);
+  const out = new Float32Array(elevation);
+  let burned = 0;
+  for (let k = 0; k < n; k++) {
+    if (!mask[k]) continue;
+    out[k] = Math.min(elevation[k], level[k]) - depth * smoothstep(0, bankCells, dist[k]);
+    burned++;
+  }
+  return {
+    elevation: out,
+    burnedCells: burned,
+    fills: bodies.map((b) => ({ seeds: [b.seed], level: b.level })),
+  };
+}

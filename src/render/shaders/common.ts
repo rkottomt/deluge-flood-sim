@@ -1,0 +1,159 @@
+/**
+ * Shared WGSL: the per-frame uniform block and lighting / atmosphere helpers used by every pass.
+ * Everything is linear-light HDR; the post pass applies exposure, ACES and the output transfer.
+ */
+
+/** Byte size of the Frame uniform (must match FRAME_WGSL and writeFrameUniforms in index.ts). */
+export const FRAME_UNIFORM_SIZE = 432;
+
+export const FRAME_WGSL = /* wgsl */ `
+struct Frame {
+  viewProj: mat4x4f,
+  invViewProj: mat4x4f,
+  camPos: vec3f,
+  time: f32,
+  sunDir: vec3f,
+  exag: f32,
+  sunColor: vec3f,
+  cellSize: f32,
+  skyZenith: vec3f,
+  rainRate: f32,
+  skyHorizon: vec3f,
+  hazeDensity: f32,
+  grid: vec2f,        // nx, ny
+  mesh: vec2f,        // vertices per row / column
+  viewport: vec2f,    // physical pixels
+  stride: f32,
+  waterMode: f32,     // 0 realistic, 1 depth, 2 maxDepth, 3 velocity
+  elev: vec4f,        // minElev, maxElev, skirt base elevation, pixelScale (world size of 1px at distance 1)
+  opts: vec4f,        // imagery on, contours on, contour interval (m), overcast 0..1
+  camFwd: vec3f,
+  near: f32,
+  bandCount: f32,
+  domainSize: f32,
+  pad0: f32,
+  pad1: f32,
+  bands: array<vec4f, 8>, // rgb (linear) + upper threshold in .a
+}
+`;
+
+export const COMMON_WGSL = /* wgsl */ `
+const PI: f32 = 3.14159265;
+
+fn gridToWorld(g: vec2f, elevation: f32) -> vec3f {
+  return vec3f((g.x - F.grid.x * 0.5) * F.cellSize, elevation * F.exag, (g.y - F.grid.y * 0.5) * F.cellSize);
+}
+
+fn worldToGrid(p: vec3f) -> vec2f {
+  return vec2f(p.x / F.cellSize + F.grid.x * 0.5, p.z / F.cellSize + F.grid.y * 0.5);
+}
+
+fn hash12(p: vec2f) -> f32 {
+  var p3 = fract(vec3f(p.xyx) * 0.1031);
+  p3 += dot(p3, p3.yzx + 33.33);
+  return fract((p3.x + p3.y) * p3.z);
+}
+
+fn hash11(x: f32) -> f32 {
+  return fract(sin(x * 127.1 + 311.7) * 43758.5453);
+}
+
+fn vnoise(p: vec2f) -> f32 {
+  let i = floor(p);
+  let f = fract(p);
+  let u = f * f * (3.0 - 2.0 * f);
+  let a = hash12(i);
+  let b = hash12(i + vec2f(1.0, 0.0));
+  let c = hash12(i + vec2f(0.0, 1.0));
+  let d = hash12(i + vec2f(1.0, 1.0));
+  return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
+
+fn luminance(c: vec3f) -> f32 {
+  return dot(c, vec3f(0.2126, 0.7152, 0.0722));
+}
+
+/** Sky radiance along a direction, without the sun disk. */
+fn skyRadiance(dirIn: vec3f) -> vec3f {
+  let dir = normalize(dirIn);
+  let overcast = F.opts.w;
+  let y = dir.y;
+  let up = clamp(y, 0.0, 1.0);
+  var col = mix(F.skyHorizon, F.skyZenith, pow(up, 0.55));
+  // Below the horizon: fade to a hazy ground-bounce tone so the diorama floats in atmosphere.
+  let below = smoothstep(0.0, -0.35, y);
+  col = mix(col, F.skyHorizon * vec3f(0.62, 0.64, 0.66), below);
+  // Sun glow (Mie-like forward scattering), stronger near the horizon.
+  let mu = max(dot(dir, F.sunDir), 0.0);
+  let glow = pow(mu, 6.0) * 0.18 + pow(mu, 48.0) * 0.45;
+  col += F.sunColor * glow * (1.0 - overcast * 0.85);
+  // Overcast storm sky: desaturate + darken.
+  let grey = vec3f(luminance(col));
+  col = mix(col, grey * vec3f(0.72, 0.76, 0.82), overcast * 0.9);
+  return col;
+}
+
+fn sunDisk(dir: vec3f) -> vec3f {
+  let mu = dot(normalize(dir), F.sunDir);
+  let disk = smoothstep(0.99985, 0.99993, mu);
+  return F.sunColor * disk * 60.0 * (1.0 - F.opts.w);
+}
+
+/** Aerial perspective: blend toward the sky seen along the view ray (with sun inscatter). */
+fn applyHaze(color: vec3f, worldPos: vec3f) -> vec3f {
+  let v = worldPos - F.camPos;
+  let dist = length(v);
+  let dir = v / max(dist, 1e-3);
+  // Thicker haze in the valleys: density falls off with height above the lowest terrain.
+  let hRel = max(worldPos.y - F.elev.x * F.exag, 0.0) / max(F.domainSize * 0.08, 1.0);
+  let density = F.hazeDensity * (0.55 + 0.45 * exp(-hRel));
+  let amount = 1.0 - exp(-dist * density);
+  let hazeCol = skyRadiance(vec3f(dir.x, max(dir.y, 0.0) * 0.35 + 0.02, dir.z));
+  return mix(color, hazeCol, clamp(amount, 0.0, 1.0));
+}
+
+fn hazeAmount(worldPos: vec3f) -> f32 {
+  let dist = length(worldPos - F.camPos);
+  let hRel = max(worldPos.y - F.elev.x * F.exag, 0.0) / max(F.domainSize * 0.08, 1.0);
+  let density = F.hazeDensity * (0.55 + 0.45 * exp(-hRel));
+  return clamp(1.0 - exp(-dist * density), 0.0, 1.0);
+}
+
+/** Ambient sky light for a surface normal (hemisphere approximation). */
+fn skyAmbient(n: vec3f) -> vec3f {
+  let t = n.y * 0.5 + 0.5;
+  let ground = vec3f(0.30, 0.27, 0.22) * luminance(F.skyHorizon);
+  return mix(ground, mix(F.skyHorizon, F.skyZenith, 0.55), t);
+}
+
+/** Pull a clip-space position slightly toward the camera along the view ray (no screen-space shift). */
+fn pullForward(clip: vec4f, fraction: f32) -> vec4f {
+  // Reversed-Z: depth = near / distance. Scaling distance by (1 - f) ≈ scaling depth by 1 / (1 - f).
+  return vec4f(clip.xy, clip.z / (1.0 - fraction), clip.w);
+}
+`;
+
+/** Manual bilinear sampling of the per-vertex texture (r = bed, g = water surface, a = wet flag). */
+export const VTX_SAMPLE_WGSL = /* wgsl */ `
+fn vtxLoad(k: i32, l: i32) -> vec4f {
+  let m = vec2i(F.mesh);
+  return textureLoad(vtxTex, vec2i(clamp(k, 0, m.x - 1), clamp(l, 0, m.y - 1)), 0);
+}
+
+/** Bilinear over mesh vertices at grid coords. Returns (bed, surface, hAvg, wet). */
+fn vtxBilinear(g: vec2f) -> vec4f {
+  let f = clamp(g / F.stride, vec2f(0.0), F.mesh - 1.0);
+  let k = min(floor(f), F.mesh - 2.0);
+  let t = f - k;
+  let ki = vec2i(k);
+  let a = vtxLoad(ki.x, ki.y);
+  let b = vtxLoad(ki.x + 1, ki.y);
+  let c = vtxLoad(ki.x, ki.y + 1);
+  let d = vtxLoad(ki.x + 1, ki.y + 1);
+  // Same triangle split as the mesh so draped geometry hugs the rendered surface.
+  if (t.x + t.y <= 1.0) {
+    return a + (b - a) * t.x + (c - a) * t.y;
+  }
+  return d + (c - d) * (1.0 - t.x) + (b - d) * (1.0 - t.y);
+}
+`;

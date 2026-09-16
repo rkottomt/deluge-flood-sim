@@ -1,0 +1,258 @@
+{
+ "version": 1,
+ "id": "pittsburgh",
+ "name": "Pittsburgh — Three Rivers",
+ "subtitle": "1936 St. Patrick's Day flood — raise the rivers",
+ "nx": 1024,
+ "ny": 1024,
+ "cellSize": 7.8125,
+ "bounds": {
+  "west": -80.03721511910139,
+  "south": 40.40805778501479,
+  "east": -79.9427848808986,
+  "north": 40.479923006456275
+ },
+ "attribution": "Elevation: USGS 3DEP · Imagery © Esri, Maxar, Earthstar Geographics · Roads: U.S. Census Bureau TIGER/Line",
+ "scenario": {
+  "description": "Downtown Pittsburgh sits on the Point, where the Allegheny and Monongahela rivers meet to form the Ohio. Normal pool here is about 16.0 ft on the Point gauge; flood stage is 25 ft, when the Parkway East \"bathtub\" closes. On March 18, 1936 — the St. Patrick's Day flood — snowmelt and heavy rain drove the river to a record 46 ft, with up to 15 ft of water in the Golden Triangle. Hurricane Agnes crested at 35.8 ft in June 1972 and Hurricane Ivan at 31 ft in September 2004. Raise the river stage to replay those crests and watch the Strip District, the North Shore stadiums and downtown go under — then try a levee.",
+  "sources": [
+   {
+    "id": "allegheny-stage",
+    "type": "stage",
+    "gx": 793.5,
+    "gy": 15.5,
+    "radius": 12,
+    "level": 216.3,
+    "label": "Allegheny River"
+   },
+   {
+    "id": "monongahela-stage",
+    "type": "stage",
+    "gx": 915.5,
+    "gy": 1010.5,
+    "radius": 12,
+    "level": 216.3,
+    "label": "Monongahela River"
+   },
+   {
+    "id": "ohio-stage",
+    "type": "stage",
+    "gx": 13.5,
+    "gy": 323.5,
+    "radius": 11.9,
+    "level": 216.3,
+    "label": "Ohio River"
+   }
+  ],
+  "storms": [],
+  "shelters": [
+   {
+    "name": "Cathedral of Learning (Pitt, Oakland)",
+    "gx": 903.03,
+    "gy": 497.59
+   },
+   {
+    "name": "Mount Washington — Grandview Ave",
+    "gx": 274.6,
+    "gy": 642.01
+   },
+   {
+    "name": "Hill District high ground",
+    "gx": 672.39,
+    "gy": 487.24
+   },
+   {
+    "name": "Fineview hilltop (North Side)",
+    "gx": 367.05,
+    "gy": 225.14
+   },
+   {
+    "name": "South Side Slopes",
+    "gx": 645.34,
+    "gy": 804.6
+   }
+  ],
+  "rainRate": 0,
+  "stage": {
+   "label": "Ohio River at Pittsburgh (Point gauge, USGS 03085152)",
+   "gaugeDatum": 211.409,
+   "normalLevel": 216.3,
+   "floodStageFt": 25,
+   "marks": [
+    {
+     "label": "2004 Ivan",
+     "ft": 31
+    },
+    {
+     "label": "1972 Agnes",
+     "ft": 35.8
+    },
+    {
+     "label": "1936 record",
+     "ft": 46
+    }
+   ],
+   "maxOffset": 12
+  },
+  "initialFill": [
+   {
+    "seeds": [
+     {
+      "gx": 790.5,
+      "gy": 5.5
+     },
+     {
+      "gx": 735.5,
+      "gy": 85.5
+     },
+     {
+      "gx": 699.5,
+      "gy": 165.5
+     },
+     {
+      "gx": 652.5,
+      "gy": 245.5
+     },
+     {
+      "gx": 602.5,
+      "gy": 319.5
+     },
+     {
+      "gx": 522.5,
+      "gy": 374.5
+     },
+     {
+      "gx": 442.5,
+      "gy": 447.5
+     },
+     {
+      "gx": 362.5,
+      "gy": 496.5
+     },
+     {
+      "gx": 915.5,
+      "gy": 1020.5
+     },
+     {
+      "gx": 915.5,
+      "gy": 940.5
+     },
+     {
+      "gx": 915.5,
+      "gy": 860.5
+     },
+     {
+      "gx": 880.5,
+      "gy": 780.5
+     },
+     {
+      "gx": 800.5,
+      "gy": 718.5
+     },
+     {
+      "gx": 720.5,
+      "gy": 680.5
+     },
+     {
+      "gx": 640.5,
+      "gy": 660.5
+     },
+     {
+      "gx": 560.5,
+      "gy": 661.5
+     },
+     {
+      "gx": 480.5,
+      "gy": 662.5
+     },
+     {
+      "gx": 422.5,
+      "gy": 655.5
+     },
+     {
+      "gx": 342.5,
+      "gy": 622.5
+     },
+     {
+      "gx": 250.5,
+      "gy": 535.5
+     },
+     {
+      "gx": 170.5,
+      "gy": 505.5
+     },
+     {
+      "gx": 93.5,
+      "gy": 450.5
+     },
+     {
+      "gx": 32.5,
+      "gy": 370.5
+     }
+    ],
+    "level": 216.3
+   }
+  ],
+  "camera": {
+   "target": {
+    "gx": 398.1,
+    "gy": 543.3,
+    "elevation": 224.9
+   },
+   "distance": 4300,
+   "yaw": 0.62,
+   "pitch": 0.52
+  }
+ },
+ "files": {
+  "elevation": "elevation.f32",
+  "imagery": "imagery.jpg",
+  "roads": "roads.json"
+ },
+ "bake": {
+  "bakedAt": "2026-09-16T21:09:15.733Z",
+  "demSource": "usgs3dep",
+  "demRepairedCells": 0,
+  "center": {
+   "lat": 40.444,
+   "lon": -79.99
+  },
+  "sizeMeters": 8000,
+  "burnedCells": 71323,
+  "rivers": [
+   {
+    "name": "Allegheny River",
+    "cells": 24429,
+    "depth": 6,
+    "surfaceMax": 216.3,
+    "surfaceMin": 216.3
+   },
+   {
+    "name": "Monongahela River",
+    "cells": 29871,
+    "depth": 6,
+    "surfaceMax": 216.3,
+    "surfaceMin": 216.3
+   },
+   {
+    "name": "Ohio River",
+    "cells": 17023,
+    "depth": 6,
+    "surfaceMax": 216.3,
+    "surfaceMin": 216.3
+   }
+  ],
+  "initialWetCells": 71323,
+  "roads": {
+   "nodes": 7455,
+   "edges": 11053,
+   "km": 1058.6547925808013,
+   "byClass": {
+    "highway": 331,
+    "major": 319,
+    "minor": 423,
+    "local": 9980
+   }
+  }
+ }
+}

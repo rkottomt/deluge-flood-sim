@@ -1,0 +1,247 @@
+/** Texture helpers: imagery upload with mip generation, procedural ripple texture, placeholders. */
+import { MIPGEN_WGSL } from './shaders/post';
+
+export function mipCount(w: number, h: number): number {
+  return Math.floor(Math.log2(Math.max(1, w, h))) + 1;
+}
+
+const mipPipelines = new WeakMap<GPUDevice, Map<GPUTextureFormat, { pipeline: GPURenderPipeline; sampler: GPUSampler }>>();
+
+/** Fill mip levels 1..n-1 of a 2D texture by successive linear downsampling (render-pass blits). */
+export function generateMips(device: GPUDevice, texture: GPUTexture): void {
+  if (texture.mipLevelCount <= 1) return;
+  let perDevice = mipPipelines.get(device);
+  if (!perDevice) {
+    perDevice = new Map();
+    mipPipelines.set(device, perDevice);
+  }
+  let entry = perDevice.get(texture.format);
+  if (!entry) {
+    const module = device.createShaderModule({ code: MIPGEN_WGSL, label: 'mipgen' });
+    const pipeline = device.createRenderPipeline({
+      label: `mipgen ${texture.format}`,
+      layout: 'auto',
+      vertex: { module, entryPoint: 'vsFull' },
+      fragment: { module, entryPoint: 'fsMip', targets: [{ format: texture.format }] },
+      primitive: { topology: 'triangle-list' },
+    });
+    const sampler = device.createSampler({ minFilter: 'linear', magFilter: 'linear' });
+    entry = { pipeline, sampler };
+    perDevice.set(texture.format, entry);
+  }
+  const encoder = device.createCommandEncoder({ label: 'mipgen' });
+  for (let level = 1; level < texture.mipLevelCount; level++) {
+    const src = texture.createView({ baseMipLevel: level - 1, mipLevelCount: 1 });
+    const dst = texture.createView({ baseMipLevel: level, mipLevelCount: 1 });
+    const bg = device.createBindGroup({
+      layout: entry.pipeline.getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: src },
+        { binding: 1, resource: entry.sampler },
+      ],
+    });
+    const pass = encoder.beginRenderPass({
+      colorAttachments: [{ view: dst, loadOp: 'clear', storeOp: 'store', clearValue: [0, 0, 0, 0] }],
+    });
+    pass.setPipeline(entry.pipeline);
+    pass.setBindGroup(0, bg);
+    pass.draw(3);
+    pass.end();
+  }
+  device.queue.submit([encoder.finish()]);
+}
+
+/** Upload aerial imagery as an sRGB texture with a full mip chain (anisotropic-friendly). */
+export function createImageryTexture(device: GPUDevice, image: ImageBitmap): GPUTexture {
+  const maxDim = Math.min(device.limits.maxTextureDimension2D, 8192);
+  let source: ImageBitmap | OffscreenCanvas = image;
+  let w = image.width;
+  let h = image.height;
+  if (w > maxDim || h > maxDim) {
+    const s = maxDim / Math.max(w, h);
+    w = Math.max(1, Math.floor(w * s));
+    h = Math.max(1, Math.floor(h * s));
+    const oc = new OffscreenCanvas(w, h);
+    const ctx = oc.getContext('2d');
+    if (ctx) {
+      ctx.imageSmoothingQuality = 'high';
+      ctx.drawImage(image, 0, 0, w, h);
+      source = oc;
+    }
+  }
+  const texture = device.createTexture({
+    label: 'imagery',
+    size: [w, h],
+    format: 'rgba8unorm-srgb',
+    mipLevelCount: mipCount(w, h),
+    usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT,
+  });
+  device.queue.copyExternalImageToTexture({ source, flipY: false }, { texture, mipLevel: 0 }, [w, h]);
+  generateMips(device, texture);
+  return texture;
+}
+
+export function createSolidTexture(device: GPUDevice, rgba: [number, number, number, number], format: GPUTextureFormat = 'rgba8unorm-srgb'): GPUTexture {
+  const texture = device.createTexture({
+    size: [1, 1],
+    format,
+    usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+  });
+  device.queue.writeTexture({ texture }, new Uint8Array(rgba.map((c) => Math.round(c * 255))), { bytesPerRow: 4 }, [1, 1]);
+  return texture;
+}
+
+// ── Procedural ripple texture ──────────────────────────────────────────────────────────────
+
+function mulberry32(seed: number) {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/**
+ * Tileable ripple data, N×N:
+ *  r,g = height-field slopes (∂h/∂x, ∂h/∂y) of a sum of integer-wavevector waves (tiles exactly), biased to 0.5;
+ *  b   = bubbly foam noise (inverted Worley F1 × fbm);  a = low-frequency variation noise.
+ * Slopes average linearly, so the CPU box-filtered mip chain stays physically meaningful (flattens at distance).
+ */
+export function buildRippleData(N = 256): { levels: Uint8Array[]; size: number } {
+  const rand = mulberry32(1337);
+  const waves: Array<{ kx: number; ky: number; amp: number; phase: number }> = [];
+  for (let i = 0; i < 40; i++) {
+    const kmag = 3 + Math.pow(rand(), 1.6) * 26;
+    const ang = rand() * Math.PI * 2;
+    const kx = Math.round(Math.cos(ang) * kmag);
+    const ky = Math.round(Math.sin(ang) * kmag);
+    if (kx === 0 && ky === 0) continue;
+    const k = Math.hypot(kx, ky);
+    waves.push({ kx, ky, amp: 1 / Math.pow(k, 1.35), phase: rand() * Math.PI * 2 });
+  }
+  const sx = new Float32Array(N * N);
+  const sy = new Float32Array(N * N);
+  let maxS = 1e-6;
+  for (let y = 0; y < N; y++) {
+    for (let x = 0; x < N; x++) {
+      let dx = 0;
+      let dy = 0;
+      for (const w of waves) {
+        const arg = ((w.kx * x + w.ky * y) / N) * Math.PI * 2 + w.phase;
+        // Sharpened crests (|sin|-like) look more like wind chop than pure sines.
+        const c = Math.cos(arg);
+        const s = Math.sin(arg);
+        const shape = 1 + 0.6 * s;
+        dx += w.amp * w.kx * c * shape;
+        dy += w.amp * w.ky * c * shape;
+      }
+      sx[y * N + x] = dx;
+      sy[y * N + x] = dy;
+      maxS = Math.max(maxS, Math.abs(dx), Math.abs(dy));
+    }
+  }
+
+  // Tileable Worley noise (F1) on a 12×12 feature grid + tileable value-noise fbm.
+  const G = 12;
+  const feats = new Float32Array(G * G * 2);
+  for (let i = 0; i < G * G; i++) {
+    feats[i * 2] = rand();
+    feats[i * 2 + 1] = rand();
+  }
+  const lattice = (P: number, seed: number) => {
+    const r = mulberry32(seed);
+    const v = new Float32Array(P * P);
+    for (let i = 0; i < v.length; i++) v[i] = r();
+    return (u: number, v2: number) => {
+      const x = u * P;
+      const y = v2 * P;
+      const x0 = Math.floor(x);
+      const y0 = Math.floor(y);
+      const fx = x - x0;
+      const fy = y - y0;
+      const ux = fx * fx * (3 - 2 * fx);
+      const uy = fy * fy * (3 - 2 * fy);
+      const at = (i: number, j: number) => v[(((j % P) + P) % P) * P + (((i % P) + P) % P)];
+      const a = at(x0, y0) + (at(x0 + 1, y0) - at(x0, y0)) * ux;
+      const b = at(x0, y0 + 1) + (at(x0 + 1, y0 + 1) - at(x0, y0 + 1)) * ux;
+      return a + (b - a) * uy;
+    };
+  };
+  const n1 = lattice(8, 11);
+  const n2 = lattice(16, 12);
+  const n3 = lattice(32, 13);
+  const n4 = lattice(4, 14);
+
+  const base = new Uint8Array(N * N * 4);
+  for (let y = 0; y < N; y++) {
+    for (let x = 0; x < N; x++) {
+      const u = x / N;
+      const v = y / N;
+      const gx = u * G;
+      const gy = v * G;
+      const cx = Math.floor(gx);
+      const cy = Math.floor(gy);
+      let f1 = 9;
+      for (let oy = -1; oy <= 1; oy++) {
+        for (let ox = -1; ox <= 1; ox++) {
+          const ix = (((cx + ox) % G) + G) % G;
+          const iy = (((cy + oy) % G) + G) % G;
+          const px = cx + ox + feats[(iy * G + ix) * 2];
+          const py = cy + oy + feats[(iy * G + ix) * 2 + 1];
+          f1 = Math.min(f1, Math.hypot(gx - px, gy - py));
+        }
+      }
+      const fbm = n1(u, v) * 0.5 + n2(u, v) * 0.3 + n3(u, v) * 0.2;
+      const foam = Math.min(1, Math.max(0, (1 - f1 * 1.25) * 0.6 + fbm * 0.55 - 0.05));
+      const o = (y * N + x) * 4;
+      base[o] = Math.round((sx[y * N + x] / maxS) * 127.5 + 127.5);
+      base[o + 1] = Math.round((sy[y * N + x] / maxS) * 127.5 + 127.5);
+      base[o + 2] = Math.round(foam * 255);
+      base[o + 3] = Math.round((n4(u, v) * 0.7 + n2(u, v) * 0.3) * 255);
+    }
+  }
+
+  const levels: Uint8Array[] = [base];
+  let size = N;
+  let prev = base;
+  while (size > 1) {
+    const ns = size >> 1;
+    const next = new Uint8Array(ns * ns * 4);
+    for (let y = 0; y < ns; y++) {
+      for (let x = 0; x < ns; x++) {
+        for (let c = 0; c < 4; c++) {
+          const s =
+            prev[(2 * y * size + 2 * x) * 4 + c] +
+            prev[(2 * y * size + 2 * x + 1) * 4 + c] +
+            prev[((2 * y + 1) * size + 2 * x) * 4 + c] +
+            prev[((2 * y + 1) * size + 2 * x + 1) * 4 + c];
+          next[(y * ns + x) * 4 + c] = Math.round(s / 4);
+        }
+      }
+    }
+    levels.push(next);
+    prev = next;
+    size = ns;
+  }
+  return { levels, size: N };
+}
+
+export function createRippleTexture(device: GPUDevice): GPUTexture {
+  const { levels, size } = buildRippleData(256);
+  const texture = device.createTexture({
+    label: 'ripples',
+    size: [size, size],
+    format: 'rgba8unorm',
+    mipLevelCount: levels.length,
+    usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+  });
+  let s = size;
+  levels.forEach((data, level) => {
+    device.queue.writeTexture({ texture, mipLevel: level }, data as Uint8Array<ArrayBuffer>, { bytesPerRow: 4 * s }, [s, s]);
+    s = Math.max(1, s >> 1);
+  });
+  return texture;
+}
