@@ -53,6 +53,7 @@ const AUTO_START_LEVEL = 1;
  * How hard the simulation is pushing for GPU time (set by the host; see AdaptiveQuality.simPressure):
  *   0 — the sim keeps up (or is paused): the renderer may claim headroom;
  *   1 — the sim is GPU-limited: hold the current level (a better picture would come straight out of sim speed),
+ *       but give up levels above the default one (claimed while the sim kept up) after LIMITED_RETURN_MS,
  *       except that quality lost to starvation comes back (up to the default level, not beyond, and not sooner than
  *       STARVED_RECOVER_MS after the sim was last starved: a throttling spell passed);
  *   2 — the sim is starved (its work budget is down to a substep or two): step down slowly, at most to
@@ -64,6 +65,8 @@ export type SimPressure = 0 | 1 | 2;
 export const STARVED_MAX_LEVEL = 3;
 /** Sustained starvation before each step down, ms. */
 const STARVED_STEP_MS = 3000;
+/** Under pressure ≥ 1 for this long, a level better than the default steps back to it, ms. */
+const LIMITED_RETURN_MS = 2000;
 /** Under pressure 1, levels lost to starvation are only won back this long after the sim was last starved, ms. */
 const STARVED_RECOVER_MS = 20000;
 
@@ -98,6 +101,7 @@ export class AdaptiveQuality {
    */
   simPressure: SimPressure = 0;
   private starvedMs = 0;
+  private limitedMs = 0;
   private lastSampleAt = -Infinity;
   private lastStarvedAt = -Infinity;
 
@@ -114,6 +118,7 @@ export class AdaptiveQuality {
     this.raiseHoldMs = 4000;
     this.lastRaiseAt = -Infinity;
     this.starvedMs = 0;
+    this.limitedMs = 0;
   }
 
   /**
@@ -126,8 +131,15 @@ export class AdaptiveQuality {
     const elapsed = Math.min(250, Math.max(0, now - this.lastSampleAt));
     this.lastSampleAt = now;
     this.starvedMs = this.simPressure === 2 ? this.starvedMs + elapsed : 0;
+    this.limitedMs = this.simPressure >= 1 ? this.limitedMs + elapsed : 0;
     if (this.simPressure === 2) this.lastStarvedAt = now;
     if (now < this.cooldownUntil) return false;
+    if (this.limitedMs > LIMITED_RETURN_MS && this.level < AUTO_START_LEVEL) {
+      this.level = AUTO_START_LEVEL;
+      this.settle(now, 1200);
+      this.limitedMs = 0;
+      return true;
+    }
     if (this.starvedMs > STARVED_STEP_MS && this.level < STARVED_MAX_LEVEL) {
       this.level++;
       this.settle(now, 1200);

@@ -89,6 +89,10 @@ test('sim pressure: a GPU-limited sim holds the level; a starved one steps down 
   t = run(q, 90, () => 16.7, t, 3);
   assert.equal(q.level, start, 'recovers to the default level');
   q.simPressure = 0;
-  run(q, 60, () => 16.7, t, 3);
+  t = run(q, 60, () => 16.7, t, 3);
   assert.ok(q.level < start, 'and beyond it once the sim keeps up');
+  // The flood starts again: the level claimed while the sim kept up is handed back.
+  q.simPressure = 1;
+  run(q, 5, () => 16.7, t, 3);
+  assert.equal(q.level, start, 'a GPU-limited sim takes back the better-than-default level');
 });

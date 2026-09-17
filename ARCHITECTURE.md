@@ -21,7 +21,8 @@ Contents: [1 Frame pipeline](#1-frame-pipeline) · [2 Module map](#2-module-map)
    │        Pass A  momentum     state ──▶ face fluxes      (slope, advection, friction, smoothing, caps)
    │        Pass B  continuity   state + fluxes ──▶ state   (limiter, ∂h/∂t, rain, sources, stages, boundaries,
    │                                                        mass ledger)
-   │     Export     state ──▶ stateTexture (h, u, v, max depth) for the renderer
+   │     Export     state ──▶ stateTexture (h, u, v, max depth), lazily: when the renderer reads it (the frames
+   │                that refresh its water textures) or a stats readback needs it
    │
    ├─ every ~300 ms (never blocking): stats reduction pass + depth copy → mapAsync → Float64 statistics
    │        └─▶ HUD (flooded area, volume, max speed, mass-balance error, Courant) and road flood status
@@ -148,7 +149,7 @@ times the domain's storage and would otherwise make the ratio shrink the longer 
 ### 3.6 Timestep
 
 ```
-dt = Cr · dx / ( √2 · (√(g·h_max) + |u|_max) )
+dt = Cr · dx / ( √2 · max over cells (√(g·h) + |u|) )
 ```
 
 **Why √2.** The scheme updates `q` from the old `η`, then `η` from the new `q` (staggered forward–backward). A von
@@ -157,14 +158,24 @@ worst mode is the 2-D checkerboard, which needs `8·C₁² ≤ 4θ` with `C₁ =
 `Cr = √2·C₁` makes the limit `Cr ≤ 1` for the plain scheme and `Cr ≤ √θ ≈ 0.89` with smoothing. Deluge targets 0.7 and
 never exceeds 0.85. A 1-D formula at 0.7 sits right on the 2-D limit (tests/sim/stability.test.ts guards this).
 
-`h_max` and `|u|_max` come from the latest asynchronous readback, so robust mode inflates them (×1.15 depth, ×1.25 speed
-+ 0.1 m/s) and adds what it knows is coming before a readback can show it: the deepest water a stage source or brush
-stroke creates, the critical velocity at an inflow's rim, and a dam-break speed `2·√(g·Δh)` for a stage raise.
+The fastest wave `max(√(g·h) + |u|)` is the stats pass's per-cell maximum from the latest asynchronous readback, so
+robust mode inflates it (×1.25 + 0.1 m/s) and combines it with what it knows is coming before a readback can show it:
+the deepest water a stage source or brush stroke creates (×1.15 depth), the critical velocity at an inflow's rim, and a
+dam-break speed `2·√(g·Δh)` for a stage raise (added to the deepest water, the conservative way). Taking the maximum
+per cell rather than `√(g·h_max) + |u|_max` matters on real terrain: the deepest water (a river channel, a stage disc)
+is rarely the fastest (a jet down a street); in Pittsburgh's 1936 flood the sum of the two maxima overstated the
+fastest wave by ~50 % (the HUD read Courant 0.46 against 0.7) and cost as much sim speed. Faces a stale estimate
+misses are held at the stability limit by the momentum pass's local Courant guard (§3.2). Naive mode keeps the textbook
+`dt = C·dx/√(g·h_max)`.
 
 ### 3.7 GPU layout
 
-Workgroups are 16×16; bind groups for both ping-pong parities are created once; all substeps of a frame go into one
-compute pass. Brush edits (walls, erasing, pouring water, digging) run a small compute pass over the edited rectangle
+Workgroups are 16×16 (8×8 and 32×8 measured the same on the M4); bind groups for both ping-pong parities are created
+once; all substeps of a frame go into one compute pass. A host may ask for a fractional number of substeps per frame
+(4.5 → alternately 4 and 5): a saturated GPU queue has a latency cliff between whole numbers. The export pass (about a
+third of a substep) is lazy: `step()` only bumps `stateVersion`, and the first read of `stateTexture` encodes the
+export in its own command buffer; the stats readback exports first if needed, so volume and ledger always describe the
+same substep. Brush edits (walls, erasing, pouring water, digging) run a small compute pass over the edited rectangle
 and apply the same math to CPU mirrors of ground and walls, which picking and routing read. `raiseWaterSurface` lifts
 water in place for river crests (§4). The stats pass reduces the exported state per 16×16 block on the GPU, so a
 readback costs a few milliseconds of main-thread time at 1024².
@@ -215,13 +226,17 @@ Monongahela and Ohio cross the domain edge.
 
 ## 6. Rendering
 
-A prep compute pass derives vertex heights and filterable surface textures from the solver's state; the main pass
+A prep compute pass derives vertex heights and filterable surface textures from the solver's state (every other frame
+by default: `stateVersion` tells it whether the water changed without making the solver export; the per-vertex bed is
+rebuilt only when `terrainVersion` changes); the main pass
 renders to MSAA 4× HDR (`rgba16float`, reversed-Z `depth32float`): sky, LOD terrain with imagery, water surface (depth
 absorption, Fresnel reflection, flow-advected ripples, muddy opaque floodwater on land that was dry at reset, a wet
 edge at the flood front), drawn walls with a screen-space minimum width, road and route ribbons coloured by flood
 status, markers and rain. Bloom and ACES tonemapping follow. Hazard maps (depth, max depth, speed) colour only land
 that was dry at reset; their colours are solved through the tone mapper so the screen matches the legend. An
-adaptive resolution controller keeps frame time on target.
+adaptive resolution controller keeps frame time on target; the app also tells it how hard the solver is pushing for GPU
+time (§8), so it does not spend on pixels what the flood needs in substeps. Terrain and water are CDLOD meshes of
+32×32-quad patches sized to ~4 px per quad by default: vertex work was half of the renderer's GPU time.
 
 ## 7. Evacuation routing
 
@@ -235,9 +250,14 @@ is blocked.
 ## 8. App loop and pacing
 
 The store is the single source of truth; `SimSync` pushes parameter changes into the solver. A work budget
-(`governor.ts`) caps substeps per frame from measured frame time and GPU queue latency, with different targets while
-the user interacts, watches, or automation runs; a render pacer drops to a heartbeat when nothing changes; and a frame
-ceiling detector notices browser 30 fps caps (Chrome Energy Saver, macOS Low Power Mode) so neither budget starves. GPU
+(`governor.ts`) caps substeps per frame (in half-substep steps) from measured frame time and GPU queue latency (median
+over ~1 s), with different targets while the user interacts (28 ms), watches (34 ms: about two frames of queue, the
+most that stays free of dropped frames) or automation runs; a render pacer drops to a heartbeat when nothing changes;
+and a frame ceiling detector notices browser 30 fps caps (Chrome Energy Saver, macOS Low Power Mode) so neither budget
+starves. The renderer's adaptive quality gets a *sim pressure* hint: while the solver is GPU-limited it holds the
+default level (it neither climbs above it nor keeps a better level claimed while the sim kept up), and while hands-off
+with the budget down to ≤ 3 substeps (a hot fanless laptop) it steps down, at most to 1 render pixel per CSS pixel, and
+recovers 20 s after the starvation ends. GPU
 device loss shows a recovery card and reloads once. `window.__deluge` exposes the debug API used by `scripts/e2e.mjs`.
 
 ## 9. Validation

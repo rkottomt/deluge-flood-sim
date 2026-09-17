@@ -44,7 +44,7 @@ An explicit shallow-water solver on real terrain wants to explode: rivers are de
 centimetre-thin films, walls and streets are one cell wide, and everything runs in Float32 on a GPU in parallel.
 Four ingredients keep Deluge stable, exact and fast (details in [ARCHITECTURE.md §3](ARCHITECTURE.md#3-numerical-method)):
 
-1. **CFL-adaptive timestep with the 2-D Courant number** `dt = Cr·dx / (√2·(√(g·h) + |u|))`, from asynchronous
+1. **CFL-adaptive timestep with the 2-D Courant number** `dt = Cr·dx / (√2·max(√(g·h) + |u|))`, from asynchronous
    readbacks inflated by what is known to be coming. A wave never jumps more than a cell.
 2. **Semi-implicit friction:** dividing instead of subtracting, so friction on thin films can only slow water down.
 3. **Positivity-preserving flux limiter:** a cell can't give away more water than it holds, so depth stays ≥ 0 without
@@ -75,7 +75,7 @@ In the running app the HUD's mass-balance error stays below 0.001 % at the 1936 
 
 ```
 solver.step ─▶ N substeps in one compute pass:  momentum pass ─▶ continuity pass   (CFL dt each)
-            ─▶ export pass (h, u, v, max depth) ──────────────────────────────▶ renderer (MSAA HDR → ACES)
+renderer    ─▶ (every other frame) export pass (h, u, v, max depth) + prep ──▶ MSAA HDR → ACES
 every ~300 ms, never blocking: stats reduction pass ─▶ mapAsync ─▶ HUD + road flood status ─▶ evacuation route
 ```
 

@@ -145,7 +145,8 @@ export class SubstepGovernor {
     if (over && this.cap > c.minCap) {
       this.ceiling = this.cap;
       // Graded: slightly over (GPU latency sampled per frame is noisy — readback and water-refresh frames carry
-      // extra work) takes one substep off; clearly over (a missed-vsync frame rate, a long queue) cuts by 30 %.
+      // extra work) takes ~10 % (at least half a substep) off; clearly over (a missed-vsync frame rate, a long queue)
+      // cuts by 30 %.
       const severe = frameTime > targetMs * 1.2 || latency > latencyMs * 1.4;
       this.cap = Math.max(c.minCap, severe ? stepFloor(this.cap * 0.7) : this.cap - Math.max(CAP_STEP, stepRound(this.cap * 0.1)));
       this.holdUntil = now + this.backoffMs;
@@ -154,10 +155,7 @@ export class SubstepGovernor {
       this.settleUntil = now + 2 * c.windowMs;
       this.latencyHistory = []; // judged again only on samples taken after the queue drained
     } else if (!over && under && throttled && this.cap < upper) {
-      // Far below target (the GPU queue is idle: e.g. right after the user raised the rivers) grow by a quarter, else
-      // by ~10 %: the first seconds of a flood are the ones people watch.
-      const idle = latency < latencyMs * 0.5 && frameTime < targetMs * 0.92;
-      let next = Math.min(upper, this.cap + Math.max(CAP_STEP, stepRound(this.cap * (idle ? 0.25 : 0.1))));
+      let next = Math.min(upper, this.cap + Math.max(CAP_STEP, stepRound(this.cap * 0.1)));
       if (next >= this.ceiling && now < this.holdUntil) next = Math.max(this.cap, this.ceiling - CAP_STEP);
       this.cap = next;
     }
