@@ -19,8 +19,9 @@ Air's whole screen, which is more than a real browser window gives the page (see
 - [ ] `npm ci` in the repo. This is the only step that needs the network.
 - [ ] Decide how you are presenting — **Deluge.app** (no terminal, no browser) or **`npm run demo` in Brave**. Both
   are rehearsed; the app is the calmer one in front of a judge.
-- [ ] If Deluge.app: `npm run app:build` (~2 min: typecheck, build, package, fuses, signature — it prints `ok` for
-  each and refuses to produce an app that would not be safe to demo). It writes `release/Deluge.app`, which is *not*
+- [ ] If Deluge.app: `npm run app:build` (~2 min: the endpoint-allowlist mirror check, typecheck, build, package,
+  fuses, signature, and a check that the verification-only smoke hook is *absent* from the shipped asar — it prints
+  `ok` for each and refuses to produce an app that would not be safe to demo). It writes `release/Deluge.app`, which is *not*
   in git, so it has to be built on this laptop. Then `open release/Deluge.app` and click through section 2 once.
 - [ ] If Brave: `npm run demo`, open http://localhost:4173, and click through section 2 once.
 

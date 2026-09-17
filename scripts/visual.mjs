@@ -1002,6 +1002,17 @@ async function runScene(browser, baseUrl, scene, palettes) {
   // Let the opening fly-in finish before the camera is pinned, so nothing is still gliding.
   await page.waitForTimeout(2500);
 
+  /*
+   * The two transient toasts (the error toast and the notice toast) are the one piece of chrome a frozen scene
+   * cannot freeze: they auto-dismiss on a wall-clock timer and the wall scenes re-post theirs ("The levee is
+   * holding") as the protection analysis re-runs, so whether one is on screen at the shutter depends on how long
+   * the machine took to get here. That is worth ~3% of the frame — enough on its own to fail the golden check on a
+   * slow run and pass it on a fast one, with no rendering change behind it. Hide them for the capture. They are
+   * covered where they belong: tests/ui/levee.test.ts for the wording, e2e flow 13 for "no false overtopping
+   * alarm". The bottom Break-it banner (.dl-naive-banner) is deliberately NOT hidden — it is part of that scene.
+   */
+  await page.addStyleTag({ content: '.dl-notices .dl-toast { visibility: hidden !important; }' });
+
   const spec = {
     mode: scene.mode ?? null,
     actions: scene.actions ?? [],
