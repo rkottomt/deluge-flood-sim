@@ -196,7 +196,8 @@ class DelugeRenderer implements DelugeRendererAPI {
   /** Developer toggles for profiling (e.g. 'terrain', 'water', 'roads', 'markers', 'sky', 'bloom', 'prep'). */
   readonly debugSkip = new Set<string>();
   private prevRenderCallDrew = false;
-  private lastPrepState: GPUTexture | null = null;
+  /** Solver state key (see stateKey) the derived textures were last built from. */
+  private lastPrepKey = -1;
   private lastPrepUseMax = -1;
   private lastPrepUseMaxBuilt = -1;
   private framesSincePrep = 1e9;
@@ -897,11 +898,20 @@ class DelugeRenderer implements DelugeRendererAPI {
       settings.rainRate > 0.2,
       this.overlayVersion,
       this.editEpoch,
-      s ? this.textureId(s.solver.stateTexture) : 0,
+      s ? this.stateKey(s.solver) : 0,
       this.canvas.clientWidth,
       this.canvas.clientHeight,
       this.needsResize,
     ].join('|');
+  }
+
+  /**
+   * Identifies the solver's current water state without reading stateTexture when the solver offers a version
+   * counter (GpuFloodSolver exports lazily on read, so reading it every frame would export every frame).
+   */
+  private stateKey(solver: FloodSolver): number {
+    const v = (solver as FloodSolver & { stateVersion?: number }).stateVersion;
+    return typeof v === 'number' ? v : this.textureId(solver.stateTexture);
   }
 
   private textureIds = new WeakMap<GPUTexture, number>();
@@ -985,19 +995,19 @@ class DelugeRenderer implements DelugeRendererAPI {
     if (s) {
       const mode = WATER_MODE_INDEX[settings.waterMode] ?? 0;
       const useMax = mode === 2 ? 1 : 0;
-      const state = s.solver.stateTexture;
+      const key = this.stateKey(s.solver);
       this.framesSincePrep++;
       // Derived textures only change when the solver state (or the displayed field) changes. The real solver
-      // re-exports into a new texture after every step and brush edit; a periodic refresh covers solvers that
-      // edit bed textures in place.
-      const changed = state !== this.lastPrepState || useMax !== this.lastPrepUseMax;
+      // bumps its state version after every step and brush edit; a periodic refresh covers solvers that edit bed
+      // textures in place. stateTexture is only read when a rebuild is due (reading it makes the solver export).
+      const changed = key !== this.lastPrepKey || useMax !== this.lastPrepUseMax;
       const due =
         this.forcePrep ||
         (changed ? this.framesSincePrep >= preset.prepInterval || useMax !== this.lastPrepUseMax : this.framesSincePrep >= 30);
       if (due && !this.debugSkip.has('prep')) {
         this.forcePrep = false;
         this.framesSincePrep = 0;
-        this.lastPrepState = state;
+        this.lastPrepKey = key;
         this.lastPrepUseMax = useMax;
         const prep = new ArrayBuffer(48);
         const pi = new Int32Array(prep);

@@ -12,7 +12,9 @@
  *   Brush   walls / erase / water / dig over a rectangle (CPU mirrors of ground + walls kept in sync)
  *   Raise   raiseWaterSurface: h = max(h, base + offset − bed) in place (river crests), booked as inflow
  * ── Per frame ──────────────────────────────────────────────────────────────────────────────────────────
- *   Export  state ──▶ stateTexture (h, u, v, maxDepth)   for the renderer
+ *   Export  state ──▶ stateTexture (h, u, v, maxDepth)   for the renderer, LAZILY: on the first read of stateTexture
+ *            after a step (a renderer refreshing its water every other frame pays for every other export), or
+ *            before a stats readback
  *   Readback (every ~300 ms, never blocking): a reduction pass (shaders/stats.ts) writes depth + per-16×16-block
  *            sums/maxima of the accounting buffer and state, the accounting buffer is ZEROED IN THE SAME ENCODER
  *            (no substep lost or counted twice), both are copied to MAP_READ buffers → mapAsync → Float64 stats.
@@ -159,6 +161,14 @@ export class GpuFloodSolver implements FloodSolver {
   /** Current state parity (stateTex[cur] holds the latest state) and export parity. */
   private cur = 0;
   private exportCur = 0;
+  /**
+   * The internal state has advanced past the exported stateTexture. Frames from step() do not export: the export
+   * pass (~⅓ of a substep) runs when something reads stateTexture (the renderer, only on frames it refreshes its
+   * water textures) or a stats readback needs it. See the stateTexture getter.
+   */
+  private exportDirty = false;
+  /** Incremented whenever the (exported) water state changes: step, brush, raise, reset. */
+  private stateVersionN = 0;
 
   private sources: WaterSource[] = [];
   private storms: StormCell[] = [];
@@ -505,8 +515,25 @@ export class GpuFloodSolver implements FloodSolver {
   // Contract API
   // ──────────────────────────────────────────────────────────────────────────────────────────────────────
 
+  /**
+   * The exported (h, u, v, max depth) texture of the latest completed step. Exporting is lazy: step() only marks the
+   * export stale, and the first read afterwards encodes the export pass in its own command buffer (submitted before
+   * whatever the reader then submits). A renderer that refreshes its water textures every other frame therefore pays
+   * for every other export; use `stateVersion` to detect changes without triggering one.
+   */
   get stateTexture(): GPUTexture {
+    if (this.exportDirty && !this.destroyed) {
+      const enc = this.device.createCommandEncoder({ label: 'sim.export' });
+      this.writeSimUniform(this.lastDt);
+      this.encodeExport(enc);
+      this.device.queue.submit([enc.finish()]);
+    }
     return this.exportTex[this.exportCur];
+  }
+
+  /** Changes whenever stateTexture's contents would (step, brush, raise, reset). Reading it never exports. */
+  get stateVersion(): number {
+    return this.stateVersionN;
   }
 
   setSources(sources: WaterSource[]): void {
@@ -546,6 +573,7 @@ export class GpuFloodSolver implements FloodSolver {
     // Keep stateTexture in sync with the edit even while paused.
     this.writeSimUniform(0);
     this.encodeExport(enc);
+    this.stateVersionN++;
     this.editSeq++;
     if (op.kind === 'water' && op.amount > 0) {
       this.hBoost = Math.max(this.hBoost, this.hRead + op.amount);
@@ -596,6 +624,7 @@ export class GpuFloodSolver implements FloodSolver {
     this.cur = 1 - this.cur;
     this.writeSimUniform(0);
     this.encodeExport(enc);
+    this.stateVersionN++;
     this.editSeq++;
     this.hBoost = Math.max(this.hBoost, hMax);
     this.hBoostSeq = this.editSeq;
@@ -686,6 +715,7 @@ export class GpuFloodSolver implements FloodSolver {
     enc.clearBuffer(this.accBuf);
     this.writeSimUniform(0);
     this.encodeExport(enc);
+    this.stateVersionN++;
     const map = this.maybeEncodeReadback(enc, true);
     this.device.queue.submit([enc.finish()]);
     map?.();
@@ -919,14 +949,11 @@ export class GpuFloodSolver implements FloodSolver {
       pass.dispatchWorkgroups(this.gx, this.gy);
       this.cur = 1 - this.cur;
     }
-    pass.setPipeline(this.exportPipe);
-    pass.setBindGroup(0, this.bgExport[this.cur][this.exportCur]);
-    pass.dispatchWorkgroups(this.gx, this.gy);
     pass.end();
     probe?.resolve(enc);
-    this.exportCur = 1 - this.exportCur;
-    // resetMax only applies to the first export after a reset; the uniform above already carried it.
-    this.resetMaxPending = false;
+    // The export follows lazily (stateTexture getter, or the readback below when one is due).
+    this.exportDirty = true;
+    this.stateVersionN++;
 
     this.simTime += n * dt;
     this.windowDtMax = Math.max(this.windowDtMax, dt);
@@ -956,7 +983,9 @@ export class GpuFloodSolver implements FloodSolver {
     pass.dispatchWorkgroups(this.gx, this.gy);
     pass.end();
     this.exportCur = 1 - this.exportCur;
+    // resetMax only applies to the first export after a reset; the uniform already carried it.
     this.resetMaxPending = false;
+    this.exportDirty = false;
   }
 
   private userSubstepCap(): number {
@@ -1209,6 +1238,9 @@ export class GpuFloodSolver implements FloodSolver {
     const staging = set;
     staging.busy = true;
     this.lastReadbackMs = t;
+    // The reduction reads the exported state: it must include every substep booked in the accounting buffer
+    // (zeroed below), or volume and in/out volumes would come from different moments.
+    if (this.exportDirty) this.encodeExport(enc);
     const pass = enc.beginComputePass({ label: 'sim.stats' });
     pass.setPipeline(this.statsPipe);
     // exportCur was flipped after the last export: the latest exported texture is exportTex[exportCur].

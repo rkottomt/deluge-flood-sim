@@ -21,7 +21,7 @@
 
 const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
 
-/** Export pass cost relative to one substep (it touches ~half as many texels). */
+/** Export pass cost relative to one substep (it touches ~half as many texels); runs once per rendered frame. */
 const EXPORT_SUBSTEP_EQUIV = 0.5;
 
 export interface FrameProbe {
@@ -74,12 +74,13 @@ export class GpuWorkBudget {
   }
 
   /**
-   * Start measuring a frame of `substeps` substeps (+ one export pass). Returns null when no measurement is
-   * possible right now (all readback buffers busy) — the frame then simply runs unmeasured.
+   * Start measuring a compute pass of `substeps` substeps (the export runs lazily in its own pass, see
+   * GpuFloodSolver.stateTexture). Returns null when no measurement is possible right now (all readback buffers
+   * busy) — the frame then simply runs unmeasured.
    */
   beginFrame(substeps: number): FrameProbe | null {
     if (this.destroyed || substeps <= 0) return null;
-    const work = substeps + EXPORT_SUBSTEP_EQUIV;
+    const work = substeps;
     if (this.querySet && this.resolveBuf) {
       let buf = this.freeReadBufs.pop();
       if (!buf) {
