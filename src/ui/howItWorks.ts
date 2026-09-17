@@ -202,9 +202,9 @@ export function createHowItWorks(ctx: UIContext): Modal {
       ingredient(
         '1',
         'CFL-adaptive timestep',
-        `${dt}${op('=')}${v('C')}${frac(dx, `${sqrt(`${g}${sub(v('h'), 'max')}`)}${op('+')}${sub(abs(v('u')), 'max')}`)}`,
+        `${dt}${op('=')}${v('C')}${frac(dx, `${sqrt('2')}${paren(`${sqrt(`${g}${sub(v('h'), 'max')}`)}${op('+')}${sub(abs(v('u')), 'max')}`)}`)}`,
         'a wave must never jump more than one cell in a single step.',
-        'Deep, fast water needs smaller steps. Depth and speed come back from the GPU a few times per second and Δt is re-chosen automatically — the frame then runs as many substeps as it needs.',
+        'Deep, fast water needs smaller steps. The √2 is the 2-D part: the fastest grid-scale wave runs diagonally, so the scheme is stable only while this Courant number C stays below 1 (Deluge uses 0.7). Depth and speed come back from the GPU a few times per second and Δt is re-chosen automatically — the frame then runs as many substeps as it needs.',
       ),
       ingredient(
         '2',

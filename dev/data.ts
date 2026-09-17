@@ -333,11 +333,16 @@ function fillPanels(L: Loaded) {
     row(st, 'max offset', `${g.maxOffset} m → ${ft(g.normalLevel + g.maxOffset)} ft`);
   }
   for (const src of s.sources) {
-    const k = Math.floor(src.gy) * t.nx + Math.floor(src.gx);
-    const depth = h0[k];
+    // Stage sources are boundary discs (they should reach the edge, their centre may lie outside): sample the depth
+    // at the in-domain point nearest the centre. Inflows must sit fully inside.
+    const gx = Math.min(t.nx - 1, Math.max(0, Math.floor(src.gx)));
+    const gy = Math.min(t.ny - 1, Math.max(0, Math.floor(src.gy)));
+    const depth = h0[gy * t.nx + gx];
     const inside = src.gx - src.radius >= 0 && src.gy - src.radius >= 0 && src.gx + src.radius <= t.nx && src.gy + src.radius <= t.ny;
     const onRiver = depth > 0.3;
-    row(ct, src.id, `${src.type} r=${src.radius} · depth ${depth.toFixed(2)} m · ${inside ? 'inside' : 'CROSSES EDGE'}`, onRiver && inside ? 'ok' : 'bad');
+    const placement = src.type === 'stage' ? (inside ? 'MISSES EDGE' : 'covers edge crossing') : inside ? 'inside' : 'CROSSES EDGE';
+    const ok = onRiver && (src.type === 'stage' ? !inside : inside);
+    row(ct, src.id, `${src.type} r=${src.radius} · depth ${depth.toFixed(2)} m · ${placement}`, ok ? 'ok' : 'bad');
   }
   const ceiling = s.stage ? s.stage.normalLevel + s.stage.maxOffset : null;
   for (const sh of s.shelters) {
