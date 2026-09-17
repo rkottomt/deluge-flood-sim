@@ -826,6 +826,49 @@ export function growEdgeRun(
   return [a, b];
 }
 
+/**
+ * Stage disc for an edge crossing, widened toward `grown` (see growEdgeRun) as far as it can go without covering a
+ * `forbidden` cell — land below the stage level that is dry at load (e.g. a neighbourhood behind a levee). The disc
+ * reaches inland as a lens, so its widened ends can cover such land even though the edge cells themselves are fine;
+ * a stage source would fill it at load. Tries the full widening, then backs it off in eighths down to the wet run.
+ */
+export function edgeStageDiscAvoiding(
+  edge: DomainEdge,
+  wet: [number, number],
+  grown: [number, number],
+  nx: number,
+  ny: number,
+  forbidden: (k: number) => boolean,
+  maxPenetration = STAGE_DISC_MAX_PENETRATION,
+): { gx: number; gy: number; radius: number; run: [number, number] } {
+  let fallback: { gx: number; gy: number; radius: number; run: [number, number] } | null = null;
+  for (let step = 8; step >= 0; step--) {
+    const f = step / 8;
+    const run: [number, number] = [Math.round(wet[0] + (grown[0] - wet[0]) * f), Math.round(wet[1] + (grown[1] - wet[1]) * f)];
+    const disc = edgeStageDisc(edge, run[0], run[1], nx, ny, maxPenetration);
+    fallback = { ...disc, run };
+    if (!discCovers(disc, nx, ny, forbidden)) return fallback;
+  }
+  return fallback!;
+}
+
+/** True if any in-domain cell centre within the disc satisfies `pred`. */
+function discCovers(disc: { gx: number; gy: number; radius: number }, nx: number, ny: number, pred: (k: number) => boolean): boolean {
+  const r = disc.radius;
+  const j0 = Math.max(0, Math.floor(disc.gy - r));
+  const j1 = Math.min(ny - 1, Math.ceil(disc.gy + r));
+  for (let j = j0; j <= j1; j++) {
+    const dy = j + 0.5 - disc.gy;
+    const w = r * r - dy * dy;
+    if (w < 0) continue;
+    const half = Math.sqrt(w);
+    const i0 = Math.max(0, Math.ceil(disc.gx - half - 0.5));
+    const i1 = Math.min(nx - 1, Math.floor(disc.gx + half - 0.5));
+    for (let i = i0; i <= i1; i++) if (pred(j * nx + i)) return true;
+  }
+  return false;
+}
+
 export interface RiverEnd {
   river: number;
   /** Which end of the traced centerline: 'upstream' (inflow) or 'downstream' (outflow). */

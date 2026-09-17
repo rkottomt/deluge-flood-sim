@@ -6,7 +6,7 @@
 import type { LiveAreaRequest, ProgressFn, RoadNetwork, ScenarioPreset, Shelter, TerrainData, WaterSource } from '../contracts';
 import { fetchDEM } from './dem';
 import { isLikelyUS, squareDomain } from './geo';
-import { burnWaterBodies, detectWaterBodies, distanceTransform, edgeRuns, edgeStageDisc, growEdgeRun, type WaterBody } from './hydro';
+import { burnWaterBodies, detectWaterBodies, distanceTransform, edgeRuns, edgeStageDiscAvoiding, growEdgeRun, type WaterBody } from './hydro';
 import { fetchImagery, IMAGERY_ATTRIBUTION } from './imagery';
 import { fetchRoadNetwork } from './roads';
 
@@ -198,8 +198,9 @@ function edgeSourcePoints(
       // Cover the crossing as wide as it gets at the top of the slider (see growEdgeRun).
       const level = levelAt[k];
       const ceiling = level + maxOffset;
-      const [a, c] = growEdgeRun(edge, t0, t1, nx, ny, (q) => mask[q] === 1 || (elev[q] < ceiling && elev[q] >= level));
-      out.push({ ...edgeStageDisc(edge, a, c, nx, ny), level });
+      const grown = growEdgeRun(edge, t0, t1, nx, ny, (q) => mask[q] === 1 || (elev[q] < ceiling && elev[q] >= level));
+      const { run: _run, ...disc } = edgeStageDiscAvoiding(edge, [t0, t1], grown, nx, ny, (q) => mask[q] !== 1 && elev[q] < level);
+      out.push({ ...disc, level });
     }
   }
   return out;

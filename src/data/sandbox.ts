@@ -11,7 +11,7 @@
  */
 import type { CameraPose, GeoBounds, RoadClass, ScenarioPreset, Shelter, TerrainData, WaterSource } from '../contracts';
 import { squareDomain } from './geo';
-import { edgeStageDisc, growEdgeRun, smoothstep } from './hydro';
+import { edgeStageDiscAvoiding, growEdgeRun, smoothstep } from './hydro';
 import { buildRoadNetwork, nodeCrossings, type RawRoad } from './roads';
 
 export const SANDBOX_NAME = 'Riverside — synthetic valley';
@@ -402,13 +402,15 @@ export function generateSandbox(opts: SandboxOptions = {}): TerrainData {
   const STAGE_MAX_OFFSET = 8;
   // The river's wet crossing of the south edge (the wetted channel reaches ~1.2 half-widths from the centreline, see
   // the bank profile above), widened to the cross-section at the top of the stage slider (see growEdgeRun).
-  const [southT0, southT1] = growEdgeRun(
+  const southWet: [number, number] = [Math.floor(riverX(N - 0.5) - 1.5 * riverHalfW), Math.ceil(riverX(N - 0.5) + 1.5 * riverHalfW) - 1];
+  const southDisc = edgeStageDiscAvoiding(
     'south',
-    Math.floor(riverX(N - 0.5) - 1.5 * riverHalfW),
-    Math.ceil(riverX(N - 0.5) + 1.5 * riverHalfW) - 1,
+    southWet,
+    growEdgeRun('south', southWet[0], southWet[1], N, N, (k) => elevation[k] < levelSouth + STAGE_MAX_OFFSET && elevation[k] >= levelSouth),
     N,
     N,
-    (k) => elevation[k] < levelSouth + STAGE_MAX_OFFSET && elevation[k] >= levelSouth,
+    // Land below the river level outside the channel (dry at load) must not be inside the disc.
+    (k) => elevation[k] < levelSouth && Math.abs((k % N) + 0.5 - riverX(Math.floor(k / N) + 0.5)) > 1.5 * riverHalfW,
   );
   const sources: WaterSource[] = [
     { id: 'river-in', type: 'inflow', gx: riverX(8) + 0, gy: 8, radius: Math.round(riverHalfW * 8) / 10, discharge: 180, label: 'Clear River inflow' },
@@ -416,7 +418,9 @@ export function generateSandbox(opts: SandboxOptions = {}): TerrainData {
     {
       id: 'river-stage',
       type: 'stage',
-      ...edgeStageDisc('south', southT0, southT1, N, N),
+      gx: southDisc.gx,
+      gy: southDisc.gy,
+      radius: southDisc.radius,
       level: levelSouth,
       label: 'Riverside gauge',
     },

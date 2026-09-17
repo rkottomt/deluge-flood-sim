@@ -111,6 +111,16 @@ function checkStageBoundary(
   for (const [t0, t1] of runs) {
     for (let t = t0; t <= t1; t++) assert.ok(covered(t), `${label}: stage source ${src.id} misses wet edge cell ${t} of crossing ${t0}..${t1}`);
   }
+  // The disc must not cover land below the stage level that is dry at load (it would be filled at load).
+  let drowned = 0;
+  const r = Math.ceil(src.radius);
+  for (let j = Math.max(0, Math.floor(src.gy - r)); j < Math.min(ny, Math.ceil(src.gy + r)); j++) {
+    for (let i = Math.max(0, Math.floor(src.gx - r)); i < Math.min(nx, Math.ceil(src.gx + r)); i++) {
+      const k = j * nx + i;
+      if (Math.hypot(i + 0.5 - src.gx, j + 0.5 - src.gy) <= src.radius && h0[k] <= 0.01 && elevation[k] < src.level) drowned++;
+    }
+  }
+  assert.equal(drowned, 0, `${label}: stage source ${src.id} covers ${drowned} dry cells below its level`);
   if (ceiling === null) return;
   // The covered stretch ends where the bed clears the slider's ceiling (or at a corner).
   let a = len;
@@ -123,11 +133,31 @@ function checkStageBoundary(
   for (const t of [a - 1, b + 1]) {
     if (t < 0 || t >= len) continue;
     const k = edgeCell(edge, t, nx, ny);
+    // (or the widening stopped short so the disc stays off land below the level — see edgeStageDiscAvoiding)
     assert.ok(
-      elevation[k] >= ceiling || (h0[k] <= 0.01 && elevation[k] < src.level),
+      elevation[k] >= ceiling || (h0[k] <= 0.01 && elevation[k] < src.level) || stoppedShort(src, edge, t, nx, ny, h0, elevation),
       `${label}: stage source ${src.id} stops at edge cell ${t} (bed ${elevation[k].toFixed(1)} m) below the stage ceiling ${ceiling.toFixed(1)} m`,
     );
   }
+}
+
+/** Would covering edge cell t (widening the disc one more cell) put land below the level that is dry at load inside? */
+function stoppedShort(src: WaterSource & { type: 'stage' }, edge: DomainEdge, t: number, nx: number, ny: number, h0: Float32Array, elevation: Float32Array): boolean {
+  // Any dry below-level cell within the penetration depth of the edge near t means the lens could not grow there.
+  const k0 = edgeCell(edge, t, nx, ny);
+  const i0 = k0 % nx;
+  const j0 = Math.floor(k0 / nx);
+  const P = STAGE_DISC_MAX_PENETRATION + 2;
+  for (let dj = -P; dj <= P; dj++) {
+    for (let di = -P; di <= P; di++) {
+      const i = i0 + di;
+      const j = j0 + dj;
+      if (i < 0 || j < 0 || i >= nx || j >= ny) continue;
+      const k = j * nx + i;
+      if (h0[k] <= 0.01 && elevation[k] < src.level) return true;
+    }
+  }
+  return false;
 }
 
 function checkScenario(
