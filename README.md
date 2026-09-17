@@ -171,8 +171,8 @@ headless Chromium (or a real Electron build) and want a machine with WebGPU — 
 | Command | What it guards | Time |
 | --- | --- | --- |
 | `npm run typecheck` | TypeScript, no emit | ~5 s |
-| `npm test` | 320+ unit tests (solver, data, routing, UI, render helpers) | ~45 s |
-| `npm run e2e` | End-to-end app flows in a real browser (`-- --prod` for the built bundle) | ~3 min |
+| `npm test` | 326 unit tests (solver, data, routing, UI, render helpers) | ~35 s |
+| `npm run e2e` | 14 end-to-end app flows in a real browser (`-- --prod` for the built bundle) | ~4 min |
 | `npm run test:perf` | **No lag** — fps, frame times, sim speed, input latency, drift | ~10 min |
 | `npm run test:visual` | **No graphics glitches** — golden images + baseline-free detectors | ~20 min |
 | `npm run test:security` | **No security regressions** — the penetration test's cases, automated | ~8 min |
@@ -223,6 +223,9 @@ exact number of simulated seconds with `runFor`, camera pose assigned rather tha
 ladder pinned so render scale cannot drift — then captured at 1470×956 @ DPR 2. Scenes cover the default Pittsburgh
 view, the 1936 crest, the demo levee with its protected-land glow, all three hazard modes, the Break-it stability
 demo, each other preset's own camera, a close-up shoreline, a drawn wall, a bridge, top-down and a low grazing angle.
+The two transient toasts are hidden for the capture — they auto-dismiss on a wall-clock timer, so whether one is on
+screen depends on how long the machine took, which is worth ~3 % of the frame and nothing to do with rendering. The
+Break-it banner is not hidden; it belongs to that scene.
 
 Two independent checks:
 
@@ -285,7 +288,10 @@ endpoints it fetches terrain, imagery, roads and place names from. A released bu
 — no `unsafe-inline`, no `unsafe-eval` — restricting `connect-src` to exactly those seven endpoints
 ([`src/data/csp.ts`](src/data/csp.ts) is the single source of truth, mirrored into the desktop wrapper and guarded by
 a test that fails if a new host appears). `npm run test:security` re-runs this project's own penetration-test cases
-against the built bundle.
+against the built bundle, and `npm run app:check` re-runs the desktop wrapper's — including that a renderer can
+leave nothing behind (cookies, localStorage, IndexedDB and the Origin Private File System are cleared before the
+window opens) and that a packaged build refuses to start if its command line asks it to drop TLS validation or the
+sandbox.
 
 **Accepted risk, stated on purpose:** a copy hosted on GitHub Pages can be framed by any other origin. Pages cannot
 send a `Content-Security-Policy` header and `frame-ancestors` is ignored in a `<meta>` tag, so there is no way to

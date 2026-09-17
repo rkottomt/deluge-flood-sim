@@ -376,9 +376,11 @@ From `npm test` (tests run on the real GPU through Dawn):
 | GPU (Float32, parallel) vs Float64 CPU reference, 5 cases × 400 steps | max \|Δh\| ≤ 4.3·10⁻⁵ m | `tests/sim/reference.test.ts` |
 | Stale-CFL abuse, heavy rain on steep terrain | no NaN, no negative depth | `tests/sim/robustness.test.ts`, `stability.test.ts` |
 
-`npm run e2e` drives the end-to-end demo flows (load, raise to the crest, levee, rain, evacuation, break and recover,
-presets, tools, frame rate, idle power, cancelling a stalled `?live=` link, the one-click levee; `--live` adds a
-live-area flow) in headless Chromium on the real GPU, offline.
+`npm run e2e` drives 14 end-to-end demo flows (load, raise to the crest, levee, rain, evacuation, break and recover,
+presets, tools, frame rate, idle power, cancelling a stalled `?live=` link, the one-click levee, the screen wake
+lock, and a GPU device loss mid-load; `--live` adds a live-area flow) in headless Chromium on the real GPU,
+offline — every request to a non-local host is blocked and reported, so a flow that quietly needed the network
+fails.
 
 ## 10. Shipping: browser, desktop app and the test suites
 
