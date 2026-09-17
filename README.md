@@ -289,9 +289,9 @@ endpoints it fetches terrain, imagery, roads and place names from. A released bu
 ([`src/data/csp.ts`](src/data/csp.ts) is the single source of truth, mirrored into the desktop wrapper and guarded by
 a test that fails if a new host appears). `npm run test:security` re-runs this project's own penetration-test cases
 against the built bundle, and `npm run app:check` re-runs the desktop wrapper's — including that a renderer can
-leave nothing behind (cookies, localStorage, IndexedDB and the Origin Private File System are cleared before the
-window opens) and that a packaged build refuses to start if its command line asks it to drop TLS validation or the
-sandbox.
+leave nothing behind (localStorage, IndexedDB, service workers, cache storage and the Origin Private File System
+are cleared before the window opens) and that a packaged build refuses to start if its command line asks it to
+drop TLS validation or the sandbox.
 
 **Accepted risk, stated on purpose:** a copy hosted on GitHub Pages can be framed by any other origin. Pages cannot
 send a `Content-Security-Policy` header and `frame-ancestors` is ignored in a `<meta>` tag, so there is no way to

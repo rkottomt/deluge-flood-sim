@@ -419,9 +419,12 @@ instead, which is stronger and needs no page to be visible. macOS fuses turn off
 `NODE_OPTIONS`, `--inspect` and `file://` extra privileges, require asar integrity and refuse to load an app from
 anywhere but the asar; a packaged build also refuses to start if its command line asks it to disarm any of this
 (`--ignore-certificate-errors`, `--disable-web-security`, `--remote-debugging-port`, …). Nothing a page writes
-survives a relaunch: the session's cookies, localStorage, IndexedDB, service workers, cache storage and — the one
-that actually matters, because a renderer can write real files there — the **Origin Private File System** are
-cleared before the window opens. A renderer crash reloads with a back-off (three times inside a minute); the next
+survives a relaunch: the session's localStorage, IndexedDB, service workers, cache storage and — the one that
+actually matters, because a renderer can write real files there — the **Origin Private File System** are cleared
+before the window opens. Cookies are pointedly *not* on that list: the app sets none, and asking Electron to clear
+them opens the cookie store, which under the `EnableCookieEncryption` fuse creates a login-keychain item that an
+ad-hoc-signed rebuild no longer matches — so the next launch asks the presenter for their password. Measured both
+ways; `electron/main.js` records the evidence at the call. A renderer crash reloads with a back-off (three times inside a minute); the next
 crash shows a static recovery page with a Restart button, rather than leaving a blank window with no message.
 
 `npm run app:check` is the gate: 43 checks, the last 20 of them against the packaged, fused bundle. Because such a

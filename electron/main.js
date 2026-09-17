@@ -452,15 +452,27 @@ app.whenReady().then(async () => {
    * A previous visitor's state never carries over. `filesystem` is the one that matters and the one that was
    * missing: it covers the Origin Private File System, where a renderer can write real files that survive a
    * relaunch (planted, read back after quitting, and confirmed gone with this list, in the Electron pentest).
-   * `cookies` and `websql` are free — the app uses neither, so wiping them costs nothing and closes the
-   * question. `shadercache` is deliberately *not* wiped: it holds no visitor state and dropping it would make
+   * `websql` is free — the app uses it not at all, so wiping it costs nothing and closes the question.
+   *
+   * `cookies` is deliberately NOT in this list, and that is a measured decision rather than an oversight.
+   * Asking Electron to clear cookies opens the cookie store, and with the R11 `EnableCookieEncryption` fuse on
+   * that makes it create a `"<AppName> Safe Storage"` item in the login keychain. The bundle is ad-hoc signed
+   * and re-signed by every `npm run app:build`, so the next launch no longer matches that item's ACL and macOS
+   * puts a **"Deluge wants to use your confidential information … enter the login keychain password"** dialog
+   * on screen — in front of the judge, over the app. Measured both ways on this machine with two identically
+   * built bundles: with `cookies` in the list the keychain item is created on first launch; without it, it
+   * never is, and no dialog can follow. The app sets no cookies (no accounts, no backend, no state-changing
+   * request — see THREAT_MODEL.md and the `EnableCookieEncryption` row of the R11 fuse table, which already
+   * says so), so the wipe protected nothing and cost the demo. The fuse itself stays on.
+   *
+   * `shadercache` is deliberately *not* wiped: it holds no visitor state and dropping it would make
    * every launch recompile shaders. The HTTP cache is kept for the same reason — it only holds public map
    * data, and it makes repeated live loads bearable on venue wifi.
    *
    * Awaited: the window must not start writing storage while the wipe is still running.
    */
   await ses
-    .clearStorageData({ storages: ['cookies', 'filesystem', 'indexdb', 'localstorage', 'serviceworkers', 'cachestorage', 'websql'] })
+    .clearStorageData({ storages: ['filesystem', 'indexdb', 'localstorage', 'serviceworkers', 'cachestorage', 'websql'] })
     .catch((e) => console.warn('[deluge] clearStorageData', e));
 
   // R4/R5
