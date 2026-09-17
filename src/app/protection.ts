@@ -336,7 +336,10 @@ export class ProtectionController {
    * erased while paused bring no new readback). `force` skips the interval.
    */
   tick(now: number, input: () => ProtectionInput | null, force = false): void {
-    const due = now - this.lastRun >= (this.pending ? this.intervalMs : 2 * this.intervalMs);
+    // A heavy run (a rising flood spreads the level over a lot of shallow land) spaces the next ones out, up to 3×:
+    // at most ~1–2 % of main-thread time.
+    const interval = Math.max(this.intervalMs, Math.min(3 * this.intervalMs, this.lastMs * 80));
+    const due = now - this.lastRun >= (this.pending ? interval : 2 * interval);
     if (!force && !due) return;
     const data = input();
     if (!data) return;

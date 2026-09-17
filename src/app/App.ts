@@ -115,13 +115,20 @@ export class App {
     this.errors.attachStore(this.store);
 
     this.evac = new EvacController(this.router, this.store, this.errors);
+    let maskKey = '';
     this.protection = new ProtectionController({
       publish: (result) => {
         const bridge = bridgeFor(this.store);
         bridge.setProtection(
           result && { wallCells: result.wallCells, areaM2: result.areaM2, roadMeters: result.roadMeters, roadEdges: result.roadEdges, level: result.level },
         );
-        (this.renderer as Partial<DelugeRendererAPI> | null)?.setProtectedMask?.(result?.cells ? result.mask : null);
+        // Upload the glow mask only when the protected land changed (a 1024² upload once a second would also wake an
+        // idle, paused view every second).
+        const b = result?.bounds;
+        const key = result?.cells && b ? `${result.cells}|${b.x0}|${b.y0}|${b.x1}|${b.y1}` : '';
+        if (key === maskKey) return;
+        maskKey = key;
+        (this.renderer as Partial<DelugeRendererAPI> | null)?.setProtectedMask?.(key ? result!.mask : null);
         this.requestRender();
       },
     });

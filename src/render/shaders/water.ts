@@ -286,7 +286,8 @@ fn fsWater(in: WOut) -> @location(0) vec4f {
   // Two incommensurate scales so the tiling never lines up.
   let slick = ((rM.w - 0.5) * 0.6 + (slickFar - 0.5) * 0.8 + (rA.w - 0.5) * 0.3 * detailFade) * 0.55;
   let riverSed = mix(vec3f(0.115, 0.088, 0.054), vec3f(0.032, 0.040, 0.027), deep);
-  let floodSed = mix(vec3f(0.185, 0.150, 0.095), vec3f(0.130, 0.112, 0.076), smoothstep(0.5, 5.0, thick));
+  // Slightly lighter and cooler than the imagery's khaki roofs and bare ground, so flood extent reads from far away.
+  let floodSed = mix(vec3f(0.205, 0.178, 0.128), vec3f(0.140, 0.128, 0.098), smoothstep(0.5, 5.0, thick));
   let sediment = mix(riverSed, floodSed, floodMix) * (1.0 + slick * mix(0.6, 1.0, turbulence));
   let body = sediment * lightIn;
   // Thin rain sheet-flow (a few cm over grass or pavement) is not visible from the air: fade it in with depth.
@@ -317,8 +318,10 @@ fn fsWater(in: WOut) -> @location(0) vec4f {
     let edge = smoothstep(0.6, 1.4, pxFromShore) * (1.0 - smoothstep(2.4, 3.6, pxFromShore))
              * smoothstep(0.03, 0.08, hInside) * (1.0 - smoothstep(0.005, 0.03, hOutside)) * smoothstep(0.5, 0.9, floodLand);
     let edgeCol = vec3f(0.80, 0.77, 0.68) * lightIn * 0.62;
-    rgb = mix(rgb, edgeCol, edge * 0.75);
-    alpha = mix(alpha, 1.0, edge * 0.75);
+    // Stronger from far away (beyond ~2 km), where the line is what outlines the flood against the city.
+    let edgeK = mix(0.75, 0.92, smoothstep(1500.0, 3500.0, distance(in.world, F.camPos)));
+    rgb = mix(rgb, edgeCol, edge * edgeK);
+    alpha = mix(alpha, 1.0, edge * edgeK);
   }
 
   if (mode != 0) {
