@@ -9,7 +9,9 @@ import assert from 'node:assert/strict';
 import type { CameraPose, FloodSolver, SimParams, StepInfo } from '../../src/contracts';
 import { createInitialState } from '../../src/app/defaults';
 import { ErrorReporter } from '../../src/app/errors';
+import { FrameCeiling } from '../../src/app/frameCeiling';
 import { SubstepGovernor, WorkBudget } from '../../src/app/governor';
+import { AdaptiveQuality } from '../../src/render/quality';
 import { RenderPacer } from '../../src/app/pacer';
 import { SimSync } from '../../src/app/simSync';
 import { StageLevels } from '../../src/app/stage';
@@ -240,4 +242,58 @@ test('sim sync: override layers — timeScale replaces, substep caps only lower 
   sync.setOverride('runFor', null);
   assert.equal(solver.params?.timeScale, 60);
   assert.equal(store.get().sim.timeScale, 60, 'overrides never leak into the store');
+});
+
+test('frame ceiling: a 30 fps browser cap with light work is learned; our own overload is not; lifting clears it', () => {
+  const c = new FrameCeiling();
+  // Energy Saver: every rAF 33.3 ms apart, frame work ~6 ms.
+  for (let f = 0; f < 90; f++) c.sample(33.3 + (f % 3) * 0.05, 6);
+  assert.ok(Math.abs(c.floorMs - 33.3) < 0.2, `floor ${c.floorMs}`);
+  // Work grows to use the headroom (hysteresis: the ceiling stays).
+  for (let f = 0; f < 90; f++) c.sample(33.3, 24);
+  assert.ok(c.floorMs > 33);
+  // Charger plugged in: 60 Hz frames again.
+  for (let f = 0; f < 45; f++) c.sample(16.7, 10);
+  assert.equal(c.floorMs, 0);
+  // 60 Hz display where OUR work makes every frame miss vsync: not an external ceiling.
+  const d = new FrameCeiling();
+  for (let f = 0; f < 180; f++) d.sample(33.3, 22);
+  assert.equal(d.floorMs, 0);
+  // A mix of 1- and 2-vsync frames is never uniformly slow.
+  for (let f = 0; f < 180; f++) d.sample(f % 2 ? 16.7 : 33.3, 3);
+  assert.equal(d.floorMs, 0);
+});
+
+test('work budget + adaptive quality: a 30 fps browser cap neither starves the sim nor drops resolution', () => {
+  const budget = new WorkBudget();
+  // Toy GPU under a 30 Hz rAF cap: frames stay 33.3 ms until work exceeds the slot.
+  const run = (frames: number, t0: number) => {
+    let now = t0;
+    for (let f = 0; f < frames; f++) {
+      const n = Math.min(budget.cap, 40);
+      const work = 7 + n * 1.7;
+      const frameMs = Math.ceil(work / 33.333 - 1e-9) * 33.333;
+      now += frameMs;
+      budget.observe(frameMs, { simSecondsAdvanced: n * 0.12, substeps: n, dt: 0.12, throttled: n < 40 }, now, 120);
+    }
+    return now;
+  };
+  const without = run(600, 0);
+  assert.equal(budget.cap, 1, 'without the ceiling the governor reads 33 ms frames as overload');
+  budget.setFrameFloor(33.3);
+  run(1500, without);
+  assert.ok(budget.cap >= 10 && 7 + budget.cap * 1.7 <= 33.4, `cap ${budget.cap} uses the 30 Hz slot without missing it`);
+
+  const q = new AdaptiveQuality();
+  const start = q.level;
+  let now = 0;
+  for (let f = 0; f < 300; f++) q.sample(33.3, (now += 33.3), 4);
+  assert.ok(q.level > start, 'without a floor, 30 fps steps quality down');
+  const r = new AdaptiveQuality();
+  r.floorMs = 33.3;
+  now = 0;
+  for (let f = 0; f < 600; f++) r.sample(33.3, (now += 33.3), 4);
+  assert.ok(r.level <= start, `with the floor quality holds or improves (level ${r.level})`);
+  for (let f = 0; f < 120; f++) r.sample(70, (now += 70), 4);
+  assert.ok(r.level > 0, 'frames well beyond the ceiling still step down');
 });

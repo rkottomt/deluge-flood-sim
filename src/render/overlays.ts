@@ -363,6 +363,43 @@ export interface MarkerScene {
   /** Grid size (cells): markers of boundary sources whose footprint centre lies outside are drawn at the edge. */
   nx: number;
   ny: number;
+  /** Ground elevation (row-major nx×ny), used to stand boundary stage gauges in the channel. Optional. */
+  ground?: ArrayLike<number>;
+}
+
+/**
+ * Where to draw the gauge of a stage source. A boundary stage disc may be centred outside the domain and, when its
+ * crossing was widened over a floodplain (see growEdgeRun in src/data), off-centre from the river itself: stand the
+ * gauge on the lowest bed (the channel) among the edge cells inside the disc, one and a half cells in from the edge.
+ */
+export function stageGaugeAnchor(scene: MarkerScene, gx: number, gy: number, radius: number): { gx: number; gy: number } {
+  const { nx, ny, ground } = scene;
+  const cx = Math.min(nx - 1.5, Math.max(1.5, gx));
+  const cy = Math.min(ny - 1.5, Math.max(1.5, gy));
+  const outside = gx < 0.5 || gx > nx - 0.5 || gy < 0.5 || gy > ny - 0.5;
+  if (!ground || !outside) return { gx: cx, gy: cy };
+  const horizontal = cy !== gy; // centre beyond the north/south edge: scan along x
+  const row = horizontal ? Math.floor(cy) : Math.floor(cx);
+  const centre = horizontal ? gx : gy;
+  const dist = horizontal ? Math.abs(gy - (row + 0.5)) : Math.abs(gx - (row + 0.5));
+  const half = Math.sqrt(Math.max(0, radius * radius - dist * dist));
+  const len = horizontal ? nx : ny;
+  const t0 = Math.max(0, Math.floor(centre - half));
+  const t1 = Math.min(len - 1, Math.ceil(centre + half));
+  const bed = (t: number) => (horizontal ? ground[row * nx + t] : ground[t * nx + row]);
+  let best = Infinity;
+  for (let t = t0; t <= t1; t++) best = Math.min(best, bed(t));
+  if (!Number.isFinite(best)) return { gx: cx, gy: cy };
+  // Middle of the channel floor (burned channels are flat-bottomed): mean position of the near-lowest cells.
+  let sum = 0;
+  let n = 0;
+  for (let t = t0; t <= t1; t++) {
+    if (bed(t) > best + 0.5) continue;
+    sum += t + 0.5;
+    n++;
+  }
+  const at = sum / n;
+  return horizontal ? { gx: at, gy: cy } : { gx: cx, gy: at };
 }
 
 export interface MarkerGeometry {
@@ -471,10 +508,9 @@ export function buildMarkers(
       ], 16, { scaleMode: ScaleMode.Marker, kind: MarkerKind.Beam, size, phase, color: C.beam });
       blended.disc(1.6, 0.03, a, 32, { scaleMode: ScaleMode.Marker, kind: MarkerKind.Pulse, size, phase, color: [0.3, 0.7, 1.0, 1.0] });
     } else {
-      // A boundary stage disc may be centred outside the domain (see edgeStageDisc in src/data): put the gauge at the
-      // nearest point just inside the edge, i.e. in the middle of the river crossing it holds.
-      const gx = Math.min(scene.nx - 1.5, Math.max(1.5, src.gx));
-      const gy = Math.min(scene.ny - 1.5, Math.max(1.5, src.gy));
+      // A boundary stage disc may be centred outside the domain (see edgeStageDisc in src/data): stand the gauge in
+      // the river crossing it holds.
+      const { gx, gy } = stageGaugeAnchor(scene, src.gx, src.gy, src.radius);
       const g: Anchor = { gx, gy, elev: 0, mode: AnchorMode.Ground };
       const lv: Anchor = { gx, gy, elev: src.level, mode: AnchorMode.Absolute };
       const pole: MarkerStyle = { scaleMode: ScaleMode.Marker, kind: MarkerKind.Gauge, size, phase, color: C.white };

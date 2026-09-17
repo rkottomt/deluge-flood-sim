@@ -16,7 +16,7 @@ import path from 'node:path';
 import type { CameraPose, ScenarioPreset, Shelter, StageControl, StormCell, WaterSource } from '../src/contracts';
 import { fetchDEM } from '../src/data/dem';
 import { geoToGrid, squareDomain } from '../src/data/geo';
-import { burnRivers, edgeRuns, edgeStageDisc, findRiverEnds, flatThreshold, localRelief, type BurnResult, type RiverSpec } from '../src/data/hydro';
+import { burnRivers, edgeRuns, edgeStageDisc, findRiverEnds, growEdgeRun, flatThreshold, localRelief, type BurnResult, type RiverSpec } from '../src/data/hydro';
 import { fetchImageryBytes, IMAGERY_ATTRIBUTION } from '../src/data/imagery';
 import { computeInitialWater } from '../src/data/initialWater';
 import { type PresetMeta, PRESETS, validatePresetMeta } from '../src/data/presets';
@@ -397,9 +397,13 @@ async function bake(def: PresetDef) {
         const runs = edgeRuns(end.edge, N, N, (k) => h0[k] > 0.01);
         const run = runs.sort((a, b) => distToRun(a, along) - distToRun(b, along))[0];
         if (!run || distToRun(run, along) > 24) throw new Error(`${def.id}: ${r.name} has no wet crossing of the ${end.edge} edge`);
-        const disc = edgeStageDisc(end.edge, run[0], run[1], N, N);
-        sources.push({ id, type: 'stage', ...disc, level: normalLevel ?? r2(end.level), label: cfg.label });
-        log(def.id, `  source ${id} covers ${end.edge} edge cells ${run[0]}..${run[1]}: disc (${disc.gx}, ${disc.gy}) r=${disc.radius}`);
+        // Cover the crossing as wide as it gets at the top of the stage slider (see growEdgeRun).
+        const level = normalLevel ?? r2(end.level);
+        const ceiling = level + (def.stage?.maxOffset ?? 0);
+        const [t0, t1] = growEdgeRun(end.edge, run[0], run[1], N, N, (k) => h0[k] > 0.01 || (elevation[k] < ceiling && elevation[k] >= level));
+        const disc = edgeStageDisc(end.edge, t0, t1, N, N);
+        sources.push({ id, type: 'stage', ...disc, level, label: cfg.label });
+        log(def.id, `  source ${id} covers ${end.edge} edge cells ${t0}..${t1} (wet ${run[0]}..${run[1]}): disc (${disc.gx}, ${disc.gy}) r=${disc.radius}`);
       }
     }
   });

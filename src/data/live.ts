@@ -6,7 +6,7 @@
 import type { LiveAreaRequest, ProgressFn, RoadNetwork, ScenarioPreset, Shelter, TerrainData, WaterSource } from '../contracts';
 import { fetchDEM } from './dem';
 import { isLikelyUS, squareDomain } from './geo';
-import { burnWaterBodies, detectWaterBodies, distanceTransform, edgeRuns, edgeStageDisc, type WaterBody } from './hydro';
+import { burnWaterBodies, detectWaterBodies, distanceTransform, edgeRuns, edgeStageDisc, growEdgeRun, type WaterBody } from './hydro';
 import { fetchImagery, IMAGERY_ATTRIBUTION } from './imagery';
 import { fetchRoadNetwork } from './roads';
 
@@ -111,7 +111,7 @@ export function buildLiveScenario(
   const sources: WaterSource[] = [];
   let stage: ScenarioPreset['stage'] = null;
   const edgeBodies = bodies.filter((b) => b.touchesEdge && b.cells * cellSize * cellSize > 50000);
-  const candidates = edgeBodies.flatMap((b) => edgeSourcePoints(b, nx, ny).map((p) => ({ ...p, body: b })));
+  const candidates = edgeBodies.flatMap((b) => edgeSourcePoints(b, nx, ny, elev, LIVE_STAGE_MAX_OFFSET).map((p) => ({ ...p, body: b })));
   candidates.sort((a, b) => b.radius - a.radius);
   const MAX_STAGE_SOURCES = 8;
   for (const c of candidates) {
@@ -134,7 +134,7 @@ export function buildLiveScenario(
       label: `Water level (detected surface ${mainBody.level.toFixed(1)} m)`,
       gaugeDatum: Math.round(mainBody.level * 100) / 100,
       normalLevel: Math.round(mainBody.level * 100) / 100,
-      maxOffset: 10,
+      maxOffset: LIVE_STAGE_MAX_OFFSET,
     };
   }
 
@@ -173,7 +173,16 @@ export function buildLiveScenario(
  * Stage-source footprints for every place the water body crosses the domain edge: one disc per run of the body's
  * edge cells, covering the whole run (see edgeStageDisc), at the body's surface level in the middle of the run.
  */
-function edgeSourcePoints(b: WaterBody, nx: number, ny: number): Array<{ gx: number; gy: number; radius: number; level: number }> {
+/** Stage slider range for live areas, m above the detected surface. */
+const LIVE_STAGE_MAX_OFFSET = 10;
+
+function edgeSourcePoints(
+  b: WaterBody,
+  nx: number,
+  ny: number,
+  elev: Float32Array,
+  maxOffset: number,
+): Array<{ gx: number; gy: number; radius: number; level: number }> {
   const mask = new Uint8Array(nx * ny);
   const levelAt = new Float32Array(nx * ny);
   b.indices.forEach((k, q) => {
@@ -186,7 +195,11 @@ function edgeSourcePoints(b: WaterBody, nx: number, ny: number): Array<{ gx: num
       if (t1 - t0 + 1 < 4) continue;
       const mid = (t0 + t1) >> 1;
       const k = edge === 'north' ? mid : edge === 'south' ? (ny - 1) * nx + mid : edge === 'west' ? mid * nx : mid * nx + nx - 1;
-      out.push({ ...edgeStageDisc(edge, t0, t1, nx, ny), level: levelAt[k] });
+      // Cover the crossing as wide as it gets at the top of the slider (see growEdgeRun).
+      const level = levelAt[k];
+      const ceiling = level + maxOffset;
+      const [a, c] = growEdgeRun(edge, t0, t1, nx, ny, (q) => mask[q] === 1 || (elev[q] < ceiling && elev[q] >= level));
+      out.push({ ...edgeStageDisc(edge, a, c, nx, ny), level });
     }
   }
   return out;

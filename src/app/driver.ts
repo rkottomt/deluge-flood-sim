@@ -75,6 +75,7 @@ export class FrameDriver {
    * `frameMs` is the raw interval since the previous frame (feeds the substep governor).
    */
   frame(realDt: number, now: number, frameMs: number): boolean {
+    const workStart = performance.now();
     const { store, renderer, runner, scenes, evac, pacer } = this.app;
     const scene = scenes?.scene;
     if (!scene || !renderer) {
@@ -151,6 +152,9 @@ export class FrameDriver {
     }
 
     this.publishHud(now, state);
+    // Frame pacing vs our own work (main thread + GPU queue) → external frame-rate ceiling detection.
+    const busyMs = Math.max(performance.now() - workStart, running ? this.app.lastLatencyMs : 0);
+    this.app.observeFramePacing(frameMs, busyMs);
     return rendered && pace.active;
   }
 

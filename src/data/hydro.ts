@@ -782,8 +782,7 @@ export function edgeStageDisc(
  */
 export function edgeRuns(edge: DomainEdge, nx: number, ny: number, wet: (k: number) => boolean): Array<[number, number]> {
   const len = edge === 'north' || edge === 'south' ? nx : ny;
-  const cell = (t: number) =>
-    edge === 'north' ? t : edge === 'south' ? (ny - 1) * nx + t : edge === 'west' ? t * nx : t * nx + nx - 1;
+  const cell = (t: number) => edgeCell(edge, t, nx, ny);
   const runs: Array<[number, number]> = [];
   let start = -1;
   for (let t = 0; t <= len; t++) {
@@ -795,6 +794,36 @@ export function edgeRuns(edge: DomainEdge, nx: number, ny: number, wet: (k: numb
     }
   }
   return runs;
+}
+
+/** Row-major index of the t-th cell along a domain edge (west→east for north/south, north→south for west/east). */
+export function edgeCell(edge: DomainEdge, t: number, nx: number, ny: number): number {
+  return edge === 'north' ? t : edge === 'south' ? (ny - 1) * nx + t : edge === 'west' ? t * nx : t * nx + nx - 1;
+}
+
+/**
+ * Widen an edge crossing t0…t1 along the edge while `floodable(k)` holds for the next edge cell — callers pass
+ * "bed below the highest stage the slider allows, and either part of the water body or not below its normal
+ * surface" — i.e. the cross-section the crossing grows to at the top of the slider. A stage disc sized from the
+ * normal-pool crossing leaves the overbank cells beside it on the open boundary at a raised stage; that boundary
+ * drains them, so the surface drops metres within a few cells of the disc rim and water jets out at the velocity
+ * cap. (Cells below the normal surface that are NOT part of the water body — land behind a levee — stop the growth:
+ * the disc would fill them at load.)
+ */
+export function growEdgeRun(
+  edge: DomainEdge,
+  t0: number,
+  t1: number,
+  nx: number,
+  ny: number,
+  floodable: (k: number) => boolean,
+): [number, number] {
+  const len = edge === 'north' || edge === 'south' ? nx : ny;
+  let a = t0;
+  let b = t1;
+  while (a > 0 && floodable(edgeCell(edge, a - 1, nx, ny))) a--;
+  while (b < len - 1 && floodable(edgeCell(edge, b + 1, nx, ny))) b++;
+  return [a, b];
 }
 
 export interface RiverEnd {

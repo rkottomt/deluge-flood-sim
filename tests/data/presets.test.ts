@@ -14,7 +14,7 @@ import http from 'node:http';
 import path from 'node:path';
 import type { AddressInfo } from 'node:net';
 import type { RoadNetwork, ScenarioPreset, TerrainData, WaterSource } from '../../src/contracts';
-import { type DomainEdge, edgeRuns, STAGE_DISC_MAX_PENETRATION } from '../../src/data/hydro';
+import { type DomainEdge, edgeCell, edgeRuns, STAGE_DISC_MAX_PENETRATION } from '../../src/data/hydro';
 import { cellSizeFor } from '../../src/data/geo';
 import { computeInitialWater } from '../../src/data/initialWater';
 import { listPresets, loadPreset } from '../../src/data/index';
@@ -67,11 +67,21 @@ function jpegSize(b: Buffer): { width: number; height: number } {
 const elevAt = (e: Float32Array, nx: number, gx: number, gy: number) => e[Math.floor(gy) * nx + Math.floor(gx)];
 
 /**
- * A stage source is a boundary condition at a water body's edge crossing: its disc must reach the domain edge, the
- * edge cell nearest its centre must start full, and EVERY wet cell of that crossing must get full footprint weight
- * (otherwise the open boundary drains the uncovered part). It must not reach far into the domain either.
+ * A stage source is a boundary condition at a water body's edge crossing: its disc must reach the domain edge and
+ * cover a full crossing, EVERY wet cell of each crossing it touches must get full footprint weight (otherwise the
+ * open boundary drains the uncovered part), and — given the slider's ceiling — the covered stretch of edge must
+ * extend until the bed rises above that ceiling, so overbank water at the top of the slider isn't drained beside
+ * the disc. It must not reach far into the domain either.
  */
-function checkStageBoundary(label: string, src: WaterSource & { type: 'stage' }, nx: number, ny: number, h0: Float32Array) {
+function checkStageBoundary(
+  label: string,
+  src: WaterSource & { type: 'stage' },
+  nx: number,
+  ny: number,
+  h0: Float32Array,
+  elevation: Float32Array,
+  ceiling: number | null,
+) {
   const R = src.radius - 0.5; // full-weight radius (smooth one-cell rim)
   const edges: Array<{ edge: DomainEdge; dist: number }> = [
     { edge: 'north', dist: src.gy },
@@ -84,17 +94,39 @@ function checkStageBoundary(label: string, src: WaterSource & { type: 'stage' },
   assert.ok(Math.abs(dist) < R, `${label}: stage source ${src.id} does not reach the ${edge} edge`);
   const reach = src.radius + dist;
   assert.ok(reach <= STAGE_DISC_MAX_PENETRATION + 2, `${label}: stage source ${src.id} reaches ${reach.toFixed(1)} cells into the domain`);
-  const horizontal = edge === 'north' || edge === 'south';
-  const along = horizontal ? src.gx : src.gy;
-  const cellOf = (t: number) => (edge === 'north' ? t : edge === 'south' ? (ny - 1) * nx + t : edge === 'west' ? t * nx : t * nx + nx - 1);
-  const centre = Math.min((horizontal ? nx : ny) - 1, Math.max(0, Math.floor(along)));
-  assert.ok(h0[cellOf(centre)] > 0.5, `${label}: stage source ${src.id} is not centred on a full edge crossing`);
-  const run = edgeRuns(edge, nx, ny, (k) => h0[k] > 0.01).find(([t0, t1]) => centre >= t0 && centre <= t1)!;
-  for (let t = run[0]; t <= run[1]; t++) {
-    const k = cellOf(t);
-    const cx = (k % nx) + 0.5;
-    const cy = Math.floor(k / nx) + 0.5;
-    assert.ok(Math.hypot(cx - src.gx, cy - src.gy) <= R, `${label}: stage source ${src.id} misses wet edge cell ${t} of crossing ${run[0]}..${run[1]}`);
+  const len = edge === 'north' || edge === 'south' ? nx : ny;
+  const covered = (t: number) => {
+    const k = edgeCell(edge, t, nx, ny);
+    return Math.hypot((k % nx) + 0.5 - src.gx, Math.floor(k / nx) + 0.5 - src.gy) <= R;
+  };
+  const runs = edgeRuns(edge, nx, ny, (k) => h0[k] > 0.01).filter(([t0, t1]) => {
+    for (let t = t0; t <= t1; t++) if (covered(t)) return true;
+    return false;
+  });
+  const full = runs.some(([t0, t1]) => {
+    for (let t = t0; t <= t1; t++) if (h0[edgeCell(edge, t, nx, ny)] > 0.5) return true;
+    return false;
+  });
+  assert.ok(full, `${label}: stage source ${src.id} does not cover a full edge crossing`);
+  for (const [t0, t1] of runs) {
+    for (let t = t0; t <= t1; t++) assert.ok(covered(t), `${label}: stage source ${src.id} misses wet edge cell ${t} of crossing ${t0}..${t1}`);
+  }
+  if (ceiling === null) return;
+  // The covered stretch ends where the bed clears the slider's ceiling (or at a corner).
+  let a = len;
+  let b = -1;
+  for (let t = 0; t < len; t++) {
+    if (!covered(t)) continue;
+    a = Math.min(a, t);
+    b = Math.max(b, t);
+  }
+  for (const t of [a - 1, b + 1]) {
+    if (t < 0 || t >= len) continue;
+    const k = edgeCell(edge, t, nx, ny);
+    assert.ok(
+      elevation[k] >= ceiling || (h0[k] <= 0.01 && elevation[k] < src.level),
+      `${label}: stage source ${src.id} stops at edge cell ${t} (bed ${elevation[k].toFixed(1)} m) below the stage ceiling ${ceiling.toFixed(1)} m`,
+    );
   }
 }
 
@@ -108,7 +140,7 @@ function checkScenario(
   // Sources: on water that starts full, with most of the footprint wet.
   for (const src of s.sources) {
     if (src.type === 'stage') {
-      checkStageBoundary(label, src, nx, ny, h0);
+      checkStageBoundary(label, src, nx, ny, h0, elevation, s.stage ? src.level + s.stage.maxOffset : null);
       if (s.stage) {
         assert.ok(Math.abs(src.level - s.stage.normalLevel) < 0.6, `${label}: stage source ${src.id} level ${src.level} vs normal ${s.stage.normalLevel}`);
       }

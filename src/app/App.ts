@@ -1,6 +1,6 @@
 import type { AppActions, AppState, FloodRenderer, FloodSolver, StepInfo, ToolController } from '../contracts';
 import { createDelugeDevice, type DelugeGPU } from '../gpu';
-import { createRenderer } from '../render';
+import { createRenderer, type DelugeRendererAPI } from '../render';
 import { createRouter } from '../routing';
 import { createToolController, mountUI } from '../ui';
 import { createActions } from './actions';
@@ -10,6 +10,7 @@ import { FrameDriver } from './driver';
 import { errorMessage, ErrorReporter } from './errors';
 import { EvacController } from './evac';
 import { WorkBudget, type BudgetMode } from './governor';
+import { FrameCeiling } from './frameCeiling';
 import { GpuLatencyProbe } from './latency';
 import { FrameLoop } from './loop';
 import { RenderPacer } from './pacer';
@@ -42,8 +43,15 @@ export class App {
   /** GPU queue latency → work budget (see governor.ts for why frame time alone is not enough). */
   readonly latency = new GpuLatencyProbe(
     () => this.gpu?.device.queue ?? null,
-    (ms) => this.budget.noteLatency(ms),
+    (ms) => {
+      this.lastLatencyMs = ms;
+      this.budget.noteLatency(ms);
+    },
   );
+  /** Latest GPU latency sample, ms (0 until the solver has run). */
+  lastLatencyMs = 0;
+  /** External frame-rate ceiling (e.g. Chrome Energy Saver / Low Power Mode at 30 fps), shared by both controllers. */
+  readonly frameCeiling = new FrameCeiling();
   readonly router = createRouter();
   readonly evac: EvacController;
   readonly sim: SimSync;
@@ -273,6 +281,22 @@ export class App {
     const switched = this.budget.setMode(mode);
     const adapted = this.budget.observe(frameMs, info, now, this.store.get().sim.maxSubstepsPerFrame);
     if (switched || adapted) this.sim.setOverride('governor', { maxSubstepsPerFrame: this.budget.cap });
+  }
+
+  /**
+   * Feed one frame's pacing (interval since the previous frame, and the frame's own work in ms) to the external
+   * frame-rate ceiling detector; a change retunes the work budget and the renderer's adaptive quality.
+   */
+  observeFramePacing(frameMs: number, busyMs: number): void {
+    if (!this.frameCeiling.sample(frameMs, busyMs)) return;
+    const floor = this.frameCeiling.floorMs;
+    this.budget.setFrameFloor(floor);
+    (this.renderer as Partial<DelugeRendererAPI> | null)?.setFrameIntervalFloor?.(floor);
+    console.info(
+      floor > 0
+        ? `[deluge] browser paces frames at ~${(1000 / floor).toFixed(0)} fps (power saving); budgets retuned to it`
+        : '[deluge] frame-rate ceiling lifted',
+    );
   }
 
   markReady(): void {

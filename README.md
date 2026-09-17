@@ -31,6 +31,10 @@ URL options: `?preset=pittsburgh|johnstown|ellicott|sandbox`, or a live area
 
 Keys: `1`–`0` tools, `Space` pause, `?` help. The HUD's mass-balance error shows no water is created or lost.
 
+**On a laptop:** plug in for the demo. The app sizes solver substeps and render resolution to measured frame time and
+GPU latency, and it detects when the browser caps pages at 30 fps on battery (Chrome Energy Saver, macOS Low Power
+Mode), retuning both budgets to that ceiling instead of starving the simulation — but 60 fps needs mains power.
+
 ## Tests
 
 ```bash

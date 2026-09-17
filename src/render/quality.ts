@@ -64,6 +64,11 @@ export class AdaptiveQuality {
   private cooldownUntil = 0;
   private raiseHoldMs = 4000;
   private lastRaiseAt = -Infinity;
+  /**
+   * Externally imposed frame interval (ms, 0 = none), e.g. a browser's 30 fps battery-saver cap. Frames at that
+   * ceiling are not slow — lowering resolution could not make them faster — so the thresholds move above it.
+   */
+  floorMs = 0;
 
   get preset(): QualityPreset {
     return AUTO_LADDER[this.level];
@@ -87,8 +92,10 @@ export class AdaptiveQuality {
     if (!(intervalMs > 0) || intervalMs > 250) return false;
     this.ema += (intervalMs - this.ema) * 0.12;
     if (now < this.cooldownUntil) return false;
-    this.slowMs = this.ema > SLOW_MS ? this.slowMs + intervalMs : 0;
-    this.fastMs = this.ema < FAST_MS ? this.fastMs + intervalMs : 0;
+    const slowThreshold = Math.max(SLOW_MS, this.floorMs * 1.25);
+    const fastThreshold = Math.max(FAST_MS, this.floorMs * 1.06);
+    this.slowMs = this.ema > slowThreshold ? this.slowMs + intervalMs : 0;
+    this.fastMs = this.ema < fastThreshold ? this.fastMs + intervalMs : 0;
 
     if (this.slowMs > 700 && this.level < AUTO_LADDER.length - 1) {
       this.level++;
@@ -113,7 +120,7 @@ export class AdaptiveQuality {
     this.cooldownUntil = now + ms;
     this.slowMs = 0;
     this.fastMs = 0;
-    this.ema = 16.7;
+    this.ema = Math.max(16.7, this.floorMs);
   }
 }
 

@@ -11,7 +11,7 @@
  */
 import type { CameraPose, GeoBounds, RoadClass, ScenarioPreset, Shelter, TerrainData, WaterSource } from '../contracts';
 import { squareDomain } from './geo';
-import { edgeStageDisc, smoothstep } from './hydro';
+import { edgeStageDisc, growEdgeRun, smoothstep } from './hydro';
 import { buildRoadNetwork, nodeCrossings, type RawRoad } from './roads';
 
 export const SANDBOX_NAME = 'Riverside — synthetic valley';
@@ -399,14 +399,24 @@ export function generateSandbox(opts: SandboxOptions = {}): TerrainData {
   ];
   // ── Scenario.
   const levelSouth = riverLevel(N - 6);
+  const STAGE_MAX_OFFSET = 8;
+  // The river's wet crossing of the south edge (the wetted channel reaches ~1.2 half-widths from the centreline, see
+  // the bank profile above), widened to the cross-section at the top of the stage slider (see growEdgeRun).
+  const [southT0, southT1] = growEdgeRun(
+    'south',
+    Math.floor(riverX(N - 0.5) - 1.5 * riverHalfW),
+    Math.ceil(riverX(N - 0.5) + 1.5 * riverHalfW) - 1,
+    N,
+    N,
+    (k) => elevation[k] < levelSouth + STAGE_MAX_OFFSET && elevation[k] >= levelSouth,
+  );
   const sources: WaterSource[] = [
     { id: 'river-in', type: 'inflow', gx: riverX(8) + 0, gy: 8, radius: Math.round(riverHalfW * 8) / 10, discharge: 180, label: 'Clear River inflow' },
     // Downstream boundary: the stage disc covers the river's whole crossing of the south edge (see edgeStageDisc).
     {
       id: 'river-stage',
       type: 'stage',
-      // (the wetted channel reaches ~1.2 half-widths from the centreline, see the bank profile above)
-      ...edgeStageDisc('south', Math.floor(riverX(N - 0.5) - 1.5 * riverHalfW), Math.ceil(riverX(N - 0.5) + 1.5 * riverHalfW) - 1, N, N),
+      ...edgeStageDisc('south', southT0, southT1, N, N),
       level: levelSouth,
       label: 'Riverside gauge',
     },
@@ -444,7 +454,7 @@ export function generateSandbox(opts: SandboxOptions = {}): TerrainData {
       normalLevel: levelSouth,
       floodStageFt: Math.round(((levelSouth + 2.6 - datum) / 0.3048) * 10) / 10,
       marks: [{ label: 'Design flood', ft: Math.round(((levelSouth + 5 - datum) / 0.3048) * 10) / 10 }],
-      maxOffset: 8,
+      maxOffset: STAGE_MAX_OFFSET,
     },
     initialFill,
     camera,

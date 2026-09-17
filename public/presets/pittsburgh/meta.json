@@ -19,27 +19,27 @@
    {
     "id": "allegheny-stage",
     "type": "stage",
-    "gx": 803.5,
-    "gy": 0,
-    "radius": 17.51,
+    "gx": 831.5,
+    "gy": -27.89,
+    "radius": 60.63,
     "level": 216.3,
     "label": "Allegheny River"
    },
    {
     "id": "monongahela-stage",
     "type": "stage",
-    "gx": 919.5,
+    "gx": 918,
     "gy": 1024,
-    "radius": 17.51,
+    "radius": 23.01,
     "level": 216.3,
     "label": "Monongahela River"
    },
    {
     "id": "ohio-stage",
     "type": "stage",
-    "gx": -94.25,
-    "gy": 322.5,
-    "radius": 127.12,
+    "gx": -275.13,
+    "gy": 276,
+    "radius": 308.08,
     "level": 216.3,
     "label": "Ohio River"
    }
@@ -210,7 +210,7 @@
   "roads": "roads.json"
  },
  "bake": {
-  "bakedAt": "2026-09-16T23:09:09.869Z",
+  "bakedAt": "2026-09-17T01:06:47.269Z",
   "demSource": "usgs3dep",
   "demRepairedCells": 0,
   "center": {

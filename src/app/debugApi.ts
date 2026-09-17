@@ -41,7 +41,16 @@ export interface DelugeDebugExtras {
   getSolver(): FloodSolver | null;
   getRenderer(): FloodRenderer | null;
   /** Frame pacing / work budget diagnostics. */
-  getPerf(): { fps: number; substepCap: number; budgetMode: string; adaptiveBudget: boolean; frames: number; animTime: number };
+  getPerf(): {
+    fps: number;
+    substepCap: number;
+    budgetMode: string;
+    adaptiveBudget: boolean;
+    frames: number;
+    animTime: number;
+    /** Learned external frame-rate ceiling (ms per frame), 0 = none. */
+    frameFloorMs: number;
+  };
   /** Enable/disable the frame-time substep governor (benchmarks). */
   setAdaptiveBudget(on: boolean): void;
   selectTool(tool: ToolId): void;
@@ -155,6 +164,7 @@ export function createDebugApi(app: App, ready: Promise<void>): DelugeDebug {
       adaptiveBudget: app.adaptiveBudget,
       frames: app.driver.frameCount,
       animTime: app.pacer.animTime,
+      frameFloorMs: app.frameCeiling.floorMs,
     }),
     setAdaptiveBudget(on) {
       app.adaptiveBudget = on;

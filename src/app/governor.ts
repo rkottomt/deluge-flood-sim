@@ -64,6 +64,11 @@ export class SubstepGovernor {
   /** After a decrease the GPU queue needs a moment to drain; windows until then are not judged. */
   private settleUntil = -Infinity;
   private throttledInWindow = false;
+  /**
+   * Externally imposed frame interval (ms, 0 = none; see frameCeiling.ts). Under a 30 Hz browser cap a 33 ms
+   * frame is on target, not overloaded, so the frame-time target is raised to just above it.
+   */
+  floorMs = 0;
 
   constructor(readonly config: GovernorConfig) {
     this.cap = config.initialCap;
@@ -118,8 +123,9 @@ export class SubstepGovernor {
     }
     const before = this.cap;
     if (now < this.settleUntil) return false;
-    const over = frameTime > c.targetMs * (1 + c.band) || latency > c.latencyMs * (1 + c.band);
-    const under = frameTime < c.targetMs * (1 - c.band) && latency < c.latencyMs * (1 - c.band);
+    const targetMs = Math.max(c.targetMs, this.floorMs * 1.1);
+    const over = frameTime > targetMs * (1 + c.band) || latency > c.latencyMs * (1 + c.band);
+    const under = frameTime < targetMs * (1 - c.band) && latency < c.latencyMs * (1 - c.band);
     if (over && this.cap > c.minCap) {
       this.ceiling = this.cap;
       this.cap = Math.max(c.minCap, Math.floor(this.cap * 0.7));
@@ -212,6 +218,18 @@ export class WorkBudget {
 
   restart(): void {
     for (const g of Object.values(this.governors)) g.restart();
+  }
+
+  /** Apply a learned external frame-rate ceiling (ms per frame, 0 = none) to every mode. */
+  setFrameFloor(ms: number): void {
+    for (const g of Object.values(this.governors)) {
+      g.floorMs = ms;
+      g.restart();
+    }
+  }
+
+  get frameFloorMs(): number {
+    return this.governors.watching.floorMs;
   }
 
   observe(frameMs: number, info: StepInfo, now: number, maxCap: number): boolean {

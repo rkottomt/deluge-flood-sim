@@ -66,6 +66,11 @@ export interface DelugeRendererAPI extends FloodRenderer {
   readonly camera: OrbitController;
   readonly quality: RendererQuality;
   setQuality(quality: RendererQuality): void;
+  /**
+   * Externally imposed frame interval in ms (e.g. a browser's 30 fps battery-saver cap), 0 = none. 'auto' quality
+   * then treats frames at that ceiling as on target instead of stepping resolution down.
+   */
+  setFrameIntervalFloor(ms: number): void;
   readonly stats: Readonly<RendererStats>;
 }
 
@@ -547,6 +552,7 @@ class DelugeRenderer implements DelugeRendererAPI {
       domainSize: Math.max(s.nx, s.ny) * s.terrain.cellSize,
       nx: s.nx,
       ny: s.ny,
+      ground: s.solver.getGroundCPU(),
     };
 
     // Road status: upload only when the contents change.
@@ -638,6 +644,10 @@ class DelugeRenderer implements DelugeRendererAPI {
 
   get quality(): RendererQuality {
     return this.qualityMode;
+  }
+
+  setFrameIntervalFloor(ms: number): void {
+    this.adaptive.floorMs = Number.isFinite(ms) && ms > 0 ? ms : 0;
   }
 
   setQuality(quality: RendererQuality): void {
