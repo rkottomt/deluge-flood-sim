@@ -1,12 +1,15 @@
 import type { RoadClass } from '../contracts';
 
-/** Depth (m) at or above which a road counts as wet: passable, but slowly. */
-export const WET_DEPTH = 0.05;
+/**
+ * Depth (m) at or above which a road counts as wet: passable, but slowly. (Road status only — not the sim's
+ * WET_DEPTH, the much lower threshold for a wet cell in the statistics.)
+ */
+export const ROAD_WET_DEPTH = 0.05;
 /**
  * Depth (m) at or above which a road is flooded and impassable. Roughly where passenger cars start
  * to float; 15 cm of moving water can already knock a person over.
  */
-export const FLOODED_DEPTH = 0.3;
+export const ROAD_FLOODED_DEPTH = 0.3;
 
 /** Road status codes (RoadStatusArray values). */
 export const STATUS_DRY = 0;

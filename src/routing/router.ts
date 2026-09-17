@@ -25,14 +25,14 @@ import {
   APPROACH_FRACTION,
   CONNECTOR_SPEED,
   MAX_APPROACH_M,
-  FLOODED_DEPTH,
+  ROAD_FLOODED_DEPTH,
   SHELTER_CANDIDATES,
   SNAP_RADIUS_M,
   START_CANDIDATES,
   STATUS_DRY,
   STATUS_FLOODED,
   STATUS_WET,
-  WET_DEPTH,
+  ROAD_WET_DEPTH,
   WET_SPEED_FACTOR,
 } from './constants';
 import { formatDistance, formatDuration } from './format';
@@ -271,7 +271,7 @@ class Router implements DelugeRouter {
         if (d > m) m = d;
       }
       edgeDepth[e] = m;
-      const st = m >= FLOODED_DEPTH ? STATUS_FLOODED : m >= WET_DEPTH ? STATUS_WET : STATUS_DRY;
+      const st = m >= ROAD_FLOODED_DEPTH ? STATUS_FLOODED : m >= ROAD_WET_DEPTH ? STATUS_WET : STATUS_DRY;
       next[e] = st;
       cost[e] = st === STATUS_DRY ? dry[e] : st === STATUS_WET ? dry[e] * wetDiv : Infinity;
       if (st !== cur[e]) changed = true;
@@ -315,7 +315,7 @@ class Router implements DelugeRouter {
     for (let s = 0; s < n; s++) {
       const key = cells[s];
       const idx = cellIndex(key & 0xffff, key >>> 16, sx, sy, nx, ny);
-      if (depth[idx] >= WET_DEPTH) mask[s] = 1;
+      if (depth[idx] >= ROAD_WET_DEPTH) mask[s] = 1;
     }
 
     // Extend every span along its edge by its approach allowance (in samples; samples per cell of road
@@ -342,7 +342,7 @@ class Router implements DelugeRouter {
     this.sampleMask = mask;
 
     const bits = new Uint8Array((nx * ny + 7) >> 3);
-    for (let k = 0; k < nx * ny; k++) if (depth[k] >= FLOODED_DEPTH) bits[k >> 3] |= 1 << (k & 7);
+    for (let k = 0; k < nx * ny; k++) if (depth[k] >= ROAD_FLOODED_DEPTH) bits[k >> 3] |= 1 << (k & 7);
     this.baseWater = bits;
     this.baseNx = nx;
     this.baseNy = ny;
@@ -447,10 +447,10 @@ class Router implements DelugeRouter {
     // 1. The start itself under water: a misplaced click into a river, or a home that is flooded — don't
     //    send anyone driving into floodwater.
     const startDepth = this.depthAt(start.gx, start.gy);
-    if (startDepth >= FLOODED_DEPTH && this.isBaselineWater(start.gx, start.gy)) {
+    if (startDepth >= ROAD_FLOODED_DEPTH && this.isBaselineWater(start.gx, start.gy)) {
       return result('none', `Start point is under ${startDepth.toFixed(1)} m of water (river or lake) — click on land with the Evac tool.`);
     }
-    if (startDepth >= FLOODED_DEPTH) {
+    if (startDepth >= ROAD_FLOODED_DEPTH) {
       return this.blocked(
         start,
         shelters,
@@ -470,7 +470,7 @@ class Router implements DelugeRouter {
     let anyDryShelter = false;
     for (let k = 0; k < shelters.length; k++) {
       const s = shelters[k];
-      if (this.depthAt(s.gx, s.gy) >= FLOODED_DEPTH) continue;
+      if (this.depthAt(s.gx, s.gy) >= ROAD_FLOODED_DEPTH) continue;
       anyDryShelter = true;
       this.addCandidates(s.gx, s.gy, SHELTER_CANDIDATES, k, false);
     }
@@ -625,7 +625,7 @@ class Router implements DelugeRouter {
       const p = bestSeg[e], u = bestU[e];
       const qx = px[p] + u * (px[p + 1] - px[p]);
       const qy = py[p] + u * (py[p + 1] - py[p]);
-      if (!anyStatus && this.maxDepthAlong(x, y, qx, qy) >= FLOODED_DEPTH) {
+      if (!anyStatus && this.maxDepthAlong(x, y, qx, qy) >= ROAD_FLOODED_DEPTH) {
         rejected++;
         continue;
       }

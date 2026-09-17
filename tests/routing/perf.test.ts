@@ -1,26 +1,18 @@
 /// <reference types="node" />
 /**
  * Performance targets (DESIGN.md §6): 50k edges — setNetwork < 150 ms, updateFlood on a 1024² depth grid
- * < 5 ms, route < 10 ms. Timings are printed so regressions are visible in the test log.
+ * < 5 ms, route < 10 ms. Real wall-clock timings are printed so regressions are visible in the test log; the
+ * assertions use main-thread CPU time, best of several interleaved passes per workload item (see timing.ts),
+ * so they hold when the tests share the machine with GPU tests and other processes.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRouter } from '../../src/routing/index';
 import type { RoadEdge, RoadNetwork } from '../../src/contracts';
 import { makeCity, shelterAt } from './city';
+import { bestOfPasses, quantile, summarize, timeCall } from './timing';
 
 const N = 1024;
-
-function median(xs: number[]): number {
-  const s = [...xs].sort((a, b) => a - b);
-  return s[s.length >> 1];
-}
-
-function time(fn: () => void): number {
-  const t0 = performance.now();
-  fn();
-  return performance.now() - t0;
-}
 
 /** Smooth, partially flooded depth field with dry, wet and flooded roads and a river band. */
 function floodField(phase: number): Float32Array {
@@ -72,16 +64,17 @@ test('performance at 50k edges (grid city)', () => {
   assert.ok(edges >= 50_000, `network has ${edges} edges`);
 
   const router = createRouter();
-  const buildCold = time(() => router.setNetwork(city.net, city.cellSize));
-  const builds: number[] = [];
-  for (let k = 0; k < 5; k++) builds.push(time(() => router.setNetwork(city.net, city.cellSize)));
+  const cold = timeCall(() => router.setNetwork(city.net, city.cellSize));
+  const BUILD_PASSES = 5;
+  const builds = bestOfPasses([0], BUILD_PASSES, () => router.setNetwork(city.net, city.cellSize));
   const info = router.getGraphInfo()!;
 
   const fields = [floodField(0), floodField(1.3), floodField(2.1)];
-  const indexBuild = time(() => router.updateFlood(fields[0], N, N)); // first call builds the sample index
+  const indexBuild = timeCall(() => router.updateFlood(fields[0], N, N)); // first call builds the sample index
   for (let k = 0; k < 10; k++) router.updateFlood(fields[k % 3], N, N);
-  const updates: number[] = [];
-  for (let k = 0; k < 60; k++) updates.push(time(() => router.updateFlood(fields[k % 3], N, N)));
+  const UPDATE_PASSES = 20;
+  const updates = bestOfPasses(fields, UPDATE_PASSES, (f) => router.updateFlood(f, N, N));
+  router.updateFlood(fields[0], N, N);
   const status = router.getRoadStatus()!;
   const counts = [0, 0, 0];
   for (const s of status) counts[s]++;
@@ -90,64 +83,70 @@ test('performance at 50k edges (grid city)', () => {
   let seed = 3;
   const rand = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296);
   const pt = () => ({ gx: 20 + rand() * (city.nx - 40), gy: 20 + rand() * (city.ny - 40) });
-  const routes: number[] = [];
-  const states = { ok: 0, blocked: 0, none: 0 };
   for (let k = 0; k < 20; k++) router.route(pt(), [shelterAt('A', 100, 100)]);
-  for (let k = 0; k < 200; k++) {
-    const start = pt();
-    const shelters = [shelterAt('A', ...xy(pt())), shelterAt('B', ...xy(pt())), shelterAt('C', ...xy(pt()))];
-    const t0 = performance.now();
-    const r = router.route(start, shelters);
-    routes.push(performance.now() - t0);
-    states[r.state]++;
-  }
-  // Dry network, far-apart start and shelter: the search has to settle most of the graph.
-  router.updateFlood(new Float32Array(N * N), N, N);
-  const longest: number[] = [];
-  for (let k = 0; k < 30; k++) {
-    longest.push(time(() => router.route({ gx: 30, gy: 30 }, [shelterAt('far', city.nx - 30, city.ny - 30)])));
-  }
+  const queries = Array.from({ length: 200 }, () => ({
+    start: pt(),
+    shelters: [shelterAt('A', ...xy(pt())), shelterAt('B', ...xy(pt())), shelterAt('C', ...xy(pt()))],
+  }));
+  const states = { ok: 0, blocked: 0, none: 0 };
+  for (const q of queries) states[router.route(q.start, q.shelters).state]++;
+  const ROUTE_PASSES = 3;
+  const routes = bestOfPasses(queries, ROUTE_PASSES, (q) => router.route(q.start, q.shelters));
 
-  const p95 = [...routes].sort((a, b) => a - b)[Math.floor(routes.length * 0.95)];
+  // Dry network, start and shelter in opposite corners: the search has to settle most of the graph.
+  router.updateFlood(new Float32Array(N * N), N, N);
+  const [lo, hiX, hiY] = [30, city.nx - 30, city.ny - 30];
+  const corners = [
+    [lo, lo, hiX, hiY],
+    [hiX, lo, lo, hiY],
+    [lo, hiY, hiX, lo],
+    [hiX, hiY, lo, lo],
+  ].map(([sx, sy, tx, ty]) => ({ start: { gx: sx, gy: sy }, shelters: [shelterAt('far', tx, ty)] }));
+  const LONG_PASSES = 8;
+  const longest = bestOfPasses(corners, LONG_PASSES, (q) => router.route(q.start, q.shelters));
+
   console.log(
     `[routing perf] grid city: ${edges} edges, ${info.nodes} nodes, ${info.samples} cell samples\n` +
-      `  setNetwork   cold ${buildCold.toFixed(1)} ms, warm median ${median(builds).toFixed(1)} ms\n` +
-      `  updateFlood  first (index build) ${indexBuild.toFixed(1)} ms, median ${median(updates).toFixed(2)} ms, max ${Math.max(...updates).toFixed(2)} ms` +
+      `  setNetwork   cold ${cold.wall.toFixed(1)} ms (cpu ${cold.cpu.toFixed(1)}), warm ${summarize(builds, BUILD_PASSES)}\n` +
+      `  updateFlood  first (index build) ${indexBuild.wall.toFixed(1)} ms, ${summarize(updates, UPDATE_PASSES)}` +
       `  (status dry/wet/flooded = ${counts.join('/')})\n` +
-      `  route        median ${median(routes).toFixed(2)} ms, p95 ${p95.toFixed(2)} ms, max ${Math.max(...routes).toFixed(2)} ms` +
-      `  (ok ${states.ok}, blocked ${states.blocked}, none ${states.none})\n` +
-      `  route        corner-to-corner on dry network: median ${median(longest).toFixed(2)} ms`,
+      `  route        ${summarize(routes, ROUTE_PASSES)}  (ok ${states.ok}, blocked ${states.blocked}, none ${states.none})\n` +
+      `  route        corner-to-corner on dry network: ${summarize(longest, LONG_PASSES)}`,
   );
 
   assert.ok(counts[0] > 0 && counts[1] > 0 && counts[2] > 0, 'test field produces all three statuses');
   assert.ok(states.ok > 20 && states.blocked > 5, 'mix of ok and blocked routes');
-  // Best-of-N filters out scheduler noise (tests run in parallel, other processes share the CPU); the cold,
-  // JIT-unwarmed first call is printed above and only sanity-bounded.
-  const buildBest = Math.min(buildCold, ...builds);
-  assert.ok(buildBest < 150, `setNetwork ${buildBest.toFixed(1)} ms < 150 ms`);
-  assert.ok(buildCold < 400, `cold setNetwork ${buildCold.toFixed(1)} ms`);
-  assert.ok(median(updates) < 5, `updateFlood ${median(updates).toFixed(2)} ms < 5 ms`);
-  assert.ok(p95 < 10, `route p95 ${p95.toFixed(2)} ms < 10 ms`);
-  assert.ok(median(longest) < 10, `corner-to-corner route ${median(longest).toFixed(2)} ms < 10 ms`);
+  const buildCpu = builds.cpu[0];
+  assert.ok(buildCpu < 150, `setNetwork ${buildCpu.toFixed(1)} ms cpu < 150 ms`);
+  // The cold, JIT-unwarmed first call is only sanity-bounded.
+  assert.ok(cold.cpu < 400, `cold setNetwork ${cold.cpu.toFixed(1)} ms cpu < 400 ms`);
+  const updateCpu = Math.max(...updates.cpu);
+  assert.ok(updateCpu < 5, `updateFlood ${updateCpu.toFixed(2)} ms cpu < 5 ms (slowest of the 3 fields)`);
+  const routeP95 = quantile(routes.cpu, 0.95);
+  assert.ok(routeP95 < 10, `route p95 ${routeP95.toFixed(2)} ms cpu < 10 ms`);
+  const longestCpu = Math.max(...longest.cpu);
+  assert.ok(longestCpu < 10, `corner-to-corner route ${longestCpu.toFixed(2)} ms cpu < 10 ms`);
 });
 
 test('performance at 50k long edges (≈2M cell samples stress case)', () => {
   const net = longEdgeNetwork(50_000);
   const router = createRouter();
-  const build = time(() => router.setNetwork(net, 8));
+  const build = timeCall(() => router.setNetwork(net, 8));
   const info = router.getGraphInfo()!;
   const fields = [floodField(0), floodField(1.3)];
   router.updateFlood(fields[0], N, N);
   for (let k = 0; k < 10; k++) router.updateFlood(fields[k % 2], N, N);
-  const updates: number[] = [];
-  for (let k = 0; k < 40; k++) updates.push(time(() => router.updateFlood(fields[k % 2], N, N)));
+  const PASSES = 20;
+  const updates = bestOfPasses(fields, PASSES, (f) => router.updateFlood(f, N, N));
   console.log(
-    `[routing perf] long edges: ${info.edges} edges, ${info.samples} cell samples — setNetwork ${build.toFixed(1)} ms, ` +
-      `updateFlood median ${median(updates).toFixed(2)} ms`,
+    `[routing perf] long edges: ${info.edges} edges, ${info.samples} cell samples — setNetwork ${build.wall.toFixed(1)} ms ` +
+      `(cpu ${build.cpu.toFixed(1)}), updateFlood ${summarize(updates, PASSES)}`,
   );
-  assert.ok(build < 400, `setNetwork (stress) ${build.toFixed(1)} ms`);
-  // Stress case well beyond the spec workload (4–5× the samples); generous bound so machine load can't flake it.
-  assert.ok(median(updates) < 15, `updateFlood (stress) ${median(updates).toFixed(2)} ms`);
+  assert.ok(build.cpu < 400, `setNetwork (stress) ${build.cpu.toFixed(1)} ms cpu`);
+  // Stress case well beyond the spec workload (4–5× the samples, ≈6 ms on an idle M4 performance core); generous
+  // bound, since a fully loaded machine can keep the test on an efficiency core for the whole run (≈2× slower).
+  const updateCpu = Math.max(...updates.cpu);
+  assert.ok(updateCpu < 20, `updateFlood (stress) ${updateCpu.toFixed(2)} ms cpu`);
 });
 
 function xy(p: { gx: number; gy: number }): [number, number] {
