@@ -3,6 +3,7 @@ import type { App } from './App';
 import { APP_CONFIG } from './defaults';
 import { errorMessage } from './errors';
 import { NO_TRANSIENT, OverlayComposer } from './overlays';
+import { snapshotIsPhysical } from './evac';
 import { footprintRadius, stormWeight } from '../sim/forcing';
 
 /** Rain rate (mm/hr) at grid position (gx, gy): global rain plus storm cells, with the solver's storm profile. */
@@ -120,6 +121,7 @@ export class FrameDriver {
     // 2. Readbacks → stats, road status, route; probe sampling; runFor completion.
     const snap = this.pollSnapshot(solver, now);
     this.guard('evac', () => evac.tick(now));
+    this.guard('protection', () => this.app.protection.tick(now, () => this.app.protectionInput()));
     if (!state.loading) this.guard('probe', () => this.app.probe?.tick(now, solver));
     runner.onFrame(snap, this.lastAdvance, now);
 
@@ -195,6 +197,8 @@ export class FrameDriver {
     this.lastSnapTime = snap.simTime;
     this.pendingStats = { ...snap.stats };
     this.app.evac.onSnapshot(snap, now);
+    // A blown-up solver's depths say nothing about what a wall holds back: keep the last physical answer.
+    if (this.app.store.get().sim.stabilityMode === 'robust' && snapshotIsPhysical(snap)) this.app.protection.onSnapshot();
     this.detectBlowup(snap.stats);
   }
 

@@ -6,7 +6,8 @@
  *  • hover: the ground under the cursor (for live "will this wall hold?" checks in the options card),
  *  • notices: neutral / warning / success toasts that are NOT errors (limits, guidance, overtopped walls),
  *  • scene access: terrain, solver and camera getters (for one-click suggestions such as an evacuation start),
- *  • walls: a wall was drawn by the user, and the latest check of the drawn walls against the water.
+ *  • walls: a wall was drawn by the user, the latest check of the drawn walls against the water, and the land they
+ *    keep dry (published by the app, see src/app/protection.ts).
  */
 import type { CameraController, FloodSolver, Store, TerrainData } from '../contracts';
 import type { WallStatus } from './wallCheck';
@@ -42,6 +43,33 @@ export interface SceneAccess {
   getSolver(): FloodSolver | null;
   /** The renderer's camera (null before the renderer exists). */
   getCamera?(): CameraController | null;
+  /**
+   * Raise walls as if the user had drawn them (the wall checks and overtopping notices watch them; wallDrawn fires).
+   * `radius` in cells; defaults to the wall tool's width.
+   */
+  buildWalls?(segments: WallSegment[], radius?: number): void;
+}
+
+/** Land the walls on the map keep dry right now (src/app/protection.ts). */
+export interface ProtectionSummary {
+  /** Cells carrying a wall. */
+  wallCells: number;
+  /** Land that would stand ≥ 0.3 m under water without the walls and does not with them, m². */
+  areaM2: number;
+  /** Road length on that land, m, and the number of road segments. */
+  roadMeters: number;
+  roadEdges: number;
+  /** Highest water level held back, m (null when no water presses on a wall yet). */
+  level: number | null;
+}
+
+/** Wall segments to raise (grid coords, per-segment height in m), e.g. the one-click demo levee. */
+export interface WallSegment {
+  ax: number;
+  ay: number;
+  bx: number;
+  by: number;
+  height: number;
 }
 
 type Listener<T> = (v: T) => void;
@@ -74,6 +102,9 @@ export class UIBridge {
   /** Latest scan of the walls on the map (null = no walls). Same data as the overtopping notices. */
   wallStatus: WallStatus | null = null;
   readonly wallStatusChanged = new Channel<WallStatus | null>();
+  /** Land the walls keep dry (null = no walls). */
+  protection: ProtectionSummary | null = null;
+  readonly protectionChanged = new Channel<ProtectionSummary | null>();
   private readonly notices = new Channel<Notice>();
   /** Notices posted before the UI mounted are delivered when it subscribes. */
   private pending: Notice[] = [];
@@ -95,6 +126,13 @@ export class UIBridge {
     }
     this.wallStatus = w;
     this.wallStatusChanged.emit(w);
+  }
+
+  setProtection(p: ProtectionSummary | null): void {
+    const a = this.protection;
+    if (a === p || (a && p && a.wallCells === p.wallCells && a.areaM2 === p.areaM2 && a.roadMeters === p.roadMeters && a.level === p.level)) return;
+    this.protection = p;
+    this.protectionChanged.emit(p);
   }
 
   notify(n: Notice): void {

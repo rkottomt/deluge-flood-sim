@@ -68,6 +68,8 @@ export async function createPipelines(device: GPUDevice, canvasFormat: GPUTextur
       // Wall distance field (rgba16float) and the normally-wet mask (rgba8unorm), both filtered.
       { binding: 9, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
       { binding: 10, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
+      // Land the user's walls keep dry (r8unorm, filtered): the terrain's green "protected" glow.
+      { binding: 11, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
     ],
   });
   const overlayBGL = device.createBindGroupLayout({

@@ -87,6 +87,12 @@ interface PresetDef {
   storms: Array<{ id: string; at: LonLat; radiusMeters: number; intensity: number }>;
   rainRate: number;
   camera: { at: LonLat; distance: number; yaw: number; pitch: number };
+  /**
+   * One-click demo levee ("Build a levee"): a wall from high ground to high ground whose crest clears the scenario's
+   * highest crest. The bake checks that both ends stand on ground at least `crest` high and that no segment needs a
+   * wall taller than the wall tool builds (10 m).
+   */
+  levee?: { name: string; crest: number; path: LonLat[]; camera: { at: LonLat; distance: number; yaw: number; pitch: number } };
   description: (ctx: { normalLevel: number | null; gaugeDatum: number | null }) => string;
 }
 
@@ -153,6 +159,20 @@ const PRESET_DEFS: PresetDef[] = [
     storms: [],
     rainRate: 0,
     camera: { at: [-80.0005, 40.4418], distance: 4300, yaw: 0.62, pitch: 0.52 },
+    // The North Shore (both stadiums) behind a riverside floodwall from the bluff below Manchester to the bluff at the
+    // 16th Street Bridge, ~50 m back from the channel. Crest 226.5 m = 1 m above the 46 ft record at the Point (the
+    // Allegheny side stands ~0.3 m higher). Measured on the M4 (runFor, 25 sim-min at 46 ft): 0 wet cells behind it,
+    // 0.57 km² and 11 km of streets kept dry, flooded land 6.30 → 5.62 km².
+    levee: {
+      name: 'the North Shore',
+      crest: 226.5,
+      path: [
+        [-80.02015, 40.44905], [-80.02015, 40.44604], [-80.01831, 40.44556], [-80.01647, 40.44518], [-80.01462, 40.44504],
+        [-80.01278, 40.4452], [-80.01093, 40.44537], [-80.00909, 40.4457], [-80.00724, 40.44594], [-80.0054, 40.44631],
+        [-80.00356, 40.44698], [-80.00171, 40.44759], [-79.99987, 40.44817], [-79.99895, 40.45067],
+      ],
+      camera: { at: [-80.00955, 40.44695], distance: 2600, yaw: 0.1, pitch: 0.68 },
+    },
     description: ({ normalLevel, gaugeDatum }) =>
       "Downtown Pittsburgh sits on the Point, where the Allegheny and Monongahela rivers meet to form the Ohio. " +
       `Normal pool here is about ${(((normalLevel ?? 0) - (gaugeDatum ?? 0)) / FT).toFixed(1)} ft on the Point gauge; ` +
@@ -551,6 +571,34 @@ async function bake(def: PresetDef) {
     yaw: Math.round(def.camera.yaw * 1000) / 1000,
     pitch: def.camera.pitch,
   };
+  let levee: ScenarioPreset['levee'];
+  if (def.levee) {
+    const L = def.levee;
+    const points = L.path.map((ll) => {
+      const p = toGrid(ll);
+      return { gx: r1(p.gx), gy: r1(p.gy) };
+    });
+    for (const end of [points[0], points[points.length - 1]]) {
+      const z = elevAt(end.gx, end.gy);
+      if (z < L.crest) throw new Error(`${def.id}: levee end (${end.gx}, ${end.gy}) at ${z.toFixed(2)} m is below its crest ${L.crest} m`);
+    }
+    for (let k = 0; k + 1 < points.length; k++) {
+      const a = points[k];
+      const b = points[k + 1];
+      const steps = Math.ceil(Math.hypot(b.gx - a.gx, b.gy - a.gy) * 2);
+      let low = Infinity;
+      for (let t = 0; t <= steps; t++) low = Math.min(low, elevAt(a.gx + ((b.gx - a.gx) * t) / steps, a.gy + ((b.gy - a.gy) * t) / steps));
+      if (L.crest - low > 10) throw new Error(`${def.id}: levee segment ${k} needs a ${(L.crest - low).toFixed(1)} m wall (max 10 m)`);
+    }
+    const lc = toGrid(L.camera.at);
+    levee = {
+      name: L.name,
+      crest: L.crest,
+      points,
+      camera: { target: { gx: r1(lc.gx), gy: r1(lc.gy), elevation: r1(elevAt(lc.gx, lc.gy)) }, distance: L.camera.distance, yaw: L.camera.yaw, pitch: L.camera.pitch },
+    };
+    log(def.id, `levee: ${points.length} points, crest ${L.crest} m`);
+  }
   const stage: StageControl | null =
     def.stage && normalLevel !== null
       ? {
@@ -575,6 +623,7 @@ async function bake(def: PresetDef) {
     stage,
     initialFill,
     camera,
+    ...(levee ? { levee } : {}),
   };
 
   // ── Imagery

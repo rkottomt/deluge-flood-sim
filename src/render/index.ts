@@ -81,6 +81,11 @@ export interface DelugeRendererAPI extends FloodRenderer {
    */
   setSimPressure(pressure: SimPressure): void;
   /**
+   * Land the user's walls keep dry (nx·ny, 255 = protected; see src/app/protection.ts), drawn as a soft green glow on
+   * the terrain; null clears it. The mask is copied to the GPU, so the caller may reuse the array.
+   */
+  setProtectedMask(mask: Uint8Array | null): void;
+  /**
    * Re-capture the "normally wet" mask (rivers and lakes before any flood) from the solver's current water. setScene
    * does this automatically — it is called right after solver.setInitialWater — so this is only needed if the
    * initial water is replaced later. The hazard maps colour only land outside this mask.
@@ -174,6 +179,9 @@ interface SceneGPU {
   /** rgba8unorm, r = 1 where the cell held water at the initial fill. */
   normalWetTex: GPUTexture;
   normalWetValid: boolean;
+  /** Land kept dry by walls (r8unorm, 255 = protected); only sampled while `protectOn`. */
+  protectTex: GPUTexture;
+  protectOn: boolean;
 }
 
 interface MeshBuffers {
@@ -218,6 +226,9 @@ class DelugeRenderer implements DelugeRendererAPI {
   private ctx: GPUCanvasContext;
   private frameBuf: GPUBuffer;
   private frameData = new Float32Array(FRAME_UNIFORM_SIZE / 4);
+  /** Protected-land glow strength (animated toward 1 while a mask is set), and the last frame's duration in s. */
+  private protectFade = 0;
+  private frameDt = 1 / 60;
   private overlayBuf: GPUBuffer;
   private postBuf: GPUBuffer;
   private bloomBufs: GPUBuffer[];
@@ -406,6 +417,7 @@ class DelugeRenderer implements DelugeRendererAPI {
       mipLevelCount: wetMips,
       usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
     });
+    const protectTex = device.createTexture({ label: 'protected-land', size: [nx, ny], format: 'r8unorm', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
     const wetBGs: GPUBindGroup[] = [
       device.createBindGroup({
         label: 'wet-base',
@@ -465,6 +477,7 @@ class DelugeRenderer implements DelugeRendererAPI {
       { binding: 8, resource: wetTex.createView() },
       { binding: 9, resource: wallTex.createView() },
       { binding: 10, resource: normalWetTex.createView() },
+      { binding: 11, resource: protectTex.createView() },
     ];
     const terrainBG = device.createBindGroup({ label: 'terrain', layout: this.P.sceneBGL, entries: sceneEntries(imageryTex, this.aniso) });
     const waterBG = device.createBindGroup({ label: 'water', layout: this.P.sceneBGL, entries: sceneEntries(this.rippleTex, this.repeat) });
@@ -557,7 +570,10 @@ class DelugeRenderer implements DelugeRendererAPI {
       wallTex,
       normalWetTex,
       normalWetValid: false,
+      protectTex,
+      protectOn: false,
     };
+    this.protectFade = 0;
     this.markerKey = '';
     this.ribbonKey = '';
     this.hotRects = [];
@@ -639,6 +655,7 @@ class DelugeRenderer implements DelugeRendererAPI {
     s.miscTex.destroy();
     s.wallTex.destroy();
     s.normalWetTex.destroy();
+    s.protectTex.destroy();
     if (s.hasImagery) s.imageryTex.destroy();
     s.roadVerts?.destroy();
     s.roadIndices?.destroy();
@@ -815,6 +832,19 @@ class DelugeRenderer implements DelugeRendererAPI {
     this.adaptive.simPressure = pressure;
   }
 
+  setProtectedMask(mask: Uint8Array | null): void {
+    const s = this.scene;
+    if (!s || this.destroyed) return;
+    if (!mask || mask.length < s.nx * s.ny) {
+      if (s.protectOn) this.editEpoch++;
+      s.protectOn = false;
+      return;
+    }
+    this.device.queue.writeTexture({ texture: s.protectTex }, mask, { bytesPerRow: s.nx }, { width: s.nx, height: s.ny });
+    s.protectOn = true;
+    this.editEpoch++;
+  }
+
   setQuality(quality: RendererQuality): void {
     if (!(quality in QUALITY_PRESETS) && quality !== 'auto') return;
     if (quality === this.qualityMode) return;
@@ -955,6 +985,8 @@ class DelugeRenderer implements DelugeRendererAPI {
       settings.rainRate > 0.2,
       this.overlayVersion,
       this.editEpoch,
+      // While the protected-land glow fades in or out, every frame differs.
+      this.protectFade > 0 && this.protectFade < 1 ? this.protectFade : s?.protectOn ? 1 : 0,
       s ? this.stateKey(s.solver) : 0,
       this.canvas.clientWidth,
       this.canvas.clientHeight,
@@ -988,6 +1020,7 @@ class DelugeRenderer implements DelugeRendererAPI {
     const cpuStart = typeof performance !== 'undefined' ? performance.now() : Date.now();
     const now = cpuStart;
     const dt = this.lastFrameMs ? (now - this.lastFrameMs) / 1000 : 1 / 60;
+    this.frameDt = Math.min(0.1, Math.max(0, dt));
     this.lastFrameMs = now;
     this.frameCounter++;
 
@@ -1319,6 +1352,13 @@ class DelugeRenderer implements DelugeRendererAPI {
       f[82 + i * 4] = hdr[k * 3 + 2] ?? 0;
       f[83 + i * 4] = b && Number.isFinite(b.max) ? b.max : 1e9;
     }
+    // Protected-land glow fades in over ~0.6 s when walls start keeping land dry, and out when they stop.
+    const protectTarget = s?.protectOn ? 1 : 0;
+    this.protectFade = protectTarget > this.protectFade ? Math.min(1, this.protectFade + this.frameDt / 0.6) : Math.max(0, this.protectFade - this.frameDt / 0.3);
+    f[112] = s?.protectOn || this.protectFade > 0 ? this.protectFade : 0;
+    f[113] = 0;
+    f[114] = 0;
+    f[115] = 0;
     this.device.queue.writeBuffer(this.frameBuf, 0, f);
 
     // Overlay uniforms.

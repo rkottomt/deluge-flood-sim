@@ -120,6 +120,13 @@ export function validatePresetMeta(m: PresetMeta): string[] {
       errs.push('bad camera pose');
     }
   }
+  if (s.levee) {
+    const l = s.levee;
+    if (!l.name || !isNum(l.crest) || !Array.isArray(l.points) || l.points.length < 2) errs.push('bad levee');
+    else if (!l.points.every((p) => isNum(p.gx) && isNum(p.gy) && inside(p.gx, p.gy))) errs.push('levee point outside grid');
+    const c = l.camera;
+    if (c && (!inside(c.target.gx, c.target.gy) || !(c.distance > 0) || !(c.pitch > 0 && c.pitch <= Math.PI / 2))) errs.push('bad levee camera pose');
+  }
   return errs;
 }
 

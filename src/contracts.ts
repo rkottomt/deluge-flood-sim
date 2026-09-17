@@ -107,6 +107,23 @@ export interface ScenarioPreset {
   initialFill: { seeds: Array<{ gx: number; gy: number; level?: number }>; level: number }[];
   /** Suggested camera framing. */
   camera?: CameraPose;
+  /**
+   * Extension: a levee the "Build a levee" demo raises in one click. It is tied into high ground at both ends and every
+   * segment reaches `crest`, so it holds the scenario's most dramatic flood (see src/ui/levee.ts).
+   */
+  levee?: DemoLevee;
+}
+
+/** A demo levee (ScenarioPreset.levee). */
+export interface DemoLevee {
+  /** What it protects, e.g. "the North Shore". */
+  name: string;
+  /** Crest elevation, m: each wall segment is built tall enough to reach it. */
+  crest: number;
+  /** Polyline in grid coords, from high ground to high ground. */
+  points: Array<{ gx: number; gy: number }>;
+  /** Camera framing the levee and the land behind it. */
+  camera?: CameraPose;
 }
 
 export interface StageControl {

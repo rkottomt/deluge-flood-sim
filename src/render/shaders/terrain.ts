@@ -13,6 +13,7 @@ ${FRAME_WGSL}
 @group(0) @binding(7) var imgSamp: sampler;
 @group(0) @binding(8) var wetTex: texture_2d<f32>;
 @group(0) @binding(9) var wallTex: texture_2d<f32>;
+@group(0) @binding(11) var protectTex: texture_2d<f32>;
 ${COMMON_WGSL}
 ${LOD_WGSL}
 ${WALL_WGSL}
@@ -192,6 +193,22 @@ fn fsTerrain(in: VOut) -> @location(0) vec4f {
   var color = albedo * (sunK * ndl + skyAmbient(nLight) * 0.85);
   color += vec3f(1.0, 0.95, 0.85) * crestGlint * 0.35 * (1.0 - F.opts.w * 0.6);
   color = mix(color, vec3f(0.018, 0.014, 0.01), casing * 0.9);
+
+  // ── Land the walls keep dry: a green wash with a brighter rim along its edge ─────────────────
+  if (F.protect.x > 0.001) {
+    let e = 2.0 / F.grid;
+    let core = textureSampleLevel(protectTex, linSamp, uv, 0.0).r;
+    let ring = 0.25 * (textureSampleLevel(protectTex, linSamp, uv + vec2f(e.x, 0.0), 0.0).r
+                     + textureSampleLevel(protectTex, linSamp, uv - vec2f(e.x, 0.0), 0.0).r
+                     + textureSampleLevel(protectTex, linSamp, uv + vec2f(0.0, e.y), 0.0).r
+                     + textureSampleLevel(protectTex, linSamp, uv - vec2f(0.0, e.y), 0.0).r);
+    let inside = max(core, ring * 0.6);
+    let rim = clamp(abs(core - ring) * 2.0, 0.0, 1.0) * max(core, ring);
+    let lum = luminance(color);
+    let greenWash = vec3f(0.16, 0.62, 0.30) * (lum * 1.1 + 0.02);
+    color = mix(color, greenWash, inside * 0.55 * F.protect.x);
+    color += vec3f(0.10, 0.75, 0.32) * rim * 0.45 * F.protect.x * (1.0 - F.opts.w * 0.5);
+  }
 
   // ── Contours ───────────────────────────────────────────────────────────────────────────
   if (F.opts.y > 0.5 || !useImagery) {

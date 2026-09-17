@@ -23,7 +23,8 @@ import { StageLevels } from './stage';
 import { StageRamp } from './stageRamp';
 import { createStore } from './store';
 import { showDeviceLost, WebGPUUnavailableError, type LighterScene } from './unsupported';
-import { postNotice } from '../ui/bridge';
+import { bridgeFor, postNotice } from '../ui/bridge';
+import { ProtectionController, type ProtectionInput } from './protection';
 import { parseStartupRequest, writeSceneToUrl, type SceneRequest } from './url';
 
 export type LoadOutcome = 'ok' | 'failed' | 'superseded';
@@ -65,6 +66,8 @@ export class App {
   readonly frameCeiling = new FrameCeiling();
   readonly router = createRouter();
   readonly evac: EvacController;
+  /** Land the walls keep dry (≤ 1 Hz, only while walls exist) → UI bridge + renderer glow. */
+  readonly protection: ProtectionController;
   readonly sim: SimSync;
   /** Stage raises lift the water in the river channels at once (see crest.ts). */
   readonly crest: CrestFill;
@@ -112,6 +115,16 @@ export class App {
     this.errors.attachStore(this.store);
 
     this.evac = new EvacController(this.router, this.store, this.errors);
+    this.protection = new ProtectionController({
+      publish: (result) => {
+        const bridge = bridgeFor(this.store);
+        bridge.setProtection(
+          result && { wallCells: result.wallCells, areaM2: result.areaM2, roadMeters: result.roadMeters, roadEdges: result.roadEdges, level: result.level },
+        );
+        (this.renderer as Partial<DelugeRendererAPI> | null)?.setProtectedMask?.(result?.cells ? result.mask : null);
+        this.requestRender();
+      },
+    });
     this.sim = new SimSync({
       store: this.store,
       stage: this.stage,
@@ -193,6 +206,7 @@ export class App {
         this.crest.onSceneChanged();
         this.setStageNow(0);
         this.evac.reset();
+        this.protection.reset();
       },
       onSceneReady: (scene) => this.onSceneReady(scene),
     });
@@ -463,6 +477,24 @@ export class App {
     });
   }
 
+  /** Inputs of the protected-land analysis from the scene on screen (null without a scene or a matching readback). */
+  protectionInput(): ProtectionInput | null {
+    const scene = this.scenes?.scene;
+    const snap = this.driver.lastSnapshot;
+    if (!scene || !snap) return null;
+    const { solver, terrain } = scene;
+    if (snap.nx !== solver.nx || snap.ny !== solver.ny) return null;
+    return {
+      nx: solver.nx,
+      ny: solver.ny,
+      cellSize: solver.cellSize,
+      ground: solver.getGroundCPU(),
+      barrier: solver.getBarrierCPU(),
+      depth: snap.depth,
+      roads: terrain.roads,
+    };
+  }
+
   /** Run `fn` with the current solver, reporting (not throwing) failures. No-op without a scene. */
   withSolver(what: string, fn: (solver: FloodSolver) => void): void {
     const solver = this.scenes?.scene?.solver;
@@ -584,6 +616,7 @@ export class App {
     this.sim.pushAll();
     this.crest.onSceneChanged();
     this.evac.reset();
+    this.protection.reset();
     this.probe?.reset();
     this.budget.restart();
     this.driver.onSceneChanged(performance.now());
