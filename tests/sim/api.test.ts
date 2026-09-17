@@ -108,6 +108,16 @@ test('step(): CFL-sized substeps, sub-substep time carried between frames, maxSu
   info = solver.step(1 / 60);
   assert.ok(info.substeps <= 1, `backlog must not burst: ${info.substeps}`);
 
+  // A fractional cap is met on average (a host's work budget may ask for 2.5 substeps per frame).
+  solver.params = { ...solver.params, timeScale: 3600, maxSubstepsPerFrame: 2.5 };
+  const perFrame: number[] = [];
+  for (let f = 0; f < 8; f++) {
+    perFrame.push(solver.step(0.1).substeps);
+    await solver.flush();
+  }
+  assert.ok(perFrame.every((n) => n === 2 || n === 3), `fractional cap per frame ${perFrame}`);
+  assert.equal(perFrame.reduce((a, b) => a + b, 0), 20, `fractional cap per frame ${perFrame}`);
+
   // No work for zero / invalid time.
   for (const r of [0, -1, NaN, Infinity]) {
     const t0 = solver.time;

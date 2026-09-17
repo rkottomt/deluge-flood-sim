@@ -183,7 +183,10 @@ export interface SimParams {
   boundary: 'open' | 'wall';
   /** Simulated seconds per real second requested by the user (1 … 3600). */
   timeScale: number;
-  /** Hard cap on solver substeps per rendered frame (keeps the UI interactive). */
+  /**
+   * Hard cap on solver substeps per rendered frame (keeps the UI interactive). A fractional cap is met on average
+   * (e.g. 4.5 → alternately 4 and 5; extension used by the app's work budget).
+   */
   maxSubstepsPerFrame: number;
   /**
    * 'robust' (default): semi-implicit friction, positivity-preserving flux limiter, velocity/Froude cap,

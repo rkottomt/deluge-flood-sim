@@ -46,14 +46,16 @@ const interactive = () => new SubstepGovernor({ targetMs: 20, latencyMs: 1000, b
 test('governor: grows the cap while frames are fast and the cap limits the sim', () => {
   const gov = interactive();
   const { history } = simulate(gov, 600, { baseMs: 6, perSubstepMs: 0.5, demand: 12 });
-  assert.equal(gov.cap, 12, `cap ${gov.cap}`);
-  assert.ok(history.every((c) => c <= 12));
+  // The cap moves in half substeps (a fractional cap is met on average): it stops once the sim is no longer
+  // throttled, i.e. at the demand or at most one step above it.
+  assert.ok(gov.cap >= 12 && gov.cap <= 12.5, `cap ${gov.cap}`);
+  assert.ok(history.every((c) => c <= 12.5));
 });
 
 test('governor: isolated hitches do not cost throughput', () => {
   const gov = interactive();
   simulate(gov, 1200, { baseMs: 6, perSubstepMs: 0.5, demand: 12, hitchEvery: 20 });
-  assert.equal(gov.cap, 12, `cap ${gov.cap}`);
+  assert.ok(gov.cap >= 12 && gov.cap <= 12.5, `cap ${gov.cap}`);
 });
 
 test('governor: does not grow when something else throttles the solver', () => {

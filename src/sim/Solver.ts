@@ -203,6 +203,8 @@ export class GpuFloodSolver implements FloodSolver {
   /** Lagged maxima from the latest readback, used for the CFL timestep. */
   private hRead = 0;
   private uRead = 0;
+  /** Largest per-cell gravity-wave speed √(g·h) + |u| of the latest readback (robust-mode CFL input). */
+  private waveRead = 0;
   /** Known sudden depth (water brush) not yet visible in a readback, and the edit sequence that caused it. */
   private hBoost = 0;
   private hBoostSeq = 0;
@@ -220,6 +222,8 @@ export class GpuFloodSolver implements FloodSolver {
   private lastProbeMs = -Infinity;
   private inflight = 0;
   private inflightSince = 0;
+  /** Carried fraction of a fractional maxSubstepsPerFrame (see ditheredSubstepCap). */
+  private capCarry = 0;
   private destroyed = false;
 
   private constructor(
@@ -703,6 +707,8 @@ export class GpuFloodSolver implements FloodSolver {
     this.lastDt = 0;
     this.hRead = hMax;
     this.uRead = 0;
+    // Float32 arithmetic like the stats pass, so a lake at rest reads back exactly this value (dt stays constant).
+    this.waveRead = Math.fround(Math.sqrt(Math.fround(Math.fround(GRAVITY) * Math.fround(hMax))));
     this.hBoost = 0;
     this.peakVolume = this.initialVolume;
     this.resetMaxPending = true;
@@ -836,16 +842,26 @@ export class GpuFloodSolver implements FloodSolver {
     const cflIn = Number.isFinite(p.cfl) ? p.cfl : DEFAULT_SIM_PARAMS.cfl;
     const cfl = robust ? Math.min(o.robustCflMax, Math.max(0.05, cflIn)) : Math.max(0.05, cflIn);
     this.refreshForcing();
-    let h = Math.max(this.hRead, this.hBoost, this.forcing.stageDepthMax, 0.01);
-    // Naive mode uses the textbook local-inertial timestep (Bates et al. 2010), dt = C·dx/√(g·h_max): no flow
-    // speed term and no margins, so the demo's C = 1.8 really applies to the gravity waves in every river.
-    let u = 0;
+    let wave: number;
     if (robust) {
-      // The maxima are stale (last readback, up to a few hundred ms old): inflate them.
-      h *= o.cflDepthMargin;
-      u = Math.max(this.uRead, this.uBoost) * o.cflSpeedMargin + 0.1;
+      // The maxima are stale (last readback, up to a few hundred ms old): inflate them. The readback's wave speed is
+      // the largest √(g·h) + |u| of any single cell: the deepest water (a river channel, a stage disc) is rarely also
+      // the fastest (a jet down a street), so adding the two separate maxima overstated the fastest wave by ~50 % in
+      // Pittsburgh's 1936 flood (the HUD read Courant 0.46 against a target of 0.7) and cost as much sim speed.
+      // What is known to be coming but cannot be in a readback yet (stage discs, a water brush, released bores) is
+      // still combined the conservative way; any face the estimate misses is caught by the momentum pass's local
+      // Courant guard.
+      // A speed boost (flow about to start) is assumed to reach the deepest water.
+      const hKnown = Math.max(this.hBoost, this.forcing.stageDepthMax, this.uBoost > 0 ? this.hRead : 0, 0.01) * o.cflDepthMargin;
+      const known = Math.sqrt(GRAVITY * hKnown) + this.uBoost * o.cflSpeedMargin + 0.1;
+      const read = Math.sqrt(GRAVITY * 0.01 * o.cflDepthMargin) + this.waveRead * o.cflSpeedMargin + 0.1;
+      wave = Math.max(known, read);
+    } else {
+      // Naive mode uses the textbook local-inertial timestep (Bates et al. 2010), dt = C·dx/√(g·h_max): no flow
+      // speed term and no margins, so the demo's C = 1.8 really applies to the gravity waves in every river.
+      wave = Math.sqrt(GRAVITY * Math.max(this.hRead, this.hBoost, this.forcing.stageDepthMax, 0.01));
     }
-    const dt = (cfl * this.cellSize) / (Math.SQRT2 * (Math.sqrt(GRAVITY * h) + u));
+    const dt = (cfl * this.cellSize) / (Math.SQRT2 * wave);
     return Math.min(o.dtMax, Math.max(o.dtMin, Number.isFinite(dt) ? dt : o.dtMin));
   }
 
@@ -993,6 +1009,28 @@ export class GpuFloodSolver implements FloodSolver {
   }
 
   /**
+   * This frame's share of a fractional maxSubstepsPerFrame (a host pacing the solver, e.g. the app's work budget,
+   * may ask for 4.5): whole substeps, plus one extra on the frames where the carried fraction reaches 1, so the
+   * average is exact. GPU throughput on a saturated queue has a cliff between whole numbers (at 60 fps on the M4 in
+   * Pittsburgh's crest flood: 4 substeps ~15 ms latency, 5 ~30 ms, 6 ~40 ms with dropped frames).
+   */
+  private ditheredSubstepCap(): number {
+    const m = Number.isFinite(this.params.maxSubstepsPerFrame) ? this.params.maxSubstepsPerFrame : 1;
+    const whole = Math.max(1, Math.floor(m));
+    const frac = m >= 1 ? m - Math.floor(m) : 0;
+    if (!(frac > 0)) {
+      this.capCarry = 0;
+      return whole;
+    }
+    this.capCarry += frac;
+    if (this.capCarry >= 1 - 1e-9) {
+      this.capCarry -= 1;
+      return whole + 1;
+    }
+    return whole;
+  }
+
+  /**
    * Whether this frame should carry GPU timestamp queries for the budget: never when the budget is off (Infinity);
    * every frame while the budget can limit the substeps (or has too few samples); otherwise every PROBE_IDLE_MS, so
    * the estimate still follows thermal throttling without a GPU→CPU readback on every frame.
@@ -1005,7 +1043,7 @@ export class GpuFloodSolver implements FloodSolver {
 
   /** Substeps allowed this frame: user cap ∩ measured GPU budget; 0 if the GPU queue is backed up. */
   private substepCap(): number {
-    const userCap = this.userSubstepCap();
+    const userCap = this.ditheredSubstepCap();
     const budget = this.budget.cap();
     if (this.inflight >= 3) {
       // Several frames of solver work still queued on the GPU: skip a frame so latency cannot build up.
@@ -1350,6 +1388,7 @@ export class GpuFloodSolver implements FloodSolver {
     // CFL inputs. Keep a brush-induced depth boost until a readback taken after that edit arrives.
     this.hRead = maxH;
     this.uRead = Math.sqrt(maxSp2);
+    this.waveRead = Number.isFinite(maxWave) ? maxWave : Infinity;
     if (meta.seq >= this.hBoostSeq) this.hBoost = 0;
     if (meta.simTime > this.uBoostTime) this.uBoost = 0;
     this.diagnostics = { nonFiniteCells: nonFinite, minDepth: minH, processMs: now() - t0 };

@@ -8,7 +8,7 @@ import type { StepInfo } from '../contracts';
  * fixed substep count that is smooth at minute 1 stutters at minute 10. A governor owns a substep cap (fed
  * to the solver as `maxSubstepsPerFrame`) and steers it with an AIMD controller, like TCP congestion control:
  *
- *   • over target → multiplicative decrease (cap × 0.7); that cap is remembered as a ceiling and probed
+ *   • over target → decrease (one substep when slightly over, cap × 0.7 when clearly over); that cap is remembered as a ceiling and probed
  *     again only after a backoff (1 s, 2 s, 4 s … 8 s), so the cap settles instead of sawtoothing;
  *   • under target AND this cap is what limits the sim → additive increase.
  *
@@ -49,7 +49,10 @@ const MAX_BACKOFF_MS = 8000;
 const CALM_RESET_MS = 15000;
 
 export class SubstepGovernor {
-  /** Current substep cap (integer ≥ minCap). */
+  /**
+   * Current substep cap (≥ minCap, in steps of CAP_STEP): fractional caps are met on average by the solver (4.5 →
+   * alternately 4 and 5), which matters because a saturated GPU queue has a latency cliff between whole numbers.
+   */
   cap: number;
 
   private window: number[] = [];
@@ -106,7 +109,7 @@ export class SubstepGovernor {
     this.window.push(frameMs);
     // Only a throttle at OUR cap counts: if something else limits the solver (its own GPU budget, a backed-up
     // queue) raising the cap would do nothing now and cause a burst later.
-    if (info.throttled && info.substeps >= this.cap) this.throttledInWindow = true;
+    if (info.throttled && info.substeps >= Math.floor(this.cap)) this.throttledInWindow = true;
     if (this.window.length < c.windowFrames || now - this.windowStart < c.windowMs) return false;
 
     const frameTime = trimmedMean(this.window);
@@ -124,23 +127,33 @@ export class SubstepGovernor {
     const before = this.cap;
     if (now < this.settleUntil) return false;
     const targetMs = Math.max(c.targetMs, this.floorMs * 1.1);
-    const over = frameTime > targetMs * (1 + c.band) || latency > c.latencyMs * (1 + c.band);
-    const under = frameTime < targetMs * (1 - c.band) && latency < c.latencyMs * (1 - c.band);
+    // Under a frame-rate ceiling one frame of queued work is the ceiling's interval, not a 60 Hz vsync.
+    const latencyMs = Math.max(c.latencyMs, this.floorMs * 1.05);
+    const over = frameTime > targetMs * (1 + c.band) || latency > latencyMs * (1 + c.band);
+    const under = frameTime < targetMs * (1 - c.band) && latency < latencyMs * (1 - c.band);
     if (over && this.cap > c.minCap) {
       this.ceiling = this.cap;
-      this.cap = Math.max(c.minCap, Math.floor(this.cap * 0.7));
+      // Graded: slightly over (GPU latency sampled per frame is noisy — readback and water-refresh frames carry
+      // extra work) takes one substep off; clearly over (a missed-vsync frame rate, a long queue) cuts by 30 %.
+      const severe = frameTime > targetMs * 1.2 || latency > latencyMs * 1.4;
+      this.cap = Math.max(c.minCap, severe ? stepFloor(this.cap * 0.7) : this.cap - Math.max(CAP_STEP, stepRound(this.cap * 0.1)));
       this.holdUntil = now + this.backoffMs;
       this.backoffMs = Math.min(MAX_BACKOFF_MS, this.backoffMs * 2);
       this.lastDecrease = now;
       this.settleUntil = now + 2 * c.windowMs;
     } else if (!over && under && throttled && this.cap < upper) {
-      let next = Math.min(upper, this.cap + Math.max(1, Math.round(this.cap * 0.1)));
-      if (next >= this.ceiling && now < this.holdUntil) next = Math.max(this.cap, this.ceiling - 1);
+      let next = Math.min(upper, this.cap + Math.max(CAP_STEP, stepRound(this.cap * 0.1)));
+      if (next >= this.ceiling && now < this.holdUntil) next = Math.max(this.cap, this.ceiling - CAP_STEP);
       this.cap = next;
     }
     return this.cap !== before;
   }
 }
+
+/** Resolution of the substep cap. */
+const CAP_STEP = 0.5;
+const stepRound = (x: number) => Math.round(x / CAP_STEP) * CAP_STEP;
+const stepFloor = (x: number) => Math.floor(x / CAP_STEP) * CAP_STEP;
 
 function median(xs: number[]): number {
   const s = [...xs].sort((a, b) => a - b);
@@ -163,9 +176,11 @@ function trimmedMean(xs: number[]): number {
 /**
  * What the frame is for, which decides how much GPU backlog is acceptable:
  *   interactive — the user is touching something (camera, tools, sliders): ~no queued frames (low input lag);
- *   watching    — hands off, the flood is the show: input lag is invisible, so the GPU queue may run a few
- *                 frames deep for more sim per frame (measured uncontended on the M4 at 1024²: 4 substeps →
- *                 57 fps, ~51 ms latency, 47 sim-s/s vs 1 substep → 60 fps, ~14 ms, 13 sim-s/s);
+ *   watching    — hands off, the flood is the show: input lag is invisible, so the GPU queue may run about two
+ *                 frames deep for more sim per frame. Not deeper: measured on the M4 (Pittsburgh at the 1936 crest
+ *                 with 50 mm/hr rain, 1600×1000), a fixed 5 substeps per frame ran at 60 fps with a p95 frame time
+ *                 of 19 ms and ~28 ms latency; 6 substeps → ~40 ms latency and dropped frames (p95 24 ms); the old
+ *                 60 ms target settled at ~6 substeps with a p95 of 31 ms for only ~10 % more sim speed;
  *   automation  — runFor() fast-forwarding: a little deeper still.
  *
  * No mode trades FRAME RATE for sim speed: the renderer runs its own adaptive-resolution controller on frame
@@ -177,7 +192,7 @@ export type BudgetMode = 'interactive' | 'watching' | 'automation';
 
 export const BUDGET_TARGETS: Record<BudgetMode, { frameMs: number; latencyMs: number }> = {
   interactive: { frameMs: 18.5, latencyMs: 28 },
-  watching: { frameMs: 19.5, latencyMs: 60 },
+  watching: { frameMs: 19.5, latencyMs: 34 },
   automation: { frameMs: 19.5, latencyMs: 80 },
 };
 
