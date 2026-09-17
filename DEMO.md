@@ -2,8 +2,8 @@
 
 For the people presenting Deluge to judges. Every number below comes from the code, the tests,
 [README.md](README.md), [ARCHITECTURE.md](ARCHITECTURE.md), or a rehearsal on the demo laptop itself (MacBook Air M4,
-macOS 15.6): production build, headless Chromium on the laptop's own GPU, 1470×956 at 2×, offline, real clicks,
-17 Sep 2026. Where a rehearsal ran on battery or while other GPU jobs were running, the numbers say so.
+macOS 15.6): production build, headless Chromium and headless Brave on the laptop's own GPU, 1470×956 at 2×, offline,
+real clicks, 17 Sep 2026. Where a rehearsal ran on battery or while other GPU jobs were running, the numbers say so.
 
 [1 Checklist](#1-before-judging) · [2 Three-minute pitch](#2-the-three-minute-pitch) ·
 [3 Sixty-second version](#3-the-sixty-second-version) · [4 The hard part](#4-the-hard-part) ·
@@ -20,7 +20,7 @@ macOS 15.6): production build, headless Chromium on the laptop's own GPU, 1470×
 
 ### At the table, 10 minutes before
 
-**Power.** Low Power Mode and heat cost sim speed long before they cost frame rate.
+**Power.** Low Power Mode and Energy Saver can cap the page at 30 fps; heat and a busy GPU cut sim speed.
 
 - [ ] Plug in the charger.
 - [ ] **Turn Low Power Mode off.** System Settings → Battery → Low Power Mode → **Never**. On this laptop it is set on
@@ -35,9 +35,9 @@ macOS 15.6): production build, headless Chromium on the laptop's own GPU, 1470×
 - [ ] Quit everything else that draws on the GPU: other browser tabs with maps, video or 3D, video calls, screen
   recorders, IDE previews.
 - [ ] Don't run `npm test`, `npm run e2e` or `npm run bench` during judging.
-- [ ] Why, measured on this laptop: with the GPU to itself the flood ran at 80–116× and a reload took 1.5 s. With other
-  headless browser tests sharing the GPU (and on battery), frames mostly still held 50–60 fps, but sim speed fell to
-  7–33×, a reload took up to 12 s, and the river took 16 s instead of 3 s to reach the 1936 crest.
+- [ ] Why, measured on this laptop: in the quietest rehearsal the 1936 flood ran at 80–116× and the river reached the
+  crest 3 s after the click. With other headless browser tests sharing the GPU (on battery, Low Power Mode on), frames
+  mostly still held 50–60 fps, but sim speed fell to 7–33×, the crest took 8–16 s, and a reload took 1.7–12 s.
 
 **Server.**
 
@@ -49,8 +49,8 @@ macOS 15.6): production build, headless Chromium on the laptop's own GPU, 1470×
 **Browser: Brave, no flags.**
 
 - [ ] Use **Brave** (installed: 1.94 on Chromium 152). Chrome is not installed. On this laptop Brave with no flags gets a
-  real WebGPU adapter (`apple metal-3`, not a fallback), loads the scene with no errors, and passes 11 of the 12
-  offline e2e flows headless (the miss is flow 12, cancelling a `?live=` download, which the pitch doesn't use).
+  real WebGPU adapter (`apple metal-3`, not a fallback), and a full rehearsal of section 2 in headless Brave ran every
+  beat with no errors.
 - [ ] **Not Safari.** It is Safari 18.6; Deluge supports Safari 26+ (README). Safari 18 keeps WebGPU behind
   *Develop → Feature Flags* and that path is untested.
 - [ ] Brave Settings → search "energy" → turn **Energy Saver** off (it caps pages at 30 fps). Shields don't matter:
@@ -62,24 +62,25 @@ macOS 15.6): production build, headless Chromium on the laptop's own GPU, 1470×
 
 **The page.**
 
-- [ ] Open http://localhost:4173/ (the address becomes `?preset=pittsburgh`) **before the first judge arrives**, and watch it
-  run for a minute.
+- [ ] Open http://localhost:4173/ (the address becomes `?preset=pittsburgh`) **before the first judge arrives**, and
+  watch it run for a minute.
 - [ ] Full screen (Ctrl-Cmd-F) at 100 % zoom (Cmd-0). The rehearsal viewport was 1470×956, which is full screen on this Air.
 - [ ] The start screen should show:
   - top right: ≈ 60 fps
-  - bottom left, LIVE SOLVER: Mass error `<0.001 %`, Sim speed `60×`
+  - bottom left, LIVE SOLVER: Mass error `<0.001 %`, Sim speed close to `60×` (far lower: something else is using the
+    GPU)
   - top centre, *Try it*: **Raise to 1936 record · Evacuate · Build a levee · Hurricane rain · Break it**
   - right panel: River stage **16.0 ft**
 
 ### Reset between judges
 
 **Press Cmd-R.** A reload is the clean reset: river back at 16 ft, speed 60×, no walls, no route, the Try-it steps
-unchecked (checked after a full pitch in rehearsal), and the strip comes back even if it was closed. Running again in
-1.5–1.7 s on a quiet GPU. Don't use `R` for this:
-it resets only the water, so walls stay and a raised river rises again.
+unchecked (checked after a full pitch in rehearsal), and the strip comes back even if it was closed. Measured: running
+again 1.7 s after Cmd-R at best, up to 12 s while other GPU work was going on. Don't use `R` for this: it resets only the
+water, so walls stay and a raised river rises again.
 
 While you wait for the next judge, press **Space** to pause: a paused view drops to ~4 renders a second (e2e flow 10),
-which keeps a fanless Air cool. Press Space again as the judge walks up.
+so the fanless Air does less work between judges. Press Space again as the judge walks up.
 
 ### If something goes wrong
 
@@ -117,8 +118,8 @@ is the fallback. Timings are from the rehearsal (conditions noted).
   The rise is a time-lapse, minutes instead of 30 hours; the flood after it is solved at real speed." As it spreads:
   "The Point, the North Shore stadiums, the Strip District. Roads go orange when wet and red when a car would float."
   Point at the HUD: "Mass error stays under a thousandth of a percent: every cubic metre in and out is booked."
-- **Judge sees:** a pill "River rising 16.0 ft → 46.0 ft" under the strip; the slider in the side panel moves to 46;
-  downtown and the North Shore go under; red roads.
+- **Judge sees:** a pill "River rising 16.0 ft → 46.0 ft" under the strip (the side panel adds "· time-lapse");
+  downtown, the Point and the North Shore go under; roads turn red.
   [Picture](docs/hero-1936-crest.jpg).
   Rehearsal: with the GPU to itself, 46 ft and ~4 km² flooded 3 s after the click, ~6 km² by 10 s, the top right
   reading e.g. "60 fps · 6.5 sub · 88×". With a shared GPU (13–33×): 46 ft after 8–16 s.
@@ -142,15 +143,16 @@ is the fallback. Timings are from the rehearsal (conditions noted).
 - **Say:** "The planner's question: what if the North Shore had a floodwall? This builds a 2.4-kilometre wall with its
   top a metre above the 1936 record, resets the flood, and replays the rise with the wall in place." When green shows:
   "Green is land that would be under water at this level without the wall, about 140 acres and 11 km of streets,
-  recomputed every second from the live water. And watch the evacuation route re-plan as the water comes back."
+  recomputed about once a second from the live water. And watch the evacuation route re-plan as the water comes back."
 - **Judge sees:** the camera flies to the North Shore; notice "Building a 2.4 km levee along the North Shore"; a tan
   wall rises; the river rises again; PNC Park and Acrisure Stadium stay dry under a green tint; the pill "Walls keep …
   acres dry · … km of streets"; notice "The levee is holding"; the route chip flips to Mount Washington while the land
   is dry, then back to "Re-planned — safe route to Hill District high ground".
   [Picture](docs/levee-north-shore.jpg).
-  Rehearsal with a shared GPU (10–25×): wall up 4–5 s after the click, first green at 10–11 s, 46 ft and "The levee is
-  holding" at 19–20 s, then the count peaks (143–152 acres) and settles at 134–139 acres and 11 km. A quiet GPU should
-  be quicker (the replayed rise is 3.7 simulated minutes), but plan for 20 s.
+  Rehearsal with a shared GPU (10–25×, Chromium and Brave): wall standing within ~5 s of the click, first green at
+  10–12 s, 46 ft and "The levee is holding" at 17–20 s. The count overshoots on the way up (up to 152 acres) and
+  settles at 134–139 acres and 11 km. A quiet GPU should be quicker (the replayed rise is 3.7 simulated minutes), but
+  plan for 20 s.
 - **If not:** no green after ~25 s → check sim speed (see Beat 2) and fill with how the number is computed (Q9).
 
 ### Beat 5 · 1:55–2:30 · Break it
@@ -197,34 +199,32 @@ levee, Diverged 1 s after Break it). The crest comes ~3 s after Raise on a quiet
 
 ### 30 seconds, plain language
 
-"Water simulations on real terrain want to blow up. The rivers here are six metres deep and fast, streets carry films
-a centimetre thick, walls are one cell wide, and the GPU updates a million cells at once. Four rules keep it stable:
-the time step shrinks so no wave skips a cell; friction can only slow water down, never reverse it; a cell can never
-give away more water than it holds; and a still lake stays still. And we count every drop: that's the mass error in
-the corner."
+"Water simulations on real terrain want to blow up: six-metre-deep rivers, centimetre-thin films on the streets, walls
+one cell wide, a million cells updated at once. Four rules keep it stable. The time step shrinks so no wave skips a
+cell. Friction can only slow water down, never reverse it. A cell can't give away more water than it holds. And a still
+lake stays still. We also count every drop: that's the mass error in the corner."
 
 ### 90 seconds, technical (say this)
 
-"It's the 2-D shallow-water equations on a staggered grid: depth at cell centres, discharge on cell faces. The base is
-the local-inertial scheme from flood models like LISFLOOD-FP, plus upwind advection, which is what makes a dam-break
-front move at the right speed.
+"It's the 2-D shallow-water equations on a staggered grid: depth at cell centres, discharge on the faces. The base is
+the local-inertial scheme from flood models like LISFLOOD-FP, plus upwind advection so a dam-break front moves at the
+right speed. It's explicit, so four things keep it stable.
 
-It's explicit, so, one: the time step is CFL-limited with the two-dimensional Courant number, dt = Cr·dx over √2 times
-the fastest √(gh) + |u|. The worst mode is the grid checkerboard, so we aim for 0.7 and never exceed 0.85. The maximum
-comes back from the GPU a few hundred milliseconds late, so we pad it, and a per-face guard in the shader catches
-anything it misses.
+One: a CFL-limited time step using the two-dimensional Courant number, dt = Cr·dx over √2 times the fastest √(gh) + |u|.
+Stability analysis puts the limit at 0.89 with our smoothing, so we aim for 0.7 and cap at 0.85. The maximum comes back
+from the GPU a few hundred milliseconds late, so we pad it, and a per-face guard in the shader catches the rest.
 
-Two: friction is semi-implicit. We divide by one plus g·dt·n²·|q| over h to the seven-thirds instead of subtracting, so
-on thin films it can only slow water down, for any time step.
+Two: semi-implicit friction. We divide by one plus g·dt·n²·|q| over h to the seven-thirds instead of subtracting, so on
+thin films friction can only slow water down, at any time step.
 
-Three: wetting and drying use a positivity-preserving flux limiter. Each cell scales its outgoing fluxes so it can't
-export more than it holds, so depth never goes negative and we never clamp, which would create water.
+Three: a positivity-preserving flux limiter for wetting and drying. A cell scales its outgoing fluxes so it never
+exports more than it holds: depth can't go negative, and we never clamp, which would create water.
 
-Four: face depth is well-balanced, max of the surfaces minus max of the beds, so a lake on rough terrain stays at rest.
+Four: well-balanced face depth, max of the surfaces minus max of the beds, so a lake on rough terrain stays at rest.
 
-Mass is booked exactly: a per-cell ledger records every source and sink, even the GPU's own Float32 rounding, and the
-CPU sums it in Float64. And every substep is two full-grid compute passes where each cell reads its neighbours and
-writes only itself, about 2 milliseconds for a million cells on this laptop."
+Mass is booked exactly: a per-cell ledger records every source, sink and even the Float32 rounding, summed in Float64.
+And each substep is two full-grid compute passes where every cell reads its neighbours and writes only itself: about
+2 milliseconds for a million cells on this laptop."
 
 ### Backup detail, if they dig
 
@@ -268,12 +268,12 @@ All of this is in `src/sim/Solver.ts`, `src/sim/shaders/{momentum,continuity,com
 For city-scale floodplain inundation, reasonably, and we checked it two ways. Against analytic and physical benchmarks
 (Q2). And against National Weather Service impact statements for the Point gauge (PTTP1), holding each stage for 15
 simulated minutes: the water surface at the Point stays within 3 cm of the gauge reading from 28 to 46 ft; Point State
-Park floods at 31 ft (NWS: 30); Federal Street at PNC Park is wet at 40 ft (NWS: 40); 15.7 ft of water at Point State
-Park at 46 ft (NWS: "up to 15 ft in the Golden Triangle"). The misses: Acrisure Stadium's field and the Station Square
-tracks first get wet at 40 ft (NWS: 30–31), the Wood Street T station only at 46 ft (NWS: 28), and the Parkway
-"bathtub" stays dry at 46 ft (NWS: 25). Those flood through storm drains, underpasses and underground stations that
-bare-earth elevation doesn't contain. It isn't calibrated against a measured flood, so it's for exploring and
-explaining, not for engineering decisions.
+Park is dry at 30 ft and wet at 31 (NWS: 30); Federal Street at PNC Park is dry at 36 and wet at 40 (NWS: 40); 15.7 ft
+of water at Point State Park at 46 ft (NWS: "up to 15 ft in the Golden Triangle"). The misses: Acrisure Stadium's field
+and the Station Square tracks first get wet at 40 ft (NWS: 30–31), the Wood Street T station only at 46 ft (NWS: 28),
+and the Parkway "bathtub" stays dry at 46 ft (NWS: 25). Those flood through storm drains, underpasses and underground
+stations that bare-earth elevation doesn't contain. It isn't calibrated against a measured flood, so it's for exploring
+and explaining, not for engineering decisions.
 
 **2. How do you validate it?**
 `npm test` runs the solver suites on the real GPU through Dawn. Re-run on this laptop today:
@@ -281,7 +281,7 @@ explaining, not for engineering decisions.
 | Check | Result |
 | --- | --- |
 | Lake at rest on rough terrain, 2000 steps | max \|u\| = 9.3·10⁻⁵ m/s |
-| Dam break vs the Ritter solution, t = 20 s | L1 error 1.6 %, front ratio 1.01, depth at the dam 0.443 m (exact 0.444) |
+| Dam break (1 m of water) vs the Ritter solution, t = 20 s | L1 error 1.6 %, front ratio 1.01, depth at the dam 0.443 m (exact 0.444) |
 | Mass error, closed domain | 7.0·10⁻⁹ |
 | Mass error, open domain with rain, storm, inflow, stage, infiltration | 9.1·10⁻⁸ |
 | Mass error, deep river with rain and a stage boundary, 3 simulated hours | 5.9·10⁻⁷ |
@@ -313,7 +313,7 @@ on the future-work list.
 
 **6. How big is the grid, and how fast?**
 Presets are 1024 × 1024 = 1,048,576 cells (Pittsburgh: 7.8 m cells, 8 km across). Live areas are 1–20 km at 512², 1024²
-or 2048² (2048² isn't benchmarked). Benchmark on an M4 (ARCHITECTURE §8.1: production build, 1936 crest plus 50 mm/hr
+or 2048² (2048² isn't benchmarked). Benchmark on the M4 (ARCHITECTURE §8.1: production build, 1936 crest plus 50 mm/hr
 rain): 60 fps, p95 frame ≈ 19 ms, 57–64× real time at this Air's 1470×956 @ 2×, 68–73× at 1600×1000, and 66–70× every
 minute of a 10-minute run. A substep costs 1.6–2.0 ms of GPU time, so at 5–6 substeps a frame that's roughly 300–400
 million cell updates a second (How it works shows the live figure).
@@ -325,7 +325,8 @@ problem is embarrassingly parallel. A server GPU would need the network, and thi
 
 **8. Why does the river rise so fast?**
 The rise is a time-lapse: 3 m (about 10 ft) per simulated minute, so the 1936 crest arrives in ~3.7 simulated minutes,
-roughly 600–850× faster than the real ~30-hour rise. Everything after that runs at its real speed. The side panel says
+roughly 600–850× faster than the real ~30-hour rise. Everything after that runs at its real speed; the "88×" top right
+is simulated seconds per real second actually achieved. The side panel says
 "time-lapse" while it rises. Raising it all at once would be a dam break along every bank.
 
 **9. Is the "acres kept dry" number real?**
@@ -377,7 +378,8 @@ flash-flood storm).
 **16. What did AI write?**
 Answer honestly. We used AI coding assistants heavily to write, test and review the code and the docs; the No Wrapper
 track allows that. **The product itself contains no language model and no machine learning:** no model or AI API calls,
-its only runtime dependencies are `geotiff` and `leaflet`, and every number on screen comes from the solver. The GPU
+its only runtime dependencies are `geotiff` and `leaflet`, and every number on screen comes from the solver or plain
+algorithms on its output (routing, the protected-land estimate). The GPU
 tests against analytic solutions and a Float64 reference are how we checked that generated code is right and not just
 plausible. Then say concretely what each of you decided, checked or debugged, and don't downplay the AI's share.
 
