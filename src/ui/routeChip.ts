@@ -91,7 +91,7 @@ export function createRouteChip(ctx: UIContext, opts: { reveal(): void }): HTMLE
     } else if (state === 'blocked') {
       setIcon('blocked');
       setText(label, 'No safe route');
-      setText(dest, blockedAdvice(route?.message));
+      setText(dest, blockedAdvice(route));
       metrics.hidden = true;
       lastShelter = '';
     } else {

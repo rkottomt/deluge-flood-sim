@@ -211,7 +211,14 @@ export function createLocationPicker(ctx: UIContext): Modal {
   const loadText = h('span', { class: 'dl-load-text' }, 'Load this area');
   const loadPct = h('span', { class: 'dl-load-pct' });
   const loadBtn = h('button', { type: 'button', class: 'dl-btn dl-btn-primary dl-load-btn' }, loadFill, icon('arrowRight', 16), loadText, loadPct);
-  const loadStatus = h('div', { class: 'dl-load-status', hidden: true });
+  const loadStatusText = h('span', { class: 'dl-load-status-text' });
+  // A live download can stall on bad wifi: the dialog always offers a way out (closing it cancels too).
+  const cancelBtn = h(
+    'button',
+    { type: 'button', class: 'dl-btn dl-btn-ghost dl-btn-sm dl-load-cancel', onclick: () => ctx.actions.cancelLoad?.() },
+    'Cancel',
+  );
+  const loadStatus = h('div', { class: 'dl-load-status', hidden: true }, loadStatusText, cancelBtn);
   const loadErrorText = h('span', { class: 'dl-load-error-text' });
   const retryBtn = h('button', { type: 'button', class: 'dl-btn dl-btn-subtle dl-btn-sm dl-load-retry', onclick: () => loadBtn.click() }, icon('reset', 14), h('span', null, 'Retry'));
   const loadError = h('div', { class: 'dl-load-error', role: 'alert', hidden: true }, icon('warning', 15), h('div', { class: 'dl-load-error-body' }, loadErrorText, retryBtn));
@@ -274,7 +281,8 @@ export function createLocationPicker(ctx: UIContext): Modal {
       center: { lat: center.lat, lon: center.lon },
       sizeMeters: size,
       resolution,
-      name: placeName || `${center.lat.toFixed(3)}, ${center.lon.toFixed(3)}`,
+      // No name yet (map click, reverse geocoding still pending): the loader looks one up itself.
+      ...(placeName ? { name: placeName } : {}),
     };
     // The app reports a failed load as an error toast and (today) resolves anyway; watch for that report so the
     // failure is handled here, in context, instead of closing the dialog as if it had worked.
@@ -292,6 +300,11 @@ export function createLocationPicker(ctx: UIContext): Modal {
       off();
     }
     loadingHere = false;
+    if (outcome === 'superseded') {
+      // Cancelled (or overtaken by another load): nothing to explain.
+      syncLoad();
+      return;
+    }
     const failed = thrown !== null || outcome === 'failed' || reported !== null;
     if (!failed) {
       syncLoad();
@@ -329,8 +342,9 @@ export function createLocationPicker(ctx: UIContext): Modal {
     setText(loadPct, busy ? `${Math.round(p * 100)}%` : '');
     // The step being fetched goes on its own line so the percentage is never cut off.
     loadStatus.hidden = !busy;
-    setText(loadStatus, busy ? s.loading?.message || 'Loading…' : '');
-    loadStatus.title = loadStatus.textContent ?? '';
+    setText(loadStatusText, busy ? s.loading?.message || 'Loading…' : '');
+    loadStatusText.title = loadStatusText.textContent ?? '';
+    cancelBtn.hidden = !(busy && s.loading?.cancellable && ctx.actions.cancelLoad);
     for (const el of [searchInput, searchBtn] as Array<HTMLInputElement | HTMLButtonElement>) el.disabled = loadingHere;
   }
   bind((s) => (s.loading ? `${s.loading.message}|${s.loading.progress.toFixed(3)}` : ''), () => syncLoad());
@@ -490,7 +504,14 @@ export function createLocationPicker(ctx: UIContext): Modal {
     requestAnimationFrame(() => map?.invalidateSize());
     setTimeout(() => map?.invalidateSize(), 260);
   });
-  bind((s) => s.panels.locationPicker, (open) => modal.setOpen(open));
+  bind(
+    (s) => s.panels.locationPicker,
+    (open) => {
+      modal.setOpen(open);
+      // Closing the dialog abandons a load it started (the scene on screen stays).
+      if (!open && loadingHere && store.get().loading?.cancellable) ctx.actions.cancelLoad?.();
+    },
+  );
 
   updateSummary();
 

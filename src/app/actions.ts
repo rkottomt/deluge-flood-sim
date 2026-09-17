@@ -10,9 +10,11 @@ export function createActions(app: App): AppActions {
   const { store } = app;
 
   // Declared standalone (not via `this`) so actions still work when destructured by callers.
-  // Water resets restart from the scenario's initial fill at the CURRENT river stage (see crest.ts).
+  // Water resets restart from the scenario's initial fill; a raised river then rises to the slider's stage again
+  // (stage ramp, see stageRamp.ts and crest.ts).
   const resetWater = (opts: { resetTerrain?: boolean } = {}): void => {
     try {
+      if (app.scenes?.scene) app.restartStage();
       if (!app.crest.resetWater(opts)) app.requestRender();
     } catch (err) {
       app.errors.report('sim', `reset failed: ${errorMessage(err)}`, err);
@@ -25,11 +27,17 @@ export function createActions(app: App): AppActions {
     },
 
     async loadLiveArea(req) {
-      const outcome = await app.loadScene({ kind: 'live', req });
+      // The picker explains a failure inline (with the connectivity check); it also still recognises the report.
+      const outcome = await app.loadScene({ kind: 'live', req }, { quietToast: store.get().panels.locationPicker });
       if (outcome === 'ok') {
         const panels = store.get().panels;
         if (panels.locationPicker) store.set({ panels: { ...panels, locationPicker: false } });
       }
+      return outcome;
+    },
+
+    cancelLoad() {
+      if (app.scenes?.cancel()) app.requestRender();
     },
 
     listPresets(): PresetInfo[] {

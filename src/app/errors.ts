@@ -73,10 +73,10 @@ export class ErrorReporter {
   }
 
   /**
-   * Record an error. `source` is a short tag (webgpu, window, promise, frame, load…).
-   * Returns the formatted message.
+   * Record an error. `source` is a short tag (webgpu, window, promise, frame, load…). `toast: false` when the caller
+   * shows the failure in context itself (e.g. the location picker). Returns the formatted message.
    */
-  report(source: string, message: string, cause?: unknown): string {
+  report(source: string, message: string, cause?: unknown, opts: { toast?: boolean } = {}): string {
     const text = `[${source}] ${message}`;
     const n = (this.counts.get(text) ?? 0) + 1;
     this.counts.set(text, n);
@@ -86,7 +86,7 @@ export class ErrorReporter {
       else console.error(`[deluge]${text}`);
       if (n === MAX_CONSOLE_REPEATS) console.error(`[deluge] (further repeats of this error are suppressed)`);
     }
-    this.toast(message);
+    if (opts.toast !== false) this.toast(message);
     return text;
   }
 

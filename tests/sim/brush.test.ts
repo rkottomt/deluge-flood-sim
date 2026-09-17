@@ -132,3 +132,59 @@ test('water brush adds/removes water with exact accounting and never goes negati
   assert.deepEqual(gpuErrors(), []);
   solver.destroy();
 });
+
+test('raiseWaterSurface lifts water in place: h = max(h, base + offset − bed), NaN cells untouched, mass accounted', async () => {
+  const nx = 64;
+  const ny = 48;
+  const dx = 5;
+  const elevation = roughTerrain(nx, ny, 7, 6, 230.5);
+  const depth = new Float32Array(nx * ny);
+  for (let j = 10; j < 30; j++) for (let i = 8; i < 40; i++) depth[j * nx + i] = Math.max(0, 233 - elevation[j * nx + i]);
+  const solver = await makeSolver({ nx, ny, cellSize: dx, elevation, depth, params: { boundary: 'wall', manningN: 0.03 } });
+  const snap0 = await stepAndSnapshot(solver, 40);
+  const before = await solver.debugReadState();
+  // Channel = the left half of the pond; everything else NaN (left alone).
+  const base = new Float32Array(nx * ny).fill(NaN);
+  for (let j = 10; j < 30; j++) for (let i = 8; i < 24; i++) base[j * nx + i] = 233;
+  const bed = (c: number) => solver.getGroundCPU()[c] + solver.getBarrierCPU()[c];
+  const expectAfter = (offset: number, h: Float32Array) => {
+    let err = 0;
+    let added = 0;
+    for (let c = 0; c < nx * ny; c++) {
+      const want = Number.isNaN(base[c]) ? h[c] : Math.max(h[c], base[c] + offset - bed(c));
+      added += want - h[c];
+      err = Math.max(err, Math.abs(want - after.h[c]));
+    }
+    return { err, added: added * dx * dx };
+  };
+  // While "paused": no substeps between the raise and the read.
+  solver.raiseWaterSurface(base, 1.5);
+  let after = await solver.debugReadState();
+  const first = expectAfter(1.5, before.h);
+  assert.ok(first.err < 1e-4, `depth after the raise: max error ${first.err}`);
+  assert.ok(first.added > 1000, 'the raise adds water');
+  assert.ok(maxAbsDiff(after.qx, before.qx) === 0 && maxAbsDiff(after.qy, before.qy) === 0, 'discharge is kept');
+  // Same array, higher offset (the cached upload), then a lower offset (a no-op: never lowers water).
+  const mid = after;
+  solver.raiseWaterSurface(base, 2.25);
+  after = await solver.debugReadState();
+  const second = expectAfter(2.25, mid.h);
+  assert.ok(second.err < 1e-4, `second raise: max error ${second.err}`);
+  const high = after;
+  solver.raiseWaterSurface(base, 0.5);
+  after = await solver.debugReadState();
+  assert.equal(maxAbsDiff(after.h, high.h), 0, 'a lower level never removes water');
+  // The renderer's texture follows without a step, and the ledger balances.
+  const exported = await solver.readTexture(solver.stateTexture, 4);
+  let expErr = 0;
+  for (let c = 0; c < nx * ny; c++) expErr = Math.max(expErr, Math.abs(exported[4 * c] - after.h[c]));
+  assert.ok(expErr < 1e-5, `stateTexture shows the raised water (max error ${expErr})`);
+  const snap = await stepAndSnapshot(solver, 200);
+  const addedIn = snap.stats.volumeIn - snap0.stats.volumeIn;
+  console.log(`  raised ${(first.added + second.added).toFixed(0)} m³, booked inflow ${addedIn.toFixed(0)} m³, massError ${snap.stats.massError.toExponential(2)}`);
+  assert.ok(Math.abs(addedIn - (first.added + second.added)) / addedIn < 1e-3, 'the added water is booked as inflow');
+  assert.ok(snap.stats.massError < 1e-5, `massError ${snap.stats.massError}`);
+  assert.ok(solver.computeDt() > 0);
+  assert.deepEqual(gpuErrors(), []);
+  solver.destroy();
+});

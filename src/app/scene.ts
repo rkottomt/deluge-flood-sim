@@ -25,10 +25,10 @@ export interface Scene {
   initialWater: Float32Array;
 }
 
-/** Thrown by a load that was overtaken by a newer load request. Callers should ignore it silently. */
+/** Thrown by a load that was overtaken by a newer load request, or cancelled. Callers should ignore it silently. */
 export class SupersededLoadError extends Error {
-  constructor() {
-    super('Load superseded by a newer request');
+  constructor(message = 'Load superseded by a newer request') {
+    super(message);
     this.name = 'SupersededLoadError';
   }
 }
@@ -57,6 +57,8 @@ export class SceneManager {
   private token = 0;
   private current: Scene | null = null;
   private inFlight: SceneRequest | null = null;
+  /** Aborts the downloads of the newest load (a newer load or cancel() fires it). */
+  private abort: AbortController | null = null;
 
   constructor(private readonly deps: SceneManagerDeps) {}
 
@@ -82,25 +84,46 @@ export class SceneManager {
     }
   }
 
+  /**
+   * Cancel the load in progress, if any: its downloads are aborted and it rejects with SupersededLoadError. The scene
+   * on screen is untouched (the old scene is only torn down once the new terrain has arrived). Returns true if a load
+   * was cancelled.
+   */
+  cancel(): boolean {
+    if (!this.inFlight) return false;
+    this.token++;
+    this.inFlight = null;
+    this.abort?.abort(new SupersededLoadError('Load cancelled'));
+    this.abort = null;
+    this.deps.store.set({ loading: null });
+    return true;
+  }
+
   async load(request: SceneRequest): Promise<Scene> {
     const token = ++this.token;
     this.inFlight = request;
+    // A newer load overtakes the previous one: stop its downloads too (not just discard their result).
+    this.abort?.abort(new SupersededLoadError());
+    const abort = new AbortController();
+    this.abort = abort;
     const { store, device, renderer, router } = this.deps;
     const label = SceneManager.label(request);
     const isCurrent = () => token === this.token;
+    // Live downloads can take a while (or stall on bad wifi): the loading overlay offers Cancel for them.
+    const cancellable = request.kind === 'live';
     const progress: ProgressFn = (message, fraction) => {
       if (!isCurrent()) return;
       const f = Number.isFinite(fraction) ? Math.min(1, Math.max(0, fraction)) : 0;
-      store.set({ loading: { message, progress: f * DATA_PROGRESS_SHARE } });
+      store.set({ loading: { message, progress: f * DATA_PROGRESS_SHARE, ...(cancellable ? { cancellable } : {}) } });
     };
 
-    store.set({ loading: { message: `Loading ${label}…`, progress: 0 } });
+    store.set({ loading: { message: `Loading ${label}…`, progress: 0, ...(cancellable ? { cancellable } : {}) } });
     /** Solver created by this load but not yet owned by a Scene (destroyed if the load fails). */
     let pending: FloodSolver | null = null;
     try {
       // 1. Terrain data (network / decode). The previous scene keeps rendering meanwhile.
       const terrain =
-        request.kind === 'preset' ? await loadPreset(request.id, progress) : await loadLiveArea(request.req, progress);
+        request.kind === 'preset' ? await loadPreset(request.id, progress) : await loadLiveArea(request.req, progress, abort.signal);
       if (!isCurrent()) throw new SupersededLoadError();
       validateTerrain(terrain);
 
@@ -142,7 +165,10 @@ export class SceneManager {
       }
       throw err;
     } finally {
-      if (isCurrent()) this.inFlight = null;
+      if (isCurrent()) {
+        this.inFlight = null;
+        this.abort = null;
+      }
     }
   }
 

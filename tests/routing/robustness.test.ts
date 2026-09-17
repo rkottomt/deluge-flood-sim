@@ -171,10 +171,10 @@ describe('formatting', () => {
   test('the status sentence uses the same numbers as the evacuation card', async () => {
     const ui = await import('../../src/ui/format');
     const plain = (s: string) => s.replace(/[\u00a0\u2009\u202f]/g, ' ').replace(/(\d),(\d)/g, '$1$2');
-    for (const m of [10, 42, 850, 994, 1000, 3456, 12_345, 99_000, 250_000]) {
+    for (const m of [10, 42, 850, 994, 996, 1000, 3456, 12_345, 99_000, 99_960, 250_000]) {
       assert.equal(formatDistance(m), plain(ui.formatDistance(m)), `${m} m`);
     }
-    for (const s of [0, 1, 45, 59, 60, 61, 89, 91, 360, 3599, 3600, 3900, 7200, 36_000]) {
+    for (const s of [0, 1, 45, 59, 59.7, 60, 61, 89, 91, 360, 3599, 3600, 3900, 7200, 36_000]) {
       assert.equal(formatDuration(s), plain(ui.formatDuration(s)), `${s} s`);
     }
   });

@@ -3,7 +3,7 @@
  *
  *   listPresets()            — preset registry for the scenario picker
  *   loadPreset(id)           — baked real-world presets from /presets/<id>/ or the procedural sandbox
- *   loadLiveArea(req)        — any US location live: USGS 3DEP + Esri imagery + TIGERweb roads + auto hydro
+ *   loadLiveArea(req)        — any US location live: USGS 3DEP + Esri imagery + TIGERweb roads + auto hydro (cancellable)
  *   computeInitialWater()    — initial depth field from a scenario's initialFill
  *   geoToGrid / gridToGeo    — Web Mercator grid conversions
  */
@@ -21,8 +21,9 @@ export function loadPreset(id: string, onProgress?: ProgressFn): Promise<Terrain
   return loadPresetImpl(id, onProgress);
 }
 
-export function loadLiveArea(req: LiveAreaRequest, onProgress?: ProgressFn): Promise<TerrainData> {
-  return loadLiveAreaImpl(req, onProgress);
+/** `signal` cancels the load (downloads included); imagery and roads are best-effort (see live.ts). */
+export function loadLiveArea(req: LiveAreaRequest, onProgress?: ProgressFn, signal?: AbortSignal): Promise<TerrainData> {
+  return loadLiveAreaImpl(req, onProgress, signal);
 }
 
 export function computeInitialWater(terrain: TerrainData, scenario: ScenarioPreset | null): Float32Array {

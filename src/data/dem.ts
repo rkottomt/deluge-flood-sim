@@ -9,7 +9,7 @@
 import { fromArrayBuffer } from 'geotiff';
 import type { ProgressFn } from '../contracts';
 import { EARTH_RADIUS, type MercatorBBox, mercatorToLonLat, mercatorToTile } from './geo';
-import { fetchBytes, mapLimit } from './net';
+import { ELEVATION_UNREACHABLE_MESSAGE, fetchBytes, isNetworkFailure, mapLimit } from './net';
 import { decodePNG } from './png';
 
 export const USGS_3DEP_EXPORT =
@@ -53,8 +53,10 @@ export async function decodeTiffF32(buf: ArrayBuffer, nx: number, ny: number): P
 
 async function fetch3DEPTile(m: MercatorBBox, nx: number, ny: number, signal?: AbortSignal): Promise<Float32Array> {
   const buf = await fetchBytes(usgs3depUrl(m, nx, ny), {
-    timeoutMs: 90000,
-    retries: 2,
+    // Time to first byte (the server renders the export first: a few seconds even at 2048²); a stalled body fails
+    // separately after 20 s without data (net.ts), so a slow but moving download is never cut off.
+    timeoutMs: 45000,
+    retries: 1,
     expectType: 'image/',
     signal,
   });
@@ -334,6 +336,14 @@ export function terrariumZoom(m: MercatorBBox, cellSize: number, maxTiles = 36):
   return z;
 }
 
+/** Every Terrarium tile failed at the network level (see isNetworkFailure). */
+export class ElevationUnreachableError extends Error {
+  constructor() {
+    super(ELEVATION_UNREACHABLE_MESSAGE);
+    this.name = 'ElevationUnreachableError';
+  }
+}
+
 export async function fetchTerrarium(
   m: MercatorBBox,
   nx: number,
@@ -354,6 +364,7 @@ export async function fetchTerrarium(
   const jobs: { x: number; y: number }[] = [];
   for (let y = 0; y < th; y++) for (let x = 0; x < tw; x++) jobs.push({ x, y });
   let done = 0;
+  let networkFailures = 0;
   const nTiles = 2 ** z;
   await mapLimit(jobs, 6, async ({ x, y }) => {
     const txw = (((tx0 + x) % nTiles) + nTiles) % nTiles;
@@ -369,10 +380,13 @@ export async function fetchTerrarium(
       }
     } catch (e) {
       if (signal?.aborted) throw e;
+      if (isNetworkFailure(e)) networkFailures++;
       // Leave NaN; filled later.
     }
     onProgress?.(`Terrarium elevation tiles ${++done}/${jobs.length}`, done / jobs.length);
   });
+  // Not a single tile, and never because the server said no: the network is down (not "open water").
+  if (jobs.length > 0 && networkFailures === jobs.length) throw new ElevationUnreachableError();
   const mw = tw * T;
   const mh = th * T;
   const out = new Float32Array(nx * ny);
@@ -432,6 +446,7 @@ export async function fetchDEM(
 ): Promise<{ elevation: Float32Array; source: 'usgs3dep' | 'terrarium'; filled: number }> {
   let elevation: Float32Array | null = null;
   let filled = 0;
+  let depUnreachable = false;
   try {
     elevation = await fetch3DEP(m, nx, ny, onProgress, signal);
     if (noDataFraction(elevation) > 0.5) {
@@ -444,6 +459,7 @@ export async function fetchDEM(
     if (!elevation) onProgress?.('USGS 3DEP has no coverage here — using Terrarium tiles', 0);
   } catch (e) {
     if (signal?.aborted) throw e;
+    depUnreachable = isNetworkFailure(e);
     console.warn('[data] USGS 3DEP failed, falling back to Terrarium tiles:', e);
     onProgress?.('USGS 3DEP unavailable — using Terrarium tiles', 0);
     elevation = null;
@@ -453,7 +469,15 @@ export async function fetchDEM(
     return { elevation, source: 'usgs3dep', filled };
   }
   filled = 0;
-  const terrarium = await fetchTerrarium(m, nx, ny, cellSize, onProgress, signal);
+  let terrarium: Float32Array;
+  try {
+    terrarium = await fetchTerrarium(m, nx, ny, cellSize, onProgress, signal);
+  } catch (e) {
+    // Both services unreachable: say so plainly (the UI shows its offline help for this message).
+    if (e instanceof ElevationUnreachableError && depUnreachable) throw new Error(ELEVATION_UNREACHABLE_MESSAGE);
+    if (e instanceof ElevationUnreachableError) throw new Error('USGS 3DEP has no data here and the Terrarium elevation tiles can’t be reached — check the network.');
+    throw e;
+  }
   // Deep ocean lies below the no-data floor; shallow seas and lake beds are valid but hold no land to flood.
   if (noDataFraction(terrarium) > 0.5 || landFraction(terrarium) < 0.01) throw new Error(NO_LAND_MESSAGE);
   filled += cleanDEM(terrarium, nx, ny);

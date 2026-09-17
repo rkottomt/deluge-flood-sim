@@ -16,7 +16,7 @@ export class GpuTimer {
   private mapping = false;
   private used = new Set<TimedPass>();
 
-  constructor(private device: GPUDevice) {
+  constructor(device: GPUDevice) {
     this.enabled = device.features.has('timestamp-query');
     if (!this.enabled) return;
     const count = PASSES.length * 2;

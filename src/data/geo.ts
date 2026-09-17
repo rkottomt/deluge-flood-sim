@@ -135,11 +135,18 @@ export function groundDistance(lon1: number, lat1: number, lon2: number, lat2: n
   return Math.hypot(x, y) * EARTH_RADIUS;
 }
 
-/** True if a lon/lat lies roughly within the USGS 3DEP coverage (CONUS, Alaska, Hawaii, PR). */
+/**
+ * True if a lon/lat lies roughly within USGS 3DEP coverage: CONUS, Alaska (with the Aleutians, which cross the
+ * antimeridian), Hawaii, Puerto Rico and the US Virgin Islands, and Guam. The one coverage check (the location picker's
+ * "outside coverage" warning uses it too).
+ */
 export function isLikelyUS(lat: number, lon: number): boolean {
-  const conus = lat > 24 && lat < 50 && lon > -125.5 && lon < -66;
-  const alaska = lat > 51 && lat < 72 && lon > -170 && lon < -129;
-  const hawaii = lat > 18.5 && lat < 22.5 && lon > -160.5 && lon < -154.5;
-  const pr = lat > 17.5 && lat < 18.7 && lon > -67.5 && lon < -65;
-  return conus || alaska || hawaii || pr;
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return false;
+  const x = ((((lon + 180) % 360) + 360) % 360) - 180;
+  const conus = lat > 24 && lat < 50 && x > -125.5 && x < -66;
+  const alaska = lat > 51 && lat < 71.6 && (x > -180 && x < -129 || x > 172 && x <= 180);
+  const hawaii = lat > 18.5 && lat < 22.5 && x > -160.5 && x < -154.5;
+  const prUsvi = lat > 17.5 && lat < 18.7 && x > -67.5 && x < -64.5;
+  const guam = lat > 13.2 && lat < 13.8 && x > 144.5 && x < 145.1;
+  return conus || alaska || hawaii || prUsvi || guam;
 }

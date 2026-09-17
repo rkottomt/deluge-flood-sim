@@ -31,7 +31,8 @@ import {
   MANNING_MIN,
   MANNING_MAX,
 } from './scales';
-import { legendBands, legendTitle } from './legend';
+import { legendTitle } from './legend';
+import { bandsForMode, NORMAL_WATER_LEGEND, showsNormalWater } from '../render/legend';
 import { selectTool } from './toolDefs';
 import { blockedAdvice, routeDetail } from './routeText';
 import { MAX_SOURCES, MAX_STORMS } from './tools';
@@ -260,6 +261,7 @@ export function createPanel(ctx: UIContext): Panel {
   let stageSlider: ReturnType<typeof slider> | null = null;
   let stageReadout: HTMLElement | null = null;
   let stageChip: HTMLElement | null = null;
+  let stageRamp: HTMLElement | null = null;
   let stageCtrl: StageControl | null = null;
   const jumpButtons: Array<{ b: HTMLButtonElement; ft: number }> = [];
 
@@ -292,6 +294,8 @@ export function createPanel(ctx: UIContext): Panel {
       className: 'dl-stage-slider',
     });
     stageChip = h('span', { class: 'dl-chip' });
+    // The simulated river follows the slider at a limited rate (src/app/stageRamp.ts): say where it is on the way.
+    stageRamp = h('span', { class: 'dl-stage-ramp', role: 'status', 'aria-live': 'polite', hidden: true });
     stageReadout = h('div', { class: 'dl-stage-gauge' }, icon('gauge', 14), h('span', null, ctrl.label));
 
     const jumps = h('div', { class: 'dl-jumps' });
@@ -315,21 +319,32 @@ export function createPanel(ctx: UIContext): Panel {
     addJump('Normal', range.min, 'calm');
     for (const m of inRange) addJump(m.label, m.value, m.kind === 'warn' ? 'warn' : 'danger');
 
-    stageSlot.append(h('div', { class: 'dl-stage' }, stageReadout, stageSlider.el, h('div', { class: 'dl-row dl-row-status' }, stageChip), jumps));
-    syncStage(store.get().stageOffset);
+    stageSlot.append(
+      h('div', { class: 'dl-stage' }, stageReadout, stageSlider.el, h('div', { class: 'dl-row dl-row-status' }, stageChip, stageRamp), jumps),
+    );
+    syncStage(store.get());
   }
 
-  function syncStage(offset: number) {
-    if (!stageCtrl || !stageSlider || !stageChip) return;
-    const ft = stageFt(stageCtrl, offset);
+  function syncStage(s: AppState) {
+    if (!stageCtrl || !stageSlider || !stageChip || !stageRamp) return;
+    const ft = stageFt(stageCtrl, s.stageOffset);
+    const nowFt = stageFt(stageCtrl, s.stageOffsetApplied);
     stageSlider.set(ft);
-    const st = stageStatus(stageCtrl, ft);
+    // The chip describes the river as it is now; the ramp line where it is heading.
+    const st = stageStatus(stageCtrl, nowFt);
     setText(stageChip, st.label);
     stageChip.dataset.sev = st.severity;
+    const moving = Math.abs(s.stageOffset - s.stageOffsetApplied) > 0.005;
+    stageRamp.hidden = !moving;
+    if (moving) {
+      const verb = s.stageOffsetApplied < s.stageOffset ? 'Rising' : 'Falling';
+      setText(stageRamp, `${verb} to ${formatStageFt(ft)} · now ${formatStageFt(nowFt)}${s.paused ? ' — paused' : ''}`);
+      stageRamp.dataset.dir = s.stageOffsetApplied < s.stageOffset ? 'up' : 'down';
+    }
     for (const j of jumpButtons) toggleClass(j.b, 'dl-on', Math.abs(j.ft - ft) < 0.15);
   }
   bind((s) => s.scenario?.stage ?? null, (ctrl) => buildStage(ctrl));
-  bind((s) => s.stageOffset, (v) => syncStage(v));
+  bind((s) => `${s.stageOffset}|${s.stageOffsetApplied}|${s.paused}`, (_, s) => syncStage(s));
 
   // Sources & storms list.
   const sourcesCount = h('span', { class: 'dl-count' });
@@ -443,12 +458,12 @@ export function createPanel(ctx: UIContext): Panel {
           h('div', { class: 'dl-metric' }, h('span', { class: 'dl-metric-value' }, formatDistance(route.lengthMeters)), h('span', { class: 'dl-metric-label' }, 'Distance')),
           h('div', { class: 'dl-metric' }, h('span', { class: 'dl-metric-value' }, formatDuration(route.etaSeconds)), h('span', { class: 'dl-metric-label' }, 'Drive time')),
         ),
-        ...((detail) => (detail ? [h('p', { class: 'dl-evac-msg' }, detail)] : []))(routeDetail(route.message, route.shelter?.name)),
+        ...((detail) => (detail ? [h('p', { class: 'dl-evac-msg' }, detail)] : []))(routeDetail(route)),
       );
     } else if (state === 'blocked') {
       evacCard.replaceChildren(
         h('div', { class: 'dl-evac-alarm' }, icon('warning', 30), h('span', { class: 'dl-evac-alarm-text' }, 'NO SAFE ROUTE')),
-        h('p', { class: 'dl-evac-msg' }, blockedAdvice(route?.message)),
+        h('p', { class: 'dl-evac-msg' }, blockedAdvice(route)),
       );
     } else if (s.evacStart) {
       evacCard.replaceChildren(
@@ -521,15 +536,12 @@ export function createPanel(ctx: UIContext): Panel {
       );
       return;
     }
-    const bands = legendBands(mode) ?? [];
+    const bands = bandsForMode(mode) ?? [];
     const bar = h('div', { class: 'dl-legend-bar' }, ...bands.map((b) => h('span', { style: { background: b.color } })));
-    const rows = h(
-      'div',
-      { class: 'dl-legend-rows' },
-      ...bands.map((b) =>
-        h('div', { class: 'dl-legend-row' }, h('i', { style: { background: b.color } }), h('span', { class: 'dl-legend-label' }, b.label), b.note ? h('span', { class: 'dl-legend-desc' }, b.note) : null),
-      ),
-    );
+    const row = (b: { color: string; label: string; note?: string }) =>
+      h('div', { class: 'dl-legend-row' }, h('i', { style: { background: b.color } }), h('span', { class: 'dl-legend-label' }, b.label), b.note ? h('span', { class: 'dl-legend-desc' }, b.note) : null);
+    // Depth maps colour only land that was dry at reset; the normal river is drawn muted (not part of the gradient).
+    const rows = h('div', { class: 'dl-legend-rows' }, showsNormalWater(mode) ? row(NORMAL_WATER_LEGEND) : null, ...bands.map(row));
     const title = legendTitle(mode);
     legend.replaceChildren(h('div', { class: 'dl-legend-title' }, title), bar, rows);
   };

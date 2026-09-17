@@ -136,6 +136,10 @@ test('Pittsburgh preset: bridges open at pool, reroute as the rivers rise to his
       `  300 random routes at +8 m: ok ${states.ok}, blocked ${states.blocked}, none ${states.none}; ${summarize(times, PASSES)}`,
   );
   assert.ok(states.ok > 100, 'most random starts find a route');
-  const p95 = quantile(times.norm, 0.95);
-  assert.ok(p95 < 10, `route p95 ${p95.toFixed(2)} ms < 10 ms`);
+  // Timing is logged above; the bound is asserted by perf.test.ts. Here only with PERF=1, so this real-data
+  // correctness test cannot fail because the machine is busy.
+  if (process.env.PERF === '1') {
+    const p95 = quantile(times.norm, 0.95);
+    assert.ok(p95 < 10, `route p95 ${p95.toFixed(2)} ms < 10 ms`);
+  }
 });

@@ -4,28 +4,11 @@
  */
 import type { PickResult, SimSnapshot } from '../contracts';
 import { HeightField } from './heightfield';
-import { transformPoint4, type Vec3 } from './math';
+import type { Vec3 } from './math';
 
 export interface Ray {
   origin: Vec3;
   dir: Vec3; // normalized
-}
-
-/**
- * World-space ray through a CSS pixel given the inverse view-projection (reversed-Z). Float32 matrices lose
- * precision far from the origin; prefer cameraRay() when the camera basis is available.
- */
-export function screenRay(cssX: number, cssY: number, cssW: number, cssH: number, invViewProj: ArrayLike<number>): Ray {
-  const ndcX = (cssX / Math.max(1, cssW)) * 2 - 1;
-  const ndcY = 1 - (cssY / Math.max(1, cssH)) * 2;
-  // Reversed-Z: ndc z = 1 is the near plane, z = 0.5 a finite point further along the same ray.
-  const a = transformPoint4(invViewProj, ndcX, ndcY, 1, 1);
-  const b = transformPoint4(invViewProj, ndcX, ndcY, 0.5, 1);
-  const p0: Vec3 = [a[0] / a[3], a[1] / a[3], a[2] / a[3]];
-  const p1: Vec3 = [b[0] / b[3], b[1] / b[3], b[2] / b[3]];
-  const d: Vec3 = [p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]];
-  const l = Math.hypot(d[0], d[1], d[2]) || 1;
-  return { origin: p0, dir: [d[0] / l, d[1] / l, d[2] / l] };
 }
 
 /** Pinhole camera description in double precision (see CameraMatrices). */

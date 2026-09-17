@@ -20,7 +20,7 @@
  *  Without a baseline every sample counts — the conservative choice: bridges over rivers read as flooded,
  *  but a route is never sent through water.
  */
-import type { EvacuationRouter, RoadNetwork, RoadStatusArray, RouteResult, Shelter } from '../contracts';
+import type { EvacuationRouter, RoadNetwork, RoadStatusArray, RouteReason, RouteResult, Shelter } from '../contracts';
 import {
   APPROACH_FRACTION,
   CONNECTOR_SPEED,
@@ -39,28 +39,8 @@ import { formatDistance, formatDuration } from './format';
 import { buildRoadGraph, type RoadGraph } from './graph';
 import { IndexedMinHeap } from './heap';
 
-/** Why there is no route ('none' / 'blocked' results). */
-export type RouteReason =
-  /** none: the area has no road data. */
-  | 'no-roads'
-  /** none: no start point chosen yet. */
-  | 'no-start'
-  /** none: no (valid) shelters. */
-  | 'no-shelters'
-  /** none: no road within SNAP_RADIUS_M of the start. */
-  | 'start-off-network'
-  /** none: no shelter within SNAP_RADIUS_M of a road. */
-  | 'shelters-off-network'
-  /** none: the start is in a river or lake (standing water at load) — a misplaced click. */
-  | 'start-in-water-body'
-  /** blocked: the start itself is under floodwater. */
-  | 'start-flooded'
-  /** blocked: every road near the start is flooded. */
-  | 'start-roads-flooded'
-  /** blocked: every shelter is under water. */
-  | 'shelters-flooded'
-  /** blocked: flooded roads cut every path to a shelter. */
-  | 'cut-off';
+/** Why a result has no route (defined in the contract, see RouteResult.reason). */
+export type { RouteReason };
 
 /**
  * A RouteResult plus the parts its `message` sentence is made of, so a UI can lay the route out and format

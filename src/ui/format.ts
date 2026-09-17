@@ -47,19 +47,6 @@ export function fmtNum(v: number | null | undefined, decimals = 0): string {
   return (neg ? '−' : '') + groupThousands(i) + (f ? '.' + f : '');
 }
 
-/** Choose decimals so small numbers keep ~3 significant digits and large ones don't show noise. */
-export function fmtAuto(v: number | null | undefined): string {
-  const b = bad(v);
-  if (b) return b;
-  const a = Math.abs(v as number);
-  if (a === 0) return '0';
-  if (a >= 100) return fmtNum(v, 0);
-  if (a >= 10) return fmtNum(v, 1);
-  if (a >= 1) return fmtNum(v, 2);
-  if (a >= 0.01) return fmtNum(v, 3);
-  return (v as number).toExponential(1).replace('-', '−');
-}
-
 /** Sim clock: T+hh:mm:ss, or T+3d 04:05:06 beyond 99 hours. */
 export function formatClock(seconds: number | null | undefined): string {
   if (seconds === null || seconds === undefined || !Number.isFinite(seconds) || seconds < 0) return 'T+00:00:00';
@@ -198,8 +185,9 @@ export function formatDistance(m: number | null | undefined): string {
   const b = bad(m);
   if (b) return b;
   const v = m as number;
-  if (v < 1000) return `${fmtNum(Math.round(v / 10) * 10, 0)}${THIN}m`;
-  return `${fmtNum(v / 1000, v >= 100000 ? 0 : 1)}${THIN}km`;
+  // Boundaries where rounding changes the unit: 996 m reads "1.0 km" (not "1,000 m"), 99,960 m "100 km".
+  if (v < 995) return `${fmtNum(Math.round(v / 10) * 10, 0)}${THIN}m`;
+  return `${fmtNum(v / 1000, v >= 99_950 ? 0 : 1)}${THIN}km`;
 }
 
 /** Travel time: "45 s", "6 min", "1 h 12 min". */
@@ -207,7 +195,8 @@ export function formatDuration(s: number | null | undefined): string {
   const b = bad(s);
   if (b) return b;
   const v = Math.max(0, s as number);
-  if (v < 60) return `${Math.round(v)}${THIN}s`;
+  // 59.7 s reads "1 min" (not "60 s").
+  if (v < 59.5) return `${Math.round(v)}${THIN}s`;
   const min = Math.round(v / 60);
   if (min < 60) return `${min}${THIN}min`;
   const h = Math.floor(min / 60);

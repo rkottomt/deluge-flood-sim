@@ -107,4 +107,11 @@ test('helpers: roundTo16, tiles, US coverage', () => {
   assert.ok(isLikelyUS(29.95, -90.07));
   assert.ok(isLikelyUS(21.3, -157.8));
   assert.ok(!isLikelyUS(51.5, -0.12));
+  assert.ok(isLikelyUS(51.88, -176.65), 'Adak (Aleutians)');
+  assert.ok(isLikelyUS(52.9, 173.2), 'Attu (west of the antimeridian)');
+  assert.ok(isLikelyUS(18.34, -64.93), 'St. Thomas, USVI');
+  assert.ok(isLikelyUS(18.47, -66.1), 'San Juan, PR');
+  assert.ok(isLikelyUS(13.47, 144.75), 'Guam');
+  assert.ok(!isLikelyUS(35.68, 139.69), 'Tokyo');
+  assert.ok(!isLikelyUS(NaN, 0));
 });

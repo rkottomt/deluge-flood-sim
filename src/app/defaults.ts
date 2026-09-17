@@ -12,12 +12,12 @@ export const APP_CONFIG = {
   /**
    * Solver tunables beyond the SimParams contract (4th createSolver argument, see src/contracts.ts):
    *
-   *  • gpuBudgetMs — the solver's own per-frame GPU budget (timestamp-query measured) is switched off: the app's
-   *    work budget (governor.ts) owns pacing because it sees what the user feels — frame time AND GPU queue latency
-   *    including the renderer — and it picks a different trade-off per interaction mode. Two independent
+   *  • gpuBudgetMs — Infinity switches the solver's own per-frame GPU budget (and its timestamp-query readbacks) off:
+   *    the app's work budget (governor.ts) owns pacing because it sees what the user feels — frame time AND GPU queue
+   *    latency including the renderer — and it picks a different trade-off per interaction mode. Two independent
    *    controllers over the same GPU would fight (each backs off when the other's work shows up).
    */
-  solverOptions: { gpuBudgetMs: 1000 },
+  solverOptions: { gpuBudgetMs: Infinity },
   /** Canvas input or camera motion within this window counts as "interacting" (low-latency work budget). */
   interactionHoldMs: 1500,
   /** Store updates that drive the HUD (stats, stepInfo, fps) are throttled to this interval. */
@@ -59,6 +59,7 @@ export function createInitialState(): AppState {
     stormIntensity: 80,
     sim: { ...DEFAULT_SIM_PARAMS },
     stageOffset: 0,
+    stageOffsetApplied: 0,
     render: {
       waterMode: 'realistic',
       verticalExaggeration: 1.5,

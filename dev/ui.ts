@@ -191,6 +191,7 @@ const initial: AppState = {
   stormIntensity: 80,
   sim: { ...DEFAULT_SIM_PARAMS },
   stageOffset: 0,
+  stageOffsetApplied: 0,
   render: { waterMode: 'realistic', verticalExaggeration: 1.5, showImagery: true, showRoads: true, showContours: false },
   sources: scenario.sources.slice(),
   storms: [{ id: 'storm-a', gx: 700, gy: 320, radius: 150, intensity: 60 }],

@@ -20,6 +20,7 @@ import { RunForScheduler } from './runFor';
 import { SceneManager, SupersededLoadError, type Scene } from './scene';
 import { SimSync } from './simSync';
 import { StageLevels } from './stage';
+import { StageRamp } from './stageRamp';
 import { createStore } from './store';
 import { showDeviceLost, WebGPUUnavailableError } from './unsupported';
 import { postNotice } from '../ui/bridge';
@@ -38,6 +39,11 @@ export class App {
   readonly store = createStore(createInitialState());
   readonly errors = new ErrorReporter();
   readonly stage = new StageLevels();
+  /** The applied river stage follows the slider at a limited rate in simulated time (see stageRamp.ts). */
+  readonly stageRamp = new StageRamp();
+  /** Applied offset last pushed to the solver (sources + channel raise), and when it was published to the store. */
+  private stagePushed = 0;
+  private stagePublishedAt = -Infinity;
   readonly runner = new RunForScheduler();
   /** Frame-time substep governor (one learned cap per interaction mode). */
   readonly budget = new WorkBudget();
@@ -108,12 +114,14 @@ export class App {
       stage: this.stage,
       errors: this.errors,
       getSolver: () => this.scenes?.scene?.solver ?? null,
+      getAppliedStageOffset: () => this.stageRamp.applied,
       onRouteInputsChanged: () => this.evac.recomputeRoute(),
     });
     this.crest = new CrestFill({
       store: this.store,
       errors: this.errors,
       getScene: () => this.scenes?.scene ?? null,
+      getStageOffset: () => this.stageRamp.applied,
       onWaterReset: () => {
         this.driver.onSolverReset();
         this.requestRender();
@@ -180,6 +188,7 @@ export class App {
       onSceneCleared: () => {
         this.exitStabilityDemoQuietly();
         this.crest.onSceneChanged();
+        this.setStageNow(0);
         this.evac.reset();
       },
       onSceneReady: (scene) => this.onSceneReady(scene),
@@ -201,7 +210,10 @@ export class App {
     this.probe.install();
     this.sim.install();
     this.store.subscribe((s, prev) => {
-      if (s.stageOffset !== prev.stageOffset) this.crest.onStageOffset(s.stageOffset);
+      if (s.stageOffset === prev.stageOffset) return;
+      this.stageRamp.setTarget(s.stageOffset);
+      // Paused: nothing advances the ramp, but the UI shows where the river is heading.
+      this.requestRender();
     });
     this.sim.setOverride('governor', { maxSubstepsPerFrame: this.budget.cap });
     this.installResizeHandling();
@@ -216,7 +228,7 @@ export class App {
     const { request, warnings } = parseStartupRequest(window.location.search);
     for (const w of warnings) {
       console.warn(`[deluge] ${w}`);
-      this.errors.toast(w, true);
+      postNotice(this.store, { kind: 'info', title: 'Link parameter ignored', message: w });
     }
     const outcome = request.kind === 'live' ? await this.loadStartupLive(request) : await this.loadScene(request);
     if (outcome === 'failed' && !this.scenes?.scene) {
@@ -298,7 +310,7 @@ export class App {
    * old scene was already torn down), a fallback scene is loaded (see loadFallbackScene). With `rethrow` (debug
    * API) the original error is re-thrown after the fallback.
    */
-  async loadScene(request: SceneRequest, opts: { rethrow?: boolean; fallback?: boolean } = {}): Promise<LoadOutcome> {
+  async loadScene(request: SceneRequest, opts: { rethrow?: boolean; fallback?: boolean; quietToast?: boolean } = {}): Promise<LoadOutcome> {
     const scenes = this.scenes;
     if (!scenes || this.gpuLost) {
       const err = new Error(this.gpuLost ? 'The GPU device was lost (reload the page)' : 'App is not started (WebGPU unavailable?)');
@@ -306,9 +318,13 @@ export class App {
       return 'failed';
     }
     try {
-      await scenes.load(request);
-      // An automatic fallback keeps the address bar on what the user asked for (reload retries it).
-      if (!opts.fallback) writeSceneToUrl(request);
+      const scene = await scenes.load(request);
+      if (request.kind === 'live') this.noteLiveLoad(scene);
+      // An automatic fallback keeps the address bar on what the user asked for (reload retries it). A live area
+      // keeps the name it was given (the reverse-geocoded one), so a reload does not look it up again.
+      if (!opts.fallback) {
+        writeSceneToUrl(request.kind === 'live' ? { kind: 'live', req: { ...request.req, name: scene.terrain.name } } : request);
+      }
       return 'ok';
     } catch (err) {
       if (err instanceof SupersededLoadError) {
@@ -316,11 +332,27 @@ export class App {
         return 'superseded';
       }
       const msg = `Could not load ${SceneManager.label(request)}: ${errorMessage(err)}`;
-      this.errors.report('load', msg, err);
+      this.errors.report('load', msg, err, { toast: !opts.quietToast || !scenes.scene });
       if (!scenes.scene && !opts.fallback && !this.gpuLost) await this.loadFallbackScene(request, msg);
       if (opts.rethrow) throw err;
       return 'failed';
     }
+  }
+
+  /** A live area loaded without its optional downloads: say what is missing and what that means. */
+  private noteLiveLoad(scene: Scene): void {
+    const { terrain } = scene;
+    const missing = [terrain.imagery ? '' : 'aerial imagery', terrain.roads ? '' : 'roads'].filter(Boolean);
+    if (!missing.length) return;
+    postNotice(this.store, {
+      kind: 'info',
+      key: 'live-missing-extras',
+      title: `Loaded ${terrain.name} without ${missing.join(' or ')}`,
+      message: `${missing.length === 2 ? 'Those services' : 'That service'} did not answer in time. The flood simulation works as usual${
+        terrain.roads ? '' : '; evacuation routing needs the road network'
+      }.`,
+      durationMs: 9000,
+    });
   }
 
   /**
@@ -338,6 +370,46 @@ export class App {
       reason = `Could not load “${label}” either`;
     }
     return outcome;
+  }
+
+  /**
+   * Advance the river stage by one frame's simulated seconds (FrameDriver). The solver gets the new stage when it
+   * has moved ≥ 5 cm (a few centimetres of channel rise per step keep the bank overtopping gradual) or has arrived;
+   * the store's stageOffsetApplied follows at ≤ 5 Hz for the UI.
+   */
+  advanceStage(simSeconds: number, now: number): void {
+    const ramp = this.stageRamp;
+    if (!ramp.advance(simSeconds)) return;
+    if (Math.abs(ramp.applied - this.stagePushed) >= STAGE_PUSH_STEP_M || !ramp.moving) this.pushStage();
+    if (now - this.stagePublishedAt >= APP_CONFIG.hudIntervalMs || !ramp.moving) this.publishStage(now);
+  }
+
+  /** Apply `offset` at once as both the slider target and the simulated stage (scene changes, automation). */
+  setStageNow(offset: number): void {
+    this.stageRamp.jump(offset);
+    if (this.store.get().stageOffset !== offset) this.store.set({ stageOffset: offset });
+    this.pushStage();
+    this.publishStage(performance.now());
+  }
+
+  /** Water reset: the river goes back to normal pool and rises to the slider's stage again. */
+  restartStage(): void {
+    this.stageRamp.restartFrom(0);
+    this.pushStage();
+    this.publishStage(performance.now());
+  }
+
+  private pushStage(): void {
+    const offset = this.stageRamp.applied;
+    this.stagePushed = offset;
+    this.sim.pushSources();
+    this.crest.onStageOffset(offset);
+  }
+
+  private publishStage(now: number): void {
+    this.stagePublishedAt = now;
+    const applied = this.stageRamp.moving ? Math.round(this.stageRamp.applied * 1000) / 1000 : this.stageRamp.applied;
+    if (this.store.get().stageOffsetApplied !== applied) this.store.set({ stageOffsetApplied: applied });
   }
 
   runFor(simSeconds: number): Promise<void> {
@@ -440,6 +512,9 @@ export class App {
   }
 
   private onSceneReady(scene: Scene): void {
+    this.stageRamp.jump(this.store.get().stageOffset);
+    this.stagePushed = this.stageRamp.applied;
+    this.publishStage(performance.now());
     this.sim.pushAll();
     this.crest.onSceneChanged();
     this.evac.reset();
@@ -509,6 +584,9 @@ export class App {
     });
   }
 }
+
+/** The solver's stage follows the ramp in steps of this many meters (or when the ramp arrives). */
+const STAGE_PUSH_STEP_M = 0.05;
 
 /** Store keys that only feed DOM readouts; their ~5 Hz updates must not keep the 3D view rendering. */
 const HUD_ONLY_KEYS: ReadonlySet<keyof AppState> = new Set<keyof AppState>(['stats', 'stepInfo', 'fps', 'probe', 'error']);

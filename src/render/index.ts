@@ -18,7 +18,7 @@ import type {
 } from '../contracts';
 import { OrbitController, type CameraEnvironment, type CameraMatrices } from './camera';
 import { HeightField, meshStride } from './heightfield';
-import { frustumPlanes, LOD_INSTANCE_FLOATS, LOD_PATCH, LodTree } from './lod';
+import { frustumPlanes, LOD_PATCH, LodTree } from './lod';
 import { bandsForMode, cssToLinear } from './legend';
 import { buildMarkers, buildRoadRibbons, buildWallGhost, circlePolyline, MarkerBuilder, RibbonBuilder, RibbonKind, stormCloudElevation } from './overlays';
 import { cameraRay, pickTerrain } from './picking';

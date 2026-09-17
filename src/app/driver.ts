@@ -102,6 +102,7 @@ export class FrameDriver {
         const advance = Number.isFinite(info.simSecondsAdvanced) ? info.simSecondsAdvanced : requested;
         this.lastAdvance = advance;
         this.simClock += advance;
+        this.app.advanceStage(advance, now);
         runner.onStep(advance, this.simClock, now, this.lastSnapshot);
         this.app.observeFrameBudget(frameMs, info, now);
       });

@@ -5,8 +5,16 @@
  */
 
 export interface FetchOptions {
-  /** Per-attempt timeout, ms. */
+  /**
+   * Per-attempt timeout until the response headers arrive, ms (ArcGIS export services render the whole image before
+   * sending a byte, so this must allow for that).
+   */
   timeoutMs?: number;
+  /**
+   * Once the body is streaming, abort the attempt if no bytes arrive for this long, ms (default 20 s). A slow but
+   * moving download is never cut off; a stalled one (dead venue wifi) fails in seconds instead of minutes.
+   */
+  stallMs?: number;
   /** Additional attempts after the first. */
   retries?: number;
   /** Base backoff, ms (doubles per retry). */
@@ -39,16 +47,58 @@ function hostOf(url: string): string {
   }
 }
 
+/** Read a response body, aborting through `ctrl` when no bytes arrive for `stallMs`. */
+async function readBody(res: Response, ctrl: AbortController, stallMs: number, onStall: () => void): Promise<ArrayBuffer> {
+  const reader = res.body?.getReader?.();
+  if (!reader) return res.arrayBuffer();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  let timer = setTimeout(onStall, stallMs);
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      clearTimeout(timer);
+      if (done) break;
+      if (value) {
+        chunks.push(value);
+        total += value.byteLength;
+      }
+      timer = setTimeout(onStall, stallMs);
+    }
+  } catch (e) {
+    if (ctrl.signal.aborted) void reader.cancel().catch(() => {});
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
+  const out = new Uint8Array(total);
+  let o = 0;
+  for (const c of chunks) {
+    out.set(c, o);
+    o += c.byteLength;
+  }
+  return out.buffer;
+}
+
 async function attempt(url: string, opts: FetchOptions): Promise<{ buf: ArrayBuffer; type: string }> {
+  opts.signal?.throwIfAborted();
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(new Error('timeout')), opts.timeoutMs ?? 45000);
+  let why = '';
+  const giveUp = (reason: string) => {
+    why = reason;
+    ctrl.abort(new Error(reason));
+  };
+  const timeoutMs = opts.timeoutMs ?? 45000;
+  const timer = setTimeout(() => giveUp(`${hostOf(url)} timed out after ${Math.round(timeoutMs / 1000)} s`), timeoutMs);
   const onAbort = () => ctrl.abort(opts.signal?.reason);
   opts.signal?.addEventListener('abort', onAbort);
   try {
     const res = await fetch(url, { signal: ctrl.signal });
+    clearTimeout(timer);
     if (!res.ok) throw new HttpError(`${hostOf(url)} responded HTTP ${res.status}`, res.status);
     const type = res.headers.get('content-type') ?? '';
-    const buf = await res.arrayBuffer();
+    const stallMs = opts.stallMs ?? 20000;
+    const buf = await readBody(res, ctrl, stallMs, () => giveUp(`${hostOf(url)} timed out: the download stalled for ${Math.round(stallMs / 1000)} s`));
     if (opts.expectType && !type.startsWith(opts.expectType)) {
       // ArcGIS reports failures as JSON/HTML with status 200.
       let detail = '';
@@ -61,7 +111,7 @@ async function attempt(url: string, opts: FetchOptions): Promise<{ buf: ArrayBuf
     }
     return { buf, type };
   } catch (e) {
-    if (ctrl.signal.aborted && !opts.signal?.aborted) throw new Error(`${hostOf(url)} timed out after ${opts.timeoutMs ?? 45000} ms`);
+    if (ctrl.signal.aborted && !opts.signal?.aborted) throw new Error(why || `${hostOf(url)} timed out`);
     throw e;
   } finally {
     clearTimeout(timer);
@@ -127,4 +177,17 @@ export async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T, in
   return out;
 }
 
-export const isBrowser = typeof document !== 'undefined' && typeof window !== 'undefined';
+/**
+ * True for failures that say nothing about the place asked for, only that the service could not be reached: fetch
+ * TypeErrors ("Failed to fetch"), timeouts and stalls. HTTP errors (the service answered) are not network failures.
+ */
+export function isNetworkFailure(e: unknown): boolean {
+  if (e instanceof HttpError) return false;
+  if (e instanceof TypeError) return true;
+  const msg = e instanceof Error ? e.message : String(e);
+  return /timed out|stalled|failed to fetch|networkerror|network error|load failed|err_internet|err_network|unreachable/i.test(msg);
+}
+
+/** Message of a live load that could not reach the elevation service at all (the UI maps it to its offline help). */
+export const ELEVATION_UNREACHABLE_MESSAGE =
+  'Can’t reach the elevation service (USGS 3DEP / Terrarium): the network looks down or very slow. Check the connection, or pick a built-in scenario — they work offline.';

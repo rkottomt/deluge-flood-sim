@@ -62,6 +62,13 @@ export interface DelugeDebugExtras {
   getScenario(): ScenarioPreset | null;
   /** Stage offset (m) for a gauge reading in feet, or null if the scenario has no stage control. */
   stageOffsetForFeet(feet: number): number | null;
+  /**
+   * setStageOffset with options. By default the river rises to the new stage at a limited rate in simulated time
+   * (≈ 3.7 sim-min to the 1936 crest); `instant: true` applies it at once (a dam break along every bank).
+   */
+  setStage(meters: number, opts?: { instant?: boolean }): void;
+  /** Stage offset currently applied in the simulation (m) and whether it is still moving toward the slider. */
+  getStageApplied(): { applied: number; target: number; moving: boolean };
   geoToGrid(lon: number, lat: number): { gx: number; gy: number } | null;
   gridToGeo(gx: number, gy: number): { lon: number; lat: number } | null;
   sampleGrid(field: 'depth' | 'ground' | 'barrier', stride: number): GridSample | null;
@@ -104,6 +111,12 @@ export function createDebugApi(app: App, ready: Promise<void>): DelugeDebug {
     setPaused: (paused) => store.set({ paused }),
     setRain: (mmPerHour) => store.set({ sim: { ...store.get().sim, rainRate: Math.max(0, mmPerHour) } }),
     setStageOffset: (meters) => store.set({ stageOffset: meters }),
+    setStage(meters, opts) {
+      if (!Number.isFinite(meters)) return;
+      if (opts?.instant) app.setStageNow(meters);
+      else store.set({ stageOffset: meters });
+    },
+    getStageApplied: () => ({ applied: app.stageRamp.applied, target: app.stageRamp.target, moving: app.stageRamp.moving }),
     setTimeScale: (scale) => store.set({ sim: { ...store.get().sim, timeScale: Math.max(0, scale) } }),
     setWaterMode: (mode) => store.set({ render: { ...store.get().render, waterMode: mode } }),
 

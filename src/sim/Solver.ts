@@ -599,9 +599,9 @@ export class GpuFloodSolver implements FloodSolver {
       this.uBoost = Math.max(this.uBoost, Math.min(this.options.uMax, 2 * Math.sqrt(GRAVITY * dhMax)));
       this.uBoostTime = this.simTime;
     }
-    const map = this.maybeEncodeReadback(enc, false);
+    // No readback here: one taken before any step would pair the raised water with the previous window's (larger)
+    // dt and report a Courant number no substep ever ran at. The boosts above cover the CFL until the next one.
     device.queue.submit([enc.finish()]);
-    map?.();
   }
 
   /**

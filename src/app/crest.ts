@@ -17,22 +17,28 @@ import { errorMessage, type ErrorReporter } from './errors';
  * footprint. Its base water surface is bed + initial depth per cell (so sloping rivers and different pools keep
  * their shape); at offset o the target surface is base + o.
  *
+ * The offsets come from the stage ramp (stageRamp.ts): the applied stage rises at a limited rate in simulated time,
+ * and each step lifts the channels by a few centimetres, so the banks overtop progressively instead of all at once.
+ *
  * Two ways to apply it:
- *   • in place, if the solver implements `raiseWaterSurface` (h = max(h, target − bed), the added volume booked as
- *     inflow): works any time, including mid-flood and continuously while the slider is dragged;
+ *   • in place, if the solver implements `raiseWaterSurface` (h = max(h, base + offset − bed), the added volume booked
+ *     as inflow): works any time, including mid-flood and continuously while the stage rises (GpuFloodSolver);
  *   • otherwise by restarting the water from the initial fill with the channels raised (solver.setInitialWater),
  *     which resets the sim clock. That is only done while nothing has happened to the water yet (no flooded land,
  *     volume within a few % of the initial fill), i.e. nothing visible is lost — the "raise the river" moment at
  *     the start of a demo. Later raises fall back to the boundary bore.
  *
- * Reset water (R) is "the scenario start at the current river stage": the initial fill with the channels at the
- * current offset (otherwise R at the crest would replay the slow bore).
+ * Reset water (R) is "the scenario start at the applied river stage" (App restarts the stage ramp from normal pool
+ * first, so the river then rises to the slider's stage again).
  */
 
-/** Optional solver extension: raise the water surface in place (see handoff notes in the class comment). */
+/** Optional solver extension (GpuFloodSolver): raise the water surface in place. */
 export interface RaiseWaterSurface {
-  /** nx·ny water-surface elevations (m); for every finite entry h = max(h, level − bed). NaN leaves a cell alone. */
-  raiseWaterSurface(level: Float32Array): void;
+  /**
+   * `base`: nx·ny water-surface elevations (m), uploaded once per array object (treat as immutable). For every finite
+   * entry h = max(h, base + offset − bed); NaN leaves a cell alone. The added volume is booked as inflow.
+   */
+  raiseWaterSurface(base: Float32Array, offset?: number): void;
 }
 
 export function canRaiseInPlace(solver: FloodSolver): solver is FloodSolver & RaiseWaterSurface {
@@ -89,12 +95,6 @@ export function channelBaseSurface(
   return base;
 }
 
-/** Target surface at `offset` (NaN outside the channel), written into `out`. */
-export function channelTarget(base: Float32Array, offset: number, out: Float32Array): Float32Array {
-  for (let c = 0; c < base.length; c++) out[c] = base[c] + offset;
-  return out;
-}
-
 /** Initial fill with the channel raised to base + offset: depth = max(initial, base + offset − bed). */
 export function raisedInitialDepth(
   initialDepth: Float32Array,
@@ -121,14 +121,14 @@ export interface CrestFillDeps {
   store: Store;
   errors: ErrorReporter;
   getScene(): CrestScene | null;
+  /** The stage offset applied in the simulation right now (the ramp's value; the store's is the slider target). */
+  getStageOffset(): number;
   /** The solver's water was reset (clock back to 0): the app resets its sim clock and wakes the renderer. */
   onWaterReset(): void;
 }
 
-/** Stage changes closer together than this form one gesture (a slider drag). */
+/** Stage changes closer together than this form one gesture (a slider drag, or a ramp in progress). */
 const GESTURE_GAP_MS = 300;
-/** Minimum spacing of in-place raises during a drag. */
-const RAISE_INTERVAL_MS = 100;
 /** Offsets closer than this are the same level. */
 const EPS = 0.005;
 /** "Nothing has happened to the water yet": flooded land and volume drift below these (see isPristine). */
@@ -144,9 +144,7 @@ export class CrestFill {
   private installedVolume = NaN;
   private base: Float32Array | null | undefined;
   private baseKey = '';
-  private target: Float32Array | null = null;
   private lastChangeAt = -Infinity;
-  private lastRaiseAt = -Infinity;
   /** The current gesture started while the water was untouched: its final level restarts the water. */
   private gesturePristine = false;
   private timer: ReturnType<typeof setTimeout> | null = null;
@@ -161,12 +159,11 @@ export class CrestFill {
     this.installedVolume = NaN;
     this.base = undefined;
     this.baseKey = '';
-    this.target = null;
     this.lastChangeAt = -Infinity;
     this.gesturePristine = false;
   }
 
-  /** store.stageOffset changed. */
+  /** The applied stage offset changed (App calls this as the stage ramp moves, a few centimetres at a time). */
   onStageOffset(offset: number, now = performance.now()): void {
     const scene = this.deps.getScene();
     const s = this.deps.store.get();
@@ -182,8 +179,7 @@ export class CrestFill {
         this.applied = Math.max(0, offset);
         return;
       }
-      if (now - this.lastRaiseAt >= RAISE_INTERVAL_MS) this.raiseInPlace(scene, offset, now);
-      else this.schedule(RAISE_INTERVAL_MS - (now - this.lastRaiseAt));
+      this.raiseInPlace(scene, offset);
       return;
     }
 
@@ -213,7 +209,7 @@ export class CrestFill {
     const scene = this.deps.getScene();
     if (!scene) return false;
     const { solver } = scene;
-    const offset = Math.max(0, this.deps.store.get().stageOffset);
+    const offset = Math.max(0, this.deps.getStageOffset());
     const inPlace = canRaiseInPlace(solver);
     const base = offset > EPS || this.installed > EPS ? this.channelBase(scene) : null;
     // setInitialWater resets by itself; reset first only when terrain must be restored (the raised fill uses the bed).
@@ -221,19 +217,17 @@ export class CrestFill {
     if (!reinstall || opts.resetTerrain) solver.reset(opts.resetTerrain ? { resetTerrain: true } : undefined);
     this.applied = this.installed;
     if (reinstall) this.install(scene, offset, base);
-    else if (base && inPlace && offset > EPS) this.raiseInPlace(scene, offset, performance.now());
+    else if (base && inPlace && offset > EPS) this.raiseInPlace(scene, offset);
     this.deps.onWaterReset();
     return true;
   }
 
-  private raiseInPlace(scene: CrestScene, offset: number, now: number): void {
+  private raiseInPlace(scene: CrestScene, offset: number): void {
     const base = this.channelBase(scene);
-    this.lastRaiseAt = now;
     this.applied = offset;
     if (!base || !canRaiseInPlace(scene.solver)) return;
-    this.target ??= new Float32Array(base.length);
     try {
-      scene.solver.raiseWaterSurface(channelTarget(base, offset, this.target));
+      scene.solver.raiseWaterSurface(base, offset);
     } catch (err) {
       this.deps.errors.report('sim', `raiseWaterSurface failed: ${errorMessage(err)}`, err);
     }
@@ -282,20 +276,16 @@ export class CrestFill {
     return Math.abs(volume - reference) <= PRISTINE_VOLUME_DRIFT * Math.max(reference, 1000);
   }
 
-  /** Trailing edge: in-place raise to the latest offset, or the gesture's final restart. */
+  /** Trailing edge of a gesture (restart path only): restart at its final level. */
   private schedule(ms: number): void {
     this.cancelTimer();
     this.timer = setTimeout(() => {
       this.timer = null;
       const scene = this.deps.getScene();
       const s = this.deps.store.get();
-      if (!scene || s.loading || s.sim.stabilityMode === 'naive') return;
-      const offset = Math.max(0, s.stageOffset);
-      if (canRaiseInPlace(scene.solver)) {
-        if (offset > this.applied + EPS) this.raiseInPlace(scene, offset, performance.now());
-      } else if (this.gesturePristine && Math.abs(offset - this.installed) > EPS) {
-        this.restart(scene, offset);
-      }
+      if (!scene || s.loading || s.sim.stabilityMode === 'naive' || canRaiseInPlace(scene.solver)) return;
+      const offset = Math.max(0, this.deps.getStageOffset());
+      if (this.gesturePristine && Math.abs(offset - this.installed) > EPS) this.restart(scene, offset);
     }, Math.max(0, ms));
   }
 

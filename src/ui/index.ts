@@ -24,7 +24,6 @@ import { createRouteChip } from './routeChip';
 import { installBreakDemoRestore } from './stabilityDemo';
 
 export { createToolController } from './tools';
-export { renderUnsupported } from './overlays';
 /** Non-error notices (neutral toast) — e.g. for startup URL warnings. Safe to call before mountUI. */
 export { postNotice, type Notice } from './bridge';
 

@@ -425,9 +425,45 @@ export interface RouteResult {
   /** Estimated travel time in seconds (driving, slowed on wet roads). */
   etaSeconds: number;
   shelter: Shelter | null;
-  /** Human-readable status line, e.g. "Route via Liberty Ave to Pitt campus — 3.4 km, 6 min". */
+  /** Human-readable status line, e.g. "Via Liberty Ave to Pitt campus — 3.4 km, 6 min". */
   message: string;
+  // Optional structured parts of `message` (src/routing returns all four), so a UI can lay a route out and format
+  // its numbers itself instead of parsing the sentence:
+  /** null for 'ok'; otherwise why there is no route. */
+  reason?: RouteReason | null;
+  /** 'ok': up to two street names carrying most of the route, in travel order ([] if unnamed). [] otherwise. */
+  via?: string[];
+  /** 'ok': metres of the route on wet (passable, slowed) roads, 0 below 1 m. 0 otherwise. */
+  wetMeters?: number;
+  /**
+   * What to do, readable without a "No safe route" heading. 'blocked': why, and to shelter in place ("Every shelter
+   * is flooded. Shelter in place on higher floors."); 'none': the same as `message`; 'ok': ''.
+   */
+  advice?: string;
 }
+
+/** Why RouteResult has no route ('none' and 'blocked' states). */
+export type RouteReason =
+  /** none: the area has no road data. */
+  | 'no-roads'
+  /** none: no start point chosen yet. */
+  | 'no-start'
+  /** none: no (valid) shelters. */
+  | 'no-shelters'
+  /** none: no road near the start. */
+  | 'start-off-network'
+  /** none: no shelter near a road. */
+  | 'shelters-off-network'
+  /** none: the start is in a river or lake (standing water at load) — a misplaced click. */
+  | 'start-in-water-body'
+  /** blocked: the start itself is under floodwater. */
+  | 'start-flooded'
+  /** blocked: every road near the start is flooded. */
+  | 'start-roads-flooded'
+  /** blocked: every shelter is under water. */
+  | 'shelters-flooded'
+  /** blocked: flooded roads cut every path to a shelter. */
+  | 'cut-off';
 
 export interface EvacuationRouter {
   /**
@@ -494,7 +530,7 @@ export interface DelugeDebugAPI {
 //  src/data/index.ts:
 //    export function listPresets(): PresetInfo[];
 //    export function loadPreset(id: string, onProgress?: ProgressFn): Promise<TerrainData>;
-//    export function loadLiveArea(req: LiveAreaRequest, onProgress?: ProgressFn): Promise<TerrainData>;
+//    export function loadLiveArea(req: LiveAreaRequest, onProgress?: ProgressFn, signal?: AbortSignal): Promise<TerrainData>;
 //    export function computeInitialWater(terrain: TerrainData, scenario: ScenarioPreset | null): Float32Array;
 //    export function geoToGrid(terrain: Pick<TerrainData,'nx'|'ny'|'bounds'>, lon: number, lat: number): { gx: number; gy: number };
 //    export function gridToGeo(terrain: Pick<TerrainData,'nx'|'ny'|'bounds'>, gx: number, gy: number): { lon: number; lat: number };
@@ -545,8 +581,8 @@ export interface AppState {
   presetId: string | null;
   terrainName: string;
   attribution: string;
-  /** Non-null while loading terrain. */
-  loading: { message: string; progress: number } | null;
+  /** Non-null while loading terrain. `cancellable`: the load can be stopped with AppActions.cancelLoad (live areas). */
+  loading: { message: string; progress: number; cancellable?: boolean } | null;
   error: string | null;
   paused: boolean;
   tool: ToolId;
@@ -559,8 +595,14 @@ export interface AppState {
   /** Intensity for newly placed storm cells, mm/hr. */
   stormIntensity: number;
   sim: SimParams;
-  /** River stage slider offset above StageControl.normalLevel, meters. */
+  /** River stage slider offset above StageControl.normalLevel, meters (the target the river rises or falls to). */
   stageOffset: number;
+  /**
+   * River stage offset currently applied in the simulation, meters. It follows stageOffset at a limited rate in
+   * SIMULATED time (≈ 3 m per sim-minute, see src/app/stageRamp.ts): an instant 9 m jump would be a dam break along
+   * every bank. Equal to stageOffset once the river has arrived.
+   */
+  stageOffsetApplied: number;
   render: {
     waterMode: WaterViewMode;
     verticalExaggeration: number;
@@ -595,7 +637,13 @@ export interface Store {
 
 export interface AppActions {
   loadPreset(id: string): Promise<void>;
-  loadLiveArea(req: LiveAreaRequest): Promise<void>;
+  /**
+   * Load a live area. Resolves 'ok', 'failed' (already reported; the previous scene stays) or 'superseded' (a newer
+   * load or cancelLoad overtook it). Contract-only implementations may resolve undefined.
+   */
+  loadLiveArea(req: LiveAreaRequest): Promise<'ok' | 'failed' | 'superseded' | void>;
+  /** Stop the terrain load in progress (downloads aborted, the scene on screen kept). Optional extension. */
+  cancelLoad?(): void;
   listPresets(): PresetInfo[];
   /** Reset water to the scenario's initial condition; keep walls/edits. */
   resetWater(): void;

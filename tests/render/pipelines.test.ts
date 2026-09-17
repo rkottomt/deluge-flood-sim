@@ -4,19 +4,15 @@
  */
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { create, globals } from 'webgpu';
-import { createDelugeDevice } from '../../src/gpu';
+import { finishGpuTests, getDevice } from '../helpers/gpu';
 
-Object.assign(globalThis, globals);
-
-after(() => {
-  setTimeout(() => process.exit(process.exitCode ?? 0), 200);
-});
+// Lets queued GPU work finish; the process then exits on its own with the right exit code. The helper keeps the Dawn
+// instance referenced for the life of the process.
+after(finishGpuTests);
 
 test('all renderer pipelines compile and validate', async () => {
   const { createPipelines } = await import('../../src/render/pipelines');
-  const gpu = create([]) as unknown as GPU;
-  const { device } = await createDelugeDevice(gpu);
+  const device = await getDevice();
   const errors: string[] = [];
   device.onuncapturederror = (e) => errors.push(e.error.message);
   device.pushErrorScope('validation');

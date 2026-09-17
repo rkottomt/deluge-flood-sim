@@ -12,13 +12,31 @@ import { isLikelyUS, squareDomain } from './geo';
 import { fetchImagery, IMAGERY_ATTRIBUTION } from './imagery';
 import { detectLiveWater, finishLiveTerrain, type LiveTerrainResult } from './liveTerrain';
 import type { LiveWorkerRequest, LiveWorkerResponse } from './liveWorker';
+import { ELEVATION_UNREACHABLE_MESSAGE } from './net';
+import { coordinateName, isCoordinateName, reverseGeocodeName } from './placeName';
 import { fetchRoadNetwork } from './roads';
 
 export { buildLiveScenario, pickHighShelters } from './liveTerrain';
 
 const tick = () => new Promise<void>((r) => setTimeout(r, 0));
 
-export async function loadLiveArea(req: LiveAreaRequest, onProgress?: ProgressFn): Promise<TerrainData> {
+/**
+ * The elevation must arrive within this long, or the load fails with ELEVATION_UNREACHABLE_MESSAGE. A backstop: the
+ * fetchers already fail a stalled download after 20 s without data, but retries and fallbacks add up.
+ */
+export const LIVE_DEM_DEADLINE_MS = 90_000;
+/**
+ * Once the elevation is ready, imagery, roads and the place name get this long to finish; the area then loads without
+ * whatever is missing (TerrainData.imagery / roads null) instead of waiting on a slow service.
+ */
+export const LIVE_EXTRAS_GRACE_MS = 15_000;
+
+/**
+ * Load a live area. `signal` cancels everything (downloads and conditioning); the returned promise then rejects with
+ * the abort reason. Imagery, roads and the reverse-geocoded name are best-effort (see LIVE_EXTRAS_GRACE_MS).
+ */
+export async function loadLiveArea(req: LiveAreaRequest, onProgress?: ProgressFn, signal?: AbortSignal): Promise<TerrainData> {
+  signal?.throwIfAborted();
   const { lat, lon } = req.center;
   if (!Number.isFinite(lat) || !Number.isFinite(lon)) throw new Error('Invalid location');
   const sizeMeters = Math.min(20000, Math.max(1000, req.sizeMeters));
@@ -30,70 +48,162 @@ export async function loadLiveArea(req: LiveAreaRequest, onProgress?: ProgressFn
   const { bounds, merc } = squareDomain({ lat, lon }, sizeMeters);
   const cellSize = sizeMeters / n;
 
+  // One controller for the whole load (the caller's signal and the elevation deadline), and a child for the optional
+  // downloads so the grace period can drop them without touching the rest.
+  const ctrl = new AbortController();
+  const extras = new AbortController();
+  const onCallerAbort = () => ctrl.abort(signal?.reason);
+  signal?.addEventListener('abort', onCallerAbort, { once: true });
+  const onLoadAbort = () => extras.abort(ctrl.signal.reason);
+  ctrl.signal.addEventListener('abort', onLoadAbort, { once: true });
+  const timers: ReturnType<typeof setTimeout>[] = [];
+
+  // Progress: while the elevation (the critical path) is pending, the message is about it; the optional downloads
+  // only add to the bar. Afterwards the message names whatever is still outstanding.
   const progress = { dem: 0, img: 0, roads: 0 };
-  let lastMsg = 'Starting…';
-  const report = (msg?: string) => {
-    if (msg) lastMsg = msg;
+  const pending = { img: true, roads: true };
+  const got = { img: false, roads: false };
+  let demMsg = 'Requesting elevation (USGS 3DEP)…';
+  let demDone = false;
+  const report = () => {
     const f = 0.02 + 0.5 * progress.dem + 0.2 * progress.img + 0.18 * progress.roads;
-    onProgress?.(lastMsg, Math.min(0.9, f));
+    let msg = demMsg;
+    if (demDone) {
+      const waiting = [pending.img ? 'aerial imagery' : '', pending.roads ? 'roads' : ''].filter(Boolean);
+      msg = waiting.length ? `Elevation ready — waiting for ${waiting.join(' and ')}…` : 'Carving rivers and building scenario…';
+    } else {
+      const extra = [got.img ? 'imagery ✓' : '', got.roads ? 'roads ✓' : ''].filter(Boolean);
+      if (extra.length) msg = `${demMsg} (${extra.join(', ')})`;
+    }
+    if (!ctrl.signal.aborted) onProgress?.(msg, Math.min(0.9, f));
   };
-  report('Requesting elevation, imagery and roads…');
+  report();
 
-  const demP = fetchDEM(merc, n, n, cellSize, (m, f) => {
-    progress.dem = f * 0.95;
-    report(m);
-  });
-  const imgP = fetchImagery(merc, 2048, (m, f) => {
-    progress.img = f;
-    report(m);
-  });
-  const roadsP = fetchRoadNetwork({ nx: n, ny: n, cellSize, bounds }, (m, f) => {
-    progress.roads = f;
-    report(m);
-  }).catch((e) => {
-    console.warn('[data] roads unavailable:', e);
-    return null;
-  });
-
-  const dem = await demP;
-  progress.dem = 1;
-  report(dem.source === 'usgs3dep' ? 'Elevation decoded (USGS 3DEP) — detecting rivers and lakes…' : 'Elevation decoded (Terrarium) — detecting rivers and lakes…');
-  await tick();
-  // Water detection starts now (in a worker when possible) while imagery and roads finish downloading.
-  const conditioner = startLiveConditioning(dem.elevation, n, cellSize);
-
-  const name = req.name?.trim() || `${lat.toFixed(4)}°, ${lon.toFixed(4)}°`;
-  let conditioned: LiveTerrainResult;
-  let imagery: ImageBitmap | null;
-  let roads: Awaited<typeof roadsP>;
   try {
-    [imagery, roads] = await Promise.all([imgP, roadsP]);
-    onProgress?.('Carving rivers and building scenario…', 0.93);
+    const demP = fetchDEM(
+      merc,
+      n,
+      n,
+      cellSize,
+      (m, f) => {
+        progress.dem = f * 0.95;
+        demMsg = m;
+        report();
+      },
+      ctrl.signal,
+    );
+    const imgP = fetchImagery(merc, 2048, (_m, f) => {
+      progress.img = f;
+      report();
+    }, extras.signal)
+      .catch(() => null)
+      .then((img) => {
+        pending.img = false;
+        got.img = !!img;
+        report();
+        return img;
+      });
+    const roadsP = fetchRoadNetwork({ nx: n, ny: n, cellSize, bounds }, (_m, f) => {
+      progress.roads = f;
+      report();
+    }, extras.signal)
+      .catch((e) => {
+        if (!extras.signal.aborted) console.warn('[data] roads unavailable:', e);
+        return null;
+      })
+      .then((rd) => {
+        pending.roads = false;
+        got.roads = !!rd;
+        report();
+        return rd;
+      });
+    const wantName = isCoordinateName(req.name);
+    const nameP = wantName ? reverseGeocodeName(lat, lon, extras.signal) : Promise.resolve(req.name!.trim());
+
+    const dem = await new Promise<Awaited<typeof demP>>((resolve, reject) => {
+      timers.push(
+        setTimeout(() => {
+          ctrl.abort(new Error(ELEVATION_UNREACHABLE_MESSAGE));
+          reject(new Error(ELEVATION_UNREACHABLE_MESSAGE));
+        }, LIVE_DEM_DEADLINE_MS),
+      );
+      demP.then(resolve, reject);
+    });
+    ctrl.signal.throwIfAborted();
+    progress.dem = 1;
+    demDone = true;
+    demMsg = dem.source === 'usgs3dep' ? 'Elevation decoded (USGS 3DEP)' : 'Elevation decoded (Terrarium)';
+    report();
     await tick();
-    conditioned = await conditioner.finish(roads?.network ?? null, name, dem.source);
+    // Water detection starts now (in a worker when possible) while imagery and roads finish downloading.
+    const conditioner = startLiveConditioning(dem.elevation, n, cellSize);
+    let conditioned: LiveTerrainResult;
+    let imagery: ImageBitmap | null;
+    let roads: Awaited<typeof roadsP>;
+    let name: string;
+    try {
+      const all = Promise.all([imgP, roadsP, nameP]);
+      const graceOver = new Promise<'late'>((resolve) => timers.push(setTimeout(() => resolve('late'), LIVE_EXTRAS_GRACE_MS)));
+      if ((await Promise.race([all, graceOver])) === 'late') {
+        const late = [pending.img ? 'imagery' : '', pending.roads ? 'roads' : ''].filter(Boolean).join(' and ');
+        if (late) console.warn(`[data] ${late} did not arrive within ${LIVE_EXTRAS_GRACE_MS / 1000} s of the elevation; loading without`);
+        extras.abort(new Error('optional downloads took too long'));
+      }
+      const [img, rd, nm] = await all;
+      ctrl.signal.throwIfAborted();
+      [imagery, roads] = [img, rd];
+      name = nm || (req.name?.trim() && !wantName ? req.name.trim() : coordinateName(lat, lon));
+      onProgress?.('Carving rivers and building scenario…', 0.93);
+      await tick();
+      conditioned = await abortable(conditioner.finish(roads?.network ?? null, name, dem.source), ctrl.signal);
+    } finally {
+      conditioner.dispose();
+    }
+    const attribution = [
+      dem.source === 'usgs3dep' ? 'Elevation: USGS 3DEP' : 'Elevation: Mapzen Terrarium (AWS Open Data)',
+      imagery ? IMAGERY_ATTRIBUTION : null,
+      roads?.attribution ?? null,
+    ]
+      .filter(Boolean)
+      .join(' · ');
+    onProgress?.('Ready', 1);
+    return {
+      name,
+      nx: n,
+      ny: n,
+      cellSize,
+      elevation: conditioned.elevation,
+      bounds,
+      imagery,
+      roads: roads?.network ?? null,
+      attribution,
+      scenario: conditioned.scenario,
+    };
   } finally {
-    conditioner.dispose();
+    for (const t of timers) clearTimeout(t);
+    signal?.removeEventListener('abort', onCallerAbort);
+    // Anything still downloading belongs to a finished (or failed) load.
+    if (!extras.signal.aborted) extras.abort(new Error('live load finished'));
   }
-  const attribution = [
-    dem.source === 'usgs3dep' ? 'Elevation: USGS 3DEP' : 'Elevation: Mapzen Terrarium (AWS Open Data)',
-    imagery ? IMAGERY_ATTRIBUTION : null,
-    roads?.attribution ?? null,
-  ]
-    .filter(Boolean)
-    .join(' · ');
-  onProgress?.('Ready', 1);
-  return {
-    name,
-    nx: n,
-    ny: n,
-    cellSize,
-    elevation: conditioned.elevation,
-    bounds,
-    imagery,
-    roads: roads?.network ?? null,
-    attribution,
-    scenario: conditioned.scenario,
-  };
+}
+
+/** Reject with the signal's reason as soon as it aborts (the promise itself keeps running and is ignored). */
+function abortable<T>(p: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(signal.reason);
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(signal.reason);
+    signal.addEventListener('abort', onAbort, { once: true });
+    p.then(
+      (v) => {
+        signal.removeEventListener('abort', onAbort);
+        resolve(v);
+      },
+      (e) => {
+        signal.removeEventListener('abort', onAbort);
+        reject(e);
+      },
+    );
+  });
 }
 
 interface LiveConditioner {

@@ -439,11 +439,28 @@ const FLOWS = [
       });
       const before = await stats();
       await D((o) => window.__deluge.setStageOffset(o), crest.offset);
-      // The crest arrives along the whole river at once (src/app/crest.ts), not as a bore from the domain edges.
-      const t120 = await runFor(120);
+      // The river rises to the crest along its whole length (src/app/crest.ts) at a limited rate in simulated time
+      // (src/app/stageRamp.ts: ~3.7 sim-min to 46 ft), not as a bore from the domain edges and not as a dam break.
+      // Sample the HUD's max speed while it rises: an instant 9 m jump pinned it at the 15 m/s cap.
+      await D(() => {
+        const d = window.__deluge;
+        window.__e2eSpeed = { max: 0, samples: 0 };
+        window.__e2eSpeedTimer = setInterval(() => {
+          const v = d.getStats()?.maxSpeed;
+          if (Number.isFinite(v)) {
+            window.__e2eSpeed.max = Math.max(window.__e2eSpeed.max, v);
+            window.__e2eSpeed.samples++;
+          }
+        }, 100);
+      });
+      const t300 = await runFor(300);
+      const rise = await D(() => {
+        clearInterval(window.__e2eSpeedTimer);
+        return { ...window.__e2eSpeed, stage: window.__deluge.getStageApplied() };
+      });
       const early = await stats();
-      await shot('02-crest-120s');
-      const t900 = t120 + (await runFor(780));
+      await shot('02-crest-300s');
+      const t900 = t300 + (await runFor(600));
       const mid = await stats();
       await D(() => {
         window.__e2e.control900 = window.__deluge.sampleGrid('depth', 4);
@@ -455,15 +472,17 @@ const FLOWS = [
         window.__e2e.control = window.__deluge.sampleGrid('depth', 4);
       });
       await shot('02b-crest-1800s');
-      r.metrics = { before: before?.floodedArea, at120: early?.floodedArea, at900: mid?.floodedArea, at1800: after?.floodedArea, runSeconds: t900 + t1800 };
+      r.metrics = { before: before?.floodedArea, at300: early?.floodedArea, at900: mid?.floodedArea, at1800: after?.floodedArea, runSeconds: t900 + t1800, riseMaxSpeed: rise.max, riseSamples: rise.samples };
       const grown = (after?.floodedArea ?? 0) - (before?.floodedArea ?? 0);
       const earlyShare = grown > 0 ? ((early?.floodedArea ?? 0) - (before?.floodedArea ?? 0)) / grown : 0;
-      check(r, 'rivers rise along their whole length: ≥ 30 % of the 30-min flood within 2 sim-min', earlyShare >= 0.3, `${km2(early?.floodedArea ?? 0)} after 120 s (${num(earlyShare * 100, 0)} % of ${km2(after?.floodedArea ?? 0)})`);
+      check(r, 'the river reaches the crest within 5 sim-min', !rise.stage.moving && Math.abs(rise.stage.applied - crest.offset) < 1e-6, `applied ${num(rise.stage.applied)} m of ${num(crest.offset)} m`);
+      check(r, 'rivers rise along their whole length: ≥ 30 % of the 30-min flood within 5 sim-min', earlyShare >= 0.3, `${km2(early?.floodedArea ?? 0)} after 300 s (${num(earlyShare * 100, 0)} % of ${km2(after?.floodedArea ?? 0)})`);
+      check(r, 'no dam-break speeds while the river rises (HUD max speed < 10 m/s)', rise.samples > 0 && rise.max < 10, `peak ${num(rise.max)} m/s over ${rise.samples} HUD samples`);
       check(r, 'flooded area grows substantially (≥ 0.25 km²)', grown >= 250_000, `${km2(before?.floodedArea ?? 0)} → ${km2(mid?.floodedArea ?? 0)} → ${km2(after?.floodedArea ?? 0)}`);
       // With the whole river at the crest the flood spreads over the first minutes and then holds (shallow fringes
       // drain back a little as it settles), so "progressive" = it keeps growing after 2 min and is sustained at 30.
-      const [a120, a900, a1800] = [early?.floodedArea ?? 0, mid?.floodedArea ?? 0, after?.floodedArea ?? 0];
-      check(r, 'flooding develops, then holds at the crest (120 s < 900 s, 1800 s ≥ 90 % of 900 s)', a120 < a900 && a1800 >= 0.9 * a900, `${km2(a120)} → ${km2(a900)} → ${km2(a1800)}; sim 1800 s in ${(t900 + t1800).toFixed(1)} s real`);
+      const [a300, a900, a1800] = [early?.floodedArea ?? 0, mid?.floodedArea ?? 0, after?.floodedArea ?? 0];
+      check(r, 'flooding develops, then holds at the crest (300 s < 900 s, 1800 s ≥ 90 % of 900 s)', a300 < a900 && a1800 >= 0.9 * a900, `${km2(a300)} → ${km2(a900)} → ${km2(a1800)}; sim 1800 s in ${(t900 + t1800).toFixed(1)} s real`);
       check(r, 'mass balance error < 1 %', (after?.massError ?? 1) < 0.01, `${num((after?.massError ?? NaN) * 100, 4)} %`);
     },
   },

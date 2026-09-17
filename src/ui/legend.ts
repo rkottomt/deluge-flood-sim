@@ -1,15 +1,8 @@
 /**
- * Legend bands for the hazard water modes. The renderer's src/render/legend.ts is the single source of
- * truth (it uploads the same colors to the GPU), so the UI legend always matches what's on screen.
+ * Legend copy for the hazard water modes. The bands themselves come straight from src/render/legend.ts (bandsForMode),
+ * the single source of truth the renderer uploads to the GPU, so the UI legend always matches what's on screen.
  */
 import type { WaterViewMode } from '../contracts';
-import { bandsForMode, type HazardBand } from '../render/legend';
-
-export type LegendBand = HazardBand;
-
-export function legendBands(mode: WaterViewMode): LegendBand[] | null {
-  return bandsForMode(mode);
-}
 
 export function legendTitle(mode: WaterViewMode): string {
   switch (mode) {

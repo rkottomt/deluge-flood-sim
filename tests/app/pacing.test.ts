@@ -227,6 +227,7 @@ test('sim sync: override layers — timeScale replaces, substep caps only lower 
     stage: new StageLevels(),
     errors: new ErrorReporter(),
     getSolver: () => solver as unknown as FloodSolver,
+    getAppliedStageOffset: () => 0,
     onRouteInputsChanged: () => {},
   });
   sync.install();

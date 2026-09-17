@@ -5,6 +5,8 @@ import type { StageLevels } from './stage';
 export interface SimSyncDeps {
   store: Store;
   stage: StageLevels;
+  /** Stage offset applied in the simulation (the stage ramp's value; store.stageOffset is the slider target). */
+  getAppliedStageOffset(): number;
   errors: ErrorReporter;
   getSolver(): FloodSolver | null;
   /** Start point or shelters changed → re-plan the evacuation route. */
@@ -16,7 +18,8 @@ export interface SimSyncDeps {
  * this class pushes every relevant change into the current solver:
  *   • sim params (identity change) → solver.params = {...sim, ...overrides}   (rain lives in sim.rainRate)
  *   • sources / storms             → setSources / setStorms
- *   • stageOffset                  → stage source levels = base + offset (rewrites store.sources)
+ *   • stageOffset                  → stage source levels = base + scale·offset (rewrites store.sources: the target)
+ *   • the solver gets the levels at the APPLIED offset (the stage ramp, see stageRamp.ts): pushSources
  * Override layers let the app change e.g. timeScale (runFor automation) or the substep cap (frame-time
  * governor) without touching user-facing state.
  */
@@ -73,8 +76,15 @@ export class SimSync {
   pushAll(): void {
     const s = this.deps.store.get();
     this.pushParams();
-    this.guard('setSources', (solver) => solver.setSources(s.sources));
+    this.pushSources();
     this.guard('setStorms', (solver) => solver.setStorms(s.storms));
+  }
+
+  /** Sources to the solver, stage levels at the applied (ramped) offset. */
+  pushSources(): void {
+    const { stage, store } = this.deps;
+    const sources = stage.apply(store.get().sources, this.deps.getAppliedStageOffset());
+    this.guard('setSources', (solver) => solver.setSources(sources));
   }
 
   pushParams(): void {
@@ -90,7 +100,7 @@ export class SimSync {
     if (s.sources !== prev.sources) {
       // Sources are authoritative (UI edits, scenario restore): their levels already include the offset.
       stage.record(s.sources, s.stageOffset);
-      this.guard('setSources', (solver) => solver.setSources(s.sources));
+      this.pushSources();
     } else if (s.stageOffset !== prev.stageOffset) {
       const sources = stage.apply(s.sources, s.stageOffset);
       // Re-entrant set: delivered to subscribers after this pass; the branch above then pushes to the solver.

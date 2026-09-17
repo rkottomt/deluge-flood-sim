@@ -24,6 +24,7 @@ import { NO_TRANSIENT, OverlayComposer } from '../../src/app/overlays';
 import { RunForScheduler } from '../../src/app/runFor';
 import { SimSync } from '../../src/app/simSync';
 import { StageLevels, stageOffsetForFeet, feetForStageOffset } from '../../src/app/stage';
+import { STAGE_RATE_MAX, StageRamp } from '../../src/app/stageRamp';
 import { createStore } from '../../src/app/store';
 import { parseStartupRequest } from '../../src/app/url';
 
@@ -90,6 +91,89 @@ test('stage levels: offset applies to bases without accumulating', () => {
   assert.ok(Math.abs((down[2] as { level: number }).level - 218.0) < 1e-9);
 });
 
+test('stage levels: offsetScale lets upstream boundaries rise faster than the downstream one (confluence head)', () => {
+  const levels = new StageLevels();
+  const up: WaterSource = { id: 'up', type: 'stage', gx: 1, gy: 1, radius: 2, level: 216.375, offsetScale: 1.01369 };
+  const down: WaterSource = { id: 'down', type: 'stage', gx: 1, gy: 1, radius: 2, level: 216.225, offsetScale: 0.98631 };
+  levels.resetFrom([up, down]);
+  const at = (o: number) => levels.apply([up, down], o).map((s) => (s as { level: number }).level);
+  const [u0, d0] = at(0);
+  const [u46, d46] = at(9.13);
+  assert.ok(Math.abs(u0 - d0 - 0.15) < 1e-9, 'head at normal pool');
+  assert.ok(Math.abs(u46 - d46 - 0.4) < 1e-3, `head at the 1936 crest: ${u46 - d46}`);
+  assert.ok(Math.abs((u46 + d46) / 2 - (216.3 + 9.13)) < 1e-9, 'the mean level (the gauge at the confluence) follows the slider exactly');
+  // Recording at a raised offset recovers the same bases (no drift through UI edits).
+  const raised = levels.apply([up, down], 9.13);
+  levels.record(raised, 9.13);
+  assert.deepEqual(at(0), [u0, d0]);
+});
+
+test('stage ramp: the applied stage follows the slider at a bounded rate, arrives exactly, never overshoots', () => {
+  const ramp = new StageRamp();
+  assert.equal(ramp.advance(10), false, 'at rest');
+  ramp.setTarget(9.13);
+  assert.equal(ramp.advance(0), false, 'paused: no simulated time, no change');
+  let t = 0;
+  let prev = 0;
+  let maxRate = 0;
+  while (ramp.moving && t < 1000) {
+    ramp.advance(0.25);
+    t += 0.25;
+    maxRate = Math.max(maxRate, (ramp.applied - prev) / 0.25);
+    assert.ok(ramp.applied >= prev - 1e-12 && ramp.applied <= 9.13 + 1e-12, `monotone, bounded at t=${t}`);
+    prev = ramp.applied;
+  }
+  assert.equal(ramp.applied, 9.13);
+  assert.ok(t > 180 && t < 260, `46 ft crest arrives in ${t} sim-s`);
+  assert.ok(maxRate <= STAGE_RATE_MAX + 1e-9, `rate ${maxRate}`);
+  // Big automation frames give the same arrival (within a chunk) and still land exactly.
+  const fast = new StageRamp();
+  fast.setTarget(9.13);
+  let tf = 0;
+  while (fast.moving && tf < 1000) {
+    fast.advance(17);
+    tf += 17;
+  }
+  assert.equal(fast.applied, 9.13);
+  assert.ok(Math.abs(tf - t) <= 17, `chunked arrival ${tf} vs ${t}`);
+  // Lowered mid-rise: it brakes (a little past the reversal point) and settles on the new target.
+  const rev = new StageRamp();
+  rev.setTarget(9);
+  for (let k = 0; k < 100; k++) rev.advance(1);
+  const at = rev.applied;
+  rev.setTarget(2);
+  let peak = at;
+  for (let k = 0; k < 400 && rev.moving; k++) {
+    rev.advance(1);
+    peak = Math.max(peak, rev.applied);
+    assert.ok(rev.applied >= 2 - 1e-12, 'no undershoot');
+  }
+  assert.equal(rev.applied, 2);
+  assert.ok(peak - at < 0.5, `keeps rising only ${(peak - at).toFixed(2)} m after the slider was lowered`);
+  // Water reset replays the rise; a jump applies at once.
+  rev.restartFrom(0);
+  assert.ok(rev.moving);
+  assert.equal(rev.target, 2);
+  assert.equal(rev.applied, 0);
+  rev.jump(5);
+  assert.ok(!rev.moving && rev.applied === 5);
+});
+
+test('sim sync: the solver gets stage levels at the APPLIED (ramped) offset; the store keeps the slider target', () => {
+  let applied = 0;
+  const { store, levels, solver, sync } = makeSync(() => applied);
+  const sources = [stage('ohio', 216.4), inflow('creek', 50)];
+  levels.resetFrom(sources);
+  store.set({ sources, stageOffset: 0 });
+  store.set({ stageOffset: 9 });
+  assert.ok(Math.abs((store.get().sources[0] as { level: number }).level - 225.4) < 1e-9, 'store: target level');
+  assert.ok(Math.abs((solver.sources[0] as { level: number }).level - 216.4) < 1e-9, 'solver: still at the applied stage');
+  applied = 4.5;
+  sync.pushSources();
+  assert.ok(Math.abs((solver.sources[0] as { level: number }).level - 220.9) < 1e-9, 'solver follows the ramp');
+  assert.equal((solver.sources[1] as { discharge: number }).discharge, 50);
+});
+
 test('stage levels: gauge feet ↔ offset round trip', () => {
   const ctrl = { label: 'x', gaugeDatum: 211.5, normalLevel: 216.4, maxOffset: 14 };
   const off = stageOffsetForFeet(ctrl, 46);
@@ -111,7 +195,8 @@ class FakeSolver {
   applyBrush(_op: BrushOp) {}
 }
 
-function makeSync() {
+/** `applied` = the stage ramp's offset (undefined: the ramp has arrived, i.e. the slider target). */
+function makeSync(applied?: () => number) {
   const store = createStore(createInitialState());
   const levels = new StageLevels();
   const solver = new FakeSolver();
@@ -121,6 +206,7 @@ function makeSync() {
     stage: levels,
     errors: new ErrorReporter(),
     getSolver: () => solver as unknown as FloodSolver,
+    getAppliedStageOffset: () => (applied ? applied() : store.get().stageOffset),
     onRouteInputsChanged: () => routeCalls++,
   });
   sync.install();

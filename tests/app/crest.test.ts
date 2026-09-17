@@ -64,9 +64,12 @@ class FakeSolver {
 }
 
 class InPlaceSolver extends FakeSolver {
+  /** Target surfaces (base + offset) of every raise. */
   raises: Float32Array[] = [];
-  raiseWaterSurface(level: Float32Array) {
-    this.raises.push(Float32Array.from(level));
+  bases = new Set<Float32Array>();
+  raiseWaterSurface(base: Float32Array, offset = 0) {
+    this.bases.add(base);
+    this.raises.push(base.map((v) => v + offset));
   }
 }
 
@@ -78,6 +81,7 @@ function setup(solver: FakeSolver, initial: Float32Array) {
     store,
     errors: new ErrorReporter(),
     getScene: () => ({ solver: solver as unknown as FloodSolver, initialWater: initial }),
+    getStageOffset: () => store.get().stageOffset,
     onWaterReset: () => waterResets++,
   });
   const setOffset = (o: number, now: number) => {
@@ -178,7 +182,7 @@ test('crest: once the flood is under way a raise never restarts the water (the b
   }
 });
 
-test('crest: with an in-place solver op every raise lifts the channel (throttled), and R re-applies the stage', () => {
+test('crest: with an in-place solver op every raise lifts the channel, and R re-applies the applied stage', () => {
   mock.timers.enable({ apis: ['setTimeout'] });
   try {
     const { ground, initial } = valley();
@@ -189,11 +193,12 @@ test('crest: with an in-place solver op every raise lifts the channel (throttled
     assert.equal(solver.raises.length, 1);
     assert.equal(solver.raises[0][idx(5, 1)], 103);
     assert.ok(Number.isNaN(solver.raises[0][idx(7, 3)]) && Number.isNaN(solver.raises[0][idx(0, 0)]));
-    setOffset(2, 1030); // within the throttle interval → trailing
-    assert.equal(solver.raises.length, 1);
-    mock.timers.tick(100);
+    setOffset(2, 1030); // the stage ramp paces raises (a few cm per step): every call lifts at once
     assert.equal(solver.raises.length, 2);
     assert.equal(solver.raises[1][idx(5, 1)], 104);
+    assert.equal(solver.bases.size, 1, 'one base array for the scene: uploaded once, then only the offset changes');
+    mock.timers.tick(1000);
+    assert.equal(solver.raises.length, 2, 'no trailing raise');
     setOffset(1.5, 2000); // lowering: nothing to do in place
     assert.equal(solver.raises.length, 2);
     assert.equal(solver.initialWaterCalls.length, 0, 'in place never restarts');

@@ -1,40 +1,27 @@
 /**
  * Evacuation status text helpers (pure — unit-tested in Node).
  *
- * The router's messages are complete sentences meant to stand alone ("Via I-279 to Mount Washington —
- * 2.9 km, 3 min (…)"). The evacuation card already shows the shelter, distance and drive time as big
- * figures, so it only needs what's left: the roads taken and any warnings.
+ * The evacuation card shows the shelter, distance and drive time as big figures; these helpers lay out the rest from
+ * the router's structured result (RouteResult.via / wetMeters / advice), formatted with the card's own number rules.
  */
+import type { RouteResult } from '../contracts';
+import { formatDistance } from './format';
 
-/** "Via I-279 → Penn Lincoln Pkwy to Mount Washington — 2.9 km, 3 min (…)" → "Via I-279 → Penn Lincoln Pkwy · …". */
-export function routeDetail(message: string | undefined, shelterName: string | undefined): string {
-  let m = (message ?? '').trim();
-  if (!m) return '';
-  // Parenthesized warning (e.g. shallow water on the way) — keep it as a separate clause.
-  let note = '';
-  const paren = /\s*\(([^()]*)\)\s*$/.exec(m);
-  if (paren) {
-    note = paren[1].trim();
-    m = m.slice(0, paren.index).trim();
-  }
-  // Trailing " — <distance>, <duration>".
-  m = m.replace(/\s*[—–-]\s*[<\d][^—–]*?\b(?:m|km)\s*,\s*[^,]*?\b(?:s|min|h)\s*$/u, '').trim();
-  // Destination (shown as the card heading).
-  if (shelterName) {
-    const esc = shelterName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    m = m.replace(new RegExp(`\\s*\\bto\\s+${esc}\\s*$`), '').trim();
-  }
-  if (/^route$/i.test(m)) m = '';
-  const parts = [m, note].filter(Boolean).map((p) => p[0].toUpperCase() + p.slice(1));
-  return parts.join(' · ');
+/** Shown when there is no advice to show (no route object yet, or a router without structured fields). */
+const DEFAULT_BLOCKED_ADVICE = 'Every road to a shelter is flooded. Shelter in place or move to higher floors.';
+
+/** "Via I-279 → Penn Lincoln Pkwy · 120 m through shallow water — drive slowly" ('' when there is nothing to add). */
+export function routeDetail(route: Pick<RouteResult, 'via' | 'wetMeters'> | null | undefined): string {
+  return [
+    route?.via?.length ? `Via ${route.via.join(' → ')}` : '',
+    route?.wetMeters ? `${formatDistance(route.wetMeters)} through shallow water — drive slowly` : '',
+  ]
+    .filter(Boolean)
+    .join(' · ');
 }
 
-/**
- * The router's blocked message usually starts with "No safe route — …", which the alarm heading already
- * says in capitals; keep only the advice.
- */
-export function blockedAdvice(message: string | undefined): string {
-  const rest = (message ?? '').replace(/^\s*no safe route\s*[—–:-]*\s*/i, '').trim();
-  if (!rest) return 'Every road to a shelter is flooded. Shelter in place or move to higher floors.';
-  return rest[0].toUpperCase() + rest.slice(1);
+/** What to do when the route is blocked (the alarm heading already says "No safe route"). */
+export function blockedAdvice(route: Pick<RouteResult, 'advice'> | null | undefined): string {
+  const a = route?.advice?.trim();
+  return a ? a[0].toUpperCase() + a.slice(1) : DEFAULT_BLOCKED_ADVICE;
 }

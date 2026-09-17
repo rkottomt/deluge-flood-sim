@@ -16,6 +16,7 @@ export function baseState(patch: Partial<AppState> = {}): AppState {
     stormIntensity: 60,
     sim: { ...DEFAULT_SIM_PARAMS },
     stageOffset: 0,
+    stageOffsetApplied: 0,
     render: { waterMode: 'realistic', verticalExaggeration: 1.5, showImagery: true, showRoads: true, showContours: false },
     sources: [],
     storms: [],

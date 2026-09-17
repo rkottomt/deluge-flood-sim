@@ -15,13 +15,25 @@ const TIPS = [
 ];
 
 export function createLoadingOverlay(ctx: UIContext): HTMLElement {
-  const { bind } = ctx;
+  const { bind, actions } = ctx;
   const title = h('div', { class: 'dl-loading-title' }, 'Loading terrain');
   const msg = h('div', { class: 'dl-loading-msg' });
   const fill = h('div', { class: 'dl-progress-fill' });
   const bar = h('div', { class: 'dl-progress', role: 'progressbar', 'aria-valuemin': '0', 'aria-valuemax': '100' }, fill);
   const pct = h('span', { class: 'dl-loading-pct' });
   const tip = h('span', { class: 'dl-loading-tip' });
+  // Live areas download from public services that can stall on bad wifi: always offer a way out. The scene on screen
+  // is kept (it is only replaced once the new terrain has arrived).
+  const cancel = h(
+    'button',
+    {
+      type: 'button',
+      class: 'dl-btn dl-btn-ghost dl-loading-cancel',
+      hidden: true,
+      onclick: () => actions.cancelLoad?.(),
+    },
+    'Cancel',
+  );
   const wave = h(
     'div',
     { class: 'dl-loading-wave', 'aria-hidden': 'true' },
@@ -31,7 +43,7 @@ export function createLoadingOverlay(ctx: UIContext): HTMLElement {
   const el = h(
     'div',
     { class: 'dl-loading', role: 'status', 'aria-live': 'polite' },
-    h('div', { class: 'dl-loading-card dl-glass' }, wave, title, msg, h('div', { class: 'dl-progress-row' }, bar, pct), tip),
+    h('div', { class: 'dl-loading-card dl-glass' }, wave, title, msg, h('div', { class: 'dl-progress-row' }, bar, pct), tip, cancel),
   );
   let tipIdx = Math.floor(Math.random() * TIPS.length);
   let tipTimer = 0;
@@ -51,6 +63,13 @@ export function createLoadingOverlay(ctx: UIContext): HTMLElement {
   bind(
     (s) => s.loading?.message ?? '',
     (v) => setText(msg, v || 'Preparing…'),
+  );
+  bind(
+    (s) => !!s.loading?.cancellable && !!actions.cancelLoad,
+    (on) => {
+      cancel.hidden = !on;
+      setText(title, on ? 'Loading live area' : 'Loading terrain');
+    },
   );
   bind(
     (s) => (s.loading ? Math.round(Math.max(0, Math.min(1, s.loading.progress)) * 100) : -1),
@@ -212,32 +231,3 @@ function autoDismiss(el: HTMLElement, onExpire: () => void, stillShown: () => bo
   };
 }
 
-/** Full-screen friendly message for browsers without WebGPU (used by the app on device failure). */
-export function renderUnsupported(root: HTMLElement, detail?: string): void {
-  root.classList.add('dl-ui');
-  const el = h(
-    'div',
-    { class: 'dl-unsupported' },
-    h(
-      'div',
-      { class: 'dl-unsupported-card dl-glass' },
-      h('div', { class: 'dl-brand-mark dl-brand-lg' }, logoMark(44), h('span', { class: 'dl-wordmark' }, 'Deluge')),
-      h('h1', null, 'This browser can’t run the GPU flood solver'),
-      h(
-        'p',
-        null,
-        'Deluge solves the shallow-water equations on your graphics card with ',
-        h('b', null, 'WebGPU'),
-        '. Please open it in a recent Chrome, Edge or Arc (version 113+) on macOS, Windows or ChromeOS — or Safari 26+.',
-      ),
-      detail ? h('pre', { class: 'dl-unsupported-detail' }, detail) : null,
-      h(
-        'ul',
-        null,
-        h('li', null, 'Make sure hardware acceleration is enabled in your browser settings.'),
-        h('li', null, 'On Linux, Chrome may need the “Unsafe WebGPU” flag (chrome://flags/#enable-unsafe-webgpu).'),
-      ),
-    ),
-  );
-  root.append(el);
-}
