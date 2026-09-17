@@ -1,7 +1,7 @@
 /**
  * Hand-drawn 24×24 stroke icons (currentColor). Kept as markup strings so they can be cloned cheaply.
  */
-import { fragment } from './dom';
+import { trustedMarkup } from './dom';
 
 const WAVE = 'q1.5-1.7 3 0t3 0 3 0 3 0 3 0 3 0';
 
@@ -80,14 +80,14 @@ export function iconMarkup(name: IconName, size = 20, extraClass = ''): string {
 }
 
 export function icon(name: IconName, size = 20, extraClass = ''): SVGSVGElement {
-  return fragment<SVGSVGElement>(iconMarkup(name, size, extraClass));
+  return trustedMarkup<SVGSVGElement>(iconMarkup(name, size, extraClass));
 }
 
 let logoSeq = 0;
 /** The Deluge wave mark: rounded square with a water gradient and two crisp wave crests. */
 export function logoMark(size = 28): SVGSVGElement {
   const id = `dl-logo-grad-${logoSeq++}`;
-  return fragment<SVGSVGElement>(`
+  return trustedMarkup<SVGSVGElement>(`
     <svg class="dl-logo" width="${size}" height="${size}" viewBox="0 0 32 32" aria-hidden="true">
       <defs>
         <linearGradient id="${id}" x1="0" y1="0" x2="1" y2="1">

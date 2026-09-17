@@ -13,10 +13,37 @@ export interface DecodedPNG {
   data: Uint8Array;
 }
 
-async function inflateZlib(data: Uint8Array): Promise<Uint8Array> {
-  const ds = new DecompressionStream('deflate');
-  const stream = new Blob([data as BlobPart]).stream().pipeThrough(ds);
-  return new Uint8Array(await new Response(stream).arrayBuffer());
+/** Largest PNG accepted, per side. Terrarium tiles are 256²; anything near this is not elevation data. */
+const MAX_DIMENSION = 4096;
+
+/**
+ * Inflate with a hard output cap, reading the stream chunk by chunk instead of buffering whatever comes out. A
+ * "deflate bomb" — a 300 kB IDAT that expands to hundreds of MB — is rejected at `maxOut` bytes instead of taking the
+ * tab's memory with it (FINDINGS.json SEC-03). `maxOut` is what the PNG header itself promises, so a well-formed file
+ * is never affected.
+ */
+async function inflateZlib(data: Uint8Array, maxOut: number): Promise<Uint8Array> {
+  const reader = new Blob([data as BlobPart]).stream().pipeThrough(new DecompressionStream('deflate')).getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (!value) continue;
+    total += value.byteLength;
+    if (total > maxOut) {
+      await reader.cancel().catch(() => {});
+      throw new Error('PNG data larger than its header says');
+    }
+    chunks.push(value);
+  }
+  const out = new Uint8Array(total);
+  let o = 0;
+  for (const c of chunks) {
+    out.set(c, o);
+    o += c.byteLength;
+  }
+  return out;
 }
 
 export async function decodePNG(bytes: ArrayBuffer | Uint8Array): Promise<DecodedPNG> {
@@ -52,6 +79,8 @@ export async function decodePNG(bytes: ArrayBuffer | Uint8Array): Promise<Decode
   if (bitDepth !== 8 || interlace !== 0) throw new Error(`unsupported PNG (bitDepth ${bitDepth}, interlace ${interlace})`);
   const channels = ({ 0: 1, 2: 3, 3: 1, 4: 2, 6: 4 } as Record<number, number>)[colorType];
   if (!channels) throw new Error(`unsupported PNG color type ${colorType}`);
+  // The header decides how much output the inflate below may produce, so it has to be sane first.
+  if (!width || !height || width > MAX_DIMENSION || height > MAX_DIMENSION) throw new Error(`unsupported PNG size ${width}×${height}`);
 
   let total = 0;
   for (const c of idat) total += c.length;
@@ -61,7 +90,8 @@ export async function decodePNG(bytes: ArrayBuffer | Uint8Array): Promise<Decode
     z.set(c, o);
     o += c.length;
   }
-  const raw = await inflateZlib(z);
+  // One filter byte per row plus the row itself: exactly what a valid PNG of this size inflates to.
+  const raw = await inflateZlib(z, (width * channels + 1) * height);
 
   const bpp = channels;
   const stride = width * channels;

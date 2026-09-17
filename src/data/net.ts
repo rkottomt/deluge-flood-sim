@@ -4,12 +4,23 @@
  * Works in browsers and Node ≥ 18 (global fetch / AbortController).
  */
 
+export const MB = 1024 * 1024;
+/** Largest response body accepted when a call site names no smaller limit. */
+export const DEFAULT_MAX_BYTES = 128 * MB;
+
 export interface FetchOptions {
   /**
    * Per-attempt timeout until the response headers arrive, ms (ArcGIS export services render the whole image before
    * sending a byte, so this must allow for that).
    */
   timeoutMs?: number;
+  /**
+   * Largest accepted body in bytes, counted *after* any transparent Content-Encoding (so a gzip bomb is caught by what
+   * it expands to, not by what it weighs on the wire). Default 128 MB. A larger answer fails immediately with
+   * HttpError 413 and is never retried: a misbehaving or hostile upstream must not be able to fill memory, and
+   * re-downloading it 2–3× would only make that worse.
+   */
+  maxBytes?: number;
   /**
    * Once the body is streaming, abort the attempt if no bytes arrive for this long, ms (default 20 s). A slow but
    * moving download is never cut off; a stalled one (dead venue wifi) fails in seconds instead of minutes.
@@ -47,10 +58,31 @@ function hostOf(url: string): string {
   }
 }
 
-/** Read a response body, aborting through `ctrl` when no bytes arrive for `stallMs`. */
-async function readBody(res: Response, ctrl: AbortController, stallMs: number, onStall: () => void): Promise<ArrayBuffer> {
+/**
+ * Read a response body, aborting through `ctrl` when no bytes arrive for `stallMs` and rejecting once more than
+ * `maxBytes` have arrived. The size failure deliberately does NOT abort `ctrl`: attempt()'s catch would then rewrite it
+ * as a timeout, and a timeout gets retried.
+ */
+async function readBody(
+  res: Response,
+  ctrl: AbortController,
+  stallMs: number,
+  onStall: () => void,
+  maxBytes: number,
+  host: string,
+): Promise<ArrayBuffer> {
+  const tooBig = () => new HttpError(`${host} sent more than ${Math.round(maxBytes / MB)} MB`, 413);
+  const declared = Number(res.headers.get('content-length'));
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    void res.body?.cancel().catch(() => {});
+    throw tooBig();
+  }
   const reader = res.body?.getReader?.();
-  if (!reader) return res.arrayBuffer();
+  if (!reader) {
+    const b = await res.arrayBuffer();
+    if (b.byteLength > maxBytes) throw tooBig();
+    return b;
+  }
   const chunks: Uint8Array[] = [];
   let total = 0;
   let timer = setTimeout(onStall, stallMs);
@@ -60,8 +92,12 @@ async function readBody(res: Response, ctrl: AbortController, stallMs: number, o
       clearTimeout(timer);
       if (done) break;
       if (value) {
-        chunks.push(value);
         total += value.byteLength;
+        if (total > maxBytes) {
+          void reader.cancel().catch(() => {});
+          throw tooBig();
+        }
+        chunks.push(value);
       }
       timer = setTimeout(onStall, stallMs);
     }
@@ -98,7 +134,14 @@ async function attempt(url: string, opts: FetchOptions): Promise<{ buf: ArrayBuf
     if (!res.ok) throw new HttpError(`${hostOf(url)} responded HTTP ${res.status}`, res.status);
     const type = res.headers.get('content-type') ?? '';
     const stallMs = opts.stallMs ?? 20000;
-    const buf = await readBody(res, ctrl, stallMs, () => giveUp(`${hostOf(url)} timed out: the download stalled for ${Math.round(stallMs / 1000)} s`));
+    const buf = await readBody(
+      res,
+      ctrl,
+      stallMs,
+      () => giveUp(`${hostOf(url)} timed out: the download stalled for ${Math.round(stallMs / 1000)} s`),
+      opts.maxBytes ?? DEFAULT_MAX_BYTES,
+      hostOf(url),
+    );
     if (opts.expectType && !type.startsWith(opts.expectType)) {
       // ArcGIS reports failures as JSON/HTML with status 200.
       let detail = '';

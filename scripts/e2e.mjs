@@ -13,6 +13,11 @@
  * reported; the baked-preset flows must not need any. Only the opt-in live flow may use the network. The startup-cancel
  * flow holds external requests unanswered instead (stalled venue wifi), so it needs no network either.
  *
+ * Debug API: the flows drive the app through `window.__deluge`, which a released build no longer contains
+ * (FINDINGS.json SEC-07). This script therefore sets DELUGE_DEBUG_API=1 before it builds, which is what
+ * vite.config.ts's `define` reads. To point --prod/E2E_URL at a server you built yourself, build it the same way:
+ * `DELUGE_DEBUG_API=1 npm run demo`. A plain `npm run demo` has no debug API, which is the point.
+ *
  * Screenshots → artifacts/e2e/NN-name.png, machine-readable report → artifacts/e2e/report.json.
  * Prints a PASS/FAIL table with measured numbers and exits non-zero if any flow fails.
  * Console errors, page errors and window.__deluge.errors are collected per flow; any of them fails the flow.
@@ -43,6 +48,10 @@ const PRESET = String(args.preset ?? process.env.E2E_PRESET ?? 'pittsburgh');
 const OTHER_PRESETS = ['pittsburgh', 'sandbox', 'johnstown', 'ellicott'].filter((p) => p !== PRESET);
 
 fs.mkdirSync(OUT, { recursive: true });
+
+// The flows need window.__deluge, which vite.config.ts only compiles in when this is set (SEC-07). Set before any
+// build()/createServer() call, because the config reads process.env when it is loaded. `??=` so an explicit 0 wins.
+process.env.DELUGE_DEBUG_API ??= '1';
 
 // ─── process management ────────────────────────────────────────────────────────────────────────
 /** In-process Vite server (dev or preview); closed on exit, so it can never be left running. */
@@ -323,6 +332,16 @@ async function shot(name) {
   await page.screenshot({ path: file });
   console.log(`  [shot] ${path.relative(ROOT, file)}`);
   return file;
+}
+
+/** Poll a Node-side predicate until it is true (or the timeout runs out). Returns whether it became true. */
+async function waitFor(predicate, timeoutMs, stepMs = 50) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return true;
+    await sleep(stepMs);
+  }
+  return predicate();
 }
 
 async function waitReady(timeoutMs) {
@@ -1087,8 +1106,18 @@ const FLOWS = [
       await page.goto(live.href, { waitUntil: 'domcontentloaded' });
       const cancel = page.locator('.dl-loading-cancel');
       await cancel.waitFor({ state: 'visible', timeout: 90_000 });
+      // The Cancel button appears the instant the live load starts — BEFORE the first USGS request has been issued,
+      // and well before Playwright's route handler has run in this process. Reading externalRequests right here is a
+      // sampling race (it was 0 in Brave, 5 in Chromium: artifacts/browsers3/e2e-brave-noflags.log). Wait for the
+      // requests to actually be held, with the same "> 0" bar — a stall that never issues one still fails.
+      const stalled = await waitFor(() => stalledRoutes.length > 0, 30_000);
       const before = await D(() => window.__deluge.getState().loading);
-      check(r, 'live download stalls with Cancel offered', !!before?.cancellable && externalRequests.length > 0, `“${before?.message}”, ${externalRequests.length} requests held`);
+      check(
+        r,
+        'live download stalls with Cancel offered',
+        !!before?.cancellable && stalled,
+        `“${before?.message}”, ${stalledRoutes.length} of ${externalRequests.length} requests held unanswered`,
+      );
       const t0 = Date.now();
       await cancel.click();
       const shown = await page

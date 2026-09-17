@@ -109,8 +109,10 @@ export function mountUI(root: HTMLElement, store: Store, actions: AppActions): v
     root.classList.remove('dl-ui', 'dl-panel-open', 'dl-modal-open', 'dl-lowfx');
   });
 
-  // Automation / dev hook (not part of the contract).
-  (root as HTMLElement & { __delugeUI?: unknown }).__delugeUI = { picker, help, how, panel };
+  // Automation / dev hook (not part of the contract), compiled out of a released build: FINDINGS.json SEC-07.
+  if (import.meta.env.DEV || __DELUGE_DEBUG_API__) {
+    (root as HTMLElement & { __delugeUI?: unknown }).__delugeUI = { picker, help, how, panel };
+  }
 }
 
 /**

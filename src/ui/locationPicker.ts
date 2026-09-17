@@ -15,6 +15,10 @@ import { icon } from './icons';
 import { segmented } from './controls';
 import { createModal, type Modal } from './modal';
 import { squareDomain, isLikelyUS } from '../data/geo';
+import { ESRI_LABELS_TILE_TEMPLATE, ESRI_TILE_TEMPLATE } from '../data/imagery';
+import { fetchJSON, MB } from '../data/net';
+import { cleanPlaceLabel, NOMINATIM_REVERSE, NOMINATIM_SEARCH, placeNameFromNominatim } from '../data/placeName';
+import { geoChoices, isLatLon, MAX_GEO_RESULTS } from './geoResults';
 import { formatLatLon, fmtNum } from './format';
 import { looksLikeNetworkError, probeConnectivity } from './connectivity';
 import { postNotice } from './bridge';
@@ -25,20 +29,11 @@ export { QUICK_PICKS } from './quickPicks';
 /** What each quick pick offered when it last loaded in this page (its tooltip then says so). */
 const loadedPicks = new Map<string, LoadedArea>();
 
-const IMAGERY_URL = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
-const LABELS_URL = 'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}';
-const NOMINATIM = 'https://nominatim.openstreetmap.org';
+const IMAGERY_URL = ESRI_TILE_TEMPLATE;
+const LABELS_URL = ESRI_LABELS_TILE_TEMPLATE;
 
 const SIZES = [2000, 5000, 8000, 12000] as const;
 const RESOLUTIONS = [512, 1024, 2048] as const;
-
-interface GeoResult {
-  display_name: string;
-  lat: string;
-  lon: string;
-  type?: string;
-  class?: string;
-}
 
 export function createLocationPicker(ctx: UIContext): Modal {
   const { store, actions, bind } = ctx;
@@ -95,10 +90,9 @@ export function createLocationPicker(ctx: UIContext): Modal {
     results.hidden = false;
     results.replaceChildren(h('div', { class: 'dl-search-status' }, h('span', { class: 'dl-spinner dl-spin-on' }), 'Searching…'));
     try {
-      const url = `${NOMINATIM}/search?q=${encodeURIComponent(q)}&format=json&limit=5&countrycodes=us&addressdetails=0`;
-      const res = await fetch(url, { signal: searchAbort.signal, headers: { Accept: 'application/json' } });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const list = (await res.json()) as GeoResult[];
+      const url = `${NOMINATIM_SEARCH}?q=${encodeURIComponent(q)}&format=json&limit=${MAX_GEO_RESULTS}&countrycodes=us&addressdetails=0`;
+      // Through net.ts rather than raw fetch: one capped, timed-out attempt (a geocoder answer is kilobytes).
+      const list = await fetchJSON<unknown>(url, { signal: searchAbort.signal, retries: 0, timeoutMs: 10000, maxBytes: MB });
       showResults(list);
     } catch (err) {
       if ((err as Error).name === 'AbortError') return;
@@ -132,15 +126,19 @@ export function createLocationPicker(ctx: UIContext): Modal {
     }
   });
 
-  function showResults(list: GeoResult[]) {
-    if (!list.length) {
+  /**
+   * Render geocoder results. `list` is whatever the service answered: geoChoices() validates, cleans and caps it
+   * (FINDINGS SEC-09/SEC-01), so nothing unusable ever becomes a clickable button.
+   */
+  function showResults(list: unknown) {
+    const choices = geoChoices(list);
+    if (!choices.length) {
       results.replaceChildren(h('div', { class: 'dl-search-status' }, 'No US places found. Try a city and state, e.g. “Nashville, TN”.'));
       return;
     }
     results.replaceChildren(
-      ...list.map((r) => {
-        const [first, ...rest] = r.display_name.split(', ');
-        return h(
+      ...choices.map((c) =>
+        h(
           'button',
           {
             type: 'button',
@@ -148,14 +146,14 @@ export function createLocationPicker(ctx: UIContext): Modal {
             role: 'option',
             onclick: () => {
               results.hidden = true;
-              searchInput.value = first;
-              setCenter(parseFloat(r.lat), parseFloat(r.lon), first, true);
+              searchInput.value = c.first;
+              setCenter(c.lat, c.lon, c.first, true);
             },
           },
           icon('pin', 15),
-          h('span', { class: 'dl-result-text' }, h('b', null, first), h('span', null, rest.slice(0, 3).join(', '))),
-        );
-      }),
+          h('span', { class: 'dl-result-text' }, h('b', null, c.first), h('span', null, c.rest.slice(0, 3).join(', '))),
+        ),
+      ),
     );
   }
   document.addEventListener('pointerdown', (e) => {
@@ -441,13 +439,10 @@ export function createLocationPicker(ctx: UIContext): Modal {
     reverseTimer = window.setTimeout(async () => {
       reverseAbort = new AbortController();
       try {
-        const res = await fetch(`${NOMINATIM}/reverse?format=json&lat=${lat}&lon=${lon}&zoom=12`, { signal: reverseAbort.signal });
-        if (!res.ok) return;
-        const j = (await res.json()) as { address?: Record<string, string>; display_name?: string };
-        const a = j.address ?? {};
-        const locality = a.city || a.town || a.village || a.hamlet || a.suburb || a.county || '';
-        const state = a.state ?? '';
-        const nm = [locality, state].filter(Boolean).join(', ') || j.display_name?.split(', ')[0] || '';
+        const url = `${NOMINATIM_REVERSE}?format=json&lat=${lat}&lon=${lon}&zoom=12`;
+        const j = await fetchJSON<unknown>(url, { signal: reverseAbort.signal, retries: 0, timeoutMs: 10000, maxBytes: MB });
+        // One shared, type-guarded and cleaned implementation (src/data/placeName.ts) instead of a second copy here.
+        const nm = placeNameFromNominatim(j as Parameters<typeof placeNameFromNominatim>[0]);
         if (center && center.lat === lat && center.lon === lon && nm) {
           placeName = nm;
           updateSummary();
@@ -459,8 +454,10 @@ export function createLocationPicker(ctx: UIContext): Modal {
   }
 
   function setCenter(lat: number, lon: number, name: string, fly: boolean) {
+    // Never select a position Leaflet (or the loader) cannot use.
+    if (!isLatLon(lat, lon)) return;
     center = { lat, lon };
-    placeName = name;
+    placeName = cleanPlaceLabel(name);
     mapHint.hidden = true;
     if (!name) reverseGeocode(lat, lon);
     updateFootprint(fly);
@@ -479,7 +476,8 @@ export function createLocationPicker(ctx: UIContext): Modal {
       marker = L.marker(ll, {
         interactive: false,
         keyboard: false,
-        icon: L.divIcon({ className: 'dl-picker-center', html: '<span></span>', iconSize: [18, 18], iconAnchor: [9, 9] }),
+        // L.divIcon's `html` is an innerHTML sink: this string must stay a constant (FINDINGS SEC-08).
+      icon: L.divIcon({ className: 'dl-picker-center', html: '<span></span>', iconSize: [18, 18], iconAnchor: [9, 9] }),
       }).addTo(map);
     } else marker.setLatLng(ll);
     if (fly) {
@@ -491,6 +489,9 @@ export function createLocationPicker(ctx: UIContext): Modal {
 
   function initMap() {
     if (map) return;
+    // Leaflet HTML sinks, all fed constants only: the zoom control writes zoomInText/zoomOutText and the attribution
+    // control writes its prefix and each layer's `attribution` through innerHTML. Never pass a response-derived or
+    // user-supplied string to either (FINDINGS SEC-08).
     map = L.map(mapEl, { center: [39.5, -97.5], zoom: 4, minZoom: 3, maxZoom: 18, worldCopyJump: true, zoomControl: true, attributionControl: true });
     const imagery = L.tileLayer(IMAGERY_URL, { maxZoom: 18, maxNativeZoom: 19, attribution: 'Imagery © Esri, Vantor, Earthstar Geographics, and the GIS User Community' }).addTo(map);
     // A black map with no explanation reads as a bug: after a few failed tiles and none loaded, say why.
@@ -538,7 +539,7 @@ export function createLocationPicker(ctx: UIContext): Modal {
         const req = loadingReq;
         ctx.actions.cancelLoad();
         if (req) {
-          const what = req.name ?? placeName;
+          const what = cleanPlaceLabel(req.name ?? placeName);
           postNotice(store, {
             kind: 'info',
             key: 'live-cancelled',

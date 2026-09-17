@@ -16,6 +16,7 @@ import { geoToGrid, gridToGeo } from '../data';
 import type { App } from './App';
 import { wallRadiusCells } from './defaults';
 import { stageOffsetForFeet } from './stage';
+import type { WakeLockStatus } from './wakeLock';
 
 /** Sampled scalar field (for automation: e2e scripts pick wall sites, check flooding, etc.). */
 export interface GridSample {
@@ -75,6 +76,8 @@ export interface DelugeDebugExtras {
   sampleAt(gx: number, gy: number): { ground: number; barrier: number; depth: number } | null;
   getRoadStatusCounts(): { dry: number; wet: number; flooded: number; total: number } | null;
   pick(cssX: number, cssY: number): PickResult | null;
+  /** Screen Wake Lock state (src/app/wakeLock.ts): is the display being held awake right now? */
+  getWakeLock(): WakeLockStatus;
   /** Latest protected-land analysis (src/app/protection.ts) without its mask, and how long it took (ms). */
   getProtection(): { wallCells: number; cells: number; areaM2: number; roadMeters: number; roadEdges: number; level: number | null; ms: number } | null;
   waitFrames(n: number): Promise<void>;
@@ -250,6 +253,8 @@ export function createDebugApi(app: App, ready: Promise<void>): DelugeDebug {
     },
 
     pick: (cssX, cssY) => app.renderer?.pick(cssX, cssY) ?? null,
+
+    getWakeLock: () => ({ ...app.wakeLock.status }),
 
     getProtection() {
       const r = app.protection.last;

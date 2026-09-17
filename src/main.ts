@@ -5,12 +5,22 @@
  * browser without WebGPU never evaluates code that might touch GPU globals (e.g. GPUBufferUsage) at
  * module top level — it gets the friendly unsupported screen instead of a ReferenceError.
  */
-import { installDebugHandle } from './app/debugHandle';
+import { installDebugHandle, type DebugHandle } from './app/debugHandle';
 import { showFatalError, showWebGPUUnsupported, WebGPUUnavailableError } from './app/unsupported';
+
+/**
+ * Automation surfaces (window.__deluge) only exist in a dev server or an explicitly flagged build
+ * (`DELUGE_DEBUG_API=1 vite build`, which is what scripts/e2e.mjs does). A build-time constant, so a released bundle
+ * contains none of this code at all — see src/env.d.ts and FINDINGS.json SEC-07.
+ */
+const DEBUG_API = import.meta.env.DEV || __DELUGE_DEBUG_API__;
+
+/** Does nothing when the debug API is compiled out; the boot path below stays identical either way. */
+const NO_DEBUG: DebugHandle = { bind() {}, fail() {} };
 
 async function boot(): Promise<void> {
   // Synchronously, so automation can `await window.__deluge.ready` as soon as the page has loaded.
-  const debug = installDebugHandle();
+  const debug = DEBUG_API ? installDebugHandle() : NO_DEBUG;
 
   const canvas = document.getElementById('deluge-canvas');
   const uiRoot = document.getElementById('ui-root');
@@ -39,7 +49,8 @@ async function boot(): Promise<void> {
   }
 
   const app = new App(canvas, uiRoot);
-  debug.bind(app.debug);
+  // Imported dynamically so the whole debug API (and its downsampling helpers) drops out of a non-debug build.
+  if (DEBUG_API) debug.bind((await import('./app/debugApi')).createDebugApi(app, app.ready));
   try {
     await app.start();
   } catch (err) {

@@ -61,6 +61,8 @@ export class SceneManager {
   private abort: AbortController | null = null;
   /** The newest load is still downloading (the scene on screen is intact): cancel() may stop it. */
   private cancellable = false;
+  /** The GPU device is gone (see abandon): no load may run or start any more. */
+  private abandoned = false;
 
   constructor(private readonly deps: SceneManagerDeps) {}
 
@@ -103,7 +105,32 @@ export class SceneManager {
     return true;
   }
 
+  /**
+   * The GPU device is gone: abandon the manager for good. Any load in flight is invalidated (its token is stale, so it
+   * throws SupersededLoadError at its next checkpoint instead of allocating solvers, binding the renderer or reporting
+   * a scene on a dead device) and its downloads are aborted; no later load() may start. Unlike cancel() this also stops
+   * a load that has passed the cancellable phase, and it deliberately leaves `loading` in the store alone — the
+   * full-screen device-lost card owns the screen from here on. Returns true if a load was in flight.
+   */
+  abandon(reason = 'The GPU device was lost'): boolean {
+    const wasLoading = !!this.inFlight;
+    this.abandoned = true;
+    this.token++;
+    this.inFlight = null;
+    this.cancellable = false;
+    this.abort?.abort(new SupersededLoadError(reason));
+    this.abort = null;
+    return wasLoading;
+  }
+
+  /** False once abandon() has been called (the device is lost). */
+  get usable(): boolean {
+    return !this.abandoned;
+  }
+
   async load(request: SceneRequest): Promise<Scene> {
+    // Nothing may touch a destroyed device — not even to report progress.
+    if (this.abandoned) throw new SupersededLoadError('The GPU device was lost');
     const token = ++this.token;
     this.inFlight = request;
     // A newer load overtakes the previous one: stop its downloads too (not just discard their result).

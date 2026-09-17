@@ -1,6 +1,19 @@
 # Publishes the production build to GitHub Pages (https://<owner>.github.io/<repo>/).
 # One-time setup: make the repository public, then Settings → Pages → Source: "GitHub Actions".
 # The build uses relative URLs (vite.config.ts base: './'), so it works under the repository sub-path as is.
+#
+# Supply-chain notes (see artifacts/security-report/FINDINGS.json SEC-04/05/06):
+#   • Every action is pinned to a full commit SHA, with the tag it resolved to in a trailing comment.
+#     `git ls-remote --refs https://github.com/actions/<action>` re-resolves them; Dependabot (.github/dependabot.yml)
+#     bumps the pin and the comment together.
+#   • actions/upload-pages-artifact is inlined as its own two steps (tar + upload-artifact, copied from v3.0.1's
+#     action.yml, Linux branch) because that composite action references actions/upload-artifact@v4 — a mutable tag
+#     that pinning the wrapper alone would not cover.
+#   • The build job holds `contents: read` only. pages:write and id-token:write live on the deploy job, which checks
+#     out no code and runs no dependency code.
+#   • `npm ci --ignore-scripts` keeps dependency install scripts off the runner. The three packages with install
+#     scripts (esbuild, webgpu, fsevents) are dev-only and unused by `tsc && vite build`; a clean-tree run was
+#     verified byte-identical to a normal build (artifacts/security-verify-infra/r2/ci-ignore-scripts/).
 name: Deploy to GitHub Pages
 
 on:
@@ -10,8 +23,6 @@ on:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
   group: pages
@@ -22,23 +33,38 @@ jobs:
     # Pages needs a public repository (on a free plan): skip instead of failing while it is private.
     if: ${{ !github.event.repository.private }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          # Don't leave GITHUB_TOKEN in .git/config where later build steps could read it.
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: npm
-      - run: npm ci
+      - run: npm ci --ignore-scripts
       - run: npm run build
-      - uses: actions/upload-pages-artifact@v3
+      # ── actions/upload-pages-artifact@v3.0.1, inlined (Linux branch) so its nested upload-artifact is pinned too.
+      - name: Archive Pages artifact
+        run: tar --dereference --hard-dereference --directory dist -cvf "$RUNNER_TEMP/artifact.tar" --exclude=.git --exclude=.github .
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          path: dist
+          name: github-pages
+          path: ${{ runner.temp }}/artifact.tar
+          retention-days: 1
+          if-no-files-found: error
   deploy:
     needs: build
     runs-on: ubuntu-latest
+    # Only this job may write to Pages or mint an OIDC token; it checks out nothing and runs no dependency code.
+    permissions:
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4.0.5

@@ -2,6 +2,13 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <!--
+      The production build also injects a Content-Security-Policy meta right here (vite.config.ts → src/data/csp.ts).
+      Referrer: third parties (Nominatim, Esri, USGS, TIGER) see only the origin, never the path or query — so a
+      shared ?live=…&name=… link never leaks to them. strict-origin-when-cross-origin rather than no-referrer because
+      Nominatim's usage policy asks for an identifying Referer and browsers cannot set a User-Agent. FINDINGS SEC-02.
+    -->
+    <meta name="referrer" content="strict-origin-when-cross-origin" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>Deluge — real-time flood simulation</title>
     <meta

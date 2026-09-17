@@ -6,7 +6,7 @@
  * Keep the text in sync with src/sim: the scheme (shaders/momentum.ts — local inertial + upwind advection,
  * θ-smoothing, semi-implicit friction), the Courant limit (constants.ts robustCflMax, √θ) and the passes.
  */
-import { h, fragment, setText, toggleClass, type UIContext } from './dom';
+import { h, trustedMarkup, setText, toggleClass, type UIContext } from './dom';
 import { icon, iconMarkup } from './icons';
 import { createModal, type Modal } from './modal';
 import { fmtNum, formatSubsteps, siParts } from './format';
@@ -29,7 +29,7 @@ const term = (inner: string, note: string, tone = '') =>
   `<span class="m-term ${tone}"><span class="m-term-body"><span>${inner}</span></span><span class="m-note">${note}</span></span>`;
 const abs = (inner: string) => `<span class="m-abs">|</span>${inner}<span class="m-abs">|</span>`;
 const rm = (s: string) => `<span class="m-rm">${s}</span>`;
-const eq = (markup: string, cls = '') => fragment<HTMLElement>(`<div class="m-eq ${cls}"><span class="m-row">${markup}</span></div>`);
+const eq = (markup: string, cls = '') => trustedMarkup<HTMLElement>(`<div class="m-eq ${cls}"><span class="m-row">${markup}</span></div>`);
 
 /** SVG subscript: base + lowered, smaller tspan (Unicode subscript letters are missing from most fonts). */
 const svgSub = (base: string, s: string) => `${base}<tspan baseline-shift="sub" font-size="8.5">${s}</tspan>`;
@@ -174,7 +174,7 @@ export function createHowItWorks(ctx: UIContext): Modal {
         [v('A'), 'convective acceleration ∂(qu)/∂x + ∂(qv)/∂y, first-order upwind'],
         [`${hf}`, 'flow depth at the cell face'],
       ] as Array<[string, string]>
-    ).flatMap(([sym, text]) => [fragment(`<dt>${sym}</dt>`), h('dd', null, text)]),
+    ).flatMap(([sym, text]) => [trustedMarkup(`<dt>${sym}</dt>`), h('dd', null, text)]),
   );
   const equations = sec(
     'equations',
@@ -231,7 +231,7 @@ export function createHowItWorks(ctx: UIContext): Modal {
         '2',
         'Semi-implicit friction',
         `${qNew}${op('=')}${frac(sup(v('q'), '∗'), `1${op('+')}${frac(`${g}${dt}${sup(n, '2')}${abs(v('q'))}`, supsub(v('h'), '7/3', v('f')), 'm-small')}`)}`,
-        h('span', { html: `in thin films friction is enormously stiff (∝&thinsp;<i>h</i><sup>−7/3</sup>).` }),
+        h('span', null, 'in thin films friction is enormously stiff (∝\u2009', h('i', null, 'h'), h('sup', null, '−7/3'), ').'),
         'An explicit friction update overshoots, reverses the flow and blows up. Dividing the frictionless update q* by a factor ≥ 1 means friction can only ever slow water down — stable for any timestep.',
       ),
       ingredient(
@@ -252,7 +252,7 @@ export function createHowItWorks(ctx: UIContext): Modal {
   );
 
   // ── 4. Pipeline diagram ──
-  const pipelineSvg = fragment<SVGSVGElement>(`
+  const pipelineSvg = trustedMarkup<SVGSVGElement>(`
   <svg class="dl-pipeline" viewBox="0 0 880 330" role="img" aria-label="Two GPU compute passes per substep: pass A updates the momentum flux on every cell face; pass B limits the fluxes, updates depth, adds rain, storms and rivers, removes infiltration and books the mass ledger. Repeated N times per frame; then export to the renderer and an asynchronous readback to the CPU for stats and routing.">
     <defs>
       <marker id="dl-arrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">

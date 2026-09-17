@@ -5,7 +5,6 @@ import { createRouter } from '../routing';
 import { createToolController, mountUI } from '../ui';
 import { createActions } from './actions';
 import { CrestFill } from './crest';
-import { createDebugApi, type DelugeDebug } from './debugApi';
 import { APP_CONFIG, createInitialState } from './defaults';
 import { FrameDriver } from './driver';
 import { errorMessage, ErrorReporter } from './errors';
@@ -27,6 +26,7 @@ import { bridgeFor, postNotice } from '../ui/bridge';
 import { ProtectionController, type ProtectionInput } from './protection';
 import { createProtectionWorker } from './protectionWorkerClient';
 import { parseStartupRequest, writeSceneToUrl, type SceneRequest } from './url';
+import { keepScreenAwake, type ScreenWakeLock } from './wakeLock';
 import { isUnreachableFailure } from '../data/net';
 
 export type LoadOutcome = 'ok' | 'failed' | 'superseded';
@@ -76,8 +76,8 @@ export class App {
   readonly driver: FrameDriver;
   readonly loop: FrameLoop;
   readonly actions: AppActions;
-  /** Automation API (exposed as window.__deluge by main.ts). */
-  readonly debug: DelugeDebug;
+  /** Holds the display awake while the tab is visible (see wakeLock.ts): a pitch runs for minutes with no input. */
+  readonly wakeLock: ScreenWakeLock;
 
   gpu: DelugeGPU | null = null;
   renderer: FloodRenderer | null = null;
@@ -89,7 +89,8 @@ export class App {
   stabilityDemo = false;
   preDemoCfl: number = APP_CONFIG.robustCfl;
 
-  private readonly ready: Promise<void>;
+  /** Resolves when the first scene is on screen; rejects if startup fails (main.ts hands it to the debug API). */
+  readonly ready: Promise<void>;
   private resolveReady!: () => void;
   private rejectReady!: (err: Error) => void;
   private readySettled = false;
@@ -115,6 +116,8 @@ export class App {
 
     this.errors.installWindowHandlers();
     this.errors.attachStore(this.store);
+    // Before anything can fail: a display that sleeps mid-pitch is the one failure the presenter cannot fix quickly.
+    this.wakeLock = keepScreenAwake();
 
     this.evac = new EvacController(this.router, this.store, this.errors);
     let maskKey = '';
@@ -159,7 +162,6 @@ export class App {
       (err) => this.errors.report('frame', errorMessage(err), err),
     );
     this.actions = createActions(this);
-    this.debug = createDebugApi(this, this.ready);
   }
 
   /**
@@ -301,6 +303,12 @@ export class App {
         unsubscribe();
       };
       const watchdog = setInterval(() => {
+        // The GPU is gone: there is nothing left to fall back to, and the device-lost card owns the screen.
+        if (this.gpuLost) {
+          stop();
+          resolve('superseded');
+          return;
+        }
         // Only while the live request itself is loading (not the preset fallback loadScene may already be running).
         if (scenes.loadingRequest !== request) return;
         const now = performance.now();
@@ -354,6 +362,7 @@ export class App {
     reason: string,
     opts: { cancelled?: boolean } = {},
   ): Promise<LoadOutcome> {
+    if (this.gpuLost) return 'superseded';
     const outcome = opts.cancelled
       ? await this.loadScene({ kind: 'preset', id: APP_CONFIG.defaultPreset })
       : await this.loadFallbackScene(null, null);
@@ -385,6 +394,9 @@ export class App {
     }
     try {
       const scene = await scenes.load(request);
+      // The device died while this load was finishing (scenes.abandon() normally throws first, but a load that had
+      // already resolved can land here): the device-lost card owns the address bar and the screen now.
+      if (this.gpuLost) return 'superseded';
       if (request.kind === 'live') this.noteLiveLoad(scene);
       // An automatic fallback keeps the address bar on what the user asked for (reload retries it). A live area
       // keeps the name it was given (the reverse-geocoded one), so a reload does not look it up again.
@@ -610,29 +622,36 @@ export class App {
   /**
    * The GPU device is gone (GPU-process crash or reset). Every texture, buffer and pipeline died with it, so the
    * frame loop stops (it would only spin no-op frames, burning battery, behind a frozen or blank canvas that still
-   * looks live) and a full-screen card takes over, reloading the page (see claimAutoReload for the limits). The address
-   * bar is pointed at the scene on screen first, so the reload brings back exactly that (not, say, a live area that
-   * needs the network). A live area or a large grid that keeps losing the GPU restarts as the offline default preset.
+   * looks live), a load in flight is abandoned, and a full-screen card takes over, reloading the page (see
+   * claimAutoReload for the limits). The address bar is pointed at the scene on screen first, so the reload brings back
+   * exactly that (not, say, a live area that needs the network). A live area or a large grid that keeps losing the GPU
+   * restarts as the offline default preset; any other non-default scene offers that as a button.
    */
   private onDeviceLost(info: GPUDeviceLostInfo): void {
     if (this.gpuLost || this.unloading) return;
     this.gpuLost = true;
     this.loop.stop();
     this.runner.cancelAll('the GPU device was lost');
+    // Order matters: the load in flight (if any) is cancelled BEFORE the address bar is set, so it can neither keep
+    // building a scene on the dead device nor rewrite the URL this handler is about to point at the right place.
+    const loading = this.scenes?.loadingRequest ?? null;
+    this.scenes?.abandon();
     const details = `GPU device lost (${info.reason ?? 'unknown'}): ${info.message || 'no details'}`;
     this.failReady(new Error(details));
     const scene = this.scenes?.scene ?? null;
     if (scene) writeSceneToUrl(scene.request);
     console.error(`[deluge] ${details} — frame loop stopped`);
-    // A live area (it also needs the network after a reload) or a grid larger than the presets can be swapped for the
-    // offline default preset if it keeps losing the GPU. Lost mid-load with nothing on screen: judge the request.
-    const request = scene?.request ?? this.scenes?.loadingRequest ?? null;
+    // Anything that is not the offline default scenario gets a way out on the card ("Start with Pittsburgh"). Only a
+    // live area (it needs the network after a reload too) or a grid larger than the presets may be swapped for it
+    // AUTOMATICALLY — those are the ones a repeated loss really blames. Lost mid-load: judge the request being loaded.
+    const request = scene?.request ?? loading;
     const isDefault = request?.kind === 'preset' && request.id === APP_CONFIG.defaultPreset;
-    const heavy = !isDefault && (request?.kind === 'live' || (!!scene && scene.terrain.nx * scene.terrain.ny > HEAVY_GRID_CELLS));
+    const heavy = request?.kind === 'live' || (!!scene && scene.terrain.nx * scene.terrain.ny > HEAVY_GRID_CELLS);
     const fallback: SceneRequest = { kind: 'preset', id: APP_CONFIG.defaultPreset };
-    const lighter: LighterScene | null = heavy
-      ? { label: SceneManager.label(fallback).split(' — ')[0], select: () => writeSceneToUrl(fallback) }
-      : null;
+    const lighter: LighterScene | null =
+      request && !isDefault
+        ? { label: SceneManager.label(fallback).split(' — ')[0], auto: heavy, select: () => writeSceneToUrl(fallback) }
+        : null;
     showDeviceLost(details, lighter);
   }
 

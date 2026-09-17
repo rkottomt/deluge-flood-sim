@@ -13,6 +13,10 @@ type Props = Record<string, unknown>;
  *  • on<event> function props become listeners
  *  • boolean true → empty attribute, false/null/undefined → omitted
  *  • `style` may be a string or an object of CSS properties (custom properties allowed)
+ *
+ * There is deliberately no `html` prop. Everything that is not an element goes through textContent or a text node, so
+ * no value from a URL, a response, a preset or the store can become markup. Constant markup (icons, the equation
+ * typography) goes through `trustedMarkup` below, which says so in its name. FINDINGS.json SEC-08.
  */
 export function h<K extends keyof HTMLElementTagNameMap>(tag: K, props?: Props | null, ...children: Child[]): HTMLElementTagNameMap[K] {
   const el = document.createElement(tag);
@@ -30,8 +34,6 @@ export function h<K extends keyof HTMLElementTagNameMap>(tag: K, props?: Props |
         }
       } else if (k === 'text') {
         el.textContent = String(v);
-      } else if (k === 'html') {
-        el.innerHTML = String(v);
       } else if (v === true) {
         el.setAttribute(k, '');
       } else {
@@ -52,8 +54,12 @@ export function append(parent: Node, children: Child[]): void {
   }
 }
 
-/** Parse an SVG/HTML fragment string into a single element. */
-export function fragment<T extends Element = Element>(markup: string): T {
+/**
+ * Parse CONSTANT markup into a single element. Never pass data from URLs, responses, presets or the store: this is an
+ * innerHTML sink and the only one left in the toolkit. tests/ui/sinks.test.ts fails when a new sink appears anywhere
+ * in src/, so a future call site has to be looked at in review.
+ */
+export function trustedMarkup<T extends Element = Element>(markup: string): T {
   const t = document.createElement('template');
   t.innerHTML = markup.trim();
   return t.content.firstElementChild as T;

@@ -12,9 +12,24 @@ export interface DelugeGPU {
   description: string;
 }
 
+/** Adapter label: the distinct, non-empty parts of GPUAdapterInfo in order ("apple metal-3"), never a repeat. */
+export function joinAdapterInfo(parts: readonly (string | undefined)[]): string {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of parts) {
+    const part = (raw ?? '').trim();
+    const key = part.toLowerCase();
+    if (!part || seen.has(key)) continue;
+    seen.add(key);
+    out.push(part);
+  }
+  return out.join(' ') || 'unknown adapter';
+}
+
 export async function createDelugeDevice(gpu: GPU): Promise<DelugeGPU> {
   const adapter = await gpu.requestAdapter({ powerPreference: 'high-performance' });
-  if (!adapter) throw new Error('No WebGPU adapter available');
+  // The exact phrase src/app/unsupported.ts matches on to show the "no adapter" screen (NO_ADAPTER_MESSAGE).
+  if (!adapter) throw new Error('No WebGPU adapter available (hardware acceleration off, a blocklisted GPU, or a VM)');
   const want: GPUFeatureName[] = ['float32-filterable', 'timestamp-query'];
   const requiredFeatures = want.filter((f) => adapter.features.has(f));
   const L = adapter.limits;
@@ -34,9 +49,10 @@ export async function createDelugeDevice(gpu: GPU): Promise<DelugeGPU> {
     },
   });
   const info = (adapter as GPUAdapter & { info?: GPUAdapterInfo }).info;
-  const description = info
-    ? [info.vendor, info.architecture, info.device, info.description].filter(Boolean).join(' ')
-    : 'unknown adapter';
+  // Some drivers repeat themselves across the four fields (Apple Silicon in Safari reports
+  // vendor/architecture/device/description all as "apple", which rendered as "apple apple apple apple" in the HUD):
+  // de-duplicate, case-insensitively, keeping the first spelling of each distinct part.
+  const description = info ? joinAdapterInfo([info.vendor, info.architecture, info.device, info.description]) : 'unknown adapter';
   return {
     adapter,
     device,

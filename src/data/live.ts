@@ -13,7 +13,7 @@ import { fetchImagery, IMAGERY_ATTRIBUTION } from './imagery';
 import { detectLiveWater, finishLiveTerrain, type LiveTerrainResult } from './liveTerrain';
 import type { LiveWorkerRequest, LiveWorkerResponse } from './liveWorker';
 import { browserOffline, ELEVATION_UNREACHABLE_MESSAGE, probeReachable, recentlyUnreachable } from './net';
-import { coordinateName, isCoordinateName, reverseGeocodeName } from './placeName';
+import { cleanPlaceLabel, coordinateName, isCoordinateName, reverseGeocodeName } from './placeName';
 import { fetchRoadNetwork } from './roads';
 
 export { buildLiveScenario, pickHighShelters } from './liveTerrain';
@@ -132,8 +132,13 @@ export async function loadLiveArea(req: LiveAreaRequest, onProgress?: ProgressFn
         report();
         return rd;
       });
-    const wantName = isCoordinateName(req.name);
-    const nameP = wantName ? reverseGeocodeName(lat, lon, extras.signal) : Promise.resolve(req.name!.trim());
+    // Names are untrusted (a shared link, a crowd-edited OSM entry): clean every one of them, and treat a name that
+    // came from a link as a fallback only — the geocoder is asked anyway, so a crafted URL cannot decide what this
+    // place is called. `nameFromLink` is set by src/app/url.ts; see the SEC-01 handoff for the contracts.ts field.
+    const nameFromLink = !!(req as LiveAreaRequest & { nameFromLink?: boolean }).nameFromLink;
+    const given = isCoordinateName(req.name) ? '' : cleanPlaceLabel(req.name);
+    const wantName = !given || nameFromLink;
+    const nameP = wantName ? reverseGeocodeName(lat, lon, extras.signal) : Promise.resolve(given);
 
     const dem = await new Promise<Awaited<typeof demP>>((resolve, reject) => {
       const unreachable = () => {
@@ -187,7 +192,7 @@ export async function loadLiveArea(req: LiveAreaRequest, onProgress?: ProgressFn
       const [img, rd, nm] = await all;
       ctrl.signal.throwIfAborted();
       [imagery, roads] = [img, rd];
-      name = nm || (req.name?.trim() && !wantName ? req.name.trim() : coordinateName(lat, lon));
+      name = cleanPlaceLabel(nm) || given || coordinateName(lat, lon);
       onProgress?.('Carving rivers and building scenario…', 0.93);
       await tick();
       conditioned = await abortable(conditioner.finish(roads?.network ?? null, name, dem.source), ctrl.signal);

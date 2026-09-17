@@ -9,7 +9,7 @@
 import { fromArrayBuffer } from 'geotiff';
 import type { ProgressFn } from '../contracts';
 import { EARTH_RADIUS, type MercatorBBox, mercatorToLonLat, mercatorToTile } from './geo';
-import { ELEVATION_UNREACHABLE_MESSAGE, fetchBytes, isNetworkFailure, mapLimit } from './net';
+import { ELEVATION_UNREACHABLE_MESSAGE, fetchBytes, isNetworkFailure, mapLimit, MB } from './net';
 import { decodePNG } from './png';
 
 export const USGS_3DEP_EXPORT =
@@ -29,6 +29,11 @@ export function usgs3depUrl(m: MercatorBBox, nx: number, ny: number): string {
   return (
     `${USGS_3DEP_EXPORT}?bbox=${f(m.xmin)},${f(m.ymin)},${f(m.xmax)},${f(m.ymax)}` +
     `&bboxSR=3857&imageSR=3857&size=${nx},${ny}&format=tiff&pixelType=F32` +
+    // Ask for the uncompressed TIFF the service already returns by default (verified 2026-09-17: same ETag and body
+    // with and without the parameter). Being explicit means a server-side default change fails the decoder's
+    // compression check and falls back to Terrarium, instead of quietly handing an unbounded inflate hostile bytes —
+    // and it keeps geotiff's WebAssembly LERC/ZSTD decoders (which the CSP blocks) off the path. FINDINGS SEC-03.
+    `&compression=None` +
     `&noDataInterpretation=esriNoDataMatchAny&interpolation=RSP_BilinearInterpolation&f=image`
   );
 }
@@ -40,6 +45,10 @@ export async function decodeTiffF32(buf: ArrayBuffer, nx: number, ny: number): P
   const w = image.getWidth();
   const h = image.getHeight();
   if (w !== nx || h !== ny) throw new Error(`DEM TIFF is ${w}×${h}, expected ${nx}×${ny}`);
+  // 1 = no compression; an absent tag means the same (TIFF default). Anything else would inflate an attacker-chosen
+  // amount of data from a few hundred kilobytes, so refuse it rather than decode it.
+  const compression = Number((image.fileDirectory as { Compression?: number }).Compression ?? 1);
+  if (compression !== 1) throw new Error(`DEM TIFF uses compression ${compression}; only uncompressed DEMs are accepted`);
   const rasters = await image.readRasters({ samples: [0] });
   const band = (rasters as unknown as ArrayLike<number>[])[0];
   const noData = image.getGDALNoData();
@@ -58,6 +67,8 @@ async function fetch3DEPTile(m: MercatorBBox, nx: number, ny: number, signal?: A
     timeoutMs: 45000,
     retries: 1,
     expectType: 'image/',
+    // The largest export we ask for is 2048² F32 = 16 MB; 64 MB leaves room for TIFF overhead and nothing else.
+    maxBytes: 64 * MB,
     signal,
   });
   return decodeTiffF32(buf, nx, ny);
@@ -370,7 +381,8 @@ export async function fetchTerrarium(
     const txw = (((tx0 + x) % nTiles) + nTiles) % nTiles;
     const url = `${TERRARIUM_TILES}/${z}/${txw}/${ty0 + y}.png`;
     try {
-      const png = await decodePNG(await fetchBytes(url, { timeoutMs: 30000, retries: 2, signal }));
+      // A 256² Terrarium PNG is ~100 kB; 4 MB is already absurd for one, and six download in parallel.
+      const png = await decodePNG(await fetchBytes(url, { timeoutMs: 30000, retries: 2, maxBytes: 4 * MB, signal }));
       for (let py = 0; py < Math.min(T, png.height); py++) {
         for (let px = 0; px < Math.min(T, png.width); px++) {
           const s = (py * png.width + px) * 4;

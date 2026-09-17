@@ -14,9 +14,11 @@
  */
 import type { GeoBounds, ProgressFn, RoadClass, RoadEdge, RoadNetwork } from '../contracts';
 import { makeGeoToGrid } from './geo';
-import { fetchBytes, fetchJSON } from './net';
+import { fetchBytes, fetchJSON, MB } from './net';
 
 export const TIGERWEB_TRANSPORT = 'https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/Transportation/MapServer';
+/** OSM API 0.6 map endpoint (the small-area fallback when TIGERweb is unavailable). */
+export const OSM_MAP_API = 'https://api.openstreetmap.org/api/0.6/map';
 export const ROADS_ATTRIBUTION_TIGER = 'Roads: U.S. Census Bureau TIGER/Line';
 export const ROADS_ATTRIBUTION_OSM = 'Roads © OpenStreetMap contributors';
 
@@ -92,13 +94,15 @@ async function fetchTigerLayer(layer: number, b: GeoBounds, signal?: AbortSignal
       `&geometryType=esriGeometryEnvelope&inSR=4326&outSR=4326&spatialRel=esriSpatialRelIntersects` +
       `&outFields=NAME,MTFCC&returnGeometry=true&orderByFields=OBJECTID&resultOffset=${offset}` +
       `&resultRecordCount=${pageSize}&f=geojson`;
+    // A 20 km TIGER page of 20k features reaches tens of MB; past 128 MB the upstream is misbehaving.
     const json = await fetchJSON<{
       features?: GeoJSONFeature[];
       exceededTransferLimit?: boolean;
       properties?: { exceededTransferLimit?: boolean };
-    }>(url, { timeoutMs: 90000, retries: 2, signal });
-    const feats = json.features ?? [];
-    out.push(...feats);
+    }>(url, { timeoutMs: 90000, retries: 2, maxBytes: 128 * MB, signal });
+    const feats = Array.isArray(json.features) ? json.features : [];
+    // Not out.push(...feats): a page of ~300k features overflows the argument list ("Maximum call stack size exceeded").
+    for (const f of feats) out.push(f);
     const more = json.exceededTransferLimit || json.properties?.exceededTransferLimit;
     if (!more && feats.length < pageSize) break;
     if (feats.length === 0) break;
@@ -121,13 +125,15 @@ export async function fetchTigerRoads(b: GeoBounds, onProgress?: ProgressFn, sig
   const roads: RawRoad[] = [];
   for (const feats of results) {
     for (const f of feats) {
+      // One malformed feature must cost one road, not the whole layer (and with it every TIGER road on screen).
+      if (!f || typeof f !== 'object') continue;
       const cls = classifyMTFCC(f.properties?.MTFCC);
       if (!cls || !f.geometry) continue;
-      const name = f.properties?.NAME ?? undefined;
+      const name = typeof f.properties?.NAME === 'string' ? f.properties.NAME : undefined;
       const g = f.geometry;
       const lines: unknown[] = g.type === 'LineString' ? [g.coordinates] : g.type === 'MultiLineString' ? (g.coordinates as unknown[]) : [];
       for (const line of lines) {
-        const coords = (line as number[][]).filter((c) => c.length >= 2).map((c) => [c[0], c[1]] as [number, number]);
+        const coords = toLonLatPath(line);
         if (coords.length >= 2) roads.push({ coords, cls, name: name || undefined });
       }
     }
@@ -135,11 +141,39 @@ export async function fetchTigerRoads(b: GeoBounds, onProgress?: ProgressFn, sig
   return roads;
 }
 
-const XML_ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" };
+/**
+ * GeoJSON coordinates → [lon, lat] pairs, keeping only finite in-range vertices. Upstream data has carried nulls,
+ * strings and 1e999 (which JSON.parse turns into Infinity); a non-finite vertex would propagate NaN through the whole
+ * projection and routing graph, and a null one used to throw and drop the layer. FINDINGS SEC-10.
+ */
+function toLonLatPath(line: unknown): Array<[number, number]> {
+  if (!Array.isArray(line)) return [];
+  const out: Array<[number, number]> = [];
+  for (const c of line) {
+    if (!Array.isArray(c) || c.length < 2) continue;
+    const lon = Number(c[0]);
+    const lat = Number(c[1]);
+    if (Number.isFinite(lon) && Number.isFinite(lat) && Math.abs(lon) <= 180 && Math.abs(lat) <= 90) out.push([lon, lat]);
+  }
+  return out;
+}
+
+/** Map, not a plain object: `&constructor;` or `&__proto__;` must stay literal text, not reach Object.prototype. */
+const XML_ENTITIES = new Map<string, string>([
+  ['amp', '&'],
+  ['lt', '<'],
+  ['gt', '>'],
+  ['quot', '"'],
+  ['apos', "'"],
+]);
 function decodeXml(s: string): string {
   return s.replace(/&(#x?[0-9a-fA-F]+|\w+);/g, (m, e: string) => {
-    if (e[0] === '#') return String.fromCodePoint(e[1] === 'x' ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10));
-    return XML_ENTITIES[e] ?? m;
+    if (e[0] === '#') {
+      // Out-of-range or unparseable code points stay literal instead of throwing away the whole OSM response.
+      const cp = e[1] === 'x' ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10);
+      return cp >= 0 && cp <= 0x10ffff ? String.fromCodePoint(cp) : m;
+    }
+    return XML_ENTITIES.get(e) ?? m;
   });
 }
 function attr(tag: string, name: string): string | undefined {
@@ -152,14 +186,16 @@ export function parseOSMXml(xml: string): RawRoad[] {
   const nodes = new Map<string, [number, number]>();
   for (const m of xml.matchAll(/<node\b[^>]*>/g)) {
     const id = attr(m[0], 'id');
-    const lat = attr(m[0], 'lat');
-    const lon = attr(m[0], 'lon');
-    if (id && lat && lon) nodes.set(id, [Number(lon), Number(lat)]);
+    const x = Number(attr(m[0], 'lon'));
+    const y = Number(attr(m[0], 'lat'));
+    // A node with a missing, non-numeric or out-of-range position is skipped, not stored as NaN.
+    if (id && Number.isFinite(x) && Number.isFinite(y) && Math.abs(x) <= 180 && Math.abs(y) <= 90) nodes.set(id, [x, y]);
   }
   const roads: RawRoad[] = [];
   for (const m of xml.matchAll(/<way\b[^>]*>([\s\S]*?)<\/way>/g)) {
     const body = m[1];
-    const tags: Record<string, string> = {};
+    // Null prototype: a `<tag k="__proto__">` (or "constructor") must not change what `tags.highway` resolves to.
+    const tags: Record<string, string> = Object.create(null) as Record<string, string>;
     for (const t of body.matchAll(/<tag\b[^>]*\/?>/g)) {
       const k = attr(t[0], 'k');
       const v = attr(t[0], 'v');
@@ -182,8 +218,8 @@ export async function fetchOSMRoads(b: GeoBounds, onProgress?: ProgressFn, signa
   const area = (b.east - b.west) * (b.north - b.south);
   if (area > 0.02) throw new Error('Area too large for the OSM API fallback');
   onProgress?.('Requesting roads (OpenStreetMap)…', 0);
-  const url = `https://api.openstreetmap.org/api/0.6/map?bbox=${b.west},${b.south},${b.east},${b.north}`;
-  const buf = await fetchBytes(url, { timeoutMs: 90000, retries: 1, signal });
+  const url = `${OSM_MAP_API}?bbox=${b.west},${b.south},${b.east},${b.north}`;
+  const buf = await fetchBytes(url, { timeoutMs: 90000, retries: 1, maxBytes: 128 * MB, signal });
   onProgress?.('Roads received', 1);
   return parseOSMXml(new TextDecoder().decode(buf));
 }
@@ -324,6 +360,9 @@ export function buildRoadNetwork(
     const flat: number[] = [];
     for (const [lon, lat] of r.coords) {
       const [gx, gy] = toGrid(lon, lat);
+      // A vertex that does not project to a finite grid point is dropped; its neighbours simply join up. Letting NaN
+      // through would poison clipping, snapping and every route computed from the graph. FINDINGS SEC-10.
+      if (!Number.isFinite(gx) || !Number.isFinite(gy)) continue;
       flat.push(gx, gy);
     }
     for (const piece of clipPolyline(flat, EPS, EPS, nx - EPS, ny - EPS)) {

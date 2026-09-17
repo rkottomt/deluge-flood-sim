@@ -5,10 +5,17 @@
  */
 import type { ProgressFn } from '../contracts';
 import type { MercatorBBox } from './geo';
-import { fetchBytes } from './net';
+import { fetchBytes, MB } from './net';
 
 export const ESRI_IMAGERY_EXPORT = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/export';
 export const IMAGERY_ATTRIBUTION = 'Imagery © Esri, Vantor, Earthstar Geographics, and the GIS User Community';
+/**
+ * Leaflet tile templates for the location picker's map. They live here, next to the other Esri endpoints, so the
+ * CSP/endpoint sync test (tests/data/csp.test.ts) can import them without pulling in Leaflet and its stylesheet.
+ */
+export const ESRI_TILE_TEMPLATE = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
+export const ESRI_LABELS_TILE_TEMPLATE =
+  'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}';
 /**
  * USDA NAIP orthoimagery (≈ 0.6 m, US only, public domain) from The National Map. Esri's World Imagery item states the
  * layer "is not intended to be used to export tiles for offline" use outside ArcGIS apps, so this is the source to
@@ -51,6 +58,8 @@ export async function fetchImageryBytes(
     timeoutMs: size > 2048 ? 180000 : 60000,
     retries: 2,
     expectType: 'image/',
+    // A JPEG export of this size is a few MB; the cap only stops an upstream from streaming forever.
+    maxBytes: size > 2048 ? 256 * MB : 64 * MB,
     signal,
   });
   onProgress?.('Imagery received', 1);
