@@ -21,6 +21,8 @@ npm run demo -- --port 5000   # if 4173 is busy
 npm run dev                   # Vite dev server
 ```
 
+Presenting to judges? [DEMO.md](DEMO.md) has the pre-demo checklist, pitch scripts and a Q&A crib sheet.
+
 `npm run build` writes a static site to `dist/` with relative URLs, so any static host works, including under a
 sub-path (`.github/workflows/pages.yml` publishes it to GitHub Pages once the repository is public and Pages is set to
 "GitHub Actions"). A hosted copy still needs WebGPU; keep `npm run demo` as the offline path.
