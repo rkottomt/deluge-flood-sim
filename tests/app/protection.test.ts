@@ -5,7 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { RoadNetwork } from '../../src/contracts';
-import { ProtectionAnalyzer, type ProtectionInput } from '../../src/app/protection';
+import { ProtectionAnalyzer, ProtectionController, type ProtectionInput } from '../../src/app/protection';
 
 /**
  * 64×40 valley: a river (rows 30–39, bed 0, surface 3 m) along the south, a flat floodplain (rows 12–29, ground 1 m)
@@ -125,3 +125,33 @@ test('protection: reuses its buffers across runs and grid sizes', () => {
   v.set(10, 28, 'barrier', 4);
   assert.equal(a.analyze(v).cells, first);
 });
+
+test('protection controller: runs at most once per interval, publishes null without walls, confirms a collapse', () => {
+  const published: Array<number | null> = [];
+  const c = new ProtectionController({ publish: (r) => published.push(r ? r.cells : null) }, 1000);
+  const v = valley();
+  wallRow(v, 28, 0, 63, 4);
+  c.onSnapshot();
+  c.tick(0, () => v);
+  c.onSnapshot();
+  c.tick(500, () => v); // too soon
+  assert.deepEqual(published, [16 * 64]);
+  // A gap opens (e.g. a surge caught mid-readback): held once, published when the next run confirms it.
+  c.onSnapshot();
+  c.tick(1000, () => ({ ...v, barrier: withGap(v.barrier) }));
+  assert.deepEqual(published, [16 * 64], 'collapse held for confirmation');
+  c.tick(1500, () => ({ ...v, barrier: withGap(v.barrier) }));
+  assert.deepEqual(published, [16 * 64, 0]);
+  // Walls erased: null.
+  c.onSnapshot();
+  c.tick(2600, () => ({ ...v, barrier: new Float32Array(v.barrier.length) }));
+  assert.deepEqual(published, [16 * 64, 0, null]);
+});
+
+/** Same number of wall cells, but one moved off the line: a gap at column 10 and a stray cell inland. */
+function withGap(barrier: Float32Array): Float32Array {
+  const b = barrier.slice();
+  b[28 * 64 + 10] = 0;
+  b[15 * 64 + 40] = 4;
+  return b;
+}

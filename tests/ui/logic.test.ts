@@ -57,6 +57,28 @@ test('wall scan counts overtopped cells and a percentile height (not one deep ou
   assert.notEqual(scanWalls(ground, barrier, null, null).signature, s2.signature, 'erasing a wall changes the signature');
 });
 
+test('wall scan with the grid width judges only crest cells, not the sloping rim beside the water', () => {
+  // 10×5 grid: a 3-row wall (rows 1–3) whose outer rows taper (0.8 m) around a 4 m crest (row 2); water on row 1.
+  const nx = 10;
+  const ground = new Float32Array(50).fill(220);
+  const barrier = new Float32Array(50);
+  const depth = new Float32Array(50);
+  for (let i = 0; i < nx; i++) {
+    barrier[1 * nx + i] = 0.8;
+    barrier[2 * nx + i] = 4;
+    barrier[3 * nx + i] = 0.8;
+    depth[0 * nx + i] = 5;
+    depth[1 * nx + i] = 4.2; // water over the rim only
+  }
+  const rim = scanWalls(ground, barrier, depth, 223, nx);
+  assert.equal(rim.cells, nx);
+  assert.equal(rim.overtopped, 0);
+  assert.equal(rim.belowLevel, 0);
+  for (let i = 0; i < nx; i++) depth[2 * nx + i] = 0.2; // now over the crest too
+  assert.equal(scanWalls(ground, barrier, depth, 225, nx).overtopped, nx);
+  assert.equal(scanWalls(ground, barrier, depth, 225, nx).belowLevel, nx);
+});
+
 test('achieved speed is simulated time over wall time, robust to readback jitter', () => {
   const est = new SpeedEstimator(3000, 900, 1500);
   assert.equal(est.value(), null);

@@ -12,6 +12,7 @@
  */
 import type {
   AppState,
+  FloodSolver,
   OverlayState,
   PickResult,
   Shelter,
@@ -23,8 +24,8 @@ import type {
 } from '../contracts';
 import { gridToGeo } from '../data/geo';
 import { TOOL_BY_ID } from './toolDefs';
-import { bridgeFor, type HoverInfo } from './bridge';
-import { checkWall, scanWalls, stageSurface, suggestedWallHeight, wallShare, WALL_ALARM_CELLS } from './wallCheck';
+import { bridgeFor, type HoverInfo, type WallSegment } from './bridge';
+import { checkWall, scanWalls, stageSurface, suggestedWallHeight, wallShare, WALL_ALARM_CELLS, WALL_MAX, WALL_MIN } from './wallCheck';
 import { formatStageFt } from './format';
 import { stageFt } from './scales';
 
@@ -41,6 +42,9 @@ const STAGE_SETTLE_MS = 700;
 const RING_REMOVE: [number, number, number] = [1.0, 0.36, 0.38];
 const RING_LIMIT: [number, number, number] = [0.58, 0.62, 0.7];
 const RING_WALL_LOW: [number, number, number] = [1.0, 0.3, 0.32];
+/** Ring that follows the head of a wall being raised by buildWalls (the one-click levee), and how long it lingers. */
+const RING_BUILD: [number, number, number] = [1.0, 0.78, 0.32];
+const BUILD_RING_MS = 700;
 /** Click-to-remove distance as a fraction of the domain's larger side. */
 export const REMOVE_FRACTION = 0.03;
 /** Pour / pump rate at the brush center, meters of depth per real second. */
@@ -165,8 +169,11 @@ export function createToolController(canvas: HTMLCanvasElement, deps: ToolContro
         return null;
       }
     },
+    buildWalls: (segments: WallSegment[], radius?: number) => buildWalls(segments, radius),
   };
   bridge.scene = scene;
+  /** Head of a wall being raised by buildWalls: a ring follows it (the renderer also re-scans walls under it at once). */
+  let buildHead: { gx: number; gy: number; until: number } | null = null;
   /** Latest wall check at the cursor (drives the ring colour); null when not applicable. */
   let wallLow = false;
 
@@ -289,6 +296,29 @@ export function createToolController(canvas: HTMLCanvasElement, deps: ToolContro
       }
     }
     lastWallEnd = { gx: simple[simple.length - 2], gy: simple[simple.length - 1] };
+    armWallScan(solver);
+    bridge.wallDrawn.emit();
+  }
+
+  /** Walls raised by code (e.g. the one-click demo levee), watched exactly like drawn ones. */
+  function buildWalls(segments: WallSegment[], radiusCells?: number) {
+    const solver = deps.getSolver();
+    const g = gridInfo();
+    if (!solver || !g || !segments.length) return;
+    const radius = radiusCells ?? wallRadiusCells(state(), g.cellSize);
+    for (const sg of segments) {
+      if (![sg.ax, sg.ay, sg.bx, sg.by, sg.height].every(Number.isFinite)) continue;
+      const height = Math.min(WALL_MAX, Math.max(WALL_MIN, sg.height));
+      solver.applyBrush({ kind: 'wall', ax: sg.ax, ay: sg.ay, bx: sg.bx, by: sg.by, radius, height });
+    }
+    const last = segments[segments.length - 1];
+    buildHead = { gx: last.bx, gy: last.by, until: now() + BUILD_RING_MS };
+    transientDirty = true;
+    armWallScan(solver);
+    bridge.wallDrawn.emit();
+  }
+
+  function armWallScan(solver: FloodSolver) {
     wallScan.armed = true;
     wallScan.nextAt = 0;
     // A wall raised under standing water briefly carries that water on top; judge overtopping once it has drained.
@@ -296,7 +326,6 @@ export function createToolController(canvas: HTMLCanvasElement, deps: ToolContro
     // …and check the new wall against the river stage right away.
     wallScan.stageDirty = true;
     wallScan.stageChangedAt = 0;
-    bridge.wallDrawn.emit();
   }
 
   function extendWall(pts: number[], hit: PickResult, cellSize: number) {
@@ -451,7 +480,7 @@ export function createToolController(canvas: HTMLCanvasElement, deps: ToolContro
     const ctrl = s.scenario?.stage ?? null;
     const level = stageSurface(ctrl, s.stageOffset);
     const depth = snap && snap.nx === solver.nx && snap.ny === solver.ny ? snap.depth : null;
-    const scan = scanWalls(ground, barrier, depth, level);
+    const scan = scanWalls(ground, barrier, depth, level, solver.nx);
     if (scan.cells === 0) {
       wallScan.armed = false;
       bridge.setWallStatus(null);
@@ -735,6 +764,11 @@ export function createToolController(canvas: HTMLCanvasElement, deps: ToolContro
       bridge.setWallStatus(null);
     }
 
+    if (buildHead && now() > buildHead.until) {
+      buildHead = null;
+      transientDirty = true;
+    }
+
     // Hover pick for the cursor ring / probe / held brushes: at most once per frame, and only when something
     // that affects it changed (no wasted CPU on a fanless laptop while the cursor rests).
     const wantsHover = tool !== 'orbit';
@@ -815,7 +849,9 @@ export function createToolController(canvas: HTMLCanvasElement, deps: ToolContro
       wallPreview = { pts: new Float32Array(pts), height: s.wallHeight, radius: wallRadiusCells(s, g.cellSize) };
     }
     const def = TOOL_BY_ID[s.tool];
-    if (g && hover && def && s.tool !== 'orbit') {
+    if (g && buildHead) {
+      cursor = { gx: buildHead.gx, gy: buildHead.gy, radius: Math.max(2, 25 / g.cellSize), color: RING_BUILD };
+    } else if (g && hover && def && s.tool !== 'orbit') {
       let radius: number;
       let color: [number, number, number] = def.ringColor ?? [1, 1, 1];
       switch (s.tool) {

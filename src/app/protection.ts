@@ -60,6 +60,8 @@ export const PROTECT_DEPTH = 0.3;
 export const PROTECT_BIG_WATER_M2 = 50_000;
 /** Cells from a wall cell within which water counts as pressing against it. */
 const SEED_RING = 2;
+/** Seeds stand at most this far above the 95th percentile of all seeds (see analyze), m. */
+const SEED_LEVEL_SLACK = 0.15;
 
 const EMPTY: ProtectionResult = { wallCells: 0, cells: 0, areaM2: 0, roadMeters: 0, roadEdges: 0, level: null, mask: null, bounds: null };
 
@@ -195,6 +197,10 @@ export class ProtectionAnalyzer {
     }
     if (!seedK.length) return { ...EMPTY, wallCells };
     const order = seedK.map((_, q) => q).sort((a, b) => seedL[b] - seedL[a]);
+    // A few cells of water piled against a wall by the flow (run-up where a fast current meets it) are not the level
+    // the wall holds back: cap every seed at the 95th percentile of the seeds plus a little.
+    const cap = seedL[order[Math.floor(order.length * 0.05)]] + SEED_LEVEL_SLACK;
+    for (const q of order) if (seedL[q] > cap) seedL[q] = cap;
 
     /** Spread each seed's level over land whose bed lies below it (highest first). Visited cells go to `list`. */
     const spread = (lvl: Float32Array, list: IntList, withWalls: boolean) => {
@@ -298,6 +304,8 @@ export class ProtectionController {
   private pending = false;
   private lastRun = -Infinity;
   private published = false;
+  /** The last run's collapse is waiting for confirmation. */
+  private held = false;
   /** Milliseconds the last analysis took (diagnostics). */
   lastMs = 0;
   last: ProtectionResult | null = null;
@@ -311,6 +319,7 @@ export class ProtectionController {
     this.pending = false;
     this.lastRun = -Infinity;
     this.last = null;
+    this.held = false;
     if (this.published) {
       this.published = false;
       this.sink.publish(null);
@@ -336,14 +345,26 @@ export class ProtectionController {
     const t0 = performance.now();
     const result = this.analyzer.analyze(data);
     this.lastMs = performance.now() - t0;
-    this.last = result;
     if (result.wallCells === 0) {
+      this.last = result;
+      this.held = false;
       if (this.published) {
         this.published = false;
         this.sink.publish(null);
       }
       return;
     }
+    // A sudden collapse of the protected area is confirmed by the next run (half an interval later) before it is shown:
+    // one readback caught mid-surge should not make the green land blink off.
+    const prev = this.last;
+    if (!this.held && prev && prev.areaM2 > 0 && result.areaM2 < prev.areaM2 * 0.5 && result.wallCells === prev.wallCells) {
+      this.held = true;
+      this.pending = true;
+      this.lastRun = now - this.intervalMs / 2;
+      return;
+    }
+    this.held = false;
+    this.last = result;
     this.published = true;
     this.sink.publish(result);
   }

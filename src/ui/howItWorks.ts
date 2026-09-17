@@ -1,5 +1,5 @@
 /**
- * "How it works" — the judge explainer. Plain language first, then the shallow-water equations typeset
+ * "How it works" — the explainer for visitors. Plain language first, then the shallow-water equations typeset
  * in HTML/CSS, the four stability ingredients, the per-substep GPU pipeline diagram (two compute passes, as
  * dispatched by src/sim/Solver.ts), data sources, and the "Break it" stability-demo toggle.
  *
@@ -114,6 +114,11 @@ export function createHowItWorks(ctx: UIContext): Modal {
       ' cells, about ',
       liveUpdates,
       ' cell updates every second, in a browser tab.',
+    ),
+    h(
+      'p',
+      null,
+      'Raising the river is a time-lapse: in 1936 the Point rose about 21 ft over some 30 hours; Deluge raises it at about 10 ft per simulated minute so you can watch the whole crest in seconds. The flood that follows is solved at its real speed.',
     ),
   );
   bind(
@@ -361,6 +366,40 @@ export function createHowItWorks(ctx: UIContext): Modal {
       dataRow('gauge', 'NOAA National Weather Service', 'Official flood stages and historic crests for river gauges, marked on the river-stage slider.'),
       dataRow('search', 'OpenStreetMap Nominatim', 'Place search in the location picker (© OpenStreetMap contributors).'),
       dataRow('book', 'Method', 'Bates, Horritt & Fewtrell (2010), J. Hydrology · de Almeida, Bates, Freer & Souvignet (2012), Water Resources Research.'),
+    ),
+    h('h4', { class: 'dl-nws-title' }, 'Checked against the National Weather Service'),
+    h(
+      'p',
+      { class: 'dl-nws-lead' },
+      'The NWS lists what floods at each stage of the Pittsburgh Point gauge. Holding each stage for 15 simulated minutes on bare-earth elevation:',
+    ),
+    h(
+      'div',
+      { class: 'dl-nws-wrap' },
+      h(
+        'table',
+        { class: 'dl-nws' },
+        h('thead', null, h('tr', null, h('th', null, 'NWS impact'), h('th', null, 'NWS'), h('th', null, 'Deluge'))),
+        h(
+          'tbody',
+          null,
+          ...(
+            [
+              ['Point State Park flooded to the Portal Bridge', '30 ft', 'wet at 31 ft', 'ok'],
+              ['PNC Park field flooded', '31 ft', '1 m deep at 35 ft', 'ok'],
+              ['Federal Street at PNC Park flooded', '40 ft', 'wet at 40 ft', 'ok'],
+              ['Up to 15 ft of water in the Golden Triangle', '46 ft', '15.7 ft at the Point', 'ok'],
+              ['Acrisure Stadium field; Station Square tracks', '30–31 ft', 'wet only at 40 ft', 'miss'],
+              ['Wood Street T; Parkway “bathtub”', '28; 25 ft', 'wet at 46 ft; dry', 'miss'],
+            ] as const
+          ).map(([impact, nws, sim, kind]) => h('tr', { 'data-kind': kind }, h('td', null, impact), h('td', null, nws), h('td', null, sim))),
+        ),
+      ),
+    ),
+    h(
+      'p',
+      { class: 'dl-nws-note' },
+      'The river surface at the Point stays within 3 cm of the gauge at every stage. The misses flood through what bare-earth elevation does not contain: storm drains, underpasses, depressed roadways and underground stations.',
     ),
   );
 

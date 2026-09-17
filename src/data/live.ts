@@ -12,7 +12,7 @@ import { isLikelyUS, squareDomain } from './geo';
 import { fetchImagery, IMAGERY_ATTRIBUTION } from './imagery';
 import { detectLiveWater, finishLiveTerrain, type LiveTerrainResult } from './liveTerrain';
 import type { LiveWorkerRequest, LiveWorkerResponse } from './liveWorker';
-import { ELEVATION_UNREACHABLE_MESSAGE } from './net';
+import { ELEVATION_UNREACHABLE_MESSAGE, probeReachable } from './net';
 import { coordinateName, isCoordinateName, reverseGeocodeName } from './placeName';
 import { fetchRoadNetwork } from './roads';
 
@@ -25,6 +25,12 @@ const tick = () => new Promise<void>((r) => setTimeout(r, 0));
  * fetchers already fail a stalled download after 20 s without data, but retries and fallbacks add up.
  */
 export const LIVE_DEM_DEADLINE_MS = 90_000;
+/**
+ * While no elevation has arrived, check this often (first check after this long) that the data hosts answer at all.
+ * Dead venue wifi often leaves requests hanging rather than failing; a slow-but-working export (the server renders
+ * before sending headers) still answers the probe, so only an unreachable network ends the load early.
+ */
+export const LIVE_DEM_PROBE_MS = 9_000;
 /**
  * Once the elevation is ready, imagery, roads and the place name get this long to finish; the area then loads without
  * whatever is missing (TerrainData.imagery / roads null) instead of waiting on a slow service. Esri renders a 2048²
@@ -123,13 +129,33 @@ export async function loadLiveArea(req: LiveAreaRequest, onProgress?: ProgressFn
     const nameP = wantName ? reverseGeocodeName(lat, lon, extras.signal) : Promise.resolve(req.name!.trim());
 
     const dem = await new Promise<Awaited<typeof demP>>((resolve, reject) => {
-      timers.push(
-        setTimeout(() => {
-          ctrl.abort(new Error(ELEVATION_UNREACHABLE_MESSAGE));
-          reject(new Error(ELEVATION_UNREACHABLE_MESSAGE));
-        }, LIVE_DEM_DEADLINE_MS),
+      const unreachable = () => {
+        ctrl.abort(new Error(ELEVATION_UNREACHABLE_MESSAGE));
+        reject(new Error(ELEVATION_UNREACHABLE_MESSAGE));
+      };
+      timers.push(setTimeout(unreachable, LIVE_DEM_DEADLINE_MS));
+      let settled = false;
+      const probe = () => {
+        if (settled || ctrl.signal.aborted) return;
+        void probeReachable().then((ok) => {
+          if (settled || ctrl.signal.aborted) return;
+          if (!ok) {
+            console.warn(`[data] no elevation after ${LIVE_DEM_PROBE_MS / 1000}+ s and the data hosts do not answer: giving up`);
+            unreachable();
+          } else timers.push(setTimeout(probe, LIVE_DEM_PROBE_MS));
+        });
+      };
+      timers.push(setTimeout(probe, LIVE_DEM_PROBE_MS));
+      demP.then(
+        (v) => {
+          settled = true;
+          resolve(v);
+        },
+        (e) => {
+          settled = true;
+          reject(e);
+        },
       );
-      demP.then(resolve, reject);
     });
     ctrl.signal.throwIfAborted();
     progress.dem = 1;

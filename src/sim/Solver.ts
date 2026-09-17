@@ -25,12 +25,13 @@
  *            While the budget cannot bind (it allows ≥ 2× maxSubstepsPerFrame) it is re-measured only every
  *            PROBE_IDLE_MS instead of every frame.
  *
- * ── Why it stays stable (the short version for judges) ──────────────────────────────────────────────────
- *   1. CFL-adaptive timestep  dt = Cr·dx / (√2·(√(g·h_max) + |u|_max)) — the 2-D Courant condition of the
+ * ── Why it stays stable (the short version) ──────────────────────────────────────────────────────────────
+ *   1. CFL-adaptive timestep  dt = Cr·dx / (√2·max_cells(√(g·h) + |u|)) — the 2-D Courant condition of the
  *      staggered scheme (derivation at computeDt) — from a lagged readback inflated by safety margins and by
  *      what we know is coming (stage sources, water brush, released bores, rain on dry ground).
  *   2. Semi-implicit friction: division instead of subtraction, so thin films cannot overshoot.
- *   3. Positivity-preserving donor-cell flux limiter: depth can never go negative, mass is exactly conserved.
+ *   3. Positivity-preserving donor-cell flux limiter: depth can never go negative; every change to h, Float32
+ *      rounding included, is booked, so the mass balance is exact.
  *   4. Well-balanced face depth/slope: a lake at rest on rough terrain stays at rest.
  *   (+ de Almeida θ-smoothing and a velocity/Froude cap as safety nets.)
  *   'naive' mode removes 2–4 and the margins and lets C > 1 — it blows up, which is the point of the demo.
@@ -836,19 +837,19 @@ export class GpuFloodSolver implements FloodSolver {
   /**
    * The timestep the solver would use right now (s):
    *
-   *     dt = Cr · dx / ( √2 · (√(g·h_max) + |u|_max) )
+   *     dt = Cr · dx / ( √2 · max over cells (√(g·h) + |u|) )
    *
    * WHY √2. Our scheme updates q from the old η, then η from the NEW q (a staggered forward–backward scheme).
    * A von Neumann analysis for gravity waves gives amplification factors λ with λ² − Tλ + s = 0, where
    * s = θ + (1−θ)·cos(k·dx) is the smoothing factor and T = 1 + s − 4·C₁²·(sin²(kx·dx/2) + sin²(ky·dx/2)),
    * C₁ = √(gh)·dt/dx. The worst mode is the 2-D checkerboard (kx = ky = π/dx): stability needs
    * 8·C₁² ≤ 2(1 + s) = 4θ, i.e. C₁ ≤ √(θ/2). Defining the 2-D Courant number Cr = √2·C₁ makes the limit
-   * "Cr ≤ 1" for the plain scheme and "Cr ≤ √θ" with θ-smoothing — the numbers the UI shows and judges read.
+   * "Cr ≤ 1" for the plain scheme and "Cr ≤ √θ" with θ-smoothing — the numbers the UI shows.
    * (A 1-D formula, dt = C·dx/√(gh) with C = 0.7, sits right ON the 2-D limit: deep rivers then develop
    * checkerboard sloshing held back only by the velocity cap. tests/sim/stability.test.ts guards this.)
    *
-   * h_max and |u|_max come from the latest asynchronous readback, i.e. they are up to a few hundred ms stale.
-   * Robust mode inflates them by safety margins and by what we KNOW is coming (stage sources, water brush, bores
+   * The per-cell maximum comes from the latest asynchronous readback, i.e. it is up to a few hundred ms stale.
+   * Robust mode inflates it by safety margins and by what we KNOW is coming (stage sources, water brush, bores
    * released by sources, rain running off dry ground) and clamps Cr to robustCflMax. Naive mode uses the raw depth, no speed term, and trusts the user's Cr (the demo
    * sets 1.8).
    */

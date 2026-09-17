@@ -48,10 +48,13 @@ export function createHud(ctx: UIContext, achievedSpeed: () => number | null): H
   const area = stat('Flooded land', 'Land that was dry at reset and is now under ≥ 30 cm of water', true);
   const volume = stat('Water volume', 'Total water stored on the map', true);
   const depth = stat('Max depth', 'Deepest water anywhere on the map');
-  const speed = stat('Max speed', 'Fastest flow anywhere on the map');
+  const speed = stat(
+    'Max speed',
+    'Fastest flow anywhere on the map. Peaks at 4–6 m/s while a risen river spills onto the floodplain and fills low basins; ~1–1.5 m/s once they have filled.',
+  );
   const mass = stat(
     'Mass error',
-    'Mass-balance error: |V − (V₀ + in − out)| ÷ the most water held since reset. Every rain, river, boundary and brush change is booked per cell on the GPU and summed in Float64 — no water is created or destroyed.',
+    'Mass-balance error: |V − (V₀ + in − out)| ÷ the most water held since reset. Every rain, river, boundary and brush change (and the GPU’s own Float32 rounding) is booked per cell and summed in Float64 — no water is created or destroyed.',
   );
   const simSpeed = stat('Sim speed', 'Simulated seconds per real second actually achieved');
 

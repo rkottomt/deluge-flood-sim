@@ -5,7 +5,7 @@
 import type { AppState, ToolId } from '../contracts';
 import { h, setText, toggleClass, setAttr, type UIContext } from './dom';
 import { bridgeFor, type HoverInfo } from './bridge';
-import { checkWall, stageSurface, wallPreviewText, wallVerdict } from './wallCheck';
+import { checkWall, keptStatus, stageSurface, wallPreviewText, wallVerdict } from './wallCheck';
 import { MAX_SOURCES, MAX_STORMS } from './tools';
 import { icon, type IconName } from './icons';
 import { slider, kbd } from './controls';
@@ -145,7 +145,9 @@ export function createToolbar(ctx: UIContext): { toolbar: HTMLElement; options: 
     if (verdict) {
       wallCheck.dataset.state = verdict.state === 'wait' ? 'idle' : verdict.state;
       setCheckIcon(verdict.state === 'wait' ? 'wall' : verdict.state);
-      setText(checkText, verdict.text);
+      // A wall that holds: say what it saves (the protected-land analysis, src/app/protection.ts).
+      const kept = verdict.state !== 'low' ? keptStatus(bridge.protection) : null;
+      setText(checkText, kept ? `Your wall is holding — ${kept.text.replace(/^Walls keep/, 'it keeps')}` : verdict.text);
       suggested = verdict.fix ?? 0;
       checkFix.hidden = !verdict.fix;
       if (verdict.fix) setText(checkFix, `Use ${formatMeters(verdict.fix, 1)} walls`);
@@ -166,6 +168,7 @@ export function createToolbar(ctx: UIContext): { toolbar: HTMLElement; options: 
   const bridge = bridgeFor(store);
   ctx.own(bridge.hoverChanged.on((hov) => store.get().tool === 'wall' && renderWallCheck(hov, store.get())));
   ctx.own(bridge.wallStatusChanged.on(() => store.get().tool === 'wall' && renderWallCheck(bridge.hover, store.get())));
+  ctx.own(bridge.protectionChanged.on(() => store.get().tool === 'wall' && renderWallCheck(bridge.hover, store.get())));
   bind(
     (s) => `${s.tool}|${s.wallHeight}|${s.stageOffset}|${s.scenario === null}`,
     (_k, s) => s.tool === 'wall' && renderWallCheck(bridge.hover, s),

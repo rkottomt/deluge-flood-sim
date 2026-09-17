@@ -259,7 +259,11 @@ export interface SimStats {
   wetArea: number;
   /** Area with h > 0.3 m that was dry (h < 0.01) at reset — i.e. newly flooded land, m². */
   floodedArea: number;
-  /** Cumulative volume added by rain + inflow + stage sources + brush, m³. */
+  /**
+   * Cumulative volume added by rain + inflow + stage sources + brush, m³. It also carries the solver's signed Float32
+   * rounding correction (≲ 1e-6 of the stored volume), so it can be slightly non-monotonic, and slightly non-zero in a
+   * walled domain without forcing (volumeOut stays exactly 0 there).
+   */
   volumeIn: number;
   /** Cumulative volume removed by open boundaries + infiltration + stage sources + brush, m³. */
   volumeOut: number;

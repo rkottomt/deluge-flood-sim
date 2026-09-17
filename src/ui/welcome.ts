@@ -1,24 +1,28 @@
 /**
- * "Try it" strip for walk-up users (judges get no instructions). Once the first terrain is ready it offers the
+ * "Try it" strip for first-time visitors (who get no instructions). Once the first terrain is ready it offers the
  * demo moments as one-click actions, derived from the loaded scenario:
  *
- *   1 raise the rivers to the record crest (or play the flood fast)   2 build a levee   3 plan an evacuation
+ *   1 raise the rivers to the record crest (or play the flood fast)   2 plan an evacuation   3 build a levee
  *   4 hurricane rain   5 break the solver
  *
- * Each step shows a check once done, and the ones with an obvious inverse (rivers, rain, solver) toggle back.
- * The strip stays available while the user explores (after the first click its heading folds away to keep the
- * map clear) and goes away for good only when closed.
+ * Evacuate comes before the levee: building the demo levee replays the rise, so a planned route visibly re-plans as
+ * streets flood. Each step shows a check once done, and the ones with an obvious inverse (rivers, levee, rain,
+ * solver) toggle back. Under the buttons a status line follows the river while it rises and says how much land the
+ * walls keep dry. The strip stays available while the user explores (after the first click its heading folds away
+ * to keep the map clear) and goes away for good only when closed.
  */
-import type { AppState, CameraPose, StageControl, Store } from '../contracts';
+import type { AppState, CameraPose, DemoLevee, StageControl, Store } from '../contracts';
 import { h, setText, toggleClass, setAttr, type UIContext } from './dom';
 import { icon, type IconName } from './icons';
 import { selectTool } from './toolDefs';
-import { clamp, offsetForFt, stageRangeFt } from './scales';
+import { clamp, M_PER_FT, offsetForFt, stageFt, stageRangeFt } from './scales';
 import { fmtNum } from './format';
 import { bridgeFor, postNotice } from './bridge';
 import { suggestEvacStarts } from './evacSuggest';
 import { startBreakDemo, stopBreakDemo } from './stabilityDemo';
-import { raiseStepText } from './stageText';
+import { formatStage, hasGauge, raiseStepText } from './stageText';
+import { leveeLength, planLevee, raiseAlong } from './levee';
+import { keptStatus } from './wallCheck';
 
 /**
  * Sim speed used by the quick actions, so a flood visibly develops within seconds. Most GPUs can't reach it on a
@@ -27,10 +31,19 @@ import { raiseStepText } from './stageText';
 export const QUICK_TIME_SCALE = 300;
 /** "Hurricane rain" rate, mm/hr (Hurricane Harvey's peak hourly rates). */
 export const HURRICANE_RAIN = 100;
+/** Land kept dry that earns a one-time "your walls keep … dry" notice, m² (~5 acres). */
+const ANNOUNCE_M2 = 20_000;
+/** Rise the raise step aims for on a live area's gauge-less water-level control, m. */
+export const LIVE_RAISE_M = 3;
 
 /** The most dramatic stage the slider can reach: the highest in-range historic mark, else the top of the range. */
 export function dramaticStage(ctrl: StageControl): { ft: number; label: string } {
   const range = stageRangeFt(ctrl);
+  // Without a gauge there is no historic crest: a moderate rise (the top of the range drowns most of a flat city).
+  if (!hasGauge(ctrl)) {
+    const ft = Math.min(range.max, range.min + LIVE_RAISE_M / M_PER_FT);
+    return { ft, label: `+${fmtNum((ft - range.min) * M_PER_FT, 0)} m` };
+  }
   const marks = (ctrl.marks ?? []).filter((m) => m.ft <= range.max + 0.01 && m.ft >= range.min).sort((a, b) => b.ft - a.ft);
   if (marks.length) return { ft: marks[0].ft, label: marks[0].label };
   return { ft: range.max, label: `${fmtNum(range.max, 0)} ft` };
@@ -67,65 +80,147 @@ interface Step {
   run(): void;
 }
 
+/** Nothing in the scenario makes water: no river stage, inflow, storm or rain (e.g. a live area with no river found). */
+export function hasNoForcing(s: Pick<AppState, 'scenario' | 'sources' | 'storms' | 'sim'>): boolean {
+  return !s.scenario?.stage && s.sources.length === 0 && s.storms.length === 0 && !(s.sim.rainRate > 0);
+}
+
+/** Id of the storm cell "Play the flood" drops on an area that has nothing else to flood it. */
+export const PLAY_STORM_ID = 'try-storm';
+/** Its peak rate, mm/hr: a flash-flood thunderstorm (Ellicott City 2016 peaked near 150 mm/hr for minutes). */
+export const PLAY_STORM_RATE = 120;
+
+/** "Storm over Asheville" for "Asheville, North Carolina" (the place part of a terrain name). */
+export function stormLabel(terrainName: string): string {
+  const place = terrainName.split(/\s[—–-]\s|,/)[0].trim();
+  return place && place.length <= 22 ? `Storm over ${place}` : 'Drop a storm';
+}
+
+/**
+ * The storm "Play the flood" drops where the view is: centred on the camera target (clamped inside the map), wide
+ * enough to cover about half of it, so the runoff it makes gathers in the streets and creeks on screen.
+ */
+export function playStorm(grid: { nx: number; ny: number }, target: { gx: number; gy: number } | null) {
+  const size = Math.max(grid.nx, grid.ny);
+  const margin = 0.15 * size;
+  const gx = clamp(target?.gx ?? grid.nx / 2, margin, grid.nx - margin);
+  const gy = clamp(target?.gy ?? grid.ny / 2, margin, grid.ny - margin);
+  return { id: PLAY_STORM_ID, gx, gy, radius: Math.round(0.35 * size), intensity: PLAY_STORM_RATE };
+}
+
 export function createWelcome(ctx: UIContext): HTMLElement {
   const { store, bind } = ctx;
+  const bridge = bridgeFor(store);
   let dismissed = false;
   let used = false;
   let wallDrawn = false;
   /** "Play the flood" was clicked in this scene (a fast speed carried over from elsewhere doesn't count). */
   let played = false;
+  /** Flooded land when a storm was dropped on a scene with no forcing: its step is done once flooding grows past it. */
+  let stormFloodBase: number | null = null;
+  /** The demo levee stands in this scene (its step then offers to remove it); a build is in progress. */
+  let leveeUp = false;
+  let leveeBusy = false;
 
   const quickSpeed = (s: AppState) => ({ ...s.sim, timeScale: Math.max(s.sim.timeScale, QUICK_TIME_SCALE) });
+  const demoLevee = (s: AppState): DemoLevee | null => (s.scenario?.levee && s.scenario.stage ? s.scenario.levee : null);
 
-  const steps: Step[] = [
-    {
-      id: 'flood',
-      icon: 'water',
-      label: (s) => {
-        const ctrl = s.scenario?.stage;
-        if (!ctrl) return 'Play the flood';
-        return isRaised(s, ctrl) ? 'Back to normal' : raiseStepText(ctrl, dramaticStage(ctrl)).label;
-      },
-      tip: (s) => {
-        const ctrl = s.scenario?.stage;
-        if (!ctrl) return 'Fast-forward the scenario (up to 300×, as fast as your GPU allows) and zoom in on it';
-        return isRaised(s, ctrl) ? 'Lower the water to its normal level' : raiseStepText(ctrl, dramaticStage(ctrl)).tip;
-      },
-      done: (s) => (s.scenario?.stage ? isRaised(s, s.scenario.stage) : played && !s.paused && s.sim.timeScale >= QUICK_TIME_SCALE),
-      active: (s) => !!s.scenario?.stage && isRaised(s, s.scenario.stage),
-      run: () => {
-        const s = store.get();
-        const ctrl = s.scenario?.stage ?? null;
-        if (!ctrl) {
-          played = true;
-          store.set({ paused: false, sim: quickSpeed(s) });
-          playTheFlood(ctx);
+  const floodStep: Step = {
+    id: 'flood',
+    icon: 'water',
+    label: (s) => {
+      const ctrl = s.scenario?.stage;
+      if (!ctrl) return hasNoForcing(s) || stormFloodBase !== null ? stormLabel(s.terrainName) : 'Play the flood';
+      return isRaised(s, ctrl) ? 'Back to normal' : raiseStepText(ctrl, dramaticStage(ctrl)).label;
+    },
+    tip: (s) => {
+      const ctrl = s.scenario?.stage;
+      if (!ctrl) {
+        return hasNoForcing(s) || stormFloodBase !== null
+          ? `No river crosses the map edge here to raise: drop a ${PLAY_STORM_RATE} mm/hr thunderstorm over the view and fast-forward`
+          : 'Fast-forward the scenario (up to 300×, as fast as your GPU allows) and zoom in on it';
+      }
+      return isRaised(s, ctrl) ? 'Lower the water to its normal level' : raiseStepText(ctrl, dramaticStage(ctrl)).tip;
+    },
+    done: (s) => {
+      if (s.scenario?.stage) return isRaised(s, s.scenario.stage);
+      if (!played || s.paused || hasNoForcing(s)) return false;
+      // A storm dropped on a dry scene counts once it floods something, not merely once it is falling.
+      if (stormFloodBase !== null) return (s.stats?.floodedArea ?? 0) > stormFloodBase + 2000;
+      return s.sim.timeScale >= QUICK_TIME_SCALE;
+    },
+    active: (s) => !!s.scenario?.stage && isRaised(s, s.scenario.stage),
+    run: () => {
+      const s = store.get();
+      const ctrl = s.scenario?.stage ?? null;
+      if (!ctrl) {
+        played = true;
+        if (hasNoForcing(s) && s.grid) {
+          const camera = bridge.scene?.getCamera?.() ?? null;
+          stormFloodBase = s.stats?.floodedArea ?? 0;
+          store.set({ paused: false, sim: quickSpeed(s), storms: [...s.storms, playStorm(s.grid, camera?.pose.target ?? null)] });
+          postNotice(store, {
+            kind: 'info',
+            key: 'try-flood',
+            title: `A ${PLAY_STORM_RATE} mm/hr thunderstorm over the view`,
+            message:
+              'No river crosses the edge of this map, so there is no river to raise. Runoff gathers in streets, hollows and creeks first; roads turn orange, then red.' +
+              (s.render.waterMode === 'realistic' ? ' The depth map shows where it collects.' : ''),
+            action: s.render.waterMode === 'realistic' ? { label: 'Show depth map', run: () => ctx.setRender({ waterMode: 'depth' }) } : undefined,
+            durationMs: 12000,
+          });
           return;
         }
-        if (isRaised(s, ctrl)) return store.set({ stageOffset: 0 });
-        store.set({ paused: false, sim: quickSpeed(s), stageOffset: dramaticOffset(ctrl) });
-      },
+        store.set({ paused: false, sim: quickSpeed(s) });
+        playTheFlood(ctx);
+        return;
+      }
+      if (isRaised(s, ctrl)) return store.set({ stageOffset: 0 });
+      store.set({ paused: false, sim: quickSpeed(s), stageOffset: dramaticOffset(ctrl) });
     },
-    {
-      id: 'levee',
-      icon: 'wall',
-      key: '2',
-      label: () => 'Build a levee',
-      tip: () => 'Wall tool — drag across the path of the water',
-      done: () => wallDrawn,
-      run: () => {
-        selectTool(store, 'wall');
-        postNotice(store, {
-          kind: 'info',
-          key: 'try-levee',
-          title: 'Drag on the map to build a wall',
-          message:
-            'Close off a low gap where water gets in and tie both ends into high ground — water runs around open ends. ' +
-            'The tool card checks the height against the flood as you hover (red = too low).',
-          durationMs: 9000,
-        });
-      },
+  };
+
+  const leveeStep: Step = {
+    id: 'levee',
+    icon: 'wall',
+    key: '2',
+    label: (s) => (demoLevee(s) && leveeUp ? 'Remove levee' : 'Build a levee'),
+    tip: (s) => {
+      const levee = demoLevee(s);
+      if (!levee) return 'Wall tool — drag across the path of the water';
+      if (leveeUp) return 'Remove every wall on the map';
+      return `Raise a floodwall along ${levee.name}, then replay the ${dramaticStage(s.scenario!.stage!).label} with it in place`;
     },
+    done: () => wallDrawn,
+    active: (s) => !!demoLevee(s) && leveeUp,
+    run: () => {
+      const s = store.get();
+      const levee = demoLevee(s);
+      if (levee && leveeUp) {
+        leveeUp = false;
+        ctx.actions.clearWalls();
+        sync(store.get());
+        return;
+      }
+      if (levee && bridge.scene?.buildWalls) {
+        if (!leveeBusy) void buildDemoLevee(levee);
+        return;
+      }
+      selectTool(store, 'wall');
+      postNotice(store, {
+        kind: 'info',
+        key: 'try-levee',
+        title: 'Drag on the map to build a wall',
+        message:
+          'Close off a low gap where water gets in and tie both ends into high ground — water runs around open ends. ' +
+          'The tool card checks the height against the flood as you hover (red = too low).',
+        durationMs: 9000,
+      });
+    },
+  };
+
+  const steps: Step[] = [
+    floodStep,
     {
       id: 'evac',
       icon: 'evac',
@@ -135,6 +230,7 @@ export function createWelcome(ctx: UIContext): HTMLElement {
       done: (s) => !!s.evacStart,
       run: () => void planEvacuation(ctx),
     },
+    leveeStep,
     {
       id: 'rain',
       icon: 'rain',
@@ -152,7 +248,7 @@ export function createWelcome(ctx: UIContext): HTMLElement {
           key: 'try-rain',
           title: `${HURRICANE_RAIN} mm of rain an hour, everywhere`,
           message: s.render.showRoads
-            ? 'Watch the streets: runoff collects in them and roads turn yellow (wet), then red (flooded). The HUD counts the rain fallen.'
+            ? 'Watch the streets: runoff collects in them and roads turn orange (wet), then red (flooded). The HUD counts the rain fallen.'
             : 'Runoff collects in streets and hollows long before the rivers rise. The HUD counts the rain fallen.',
           durationMs: 9000,
         });
@@ -171,6 +267,61 @@ export function createWelcome(ctx: UIContext): HTMLElement {
       run: () => (store.get().sim.stabilityMode === 'naive' ? stopBreakDemo(ctx) : startBreakDemo(ctx)),
     },
   ];
+
+  /**
+   * The one-click levee: fly to it, reset the water if the flood is already out (a wall raised on flooded land only
+   * traps the water behind it), raise the wall along its line over ~2 s, then bring the river up to the record crest
+   * again so the levee is tested live. The land it keeps dry turns green and the status line counts it.
+   */
+  async function buildDemoLevee(levee: DemoLevee): Promise<void> {
+    const scene = bridge.scene;
+    const solver = scene?.getSolver() ?? null;
+    const s0 = store.get();
+    const ctrl = s0.scenario?.stage ?? null;
+    if (!scene?.buildWalls || !solver || !ctrl) return;
+    leveeBusy = true;
+    const terrainName = s0.terrainName;
+    const stale = () => store.get().terrainName !== terrainName || store.get().sim.stabilityMode !== 'robust';
+    try {
+      const flooded = s0.stageOffsetApplied > 0.3 || (s0.stats?.floodedArea ?? 0) > 50_000;
+      if (flooded || s0.stageOffset > 0.05) {
+        store.set({ stageOffset: 0 });
+        if (flooded) ctx.actions.resetWater();
+      }
+      const crest = dramaticStage(ctrl);
+      const km = leveeLength(levee, solver.cellSize) / 1000;
+      postNotice(store, {
+        kind: 'info',
+        key: 'try-levee',
+        title: `Building a ${fmtNum(km, 1)} km levee along ${levee.name}`,
+        message:
+          `Its top stands above the ${crest.label} (${fmtNum(crest.ft, 0)} ft). ` +
+          (flooded ? 'The flood is reset and the river rises again with the levee in place' : 'Then the river rises to the record') +
+          ' — land the levee keeps dry turns green.',
+        durationMs: 12000,
+      });
+      const camera = scene.getCamera?.() ?? null;
+      if (levee.camera && camera) {
+        try {
+          camera.flyTo(levee.camera, 1.4);
+        } catch {
+          /* renderer gone */
+        }
+      }
+      await wait(1100);
+      if (stale()) return;
+      const radius = Math.max(1.2, 15 / solver.cellSize);
+      const segments = planLevee(levee, solver.getGroundCPU(), solver.nx, solver.ny, radius);
+      const built = await raiseAlong(segments, (batch) => scene.buildWalls?.(batch, radius), 2.2, stale);
+      if (!built) return;
+      leveeUp = true;
+      const s = store.get();
+      store.set({ paused: false, sim: quickSpeed(s), stageOffset: dramaticOffset(ctrl) });
+    } finally {
+      leveeBusy = false;
+      sync(store.get());
+    }
+  }
 
   const buttons = steps.map((step) => {
     const text = h('span', { class: 'dl-try-label' });
@@ -211,6 +362,15 @@ export function createWelcome(ctx: UIContext): HTMLElement {
     e.stopPropagation();
     list[(k + (e.key === 'ArrowRight' ? 1 : list.length - 1)) % list.length].focus();
   });
+
+  // Status line: the river on its way to a new stage (the first seconds of a raise look static from far away), and
+  // the land the walls keep dry.
+  const riverText = h('span', { class: 'dl-try-status-text' });
+  const riverPill = h('span', { class: 'dl-try-status dl-try-status-river', role: 'status', hidden: true }, icon('water', 14), riverText);
+  const keptText = h('span', { class: 'dl-try-status-text' });
+  const keptPill = h('span', { class: 'dl-try-status dl-try-status-kept', role: 'status', hidden: true }, icon('shield', 14), keptText);
+  const status = h('div', { class: 'dl-try-statusbar', 'aria-live': 'polite', hidden: true }, riverPill, keptPill);
+
   const el = h(
     'section',
     { class: 'dl-welcome dl-glass', 'aria-label': 'Try the demo' },
@@ -221,6 +381,7 @@ export function createWelcome(ctx: UIContext): HTMLElement {
       h('span', { class: 'dl-welcome-title' }, h('b', null, 'Try it'), ' — every drop is solved live on your GPU'),
     ),
     h('div', { class: 'dl-try-body' }, row, close),
+    status,
   );
 
   // The heading folds away after the first click, but only once the pointer has left the strip: folding it under a
@@ -240,6 +401,22 @@ export function createWelcome(ctx: UIContext): HTMLElement {
     sync(store.get());
   }
 
+  function syncStatus(s: AppState) {
+    const river = riverStatus(s);
+    riverPill.hidden = !river;
+    if (river) {
+      setText(riverText, river.text);
+      riverPill.dataset.dir = river.dir;
+    }
+    const kept = keptStatus(bridge.protection);
+    keptPill.hidden = !kept;
+    if (kept) {
+      setText(keptText, kept.text);
+      keptPill.dataset.tip = kept.tip;
+    }
+    status.hidden = !river && !kept;
+  }
+
   function sync(s: AppState) {
     const show = !dismissed && !!s.terrainName && !s.loading;
     toggleClass(el, 'dl-show', show);
@@ -254,19 +431,41 @@ export function createWelcome(ctx: UIContext): HTMLElement {
       b.dataset.tip = step.tip(s);
       toggleClass(b, 'dl-done', done);
       toggleClass(b, 'dl-next', firstOpen?.b === b);
+      toggleClass(b, 'dl-busy', step.id === 'levee' && leveeBusy);
       if (step.active) setAttr(b, 'aria-pressed', String(step.active(s)));
     }
+    syncStatus(s);
   }
 
   ctx.own(
-    bridgeFor(store).wallDrawn.on(() => {
+    bridge.wallDrawn.on(() => {
       wallDrawn = true;
+      sync(store.get());
+    }),
+  );
+  // The first time walls keep real land dry (per wall layout), say so once: the moment a levee pays off.
+  let announcedWalls = -1;
+  ctx.own(
+    bridge.protectionChanged.on((p) => {
+      // Walls erased (by any means): the demo levee is gone too.
+      if (!p) leveeUp = false;
+      const kept = keptStatus(p);
+      if (p && kept && p.areaM2 >= ANNOUNCE_M2 && Math.abs(p.wallCells - announcedWalls) > 0.1 * Math.max(1, announcedWalls)) {
+        announcedWalls = p.wallCells;
+        postNotice(store, {
+          kind: 'success',
+          key: 'walls-protect',
+          title: kept.text.replace(/^Walls keep/, leveeUp ? 'The levee keeps' : 'Your walls keep'),
+          message: 'Green on the map: land that would be under water at this level without the walls.',
+          durationMs: 8000,
+        });
+      }
       sync(store.get());
     }),
   );
   bind(
     (s) =>
-      `${!!s.terrainName}|${!!s.loading}|${s.scenario === null}|${s.stageOffset}|${s.sim.rainRate}|${s.sim.timeScale}|${s.paused}|${s.sim.stabilityMode}|${!!s.evacStart}`,
+      `${!!s.terrainName}|${!!s.loading}|${s.scenario === null}|${s.stageOffset}|${s.stageOffsetApplied}|${s.sim.rainRate}|${s.sim.timeScale}|${s.paused}|${s.sim.stabilityMode}|${!!s.evacStart}|${s.storms.length}|${s.sources.length}|${stormFloodBase !== null ? Math.round((s.stats?.floodedArea ?? 0) / 1000) : ''}`,
     (_k, s) => sync(s),
   );
   // A new scene starts the checklist over (the dismissal sticks).
@@ -275,10 +474,25 @@ export function createWelcome(ctx: UIContext): HTMLElement {
     () => {
       wallDrawn = false;
       played = false;
+      stormFloodBase = null;
+      leveeUp = false;
+      announcedWalls = -1;
     },
   );
   return el;
 }
+
+/** "River rising 24.1 → 46.0 ft" while the simulated stage moves toward the slider (null when it has arrived). */
+export function riverStatus(s: Pick<AppState, 'scenario' | 'stageOffset' | 'stageOffsetApplied' | 'paused'>): { text: string; dir: 'up' | 'down' } | null {
+  const ctrl = s.scenario?.stage;
+  if (!ctrl || Math.abs(s.stageOffset - s.stageOffsetApplied) <= 0.005) return null;
+  const up = s.stageOffsetApplied < s.stageOffset;
+  const now = formatStage(ctrl, stageFt(ctrl, s.stageOffsetApplied));
+  const to = formatStage(ctrl, stageFt(ctrl, s.stageOffset));
+  return { text: `River ${up ? 'rising' : 'falling'} ${now} → ${to}${s.paused ? ' (paused)' : ''}`, dir: up ? 'up' : 'down' };
+}
+
+const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 /**
  * "Play the flood" on a scenario without a river-stage control (a storm or inflows drive it): zoom in on the
@@ -357,8 +571,9 @@ export async function planEvacuation(ctx: Pick<UIContext, 'store'>): Promise<voi
     shelters: s.shelters,
     focus: s.scenario?.camera?.target ?? { gx: solver.nx / 2, gy: solver.ny / 2 },
     floodLevel: ctrl ? ctrl.normalLevel + dramaticOffset(ctrl) : null,
-    currentLevel: ctrl ? ctrl.normalLevel + s.stageOffset : null,
-    max: 6,
+    // Where the river is in the simulation now (the slider may be far ahead of it while it rises).
+    currentLevel: ctrl ? ctrl.normalLevel + s.stageOffsetApplied : null,
+    max: 10,
   });
   if (!cands.length) {
     postNotice(store, { kind: 'info', key: 'try-evac', title: 'Click a home on the map', message: 'The route to the nearest dry shelter appears at once and re-plans as roads flood.' });
@@ -370,7 +585,23 @@ export async function planEvacuation(ctx: Pick<UIContext, 'store'>): Promise<voi
     store.set({ evacStart: start });
     const state = await routeStateFor(store, start, before, 1500);
     if (store.get().evacStart !== start) return; // the user clicked a start of their own meanwhile
-    if (state === 'ok') return;
+    if (state === 'ok') {
+      const now = store.get();
+      const rising = !!ctrl && now.stageOffsetApplied < now.stageOffset - 0.05;
+      const risen = !!ctrl && now.stageOffsetApplied > 0.3;
+      postNotice(store, {
+        kind: 'info',
+        key: 'try-evac',
+        title: 'Evacuation route planned',
+        message: rising
+          ? 'The river is still rising: watch the route re-plan around streets as they flood.'
+          : risen
+            ? 'It drives around the flooded streets. Build the levee or add rain next: the route re-plans as the water moves.'
+            : 'Now raise the river or add rain: the route re-plans as streets flood, and turns red if every way out is cut.',
+        durationMs: 8000,
+      });
+      return;
+    }
   }
   store.set({ evacStart: { gx: cands[0].gx, gy: cands[0].gy } });
 }

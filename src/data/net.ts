@@ -188,6 +188,32 @@ export function isNetworkFailure(e: unknown): boolean {
   return /timed out|stalled|failed to fetch|networkerror|network error|load failed|err_internet|err_network|unreachable/i.test(msg);
 }
 
+/** Hosts a live load needs; reaching any of them means the network is up. */
+export const DATA_HOST_PROBES = [
+  'https://elevation.nationalmap.gov/arcgis/rest/services/3DEPElevation/ImageServer?f=json',
+  'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/0/0/0.png',
+  'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer?f=json',
+];
+
+/**
+ * True when at least one of `urls` answers within `timeoutMs`. `navigator.onLine` alone is not trusted (captive portals
+ * and broken venue wifi report online); an opaque no-cors response is enough to prove reachability.
+ */
+export async function probeReachable(urls: readonly string[] = DATA_HOST_PROBES, timeoutMs = 3000): Promise<boolean> {
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) return false;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    await Promise.any(urls.map((u) => fetch(u, { method: 'HEAD', mode: 'no-cors', cache: 'no-store', signal: ctrl.signal })));
+    return true;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+    ctrl.abort();
+  }
+}
+
 /** Message of a live load that could not reach the elevation service at all (the UI maps it to its offline help). */
 export const ELEVATION_UNREACHABLE_MESSAGE =
   'Can’t reach the elevation service (USGS 3DEP / Terrarium): the network looks down or very slow. Check the connection, or pick a built-in scenario — they work offline.';

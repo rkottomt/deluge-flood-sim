@@ -4,6 +4,8 @@
  * TOP (ground + height) stays above the water surface around it.
  */
 import type { StageControl } from '../contracts';
+import type { ProtectionSummary } from './bridge';
+import { fmtNum } from './format';
 import { stageFt } from './scales';
 
 /** Freeboard added on top of the expected water surface when suggesting a height, m. */
@@ -17,6 +19,8 @@ export const OVERTOP_DEPTH = 0.1;
 export const WALL_ALARM_CELLS = 3;
 /** Barrier height below which a cell is not considered part of a wall, m. */
 const WALL_CELL_MIN = 0.2;
+/** A wall cell lower than a neighbouring wall cell by more than this is on the wall's sloping rim, not its crest, m. */
+const CREST_TOLERANCE = 0.05;
 
 /** Water-surface elevation the river stage control currently asks for (at the gauge), m. */
 export function stageSurface(ctrl: StageControl | null | undefined, offset: number): number | null {
@@ -85,7 +89,7 @@ export function checkWall(i: WallCheckInput): WallCheck | null {
 }
 
 export interface WallScan {
-  /** Cells that carry a wall. */
+  /** Cells that carry a wall (its crest cells when scanned with nx). */
   cells: number;
   /** Wall cells with water standing on top (overtopped right now). */
   overtopped: number;
@@ -103,8 +107,13 @@ export interface WallScan {
 const NEED_BIN_M = 0.25;
 const NEED_BINS = 48;
 
-/** One pass over the barrier field (row-major nx*ny). ~1 ms for a million cells. */
-export function scanWalls(ground: Float32Array, barrier: Float32Array, depth: Float32Array | null, level: number | null): WallScan {
+/**
+ * One pass over the barrier field (row-major nx*ny). ~1 ms for a million cells.
+ *
+ * With `nx`, only a wall's crest cells are judged (barrier at least as high as its four neighbours'): a wall stroke
+ * tapers to the ground over its outer cell, and that sloping rim stands in the water beside even a wall that holds.
+ */
+export function scanWalls(ground: Float32Array, barrier: Float32Array, depth: Float32Array | null, level: number | null, nx?: number): WallScan {
   let cells = 0;
   let overtopped = 0;
   let belowLevel = 0;
@@ -112,11 +121,19 @@ export function scanWalls(ground: Float32Array, barrier: Float32Array, depth: Fl
   const bins = new Uint32Array(NEED_BINS);
   const n = Math.min(ground.length, barrier.length);
   const useDepth = depth && depth.length >= n ? depth : null;
+  const w = nx && nx > 0 && n % nx === 0 ? nx : 0;
   for (let k = 0; k < n; k++) {
     const b = barrier[k];
     if (!(b > WALL_CELL_MIN)) continue;
-    cells++;
     sig = (sig + b * ((k % 997) + 1)) % 1e9;
+    if (w) {
+      const i = k % w;
+      const top = b + CREST_TOLERANCE;
+      if ((i > 0 && barrier[k - 1] > top) || (i < w - 1 && barrier[k + 1] > top) || (k >= w && barrier[k - w] > top) || (k + w < n && barrier[k + w] > top)) {
+        continue;
+      }
+    }
+    cells++;
     if (useDepth && useDepth[k] > OVERTOP_DEPTH) overtopped++;
     if (level !== null) {
       const g = ground[k];
@@ -215,4 +232,23 @@ export function wallPreviewText(check: WallCheck | null, wallHeight: number, sta
   if (check.ok) return `A ${h} wall here would stand ${m} m above ${what} (${surface})`;
   if (check.tooLow) return `Here even a ${WALL_MAX} m wall would be under ${what} (${surface}) — build on higher ground`;
   return `A ${h} wall here would be ${m} m under ${what} (${surface})`;
+}
+
+/** Land kept dry by walls below this area is not worth a status line (a wall across a ditch), m². */
+export const KEPT_MIN_M2 = 4000;
+
+/** "Walls keep 141 acres dry · 11 km of streets" (null when they keep less than KEPT_MIN_M2 dry). */
+export function keptStatus(p: ProtectionSummary | null): { text: string; tip: string } | null {
+  if (!p || !(p.areaM2 >= KEPT_MIN_M2)) return null;
+  const acres = p.areaM2 / 4046.8564224;
+  const km2 = p.areaM2 / 1e6;
+  const roadKm = p.roadMeters / 1000;
+  const streets = roadKm >= 0.1 ? ` · ${fmtNum(roadKm, roadKm >= 10 ? 0 : 1)} km of streets` : '';
+  return {
+    text: `Walls keep ${fmtNum(acres, acres >= 100 ? 0 : 1)} acres dry${streets}`,
+    tip:
+      `${fmtNum(km2, 2)} km² of land (green on the map) would stand at least 0.3 m under water without your walls` +
+      (p.level !== null ? `, with the water they hold back at ${fmtNum(p.level, 1)} m` : '') +
+      '. A still-water estimate at the current level; it drops as water gets around or over a wall.',
+  };
 }

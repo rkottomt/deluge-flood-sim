@@ -24,7 +24,7 @@ const LABELS_URL = 'https://server.arcgisonline.com/ArcGIS/rest/services/Referen
 const NOMINATIM = 'https://nominatim.openstreetmap.org';
 export const QUICK_PICKS: Array<{ name: string; lat: number; lon: number; note: string; tip: string }> = [
   { name: 'New Orleans', lat: 29.9511, lon: -90.0715, note: 'Below sea level', tip: 'Much of the city sits below sea level between the Mississippi and Lake Pontchartrain' },
-  { name: 'Houston', lat: 29.7604, lon: -95.3698, note: 'Harvey, 2017', tip: 'Flat bayou city — Hurricane Harvey dropped over 40 inches of rain in 2017' },
+  { name: 'Houston', lat: 29.7604, lon: -95.3698, note: 'Harvey, 2017', tip: 'Flat bayou city — Hurricane Harvey dropped over 40 inches of rain in 2017. Rain floods it here: try Hurricane rain' },
   { name: 'Miami', lat: 25.7617, lon: -80.1918, note: 'Low & coastal', tip: 'Low-lying coastal city on porous limestone' },
   { name: 'Boulder', lat: 40.015, lon: -105.2705, note: 'Flash floods', tip: 'Canyon mouth at the foot of the Rockies — the 2013 Front Range floods' },
   { name: 'Asheville NC', lat: 35.5951, lon: -82.5515, note: 'Helene, 2024', tip: 'Mountain river valley devastated by Hurricane Helene flooding in 2024' },
@@ -333,9 +333,23 @@ export function createLocationPicker(ctx: UIContext): Modal {
     loadBtn.scrollIntoView({ block: 'nearest' });
   });
 
+  let revealQueued = false;
   function syncLoad() {
     const s = store.get();
     const busy = loadingHere && !!s.loading;
+    // The status line carries Cancel: keep it on screen while loading (the side column scrolls, and the offline banner
+    // or a longer status can push it below the fold after the load has started).
+    if (busy && !revealQueued) {
+      revealQueued = true;
+      requestAnimationFrame(() => {
+        revealQueued = false;
+        const col = loadStatus.parentElement;
+        if (loadStatus.hidden || !col) return;
+        const r = loadStatus.getBoundingClientRect();
+        const c = col.getBoundingClientRect();
+        if (r.bottom > c.bottom || r.top < c.top) loadStatus.scrollIntoView({ block: 'nearest' });
+      });
+    }
     toggleClass(loadBtn, 'dl-busy', loadingHere);
     loadBtn.disabled = !center || (!!s.loading && !loadingHere);
     const p = s.loading ? Math.max(0, Math.min(1, s.loading.progress)) : 0;

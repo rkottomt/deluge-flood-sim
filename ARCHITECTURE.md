@@ -46,9 +46,9 @@ selection accounts for (§3.6).
 | `src/render/` | WebGPU renderer: LOD terrain, water surface, hazard colour maps, road/route ribbons, walls, markers, camera, picking, adaptive quality. |
 | `src/data/` | USGS 3DEP DEM, imagery and road loaders; hydro-conditioning (channel burning, water detection, ridge opening); baked presets; the synthetic sandbox; live areas (conditioning runs in a Web Worker). |
 | `src/routing/` | Road graph, flood status per edge, multi-target Dijkstra with wet-road slowdowns and bridge handling. |
-| `src/ui/` | Panels, toolbar and tools, HUD, "Try it" strip, How it works, location picker. Plain DOM + one CSS file. |
-| `src/app/` | Orchestration: scene loading, store → solver sync, stage ramp and crest fill, frame driver, work budget / frame pacing, debug API (`window.__deluge`). |
-| `scripts/` | `bake-presets.ts` (bakes `public/presets/*`), `e2e.mjs` (10 judge flows in headless Chromium on the real GPU), `shot.mjs` (screenshot tool). |
+| `src/ui/` | Panels, toolbar and tools, HUD, "Try it" strip (with the one-click demo levee), How it works, location picker. Plain DOM + one CSS file. |
+| `src/app/` | Orchestration: scene loading, store → solver sync, stage ramp and crest fill, protected-land analysis, frame driver, work budget / frame pacing, debug API (`window.__deluge`). |
+| `scripts/` | `bake-presets.ts` (bakes `public/presets/*`), `e2e.mjs` (end-to-end demo flows in headless Chromium on the real GPU), `bench.mjs` (performance benchmark, §8.1), `shot.mjs` (screenshot tool). |
 | `dev/` | Stand-alone harness pages per module: `render.html` (synthetic valley with analytic mock water, or `?preset=<id>` with the real solver), `sim.html`, `data.html`, `ui.html`; `tests/routing/harness.html` for routing. |
 | `tests/<module>/` | `node:test` suites; the sim and render suites run on a real GPU through Dawn (`webgpu` package). |
 
@@ -97,7 +97,7 @@ Ritter solution (§9).
   which the plain Laplacian treated as drag (diagonal channels ran 3–5× too deep).
 * **Advection next to walls.** A dry or blocked neighbour face contributes the face's own velocity (free slip), and
   faces whose stencil touches one keep only `wallAdvection = 0.1` of the term. Walled channels at 0–60° to the grid then
-  run within ~7 % of Manning's normal depth, and grid-scale circulations along rough shorelines stay damped.
+  run within 6 % of Manning's normal depth (0.98–1.05), and grid-scale circulations along rough shorelines stay damped.
 * **Semi-implicit friction.** An explicit Manning term is stiff on thin films (rate ∝ `h^{−4/3}`) and overshoots.
   Dividing by a factor ≥ 1 can only slow water down, for any `dt`.
 * **Safety caps (robust mode).** `|q| ≤ hf · min(15 m/s, 8·√(g·hf))`. The Froude cap is 8, not ~2: a dam-break tip is
@@ -111,7 +111,7 @@ For every cell the volume that would leave in this substep is
 `O = dt/dx · (max(qE,0) + max(−qW,0) + max(qS,0) + max(−qN,0))`, and `k = min(1, h/O)`. Every face flux is multiplied
 by `k` of its **donor** (upwind) cell. A cell can never export more water than it holds, so `h ≥ 0` by construction —
 no clamping, which would silently create water — and both cells of a face apply the same limited flux, so mass is
-conserved to Float32 rounding. Computing a neighbour's `k` needs that neighbour's four faces, hence a 13-texel
+conserved (and the Float32 rounding that remains is booked, §3.5). Computing a neighbour's `k` needs that neighbour's four faces, hence a 13-texel
 stencil. Then `h_new = h + dt/dx·(qW − qE + qN − qS)`.
 
 ### 3.4 Forcing and boundaries
@@ -135,9 +135,15 @@ stencil. Then `h_new = h + dt/dx·(qW − qE + qN − qS)`.
 ### 3.5 Exact mass accounting
 
 Every external change (rain, sources, stages, infiltration, open-boundary outflow, brush edits, in-place stage raises,
-Float32 limiter residue) is measured as the actual Float32 difference it made to `h` and added to a per-cell
-in/out accounting buffer. At each readback a reduction pass sums it per 16×16 block, and the buffer is copied and
-zeroed **in the same command encoder**, so no substep is lost or counted twice; the CPU sums blocks in Float64:
+Float32 limiter residue) is added to a per-cell in/out accounting buffer as exactly what it did to `h`. That cannot be
+measured as `(h + Δ) − h` on the GPU: shader compilers (Metal) fold the expression into `Δ`, and after hours of a crest
+the unbooked rounding on deep cells turned the HUD yellow. Instead every increment is snapped to the Float32 ULP grid
+of the depth it changes (`SNAP_WGSL` in `shaders/common.ts`), so the snapped value is exactly what lands in `h`. Face
+volumes `dt/dx·q` are one Float32 product that both neighbouring cells compute identically, so interior exchanges
+cancel exactly; what the snaps remove (and the limiter residue) is booked as signed inflow, so `volumeIn` may be
+slightly non-monotonic (≲ 10⁻⁶ of the stored volume). At each readback a reduction pass sums the buffer per 16×16
+block exactly (a grid part plus a remainder, added in Float64 on the CPU), and the buffer is copied and zeroed **in
+the same command encoder**, so no substep is lost or counted twice:
 
 ```
 massError = |V − (V0 + Vin − Vout)| / max(1 m³, V0, peak V since reset)
@@ -156,12 +162,17 @@ dt = Cr · dx / ( √2 · max over cells (√(g·h) + |u|) )
 Neumann analysis for gravity waves gives amplification factors with `λ² − Tλ + s = 0`, `s = θ + (1−θ)·cos(k·dx)`; the
 worst mode is the 2-D checkerboard, which needs `8·C₁² ≤ 4θ` with `C₁ = √(g·h)·dt/dx`. Defining the 2-D Courant number
 `Cr = √2·C₁` makes the limit `Cr ≤ 1` for the plain scheme and `Cr ≤ √θ ≈ 0.89` with smoothing. Deluge targets 0.7 and
-never exceeds 0.85. A 1-D formula at 0.7 sits right on the 2-D limit (tests/sim/stability.test.ts guards this).
+never exceeds 0.85; because of the safety margins below, the HUD usually reads ≈ 0.55. A 1-D formula at 0.7 sits right
+on the 2-D limit (tests/sim/stability.test.ts guards this).
 
 The fastest wave `max(√(g·h) + |u|)` is the stats pass's per-cell maximum from the latest asynchronous readback, so
 robust mode inflates it (×1.25 + 0.1 m/s) and combines it with what it knows is coming before a readback can show it:
 the deepest water a stage source or brush stroke creates (×1.15 depth), the critical velocity at an inflow's rim, and a
-dam-break speed `2·√(g·Δh)` for a stage raise (added to the deepest water, the conservative way). Taking the maximum
+dam-break speed `2·√(g·Δh)` for a stage raise (added to the deepest water, the conservative way). Rain on dry ground
+is anticipated too: while it rains the wave speed is floored at `SolverOptions.rainRunoffSpeed` (2 m/s at 100 mm/hr,
+scaled by rate^0.4, Manning sheet flow on slopes), and hollows are assumed to fill 50× faster than the rain falls
+during the readback lag (`rainPondingFactor`). Without that, a dry live area such as Houston ran its first rainy
+readback window at dt = 5 s and showed Courant 4–19. Taking the maximum
 per cell rather than `√(g·h_max) + |u|_max` matters on real terrain: the deepest water (a river channel, a stage disc)
 is rarely the fastest (a jet down a street); in Pittsburgh's 1936 flood the sum of the two maxima overstated the
 fastest wave by ~50 % (the HUD read Courant 0.46 against 0.7) and cost as much sim speed. Faces a stale estimate
@@ -183,8 +194,10 @@ readback costs a few milliseconds of main-thread time at 1024².
 ### 3.8 The stability demo ("Break it")
 
 Naive mode removes semi-implicit friction, the limiter, the caps, the smoothing and the CFL margins, and runs at
-Courant 1.8. It diverges within seconds, starting at the river inlets, and the solver keeps running through the NaNs
-without validation errors; restoring robust mode rewrites every state texture.
+Courant 1.8. The UI (`src/ui/stabilityDemo.ts`) drops a 2 m splash of water into the water nearest the camera
+target, so it diverges mid-view within seconds and the NaNs run along the rivers; the clock is slowed to 3× until
+divergence, then the user's speed returns. The solver keeps running through the NaNs without validation errors;
+routing freezes on the last physical flood, and restoring robust mode rewrites every state texture.
 
 ---
 
@@ -202,10 +215,45 @@ Monongahela and Ohio cross the domain edge.
 * **Stage ramp** (`src/app/stageRamp.ts`). Applying a 9 m jump at once is a dam break along every bank: bores run at
   the 15 m/s cap. The applied stage follows the slider in simulated time with bounded rate (3 m per sim-minute) and
   acceleration, so the 1936 crest arrives in ~3.7 sim-minutes (a few seconds at 60×) with peak flood speeds of ~6 m/s.
+  It is a time-lapse (~600–850× the 1936 rate, which took ~30 hours; the UI says so): the ~6 m/s peaks come from water
+  spilling onto the floodplain and filling low basins, not from the rate (half the rate gave the same peaks). Moving the
+  slider back past the applied stage turns the ramp around at once (no coasting).
 * **Crest fill** (`src/app/crest.ts`). A real crest rises along the whole river at once, not as a wave from the domain
   edge. As the stage ramps up, water in the channels connected to a stage disc is raised in place to the new level
   (`raiseWaterSurface`, booked as inflow), a few centimetres per step, so overbank flooding starts from every bank.
   Reset water replays the rise from normal pool.
+* **Checked against the National Weather Service.** NWS impact statements for gauge PTTP1, against Deluge holding each
+  stage for 900 sim-s (bare-earth landmarks sampled on the grid):
+
+  | NWS impact | NWS stage | Deluge |
+  | --- | --- | --- |
+  | Water surface at the Point | the gauge reading | within 3 cm of it at every stage from 28 to 46 ft |
+  | Point State Park flooded to the Portal Bridge | 30 ft | dry at 30 ft, wet (0.11 m) at 31 ft |
+  | PNC Park field flooded | 31 ft | dry at 31 ft, 0.98 m at 35 ft (field at 221.1 m ≈ 31.8 ft) |
+  | Federal Street at PNC Park flooded | 40 ft | dry at 36 ft, 0.26 m at 40 ft |
+  | Up to 15 ft of water in the Golden Triangle | 46 ft | 4.8 m (15.7 ft) at Point State Park |
+  | Acrisure Stadium field | 30 ft | dry until 40 ft |
+  | Station Square tracks | 31 ft | dry at 36 ft, wet at 40 ft |
+  | Wood Street T station | 28 ft | wet only at 46 ft |
+  | Tenth Street Bypass / Fort Pitt Blvd / Parkway "bathtub" | 22 / 28 / 25 ft | first water at 35–40 ft / dry at 46 ft / dry at 46 ft |
+  | Rivers Casino floor | 37 ft | 1.26 m at 35 ft (early) |
+
+  The river-level and open-ground impacts match within a few feet. The misses are water that arrives through what
+  bare-earth elevation does not contain — storm drains, underpasses, depressed roadways, underground stations — and
+  places sampled by approximate coordinates.
+* **Protected land and the one-click levee** (`src/app/protection.ts`, `src/ui/levee.ts`). About once a second, while
+  walls exist, a bathtub counterfactual on the latest readback: water pressing against a wall (a large body of water
+  within two cells of it; its level capped at the 95th percentile of those cells + 0.15 m so run-up spray does not
+  count) spreads over land below its level twice — over the bare ground, and over ground + walls. Land that would
+  stand ≥ 0.3 m deep without the walls but not with them, and is dry now, is *protected*: the renderer tints it green,
+  and the Try-it strip and wall card report the acres and streets. It costs one pass over the barrier field plus the
+  land near the walls (~3–10 ms on the main thread for Pittsburgh's levee) and ignores how long a gap would take to fill
+  the land behind it. A sudden collapse is confirmed by a second run before it is shown. Pittsburgh's scenario carries
+  a demo levee (`ScenarioPreset.levee`, baked): a 2.4 km floodwall along the North Shore from bluff to bluff with its
+  crest 1 m above the 1936 record. *Build a levee* resets the water if the flood is already out, raises it along its
+  line in ~2 s (each ~40 m piece tall enough for the lowest ground under it), and replays the rise; at the crest it
+  keeps ~0.56 km² (139 acres) and 11 km of streets dry while flooded land drops from 6.3 to 5.6 km²
+  (`scripts/e2e.mjs` flow 13).
 
 ## 5. Data
 
@@ -218,11 +266,18 @@ Monongahela and Ohio cross the domain edge.
   World Imagery.
 * **Roads:** US Census TIGER/Line via TIGERweb, fallback OpenStreetMap; noded into a graph in grid coordinates.
 * **Presets** (`public/presets/<id>/`: `meta.json`, `elevation.f32`, `imagery.jpg`, `roads.json`) are baked by
-  `npx tsx scripts/bake-presets.ts` and work fully offline: Pittsburgh (three rivers), Johnstown (Conemaugh valley,
-  1936 peak inflows), Ellicott City (2016 flash flood), and a procedural sandbox.
+  `npx tsx scripts/bake-presets.ts` and work fully offline: Pittsburgh (three rivers, with a demo levee), Johnstown (the
+  1889 South Fork Dam flood, as a lake-average 3,730 m³/s inflow on the Little Conemaugh, entering today's valley),
+  Ellicott City (the 2016 flash-flood storm over the Tiber-Hudson-New Cut watershed), and a procedural sandbox.
 * **Live areas** are cancellable. A download that stalls mid-transfer fails after 20 s without data, and the elevation
-  has a 90 s overall deadline (the error then says the service can't be reached). Imagery, roads and the reverse-geocoded place name get 25 s once
-  the elevation is ready (Esri renders a 2048² export for 5–12 s before sending a byte); after that the area loads without them.
+  has a 90 s overall deadline (the error then says the service can't be reached). Dead venue wifi often leaves requests
+  hanging instead of failing: while no elevation has arrived, the loader checks every 9 s that the data hosts answer at
+  all (a 3 s no-cors probe; a slow export still answers it) and gives up with the offline message when they do not
+  (~12–15 s instead of 90 s). Imagery, roads and the reverse-geocoded place name get 25 s once the elevation is ready
+  (Esri renders a 2048² export for 5–12 s before sending a byte); after that the area loads without them. Cancelling a
+  load with nothing on screen (a `?live=` link at startup) shows the offline default preset, points the address bar at
+  it, and offers a retry. A live area with no river crossing its edge has no stage control; there *Play the flood*
+  drops a 120 mm/hr storm cell over the view instead of only fast-forwarding.
 
 ## 6. Rendering
 
@@ -257,20 +312,22 @@ and a frame ceiling detector notices browser 30 fps caps (Chrome Energy Saver, m
 starves. The renderer's adaptive quality gets a *sim pressure* hint: while the solver is GPU-limited it holds the
 default level (it neither climbs above it nor keeps a better level claimed while the sim kept up), and while hands-off
 with the budget down to ≤ 3 substeps (a hot fanless laptop) it steps down, at most to 1 render pixel per CSS pixel, and
-recovers 20 s after the starvation ends. GPU device loss shows a recovery card and reloads once. `window.__deluge`
-exposes the debug API used by `scripts/e2e.mjs`.
+recovers 20 s after the starvation ends. GPU device loss shows a recovery card and reloads by itself at most twice
+per 10 minutes (never within a minute of the last automatic reload); a live area or large grid that keeps losing the
+GPU restarts as the offline Pittsburgh preset, otherwise the card waits for the user. `window.__deluge` exposes the
+debug API used by `scripts/e2e.mjs`.
 
 ### 8.1 Performance budget (measured)
 
 Production build in headless Chromium on the Apple M4 GPU (the demo machine class), Pittsburgh raised to the 1936 crest
-(46 ft) with 50 mm/hr rain, 1200× requested, hands-off (`artifacts/perf/bench.mjs`):
+(46 ft) with 50 mm/hr rain, 1200× requested, hands-off (`npm run demo`, then `node scripts/bench.mjs --scenario=pgh`):
 
 | | before | after |
 | --- | --- | --- |
 | 1600×1000: fps / p95 frame time / achieved speed | 56–58 fps / 27–34 ms / 60–69× | 60 fps / 18.7 ms / 68–73× |
 | 1470×956 @ DPR 2 (renders 1882×1224) | 56 fps / 31 ms / 43–57× | 60 fps / 18.9 ms / 57–64× |
 | 30 fps browser cap (Energy Saver) | 29.5 fps / 70× (quality dropped a level) | 29.5 fps / 93× (quality kept) |
-| Johnstown, inflows ×3, 1200× | 57 fps / 31 ms / 41× | 60 fps / 18.4 ms / 43–50× |
+| Johnstown, inflows ×3, 1200× (the earlier 1936 inflows, ~7,460 m³/s in total) | 57 fps / 31 ms / 41× | 60 fps / 18.4 ms / 43–50× |
 | 10 minutes sustained (1600×1000) | — | 60 fps, p95 18.6–18.8 ms, 66–70× every minute |
 | crest button → half of downtown under ≥ 30 cm | 3.8–4.6 s | 4.0–4.8 s (same: the old budget got there by overfilling the GPU queue) |
 
@@ -295,20 +352,22 @@ From `npm test` (tests run on the real GPU through Dawn):
 
 | Check | Result | Test |
 | --- | --- | --- |
-| Lake at rest on rough terrain, 2000 steps | max \|u\| = 1.9·10⁻⁵ m/s | `tests/sim/wellbalanced.test.ts` |
+| Lake at rest on rough terrain, 2000 steps | max \|u\| = 9.3·10⁻⁵ m/s | `tests/sim/wellbalanced.test.ts` |
 | Dam break vs the Ritter solution at t = 20 s | profile L1 error 1.6 %, front (5 % depth) ratio 1.01 | `tests/sim/dambreak.test.ts` |
-| Closed domain mass conservation | \|ΔV\|/V0 = 2.0·10⁻⁷ | `tests/sim/conservation.test.ts` |
-| Open domain with rain, storm, inflow, stage, infiltration | worst massError 1.9·10⁻⁶ | `tests/sim/conservation.test.ts` |
+| Closed domain mass conservation | massError 7·10⁻⁹ (\|ΔV\|/V0 = 2.5·10⁻⁶, all of it booked Float32 rounding) | `tests/sim/conservation.test.ts` |
+| Open domain with rain, storm, inflow, stage, infiltration | worst massError 9.1·10⁻⁸ | `tests/sim/conservation.test.ts` |
+| Deep river with rain and a stage boundary, 3 sim-hours | worst massError 5.9·10⁻⁷ | `tests/sim/conservation.test.ts` |
 | Rain on a tilted plane, steady state | outflow / rain = 1.000 | `tests/sim/boundary.test.ts` |
 | River sloping to an open edge | depth / normal depth = 1.000 at the outlet | `tests/sim/boundary.test.ts` |
 | Walled channels at 0 / 30 / 45 / 60° to the grid | depth / Manning normal depth 0.98 – 1.05 | `tests/sim/channel.test.ts` |
 | Inflow beside an open edge | 0.00 % leaks back out | `tests/sim/boundary.test.ts` |
 | Stage discs | zero discharge inside, no water above the stage | `tests/sim/boundary.test.ts` |
-| GPU (Float32, parallel) vs Float64 CPU reference, 5 cases × 400 steps | max \|Δh\| ≤ 3.4·10⁻⁵ m | `tests/sim/reference.test.ts` |
+| GPU (Float32, parallel) vs Float64 CPU reference, 5 cases × 400 steps | max \|Δh\| ≤ 4.3·10⁻⁵ m | `tests/sim/reference.test.ts` |
 | Stale-CFL abuse, heavy rain on steep terrain | no NaN, no negative depth | `tests/sim/robustness.test.ts`, `stability.test.ts` |
 
-`npm run e2e` drives the ten judge flows (load, raise to the crest, levee, rain, evacuation, break and recover,
-presets, tools, frame rate, idle power; `--live` adds a live-area flow) in headless Chromium on the real GPU, offline.
+`npm run e2e` drives the end-to-end demo flows (load, raise to the crest, levee, rain, evacuation, break and recover,
+presets, tools, frame rate, idle power, cancelling a stalled `?live=` link, the one-click levee; `--live` adds a
+live-area flow) in headless Chromium on the real GPU, offline.
 
 ## 10. Future work
 

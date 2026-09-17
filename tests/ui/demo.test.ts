@@ -81,10 +81,11 @@ test('stage wording: gauge feet for presets, a rise above the detected surface f
   assert.equal(pgh.label, 'Raise to 1936 record');
   assert.match(pgh.tip, /46\.0 ft at the gauge/);
   assert.doesNotMatch(pgh.tip, /300×/);
+  // Without a gauge the raise step aims for a moderate +3 m (the top of the range drowns most of a flat city).
   const live = raiseStepText(LIVE, dramaticStage(LIVE));
-  assert.equal(live.label, 'Raise water +10 m');
+  assert.equal(live.label, 'Raise water +3 m');
   assert.doesNotMatch(live.tip, /crest|gauge/);
-  assert.match(live.tip, /33 ft/);
+  assert.match(live.tip, /10 ft/);
   const topFt = LIVE.maxOffset / 0.3048;
   assert.equal(formatStage(LIVE, topFt), '+10\u00a0m');
   assert.equal(formatStage(LIVE, 0), '+0\u00a0m');

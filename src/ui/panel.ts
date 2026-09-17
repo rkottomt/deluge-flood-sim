@@ -341,7 +341,10 @@ export function createPanel(ctx: UIContext): Panel {
     stageRamp.hidden = !moving;
     if (moving) {
       const verb = s.stageOffsetApplied < s.stageOffset ? 'Rising' : 'Falling';
-      setText(stageRamp, `${verb} to ${formatStage(stageCtrl, ft)} · now ${formatStage(stageCtrl, nowFt)}${s.paused ? ' — paused' : ''}`);
+      setText(stageRamp, `${verb} to ${formatStage(stageCtrl, ft)} · now ${formatStage(stageCtrl, nowFt)}${s.paused ? ' — paused' : ' · time-lapse'}`);
+      stageRamp.dataset.tip = hasGauge(stageCtrl)
+        ? 'A time-lapse: in March 1936 the Point rose about 21 ft over some 30 hours; here the river rises about 10 ft per simulated minute. The flood that follows is solved at its real speed.'
+        : 'A time-lapse: the water rises about 3 m per simulated minute, far faster than a real flood. The flooding that follows is solved at its real speed.';
       stageRamp.dataset.dir = s.stageOffsetApplied < s.stageOffset ? 'up' : 'down';
     }
     for (const j of jumpButtons) toggleClass(j.b, 'dl-on', Math.abs(j.ft - ft) < 0.15);
@@ -449,8 +452,10 @@ export function createPanel(ctx: UIContext): Panel {
   function renderEvac(route: RouteResult | null, s: AppState) {
     const state = route?.state ?? 'none';
     evacCard.dataset.state = state;
-    evacBadge.dataset.sev = state === 'ok' ? 'ok' : state === 'blocked' ? 'danger' : 'calm';
-    setText(evacBadge, state === 'ok' ? 'Route OK' : state === 'blocked' ? 'Blocked' : s.evacStart ? 'Waiting' : 'Not set');
+    // While the stability demo runs, routing is frozen on the last physical flood (src/app/evac.ts).
+    const paused = s.sim.stabilityMode === 'naive' && state !== 'none';
+    evacBadge.dataset.sev = paused ? 'calm' : state === 'ok' ? 'ok' : state === 'blocked' ? 'danger' : 'calm';
+    setText(evacBadge, paused ? 'Paused' : state === 'ok' ? 'Route OK' : state === 'blocked' ? 'Blocked' : s.evacStart ? 'Waiting' : 'Not set');
     if (state === 'ok' && route) {
       evacCard.replaceChildren(
         h('div', { class: 'dl-evac-top' }, icon('check', 18), h('span', null, 'Safe route found')),
@@ -486,7 +491,7 @@ export function createPanel(ctx: UIContext): Panel {
     }
   }
   bind(
-    (s) => [s.route, s.evacStart, s.shelters.length] as const,
+    (s) => [s.route, s.evacStart, s.shelters.length, s.sim.stabilityMode] as const,
     ([route], s) => renderEvac(route, s),
     (a, b) => shallowArrayEq(a, b),
   );
@@ -507,8 +512,13 @@ export function createPanel(ctx: UIContext): Panel {
     { class: 'dl-road-legend', 'aria-label': 'Road status legend' },
     h('span', { class: 'dl-road dl-road-dry' }, h('i'), 'Dry'),
     h('span', { class: 'dl-road dl-road-wet', 'data-tip': '5–30 cm: passable, slow', 'data-tip-side': 'top' }, h('i'), 'Wet'),
-    h('span', { class: 'dl-road dl-road-flooded', 'data-tip': '≥ 30 cm: cars float — impassable', 'data-tip-side': 'top' }, h('i'), 'Flooded'),
+    h('span', { class: 'dl-road dl-road-flooded', 'data-tip': '≥ 30 cm: cars float — impassable (dashed on the map)', 'data-tip-side': 'top' }, h('i'), 'Flooded'),
     h('span', { class: 'dl-road dl-road-route' }, h('i'), 'Route'),
+  );
+  // The hazard maps draw flooded roads grey, not red.
+  bind(
+    (s) => s.render.waterMode,
+    (mode) => toggleClass(roadLegend, 'dl-road-legend-hazard', mode !== 'realistic'),
   );
 
   const evacSec = section(

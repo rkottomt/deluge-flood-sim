@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Deluge end-to-end judge flows in headless Chromium on the real GPU.
+ * Deluge end-to-end demo flows in headless Chromium on the real GPU.
  *
  *   node scripts/e2e.mjs                    in-process Vite dev server on :5190 (or the next free port), all flows
  *   node scripts/e2e.mjs --prod             production build + `vite preview` (what `npm run demo` serves)
@@ -38,7 +38,7 @@ const args = Object.fromEntries(
   }),
 );
 const only = args.only ? new Set(String(args.only).split(',').map((s) => Number(s.trim()))) : null;
-/** Main preset for flows 1–6 and 9 (the judge demo is Pittsburgh; other presets are useful while developing). */
+/** Main preset for flows 1–6 and 9 (the demo is Pittsburgh; other presets are useful while developing). */
 const PRESET = String(args.preset ?? process.env.E2E_PRESET ?? 'pittsburgh');
 const OTHER_PRESETS = ['pittsburgh', 'sandbox', 'johnstown', 'ellicott'].filter((p) => p !== PRESET);
 
@@ -1111,6 +1111,63 @@ const FLOWS = [
         await page.goto(ctx.appUrl, { waitUntil: 'domcontentloaded' });
         await waitReady(90_000);
       }
+    },
+  },
+  {
+    id: 13,
+    name: 'One-click levee keeps its land dry at the 1936 crest',
+    timeoutMs: 300_000,
+    async run(r) {
+      const levee = await D(() => window.__deluge.getScenario()?.levee ?? null);
+      if (!levee) {
+        r.notes.push(`${PRESET} has no demo levee: skipped`);
+        check(r, 'scenario without a demo levee (nothing to check)', true, PRESET);
+        return;
+      }
+      await calm();
+      // The real Try-it button: raises the wall along its line over ~2 s, then sends the river to the crest.
+      await D(() => window.__deluge.store.set({ paused: false }));
+      await page.click('.dl-try-step[data-step="levee"]');
+      const built = await page
+        .waitForFunction(() => {
+          const d = window.__deluge;
+          const s = d.getState();
+          const crest = d.stageOffsetForFeet(Math.max(...(s.scenario?.stage?.marks ?? [{ ft: 0 }]).map((m) => m.ft)));
+          return (d.getProtection()?.wallCells ?? 0) > 500 && Math.abs(s.stageOffset - crest) < 0.01;
+        }, null, { timeout: 30_000 })
+        .then(() => true, () => false);
+      const wall = await D(() => window.__deluge.getProtection());
+      check(r, 'levee raised and the river sent to the crest', built, `${wall?.wallCells ?? 0} wall cells`);
+      await runFor(1500);
+      const res = await D(() => {
+        const d = window.__deluge;
+        const p = d.getProtection();
+        const pts = d.getScenario().levee.points;
+        // Probe the land behind the middle of the levee: 25 cells inland of its midpoint, away from the river.
+        const a = pts[Math.floor(pts.length / 2) - 1];
+        const b = pts[Math.floor(pts.length / 2)];
+        const mid = { gx: (a.gx + b.gx) / 2, gy: (a.gy + b.gy) / 2 };
+        const len = Math.hypot(b.gx - a.gx, b.gy - a.gy) || 1;
+        const n = { gx: (b.gy - a.gy) / len, gy: -(b.gx - a.gx) / len };
+        const probe = (sgn) => d.sampleAt(mid.gx + sgn * n.gx * 25, mid.gy + sgn * n.gy * 25);
+        const [s1, s2] = [probe(1), probe(-1)];
+        const status = [...document.querySelectorAll('.dl-try-status-kept')].find((e) => !e.hidden)?.textContent ?? null;
+        const overtopNotice = [...document.querySelectorAll('.dl-toast')].some((t) => t.getClientRects().length > 0 && /pouring over your wall/i.test(t.textContent ?? ''));
+        return { p, sides: [s1, s2], status, overtopNotice, stats: d.getStats() };
+      });
+      const p = res.p;
+      const dryBehind = Math.min(res.sides[0].depth, res.sides[1].depth);
+      const wetFront = Math.max(res.sides[0].depth, res.sides[1].depth);
+      check(r, 'land behind the levee stays dry while the river side floods', dryBehind < 0.05 && wetFront > 1, `behind ${num(dryBehind)} m, river side ${num(wetFront)} m`);
+      check(r, 'protected-land analysis reports the land it keeps dry', (p?.areaM2 ?? 0) > 0.3e6, p ? `${km2(p.areaM2)}, ${num(p.roadMeters / 1000, 1)} km of streets, level ${num(p.level ?? NaN)} m, ${num(p.ms, 1)} ms` : 'none');
+      check(r, 'status line under the Try-it strip counts it', /Walls keep \d[\d,]* acres dry/.test(res.status ?? ''), res.status ?? 'hidden');
+      check(r, 'no false "water is pouring over your wall" alarm', !res.overtopNotice, res.overtopNotice ? 'notice shown' : 'none');
+      check(r, 'stats stay finite', statsFinite(res.stats), `mass error ${res.stats?.massError}`);
+      r.metrics = { protection: p, flooded: res.stats?.floodedArea };
+      await D((c) => window.__deluge.setCamera(c), levee.camera);
+      await sleep(800);
+      await shot('13-demo-levee');
+      await calm();
     },
   },
 ];

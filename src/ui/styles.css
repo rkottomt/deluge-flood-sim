@@ -1799,10 +1799,16 @@
   background: #c9d3de;
 }
 .dl-road-wet i {
-  background: #ffb547;
+  background: #e8801a;
 }
+/* Flooded roads are thin dashed lines on the map (dark grey in the hazard maps). */
 .dl-road-flooded i {
-  background: #ff4d55;
+  height: 3px;
+  border-radius: 0;
+  background: repeating-linear-gradient(90deg, #ee5a48 0 5px, transparent 5px 8px);
+}
+.dl-road-legend-hazard .dl-road-flooded i {
+  background: repeating-linear-gradient(90deg, #8b8f98 0 5px, transparent 5px 8px);
 }
 .dl-road-route i {
   background: #5ff0ff;
@@ -2564,6 +2570,51 @@
 }
 .dl-try-step.dl-try-danger.dl-next .dl-try-mark {
   color: #fff;
+}
+/* Status line under the Try-it buttons: the river on its way to a new stage, and land the walls keep dry. */
+.dl-try-statusbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: -2px;
+}
+.dl-try-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 10px 0 7px;
+  border-radius: 12px;
+  font-size: 12.5px;
+  font-weight: 620;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.dl-try-status-river {
+  color: #cfeaff;
+  background: rgba(64, 160, 255, 0.16);
+  box-shadow: inset 0 0 0 1px rgba(110, 195, 255, 0.4);
+}
+.dl-try-status-river .dl-icon {
+  color: #7cc6ff;
+  animation: dl-pulse 1.4s ease-in-out infinite;
+}
+.dl-try-status-kept {
+  color: #c9f7df;
+  background: rgba(61, 220, 151, 0.16);
+  box-shadow: inset 0 0 0 1px rgba(61, 220, 151, 0.45);
+}
+.dl-try-status-kept .dl-icon {
+  color: var(--dl-ok);
+}
+.dl-try-step.dl-busy .dl-try-mark {
+  animation: dl-pulse 0.9s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .dl-try-status-river .dl-icon,
+  .dl-try-step.dl-busy .dl-try-mark {
+    animation: none;
+  }
 }
 .dl-notice {
   background: rgba(16, 24, 36, 0.95);
@@ -3436,6 +3487,56 @@
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
+}
+.dl-nws-title {
+  margin-top: 18px;
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--dl-text);
+}
+.dl-nws-lead,
+.dl-nws-note {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--dl-text-2);
+}
+.dl-nws-wrap {
+  margin-top: 8px;
+  overflow-x: auto;
+}
+.dl-nws {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.dl-nws th {
+  text-align: left;
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--dl-text-3);
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--dl-line);
+}
+.dl-nws td {
+  padding: 5px 8px;
+  color: var(--dl-text-2);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+.dl-nws td:first-child {
+  color: var(--dl-text);
+}
+.dl-nws td:last-child {
+  white-space: nowrap;
+}
+.dl-nws tr[data-kind='ok'] td:last-child {
+  color: var(--dl-ok-text);
+}
+.dl-nws tr[data-kind='miss'] td:last-child {
+  color: #f3c27a;
 }
 .dl-data-row {
   display: flex;
@@ -4361,7 +4462,7 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
-/* Phone width (a judge opening the shared link on a phone): the top bar becomes two rows (brand + actions,
+/* Phone width (a visitor opening the shared link on a phone): the top bar becomes two rows (brand + actions,
    then the full-width transport), the HUD spans the bottom and starts collapsed, the side panel is a bottom
    sheet, and floating notices keep clear of the tool rail. */
 @media (max-width: 600px) {

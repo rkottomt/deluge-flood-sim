@@ -203,11 +203,12 @@ fn fsTerrain(in: VOut) -> @location(0) vec4f {
                      + textureSampleLevel(protectTex, linSamp, uv + vec2f(0.0, e.y), 0.0).r
                      + textureSampleLevel(protectTex, linSamp, uv - vec2f(0.0, e.y), 0.0).r);
     let inside = max(core, ring * 0.6);
-    let rim = clamp(abs(core - ring) * 2.0, 0.0, 1.0) * max(core, ring);
+    let rim = clamp(abs(core - ring) * 2.5, 0.0, 1.0) * max(core, ring);
+    // Keep the photo's detail (luminance) but push its hue to green, then light the edge.
     let lum = luminance(color);
-    let greenWash = vec3f(0.16, 0.62, 0.30) * (lum * 1.1 + 0.02);
+    let greenWash = vec3f(0.12, 0.78, 0.30) * (lum * 1.35 + 0.025);
     color = mix(color, greenWash, inside * 0.55 * F.protect.x);
-    color += vec3f(0.10, 0.75, 0.32) * rim * 0.45 * F.protect.x * (1.0 - F.opts.w * 0.5);
+    color += vec3f(0.12, 0.95, 0.38) * rim * 0.9 * F.protect.x * (1.0 - F.opts.w * 0.5);
   }
 
   // ── Contours ───────────────────────────────────────────────────────────────────────────
