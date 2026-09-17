@@ -74,7 +74,7 @@ const WG = 16;
 const PROBE_IDLE_MS = 500;
 /** Upper bound on the readback lag the rain CFL estimate assumes, simulated s (hollows fill and spill; see rainDepthAhead). */
 const RAIN_LAG_MAX_S = 1200;
-/** reset() keeps its initial state array between resets up to this grid size (16 MB at 1024²; larger grids rebuild it). */
+/** reset() keeps a GPU copy of the initial state up to this grid size (16 MB at 1024²); larger grids rebuild it each time. */
 const RESET_CACHE_MAX_CELLS = 1 << 20;
 const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
 
