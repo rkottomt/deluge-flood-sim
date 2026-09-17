@@ -174,8 +174,10 @@ const SCENES = [
     simSeconds: 400,
     // The point of this scene is that the glitch colours ARE there; every other scene must have none.
     expectMagenta: true,
-    // A blown-up solver produces non-finite depths on purpose, so the hydrostatic check does not apply.
-    skipDetectors: ['unsupportedWater', 'shoreline'],
+    // A blown-up solver produces non-finite depths on purpose, so the hydrostatic check does not apply — and the
+    // glitch shader animates its speckle by design (src/render/shaders/water.ts mixes two colours by a per-cell
+    // flicker), so a frozen capture of THIS scene is meant to differ from the next one. Measured ~7% of pixels.
+    skipDetectors: ['unsupportedWater', 'shoreline', 'flicker'],
   },
   {
     id: 'johnstown',
@@ -484,43 +486,54 @@ function frameStats(img) {
 /**
  * Water mask + shoreline blockiness + legend agreement for a hazard mode.
  *
- * `palettes` are the legend swatch colours scraped from the app's own legend for all three hazard modes. A pixel is
- * "hazard water" when it is close to some band colour of some palette; the mode's own palette must be the closest
- * one for nearly all of them (that is the legend-vs-pixels agreement check — it fails if a mode is wired to the
- * wrong ramp). Blockiness is the share of water-edge gradients pointing within 10° of an axis: a shoreline that has
- * collapsed onto the simulation grid is a staircase, and staircases are axis-aligned.
+ * The mask comes from the app itself: `refImg` is the SAME frozen scene rendered in a different hazard mode, so the
+ * pixels that changed are exactly the hazard-mapped water — no absolute colour threshold to tune, and terrain, sky
+ * and UI drop out for free. Within that mask, each pixel's nearest legend swatch (scraped live from the app's own
+ * legend) must belong to the mode being rendered; if a mode is ever wired to the wrong ramp, agreement collapses.
+ * Blockiness is the share of water-edge gradients within 10° of an axis: a shoreline that has collapsed onto the
+ * simulation grid is a staircase, and staircases are axis-aligned.
  */
-function analyzeHazard(img, palettes, mode) {
+function analyzeHazard(img, refImg, palettes, mode, refMode) {
   const { width: w, height: h, data } = img;
   const mask = new Uint8Array(w * h);
+  let total = 0;
+  for (let i = 0; i < w * h; i++) {
+    const o = i * 4;
+    const d =
+      Math.max(
+        Math.abs(data[o] - refImg.data[o]),
+        Math.abs(data[o + 1] - refImg.data[o + 1]),
+        Math.abs(data[o + 2] - refImg.data[o + 2]),
+      );
+    if (d > 18) {
+      mask[i] = 1;
+      total++;
+    }
+  }
   const names = Object.keys(palettes);
   const nearest = (r, g, b) => {
     let best = Infinity;
     let bestName = null;
     for (const name of names) {
       for (const c of palettes[name]) {
-        const d = (r - c[0]) ** 2 + (g - c[1]) ** 2 + (b - c[2]) ** 2;
-        if (d < best) {
-          best = d;
+        const dd = (r - c[0]) ** 2 + (g - c[1]) ** 2 + (b - c[2]) ** 2;
+        if (dd < best) {
+          best = dd;
           bestName = name;
         }
       }
     }
-    return { d2: best, name: bestName };
+    return bestName;
   };
   let own = 0;
-  let total = 0;
-  const MAX_D2 = 55 * 55; // sRGB distance a lit, tone-mapped band colour can drift and still be "that band"
+  let refOwn = 0;
   for (let i = 0; i < w * h; i++) {
+    if (!mask[i]) continue;
     const o = i * 4;
-    const { d2, name } = nearest(data[o], data[o + 1], data[o + 2]);
-    if (d2 <= MAX_D2) {
-      mask[i] = 1;
-      total++;
-      if (name === mode) own++;
-    }
+    if (nearest(data[o], data[o + 1], data[o + 2]) === mode) own++;
+    if (nearest(refImg.data[o], refImg.data[o + 1], refImg.data[o + 2]) === refMode) refOwn++;
   }
-  // Sobel on the mask → gradient direction histogram at the water edge.
+  // Sobel on the mask → gradient-direction histogram at the water edge.
   let edge = 0;
   let axis = 0;
   for (let y = 1; y < h - 1; y++) {
@@ -538,8 +551,10 @@ function analyzeHazard(img, palettes, mode) {
     }
   }
   return {
+    refMode,
     waterFrac: +(total / (w * h)).toFixed(4),
-    legendAgreement: total > 0 ? +(own / total).toFixed(4) : null,
+    legendAgreement: total > 500 ? +(own / total).toFixed(4) : null,
+    refLegendAgreement: total > 500 ? +(refOwn / total).toFixed(4) : null,
     shorelineEdgePixels: edge,
     shorelineAxisFrac: edge > 200 ? +(axis / edge).toFixed(4) : null,
   };
@@ -584,6 +599,13 @@ async function setupScene(spec) {
   d.setPaused(true);
   d.resetWater();
   if (spec.mode) d.setWaterMode(spec.mode);
+  // Pin the quality ladder. On 'auto' the adaptive controller moves render scale in response to frame timing, so
+  // two captures of the SAME frozen scene differ by a resample — and a slower machine would record a different
+  // baseline entirely. Pinning makes the scene a property of the app, not of the laptop.
+  const renderer = d.getRenderer();
+  if (renderer?.setQuality) renderer.setQuality('high');
+  d.setAdaptiveBudget(false);
+  info.quality = renderer?.quality ?? null;
 
   const groundAt = (gx, gy) => d.sampleAt(gx, gy)?.ground ?? 0;
   let wallPoints = null;
@@ -789,7 +811,13 @@ async function readLegendPalettes() {
   return out;
 }
 
-/** Every visible UI element must sit inside the viewport: nothing clipped by, or hanging off, the canvas edges. */
+/**
+ * No UI may hang off the canvas edges.
+ *
+ * "Off the edge" means unreachable, not merely outside the viewport rectangle: the control panel is a scrolling
+ * column, so its lower sections are legitimately below the fold and the user scrolls to them. An element is only an
+ * offender when nothing between it and #ui-root clips or scrolls — i.e. it is positioned off-screen for good.
+ */
 function uiBoxes() {
   const root = document.getElementById('ui-root');
   if (!root) return { checked: 0, offenders: [{ what: '#ui-root', why: 'missing' }] };
@@ -798,13 +826,21 @@ function uiBoxes() {
   const offenders = [];
   let checked = 0;
   const describe = (el) => `${el.tagName.toLowerCase()}${el.id ? '#' + el.id : ''}${el.className && typeof el.className === 'string' ? '.' + el.className.trim().split(/\s+/).slice(0, 2).join('.') : ''}`;
+  const insideScroller = (el) => {
+    for (let p = el.parentElement; p && p !== root.parentElement; p = p.parentElement) {
+      const st = getComputedStyle(p);
+      if (/(auto|scroll|hidden|clip)/.test(st.overflowY + ' ' + st.overflowX)) return true;
+    }
+    return false;
+  };
   for (const el of root.querySelectorAll('*')) {
     const st = getComputedStyle(el);
     if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) continue;
     const r = el.getBoundingClientRect();
     if (r.width < 8 || r.height < 8) continue;
-    // Only leaf-ish panels: a container that merely spans the viewport is not an offender.
+    // A container that merely spans the viewport is not an offender, and anything a scroll container owns is reachable.
     if (el.children.length > 0 && r.width > vw * 0.9 && r.height > vh * 0.9) continue;
+    if (insideScroller(el)) continue;
     checked++;
     const out = [];
     if (r.left < -1) out.push(`left ${Math.round(r.left)}`);
@@ -934,11 +970,21 @@ async function runScene(browser, baseUrl, scene, palettes) {
     shots.push(decodePNG(await page.screenshot({ type: 'png' })));
     if (i === 0) await page.waitForTimeout(700);
   }
+
+  // A hazard scene is captured a second time in another mode; the difference is the water mask (see analyzeHazard).
+  let refShot = null;
+  const refMode = scene.hazard ? (scene.mode === 'depth' ? 'maxDepth' : 'depth') : null;
+  if (refMode) {
+    await page.evaluate((m) => window.__deluge.setWaterMode(m), refMode);
+    await page.evaluate(settle, 5000);
+    refShot = decodePNG(await page.screenshot({ type: 'png' }));
+    await page.evaluate((m) => window.__deluge.setWaterMode(m), scene.mode);
+  }
   await page.close();
 
   const img = shots[0];
   const stats = frameStats(img);
-  const hazard = scene.hazard && palettes ? analyzeHazard(img, palettes, scene.mode) : null;
+  const hazard = refShot && palettes ? analyzeHazard(img, refShot, palettes, scene.mode, refMode) : null;
   return {
     id: scene.id,
     label: scene.label,
@@ -983,7 +1029,7 @@ function checkScene(row, scene, golden) {
   if (!skip.has('greyImagery')) {
     add('imageryPresent', row.stats.greyFrac <= THRESHOLDS.maxGreyFrac, row.stats.greyFrac, `<= ${THRESHOLDS.maxGreyFrac}`);
   }
-  add('flicker', row.flickerFrac <= THRESHOLDS.maxFlickerFrac, row.flickerFrac, `<= ${THRESHOLDS.maxFlickerFrac}`);
+  if (!skip.has('flicker')) add('flicker', row.flickerFrac <= THRESHOLDS.maxFlickerFrac, row.flickerFrac, `<= ${THRESHOLDS.maxFlickerFrac}`);
   add('uiInsideViewport', row.ui.offenders.length === 0, row.ui.offenders.length, '0', row.ui.offenders.map((o) => `${o.what}: ${o.why}`).join(' | '));
   add('noPageErrors', row.pageErrors.length === 0, row.pageErrors.length, '0', row.pageErrors.slice(0, 3).join(' | '));
 
@@ -1013,8 +1059,10 @@ function checkScene(row, scene, golden) {
         row.hazard.legendAgreement >= THRESHOLDS.minLegendAgreement,
         row.hazard.legendAgreement,
         `>= ${THRESHOLDS.minLegendAgreement}`,
-        `${(row.hazard.waterFrac * 100).toFixed(1)}% of frame is hazard-coloured`,
+        `${(row.hazard.waterFrac * 100).toFixed(1)}% of frame is mapped water; ${row.hazard.refMode} reference agrees ${row.hazard.refLegendAgreement}`,
       );
+    } else {
+      add('legendMatchesPixels', false, row.hazard.waterFrac, '> 0', 'no hazard-mapped water in frame — the mode changed nothing');
     }
   }
   if (golden) {

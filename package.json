@@ -22,8 +22,9 @@
     "test:security": "node scripts/security-test.mjs",
     "test:suites": "node scripts/perf.mjs --quick && node scripts/visual.mjs --quick && node scripts/security-test.mjs --quick",
     "test:all": "npm run typecheck && npm test && node scripts/security-test.mjs && node scripts/visual.mjs && node scripts/perf.mjs",
-    "app:dev": "vite build && electron electron/main.js",
+    "app:dev": "vite build && env -u ELECTRON_RUN_AS_NODE electron electron/main.js",
     "app:build": "node --import tsx electron/check-endpoints.mjs && tsc --noEmit && vite build && node electron/package.mjs",
+    "app:icon": "node electron/make-icon.mjs",
     "app:verify": "node electron/package.mjs --name='Deluge Verify' --out=artifacts/electron",
     "app:check": "node electron/verify-renderer.mjs && node electron/verify-packaged.mjs"
   },

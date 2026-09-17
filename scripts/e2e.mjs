@@ -8,6 +8,7 @@
  *   node scripts/e2e.mjs --only=1,2,6       run a subset (flows that need an earlier result compute it themselves)
  *   node scripts/e2e.mjs --preset=sandbox   run the preset-specific flows on another preset (default pittsburgh)
  *   node scripts/e2e.mjs --live             also run the live-area flow (needs internet: USGS, Esri, TIGERweb)
+ *   node scripts/e2e.mjs --browser=brave    run the flows in installed Brave (the demo browser) → artifacts/e2e-brave
  *
  * Offline guarantee: every request to a non-local host is blocked (the demo venue's wifi is unreliable) and
  * reported; the baked-preset flows must not need any. Only the opt-in live flow may use the network. The startup-cancel
@@ -20,7 +21,10 @@
  *
  * Screenshots → artifacts/e2e/NN-name.png, machine-readable report → artifacts/e2e/report.json.
  * Prints a PASS/FAIL table with measured numbers and exits non-zero if any flow fails.
- * Console errors, page errors and window.__deluge.errors are collected per flow; any of them fails the flow.
+ * Console errors, page errors and window.__deluge.errors are collected per flow; any of them fails the flow, unless
+ * the flow declares them in `expectedErrors` (flow 15 destroys the GPU device on purpose).
+ *
+ * Flow 15 destroys the GPU device and flow 14 pretends the tab was hidden; both put the page back afterwards.
  */
 import { chromium } from 'playwright';
 import { build, createServer, preview } from 'vite';
@@ -29,13 +33,6 @@ import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const OUT = path.join(ROOT, 'artifacts', 'e2e');
-const WIDTH = 1600;
-const HEIGHT = 1000;
-const TOOL_KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0'];
-const ALL_TOOLS = ['orbit', 'wall', 'eraseWall', 'inflow', 'storm', 'water', 'dig', 'evac', 'shelter', 'probe'];
-
 const args = Object.fromEntries(
   process.argv.slice(2).map((a) => {
     const m = a.match(/^--([^=]+)(?:=(.*))?$/s);
@@ -43,6 +40,16 @@ const args = Object.fromEntries(
   }),
 );
 const only = args.only ? new Set(String(args.only).split(',').map((s) => Number(s.trim()))) : null;
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+// A Brave run writes elsewhere, so it never overwrites the canonical Chromium screenshots and report.
+const OUT = path.join(ROOT, 'artifacts', args.out ?? (args.browser === 'brave' ? 'e2e-brave' : 'e2e'));
+const WIDTH = 1600;
+const HEIGHT = 1000;
+const TOOL_KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0'];
+const ALL_TOOLS = ['orbit', 'wall', 'eraseWall', 'inflow', 'storm', 'water', 'dig', 'evac', 'shelter', 'probe'];
+/** The demo laptop presents in Brave, so the flows can be run there too (--browser=brave). */
+const BRAVE = '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser';
 /** Main preset for flows 1–6 and 9 (the demo is Pittsburgh; other presets are useful while developing). */
 const PRESET = String(args.preset ?? process.env.E2E_PRESET ?? 'pittsburgh');
 const OTHER_PRESETS = ['pittsburgh', 'sandbox', 'johnstown', 'ellicott'].filter((p) => p !== PRESET);
@@ -169,11 +176,16 @@ async function main() {
   const baseUrl = process.env.E2E_URL ?? (await startVite());
   console.log(`[e2e] app URL ${baseUrl}${vite ? (args.prod ? ' (own production preview)' : ' (own vite dev server)') : ''}`);
 
+  // New headless: real Metal GPU → hardware WebGPU (the headless shell only has SwiftShader). Brave is the browser
+  // the demo is actually presented in, and it is Chromium underneath, so the same flows run in it unchanged.
+  const brave = args.browser === 'brave';
+  if (brave && !fs.existsSync(BRAVE)) throw new Error(`--browser=brave: not installed at ${BRAVE}`);
   browser = await chromium.launch({
     headless: true,
-    channel: 'chromium', // new headless: real Metal GPU → hardware WebGPU (the headless shell only has SwiftShader)
+    ...(brave ? { executablePath: BRAVE } : { channel: 'chromium' }),
     args: ['--enable-unsafe-webgpu', '--enable-gpu', '--ignore-gpu-blocklist'],
   });
+  console.log(`[e2e] ${brave ? 'Brave' : 'Chromium'} ${browser.version()} → ${path.relative(ROOT, OUT)}`);
   const context = await browser.newContext({ viewport: { width: WIDTH, height: HEIGHT }, deviceScaleFactor: 1 });
   // Offline enforcement: the built-in presets must work without internet.
   // (Predicate matcher: local requests — every dev module — are never intercepted.)
@@ -1231,6 +1243,133 @@ const FLOWS = [
       const after = await page.locator('.dl-try-step[data-step="levee"]').textContent();
       check(r, '"Remove levee" clears the walls, the count and the glow', /remove levee/i.test(label ?? '') && removed && /build a levee/i.test(after ?? ''), `“${label?.trim()}” → “${after?.trim()}”, cleared ${removed}`);
       await calm();
+    },
+  },
+  {
+    id: 14,
+    name: 'Screen Wake Lock holds the display awake while the pitch runs',
+    timeoutMs: 60_000,
+    async run(r) {
+      // A running simulation is not "user activity" to macOS, so without this the demo laptop's display dims and
+      // blanks mid-pitch (artifacts/browsers3: 2 min on battery). src/app/wakeLock.ts asks the browser to hold it.
+      const held = await page
+        .waitForFunction(() => window.__deluge.getWakeLock().held, null, { timeout: 15_000 })
+        .then(() => true, () => false);
+      const status = await D(() => window.__deluge.getWakeLock());
+      r.metrics = { wakeLock: status };
+      check(r, 'the browser supports the Screen Wake Lock API', status.supported, status.supported ? 'navigator.wakeLock' : 'missing');
+      check(r, 'a screen wake lock is held while the tab is visible', held && status.held && status.acquired >= 1, `held ${status.held}, acquired ${status.acquired}, error ${status.lastError ?? 'none'}`);
+
+      // Hidden tabs must hand the lock back (the browser would anyway; the app says so explicitly so its own state
+      // stays honest). document.visibilityState is read-only, so the getter is swapped for the length of the check.
+      const hide = (hidden) =>
+        D((h) => {
+          const saved = window.__e2eVis ?? (window.__e2eVis = Object.getOwnPropertyDescriptor(Document.prototype, 'visibilityState'));
+          if (h) Object.defineProperty(Document.prototype, 'visibilityState', { configurable: true, get: () => 'hidden' });
+          else Object.defineProperty(Document.prototype, 'visibilityState', saved);
+          document.dispatchEvent(new Event('visibilitychange'));
+        }, hidden);
+      await hide(true);
+      const released = await page
+        .waitForFunction(() => !window.__deluge.getWakeLock().held, null, { timeout: 10_000 })
+        .then(() => true, () => false);
+      check(r, 'the lock is released when the tab is hidden', released, released ? 'released' : 'still held');
+
+      await hide(false);
+      const regained = await page
+        .waitForFunction(() => window.__deluge.getWakeLock().held, null, { timeout: 10_000 })
+        .then(() => true, () => false);
+      const after = await D(() => window.__deluge.getWakeLock());
+      r.metrics.wakeLockAfter = after;
+      check(
+        r,
+        're-requested when the tab comes back (the browser drops it on every hide)',
+        regained && after.acquired > status.acquired,
+        `held ${after.held}, acquired ${status.acquired} → ${after.acquired}`,
+      );
+      check(r, 'no refusals along the way', after.lastError === null, after.lastError ?? 'none');
+    },
+  },
+  {
+    id: 15,
+    name: 'GPU lost while a scene loads → the load is abandoned, not run on a dead device',
+    timeoutMs: 180_000,
+    resetsPage: true,
+    stallNetwork: true,
+    // Destroying the device is the point of the flow; these are what a working loss looks like.
+    expectedErrors: /GPU device lost|Device was destroyed|device was lost/i,
+    async run(r, ctx) {
+      // artifacts/soak3/t3-devlost.json, S5b: the GPU died while a live area was downloading. The load carried on,
+      // timed out 15 s later, fell back to a preset and reported THAT as the scene — on a destroyed device, and over
+      // the address bar the loss handler had just set. src/app/scene.ts abandon() stops it; this flow proves it.
+      await page.goto(ctx.appUrl, { waitUntil: 'domcontentloaded' });
+      await waitReady(90_000);
+      // Seed this tab's reload history so the card waits for the user (two losses already in the window) and so its
+      // lead has a real "how long did it run" to report: 4 minutes, which it must NOT call "again after restarting".
+      await D(() => {
+        const now = Date.now();
+        sessionStorage.setItem('deluge:gpu-lost-reload-at', JSON.stringify([now - 300_000, now - 240_000]));
+      });
+
+      const live = new URL(ctx.baseUrl);
+      live.search = '?live=40.25980,-76.88700,6&name=Harrisburg,+Pennsylvania';
+      await page.goto(live.href, { waitUntil: 'domcontentloaded' });
+      await page.locator('.dl-loading-cancel').waitFor({ state: 'visible', timeout: 90_000 });
+      await waitFor(() => stalledRoutes.length > 0, 30_000);
+      const before = await D(() => ({ search: location.search, loading: window.__deluge.getState().loading, presetId: window.__deluge.getState().presetId }));
+      check(r, 'a live scene is downloading when the device dies', !!before.loading && before.presetId === null, `“${before.loading?.message}”, ${stalledRoutes.length} requests held`);
+
+      await D(() => window.__deluge.app.gpu.device.destroy());
+      const carded = await page
+        .waitForFunction(() => document.getElementById('deluge-fatal'), null, { timeout: 30_000 })
+        .then(() => true, () => false);
+      const card = await D(() => {
+        const root = document.getElementById('deluge-fatal');
+        if (!root) return null;
+        return {
+          title: root.querySelector('h1')?.textContent ?? '',
+          lead: root.querySelector('.lead')?.textContent ?? '',
+          countdown: root.querySelector('.countdown')?.textContent ?? null,
+          buttons: [...root.querySelectorAll('button')].map((b) => b.textContent?.trim()),
+          search: location.search,
+          usable: window.__deluge.app.scenes?.usable ?? null,
+        };
+      });
+      r.metrics = { card };
+      check(r, 'the device-lost card takes over', carded && /Lost connection to the GPU/.test(card?.title ?? ''), card?.title ?? 'no card');
+      check(r, 'the load in flight is abandoned at once (no work left on the dead device)', card?.usable === false, `scenes.usable ${card?.usable}`);
+      check(
+        r,
+        'the card does not claim the driver "reset again after restarting" when it ran for minutes',
+        !!card && !/again after restarting/.test(card.lead) && /ran for 4 minutes/.test(card.lead),
+        `“${(card?.lead ?? '').slice(0, 120)}…”`,
+      );
+      check(
+        r,
+        'a non-default scene gets a way out besides Reload',
+        !!card && card.buttons.includes('Reload this scene') && card.buttons.some((b) => /^Start with /.test(b ?? '')),
+        (card?.buttons ?? []).join(' · ') || 'no buttons',
+      );
+      check(r, 'it waits for the user rather than reloading into the same loss', card?.countdown === null, card?.countdown ?? 'no countdown');
+      check(r, 'the address bar still points at the scene that was loading', card?.search === before.search, `${card?.search}`);
+      await shot('15-device-lost-mid-load');
+
+      // Let the held downloads fail, which is what used to wake the abandoned load up: it gave up, ran its fallback
+      // and rewrote the address bar behind the card. Nothing may happen now.
+      await releaseStalled();
+      await sleep(8000);
+      const after = await D(() => {
+        const s = window.__deluge.getState();
+        return { search: location.search, presetId: s.presetId, terrainName: s.terrainName, scene: !!window.__deluge.app.scenes?.scene };
+      });
+      r.metrics.after = after;
+      check(r, 'the abandoned load never rewrites the address bar afterwards', after.search === before.search, `${after.search}`);
+      check(r, 'and never builds a fallback scene on the dead device', after.presetId === null && !after.scene, `presetId ${after.presetId}, scene ${after.scene}`);
+
+      // Leave the tab as the later runs expect: no seeded history, the default scene on screen.
+      await D(() => sessionStorage.removeItem('deluge:gpu-lost-reload-at'));
+      await page.goto(ctx.appUrl, { waitUntil: 'domcontentloaded' });
+      await waitReady(90_000);
     },
   },
 ];

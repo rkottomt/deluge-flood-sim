@@ -252,6 +252,26 @@ function installSmokeReport(win, consoleLog) {
       const gpu = await app.getGPUInfo('complete');
       // The full blob is megabytes of driver detail; §V-2 only needs the adapter identity.
       report.gpu = { vendor: gpu?.gpuDevice?.[0]?.vendorId ?? null, device: gpu?.gpuDevice?.[0]?.deviceId ?? null, description: gpu?.machineModelName ?? null, raw: gpu?.auxAttributes ?? null };
+      // What the checklist wants to read off a *packaged* app: items 13 (no DevTools), 15 (no deep link) and the
+      // webPreferences that items 1-2 depend on, straight from the running main process.
+      const prefs = win.webContents.getLastWebPreferences?.() ?? {};
+      report.security = {
+        devTools: prefs.devTools ?? null,
+        sandbox: prefs.sandbox ?? null,
+        contextIsolation: prefs.contextIsolation ?? null,
+        nodeIntegration: prefs.nodeIntegration ?? null,
+        webSecurity: prefs.webSecurity ?? null,
+        preload: prefs.preload ?? null,
+        // `getLastWebPreferences()` does not echo `devTools` or `backgroundThrottling`; read them where they live.
+        backgroundThrottling: win.webContents.backgroundThrottling,
+        devToolsOpened: win.webContents.isDevToolsOpened(),
+        devToolsRequested: !app.isPackaged, // what webPreferences.devTools was set to for this window
+        menu: Menu.getApplicationMenu()?.items.map((i) => ({ label: i.label, items: i.submenu?.items.map((x) => x.role ?? x.label) ?? [] })) ?? null,
+        isDefaultProtocolClient: app.isDefaultProtocolClient('deluge'),
+        displaySleepBlocked: blockerId !== null && powerSaveBlocker.isStarted(blockerId),
+        contentSize: win.getContentSize(),
+        scaleFactor: screen.getPrimaryDisplay().scaleFactor,
+      };
       const scriptPath = process.env.DELUGE_SMOKE_SCRIPT;
       if (scriptPath) {
         // A fixed file on disk, never renderer input and never interpolated (R12). Verification builds only.
@@ -313,6 +333,9 @@ function createWindow(ses) {
       safeDialogs: true,
       devTools: !app.isPackaged, // R12
       backgroundThrottling: false, // the sim must keep full speed if the window loses focus
+      // Middle-click must not be able to ask for a new window at all. setWindowOpenHandler already denies every
+      // request (R7); turning the feature off removes the ask, and with it electronegativity's AUXCLICK finding.
+      disableBlinkFeatures: 'Auxclick',
       // No `preload` (R3), no `enableBlinkFeatures`, no `additionalArguments`.
     },
   });

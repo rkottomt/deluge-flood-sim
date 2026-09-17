@@ -2,8 +2,9 @@
 
 For the people presenting Deluge to judges. Every number below comes from the code, the tests,
 [README.md](README.md), [ARCHITECTURE.md](ARCHITECTURE.md), or a rehearsal on the demo laptop itself (MacBook Air M4,
-macOS 15.6): production build, headless Chromium and headless Brave on the laptop's own GPU, 1470×956 at 2×, offline,
-real clicks, 17 Sep 2026. Where a rehearsal ran on battery or while other GPU jobs were running, the numbers say so.
+macOS 15.6): production build, headless Chromium and headless Brave on the laptop's own GPU, 1470×956 at 2× — this
+Air's whole screen, which is more than a real browser window gives the page (see *The page*) — offline, real clicks,
+17 Sep 2026. Where a rehearsal ran on battery or while other GPU jobs were running, the numbers say so.
 
 [1 Checklist](#1-before-judging) · [2 Three-minute pitch](#2-the-three-minute-pitch) ·
 [3 Sixty-second version](#3-the-sixty-second-version) · [4 The hard part](#4-the-hard-part) ·
@@ -23,11 +24,16 @@ real clicks, 17 Sep 2026. Where a rehearsal ran on battery or while other GPU jo
 **Power.** Low Power Mode and Energy Saver can cap the page at 30 fps; heat and a busy GPU cut sim speed.
 
 - [ ] Plug in the charger.
-- [ ] **Turn Low Power Mode off.** System Settings → Battery → Low Power Mode → **Never**. On this laptop it is set on
-  for battery *and* for the adapter, so plugging in does not turn it off. Check in Terminal:
+- [ ] **Turn Low Power Mode off.** System Settings → Battery → Low Power Mode → **Never**. It is set per power source,
+  and on this laptop the two disagree: as measured on 17 Sep, battery is off but **the adapter still has it on**, so
+  plugging the charger in switches it back **on**. Check it with the charger in, which is how you will present:
   `pmset -g | grep lowpowermode` must print `0`.
-- [ ] Keep the screen awake: run `caffeinate -dis` in a Terminal tab and leave it running. The display otherwise sleeps
-  after 2 min on battery and 10 min on the adapter.
+- [ ] Keep the screen awake. Deluge asks the browser for a **Screen Wake Lock** while the tab is visible, which holds
+  the display awake in Brave and Chrome with nothing to switch on (it is handed back whenever you leave the tab and
+  taken again when you come back). Checked on this laptop: with the page open in Brave, `pmset -g assertions` lists
+  `pid NNN(Brave Browser): NoDisplaySleepAssertion named: "Blink Wake Lock"`. Safari 18 has no such API, and no lock
+  outvotes closing the lid — so for belt and braces run `caffeinate -dis` in a Terminal tab and leave it running.
+  Without either, the display sleeps after 2 min on battery and 10 min on the adapter.
 - [ ] **Keep the lid open.** Closing it sleeps the Mac, and waking it can reset the GPU (see *If something goes wrong*).
 
 **A quiet GPU.**
@@ -51,8 +57,10 @@ real clicks, 17 Sep 2026. Where a rehearsal ran on battery or while other GPU jo
 - [ ] Use **Brave** (installed: 1.94 on Chromium 152). Chrome is not installed. On this laptop Brave with no flags gets a
   real WebGPU adapter (`apple metal-3`, not a fallback), and a full rehearsal of section 2 in headless Brave ran every
   beat with no errors.
-- [ ] **Not Safari.** It is Safari 18.6; Deluge supports Safari 26+ (README). Safari 18 keeps WebGPU behind
-  *Develop → Feature Flags* and that path is untested.
+- [ ] **Not Safari.** This Mac has Safari 18.6, and Deluge needs Safari 26+ (README). Safari 18 does have WebGPU, but
+  switched off behind a flag: *Settings → Advanced → Show features for web developers*, then
+  *Develop → Feature Flags… → WebGPU*. Deluge has not been rehearsed that way, so treat it as a last resort — the
+  app's unsupported-browser screen spells out the same path if a judge lands there on their own Mac.
 - [ ] Brave Settings → search "energy" → turn **Energy Saver** off (it caps pages at 30 fps). Shields don't matter:
   everything is served from localhost.
 - [ ] If Brave shows "This browser can't run Deluge (yet)": `brave://settings/system` → *Use graphics acceleration when
@@ -64,13 +72,21 @@ real clicks, 17 Sep 2026. Where a rehearsal ran on battery or while other GPU jo
 
 - [ ] Open http://localhost:4173/ (the address becomes `?preset=pittsburgh`) **before the first judge arrives**, and
   watch it run for a minute.
-- [ ] Full screen (Ctrl-Cmd-F) at 100 % zoom (Cmd-0). The rehearsal viewport was 1470×956, which is full screen on this Air.
+- [ ] Full screen (Ctrl-Cmd-F) at 100 % zoom (Cmd-0). 1470×956 is this Air's whole screen and what the headless
+  rehearsals used; a real Brave window hands the page less, because the tab strip and toolbar stay (measured: 1470×752
+  in a maximised window). That is fine — the layout was checked at 956, 924, 837, 746 and 718 px tall and nothing
+  clips or overlaps anywhere in that range.
 - [ ] The start screen should show:
   - top right: ≈ 60 fps
   - bottom left, LIVE SOLVER: Mass error `<0.001 %`, Sim speed close to `60×` (far lower: something else is using the
     GPU)
   - top centre, *Try it*: **Raise to 1936 record · Evacuate · Build a levee · Hurricane rain · Break it**
   - right panel: River stage **16.0 ft**
+
+**Mid-pitch, in one line.** *Screen goes dark:* it shouldn't — the page holds a wake lock in Brave — so wiggle the
+trackpad and start `caffeinate -dis`. *Top right says ≈ 30 fps:* Low Power Mode or Brave's Energy Saver is on; every
+beat still happens, fix it between judges. *"Lost connection to the GPU":* let it reload itself, or pick a button on
+the card — the table below has the detail.
 
 ### Reset between judges
 
@@ -87,7 +103,9 @@ so the fanless Air does less work between judges. Press Space again as the judge
 | What you see | What to do |
 | --- | --- |
 | "Lost connection to the GPU" with "Reloading in 3 s…" | Nothing. It reloads by itself into the same scene (rehearsal: running again 11 s after the loss, on a busy GPU). Say: "the GPU driver reset; the whole simulation lives on the GPU, so it restarts." |
-| The same card with no countdown, "reset again after restarting", a **Reload** button | A second loss within 10 minutes of an automatic reload in this tab waits for you. Quit other GPU apps, click **Reload** (rehearsal: running 9 s later). If it keeps happening, open a new tab at localhost:4173 (the limit is per tab) or relaunch Brave. |
+| The same card with **no countdown** and a **Reload** button (you are on Pittsburgh, the usual pitch scene) | A second loss within 10 minutes of an automatic reload in this tab waits for you instead of looping. The card says how long the scene ran after the last restart: minutes means another one-off, seconds means the machine is struggling. Quit other GPU apps and click **Reload** (rehearsal: running 9 s later). If it keeps happening, open a new tab at localhost:4173 (the limit is per tab) or relaunch Brave. |
+| The same card with **Reload this scene** *and* **Start with Pittsburgh** | Same thing, but you were on Johnstown, Ellicott City, the sandbox or a live area. **Start with Pittsburgh** is the way out: it is the lightest scenario, needs no network and always loads. A live area or an oversized grid that keeps dying switches to it by itself. |
+| Either card while a scene was still loading | The load is dropped the moment the GPU goes, so nothing carries on behind the card and the address bar still points at what you asked for. |
 | Brave's own crash page, or a blank page | Cmd-R. |
 | "This site can't be reached" | The `npm run demo` terminal was closed. Run it again. |
 | ≈ 30 fps top right | Low Power Mode or Energy Saver is on. The demo still works; fix it between judges. |
@@ -363,8 +381,9 @@ the snap removes goes in the ledger; the CPU sums the ledger in Float64. The fir
 GPU. Metal folded that into `Δ`, and after hours at the crest the HUD turned yellow. Snapping fixed it.
 
 **14. Does it run on other machines?**
-Any browser with WebGPU: Chrome or Edge 113+, Safari 26+, Firefox 141+ on Windows (the list on the unsupported-browser
-screen). Performance has only been measured on an Apple M4. The app adapts substeps and render resolution to measured
+Any browser with WebGPU: Chrome, Edge or Brave 113+, Safari 26+, and Firefox 141+ on Windows / 147+ on Apple-silicon
+Macs (the list on the unsupported-browser screen, which also tells a visitor exactly what to switch on in the browser
+they arrived with). Performance has only been measured on an Apple M4. The app adapts substeps and render resolution to measured
 frame time and GPU latency; with the GPU emulated ~35 % slower, frames held 58–60 fps and sim speed fell to ~15–20×.
 
 **15. Can it do my town?**

@@ -328,7 +328,7 @@ test('buildRoadNetwork drops vertices that do not project to a finite grid point
   // as NaN (a single NaN node poisons snapping, clipping and every route computed afterwards).
   const roads: RawRoad[] = [
     {
-      cls: 'residential',
+      cls: 'local',
       coords: [
         [-80.002, 40.438],
         [Number.NaN, 40.439],
@@ -336,7 +336,7 @@ test('buildRoadNetwork drops vertices that do not project to a finite grid point
       ] as Array<[number, number]>,
     },
     {
-      cls: 'residential',
+      cls: 'local',
       coords: [
         [-80.002, 40.442],
         [Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY],

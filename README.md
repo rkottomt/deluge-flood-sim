@@ -11,8 +11,9 @@ Built for SteelHacks, *No Wrapper* track: no language models anywhere in the pro
 
 ## Run it
 
-Needs Node 20.19+ or 22.12+ and a WebGPU browser (Chrome / Edge 113+, Safari 26+). The built-in scenarios work
-offline.
+Needs Node 20.19+ or 22.12+ and a WebGPU browser: Chrome, Edge or Brave 113+, Safari 26+ (Safari 18 has WebGPU behind
+*Develop → Feature Flags*), or Firefox 141+ on Windows / 147+ on Apple-silicon Macs. The built-in scenarios work
+offline, and the app holds a Screen Wake Lock while it is on screen so the display does not sleep mid-demo.
 
 ```bash
 npm ci
@@ -120,7 +121,7 @@ every ~300 ms, never blocking: stats reduction pass ─▶ mapAsync ─▶ HUD +
 | [`src/data`](src/data) | USGS 3DEP / imagery / roads loaders, hydro-conditioning, presets, live areas |
 | [`src/routing`](src/routing) | road graph, flood status per edge, travel-time Dijkstra |
 | [`src/ui`](src/ui) | panels, tools, HUD, How it works, location picker |
-| [`src/app`](src/app) | scene loading, store → solver sync, stage ramp, protected-land analysis, frame pacing, debug API (`window.__deluge`) |
+| [`src/app`](src/app) | scene loading, store → solver sync, stage ramp, protected-land analysis, frame pacing, screen wake lock, debug API (`window.__deluge`, dev and flagged builds only) |
 
 ## Repo tour
 
@@ -143,6 +144,16 @@ npm test                    # every unit suite, one file at a time (the GPU suit
 npm run test:unit           # the suites that need no GPU
 npm run e2e                 # end-to-end demo flows in headless Chromium on the real GPU, offline
 node scripts/e2e.mjs --prod # the same against the production build
+```
+
+**Driving the app from automation.** The e2e flows, `scripts/bench.mjs` and `scripts/shot.mjs --ready=…` all steer the
+app through `window.__deluge`, which a released build no longer contains: it is compiled out unless the build sets
+`DELUGE_DEBUG_API=1` (`vite.config.ts`, `src/env.d.ts`), so a copy handed to anyone else exposes no automation surface.
+`npm run dev` keeps it, and `npm run e2e` sets the variable before it builds, so neither needs anything. A server you
+start yourself for those tools needs it too:
+
+```bash
+DELUGE_DEBUG_API=1 npm run demo   # same as npm run demo, plus window.__deluge for bench / shot
 ```
 
 Routing timing bounds are asserted in `tests/routing/perf.test.ts` (normalised for machine load); `PERF=1` also checks

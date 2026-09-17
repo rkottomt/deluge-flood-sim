@@ -1,5 +1,5 @@
 import { defineConfig, type Plugin } from 'vite';
-import { contentSecurityPolicy } from './src/data/csp';
+import { contentSecurityPolicy } from './src/data/csp.ts';
 
 const CHARSET_META = '<meta charset="UTF-8" />';
 

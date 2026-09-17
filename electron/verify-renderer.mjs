@@ -81,6 +81,19 @@ async function tlsFixture() {
   return server;
 }
 
+/**
+ * The environment this repo is developed in exports ELECTRON_RUN_AS_NODE=1, which turns the Electron binary into
+ * a bare Node interpreter — `require('electron')` then fails and no window ever opens. The packaged app is immune
+ * (the RunAsNode fuse is off, checklist item 9), but an unpackaged launch inherits the shell, so strip it here and
+ * in `npm run app:dev`.
+ */
+function cleanEnv(extra) {
+  const env = { ...process.env, ...extra };
+  delete env.ELECTRON_RUN_AS_NODE;
+  delete env.NODE_OPTIONS;
+  return env;
+}
+
 /** Launch the wrapper and collect everything the main process prints. */
 async function launch({ dist, args = [] }) {
   const mainLog = [];
@@ -88,7 +101,7 @@ async function launch({ dist, args = [] }) {
     executablePath: electronPath,
     args: [MAIN, ...args],
     cwd: REPO,
-    env: { ...process.env, DELUGE_DIST: dist, DELUGE_SMOKE_OUT: '' },
+    env: cleanEnv({ DELUGE_DIST: dist }),
   });
   app.process().stdout?.on('data', (b) => mainLog.push(String(b)));
   app.process().stderr?.on('data', (b) => mainLog.push(String(b)));
@@ -233,6 +246,13 @@ await waitReady(A.page);
   }
 }
 
+/**
+ * Everything above is the app behaving normally, so its console must be clean. Everything below deliberately
+ * provokes blocks (CSP refusals, 404s, a file:// navigation), and those messages are the proof the rules work —
+ * so the console check is taken here, before the adversarial half starts.
+ */
+record('A-console', 'R2', 'the app runs with a clean console under the wrapper', A.pageErrors.length === 0, A.pageErrors.slice(0, 4).join(' | ') || 'clean');
+
 /* V3 CSP */
 {
   const hdr = await A.page.evaluate(async (asset) => {
@@ -364,9 +384,6 @@ await waitReady(A.page);
   }));
   record(15, 'R13', 'no URL scheme is registered to this app', surface.deepLink === false && surface.appLink === false, JSON.stringify(surface));
 }
-
-/* console hygiene for the debug build */
-record('A-console', 'R2', 'debug build produced no unexpected renderer errors', A.pageErrors.filter((e) => !/blocked|violat|net::ERR|Failed to load resource|evil\.example|attacker-bucket|PrintingTools/i.test(e)).length === 0, A.pageErrors.slice(0, 4).join(' | ') || 'clean');
 
 await A.app.close();
 

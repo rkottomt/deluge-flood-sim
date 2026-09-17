@@ -31,8 +31,10 @@
  * because they move these numbers by more than the margins do.
  *
  * Flags: --quick --strict --url=<url> --port=<n> --json=<path> --seconds=<n> --sustain=<s>
- *        --scenario=idle,crest,... --viewport=air|wide|both --keep-dist --headed --calibrate
+ *        --scenario=idle,crest,... --viewport=air|wide|both --keep-dist --headed --calibrate --allow-low-power
  *   --calibrate prints the measured numbers as a ready-to-paste THRESHOLDS block and never fails.
+ *   --allow-low-power measures with macOS Low Power Mode on and keeps the floors fatal. Off by default: LPM caps
+ *   the GPU clocks, and the same scenario measured 162x sim speed with it off against 27x with it on.
  */
 import { chromium } from 'playwright';
 import { execFile, spawn } from 'node:child_process';
@@ -95,8 +97,15 @@ const THRESHOLDS = {
   inputLatP95Ms: { dir: 'max', env: 'DELUGE_PERF_MAX_INPUT_LATENCY_MS', target: 85, floor: 200, unit: 'ms' },
   /** Navigation start to __deluge.ready (first frame with terrain and water). Overridden for the live scenario. */
   ttiS: { dir: 'max', env: 'DELUGE_PERF_MAX_TTI_S', target: 9, floor: 25, unit: 's' },
-  /** Sustain run only: how far fps and sim speed may fall from the first chunk to the last. */
+  /**
+   * Sustain run only, and ONE-SIDED: only degradation counts. A scenario that speeds up as the flood settles is
+   * not a lag regression, so the checks below feed max(0, drop) rather than |change|.
+   */
   driftPct: { dir: 'max', env: 'DELUGE_PERF_MAX_DRIFT_PCT', target: 12, floor: 40, unit: '%' },
+  /** Sim speed legitimately moves with the physics (more wet cells = more work), so it is judged far more loosely. */
+  simDriftPct: { dir: 'max', env: 'DELUGE_PERF_MAX_SIM_DRIFT_PCT', target: 45, floor: 75, unit: '%' },
+  /** Frame-time p95 growth from the first chunk to the last: the clearest "it gets laggier the longer it runs". */
+  p95GrowthMs: { dir: 'max', env: 'DELUGE_PERF_MAX_P95_GROWTH_MS', target: 5, floor: 15, unit: 'ms' },
 };
 
 // An explicitly set env var wins over both the default above and any per-scenario override below, so a single
@@ -694,15 +703,25 @@ function evaluate(row) {
   // Absolute sim speed is only meaningful where the scenario asked for more than real time on purpose.
   if (over.simSpeed) add('simSpeed', row.simSpeed);
   if (row.sustain) {
-    add('driftPct', Math.abs(row.sustain.fpsDriftPct), { name: 'fpsDriftPct' });
-    add('driftPct', Math.abs(row.sustain.simSpeedDriftPct), { name: 'simSpeedDriftPct' });
+    // Positive = it got worse over the run. Improvement is not a regression.
+    add('driftPct', Math.max(0, row.sustain.fpsDriftPct), { name: 'fpsDriftPct' });
+    add('simDriftPct', Math.max(0, row.sustain.simSpeedDriftPct), { name: 'simSpeedDriftPct' });
+    add('p95GrowthMs', Math.max(0, row.sustain.p95GrowthMs), { name: 'p95GrowthMs' });
   }
   return checks;
 }
 
 // ── main ────────────────────────────────────────────────────────────────────────────────────────
 const machine = await machineState();
+const ALLOW_LOW_POWER = argv['allow-low-power'] === 'true' || process.env.DELUGE_PERF_ALLOW_LOW_POWER === '1';
 const advisory = CALIBRATE || process.env.DELUGE_PERF_ADVISORY === '1' || (machine.noisy && !STRICT);
+/**
+ * Low Power Mode is not noise: macOS caps the GPU clocks, and this machine measured 162x sim speed with it off
+ * against 27x with it on — six times the margin of any threshold here. A run in that state cannot tell a
+ * regression from a setting, so even the floors are reported rather than fatal, and the banner says so loudly.
+ * `--strict` (or --allow-low-power) measures anyway and fails normally.
+ */
+const lowPowerAdvisory = machine.lowPowerMode && !STRICT && !ALLOW_LOW_POWER;
 
 console.log('\n=== Deluge lag suite ===');
 console.log(`machine : ${machine.host} · ${machine.platform} · ${machine.cpus} cores · ${machine.memGB} GB`);
@@ -710,6 +729,15 @@ console.log(`power   : ${machine.pmsetBatt.split('\n').slice(-1)[0].trim() || 'u
 console.log(`load    : ${machine.loadavg.join(' ')}${machine.busyProcesses.length ? ` · busy: ${machine.busyProcesses.join(', ')}` : ''}`);
 if (advisory) console.log(`mode    : ADVISORY${CALIBRATE ? ' (--calibrate)' : ''} — target misses are reported, not fatal${machine.noisyReasons.length ? ` (${machine.noisyReasons.join('; ')})` : ''}`);
 else console.log('mode    : STRICT — target misses fail the run');
+if (lowPowerAdvisory) {
+  console.log(
+    '\n  ############################################################################\n' +
+      '  #  LOW POWER MODE IS ON — these numbers measure the setting, not the app.  #\n' +
+      '  #  Turn it off (System Settings > Battery > Low Power Mode: Never), plug   #\n' +
+      '  #  in, and re-run. Nothing below can fail the build in this state.         #\n' +
+      '  ############################################################################\n',
+  );
+}
 
 let server = null;
 let baseUrl = EXTERNAL_URL;
@@ -851,7 +879,8 @@ try {
   const floorMisses = misses.filter((m) => m.status === 'floor-miss');
   const targetMisses = misses.filter((m) => m.status === 'target-miss');
   const hardErrors = errRows.flatMap((r) => r.pageErrors);
-  const failed = floorMisses.length > 0 || hardErrors.length > 0 || (!advisory && targetMisses.length > 0);
+  // A page error is a real bug in any power state; timing floors are not, while Low Power Mode is on.
+  const failed = hardErrors.length > 0 || (!lowPowerAdvisory && floorMisses.length > 0) || (!advisory && targetMisses.length > 0);
 
   fs.mkdirSync(path.dirname(JSON_OUT), { recursive: true });
   fs.writeFileSync(
@@ -863,6 +892,7 @@ try {
         date: new Date().toISOString(),
         quick: QUICK,
         advisory,
+        lowPowerAdvisory,
         strict: STRICT,
         online,
         machine,
@@ -873,7 +903,7 @@ try {
         rows,
         skipped,
         misses,
-        verdict: failed ? 'FAIL' : advisory && targetMisses.length ? 'ADVISORY' : 'PASS',
+        verdict: failed ? 'FAIL' : (advisory || lowPowerAdvisory) && misses.length ? 'ADVISORY' : 'PASS',
       },
       null,
       2,
@@ -882,7 +912,9 @@ try {
   console.log(`\nJSON: ${path.relative(ROOT, JSON_OUT)}`);
 
   if (hardErrors.length) console.log(`\nFAIL: ${hardErrors.length} page error(s) during the run.`);
-  if (floorMisses.length) console.log(`FAIL: ${floorMisses.length} floor threshold(s) missed — the app is genuinely laggy.`);
+  if (floorMisses.length && lowPowerAdvisory)
+    console.log(`\nNOT FATAL: ${floorMisses.length} floor threshold(s) missed with Low Power Mode ON — turn it off and re-run before believing them.`);
+  else if (floorMisses.length) console.log(`FAIL: ${floorMisses.length} floor threshold(s) missed — the app is genuinely laggy.`);
   if (targetMisses.length && advisory && !floorMisses.length)
     console.log(
       `ADVISORY: ${targetMisses.length} target threshold(s) missed on a noisy machine (${machine.noisyReasons.join('; ') || 'advisory mode'}). Re-run on AC power with nothing else open before treating this as a regression.`,
