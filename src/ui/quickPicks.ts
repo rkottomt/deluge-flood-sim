@@ -28,15 +28,20 @@ export const QUICK_PICKS: QuickPick[] = [
 export interface LoadedArea {
   /** The scenario has a water-level control (a water body crosses the area's edge). */
   waterLevel: boolean;
+  /** The size and grid it was loaded at (detection depends on both). */
+  sizeMeters?: number;
+  resolution?: number;
 }
 
 /** Tooltip for a quick pick, before it has loaded (`loaded` null) or after. */
 export function quickPickTip(pick: QuickPick, loaded: LoadedArea | null | undefined): string {
   if (!loaded) return pick.rainStory ? `${pick.tip}. Once it loads, try Hurricane rain` : pick.tip;
+  const at =
+    loaded.sizeMeters && loaded.resolution ? `Loaded at ${Math.round(loaded.sizeMeters / 100) / 10} km · ${loaded.resolution}²` : 'Loaded';
   if (loaded.waterLevel) {
-    return `${pick.tip}. Loaded, it has a water-level control — raise the water${pick.rainStory ? ', or try Hurricane rain' : ''}`;
+    return `${pick.tip}. ${at}, it has a water-level control — raise the water${pick.rainStory ? ', or try Hurricane rain' : ''}`;
   }
-  return `${pick.tip}. Loaded, no water body crosses its edge, so rain floods it — try Hurricane rain`;
+  return `${pick.tip}. ${at}, no water body crosses its edge, so rain floods it — try Hurricane rain`;
 }
 
 /** The quick pick whose centre a request uses, if any. */

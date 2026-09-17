@@ -138,8 +138,9 @@ fn vsWaterSkirt(@builtin(vertex_index) vi: u32) -> WOut {
 }
 
 /** Ripple slopes (∂h/∂x, ∂h/∂z) and foam noise from the tileable ripple texture. */
-fn rippleSample(p: vec2f) -> vec4f {
-  let s = textureSample(rippleTex, repSamp, p);
+/** Ripple texel at p with the screen-space gradients of p (the same filtering textureSample would choose). */
+fn rippleSample(p: vec2f, gx: vec2f, gy: vec2f) -> vec4f {
+  let s = textureSampleGrad(rippleTex, repSamp, p, gx, gy);
   return vec4f(s.rg * 2.0 - 1.0, s.b, s.a);
 }
 
@@ -213,16 +214,14 @@ fn fsWater(in: WOut) -> @location(0) vec4f {
   let pA = in.world.xz / 13.0;
   let pB = in.world.xz / 4.1;
   let pM = in.world.xz / 70.0;
-  let a0 = rippleSample(pA - adv * ph0 / 13.0);
-  let a1 = rippleSample(pA - adv * ph1 / 13.0 + vec2f(0.37, 0.61));
-  let b0 = rippleSample(pB - adv * ph0 / 4.1 + vec2f(0.21, 0.13) * F.time * 0.12);
-  let b1 = rippleSample(pB - adv * ph1 / 4.1 + vec2f(0.53, 0.19) + vec2f(0.21, 0.13) * F.time * 0.12);
-  let m0 = rippleSample(pM - adv * ph0 / 70.0);
-  let m1 = rippleSample(pM - adv * ph1 / 70.0 + vec2f(0.71, 0.29));
-  let rA = mix(a0, a1, blend);
-  let rB = mix(b0, b1, blend);
-  let rM = mix(m0, m1, blend);
-  let slickFar = textureSample(rippleTex, repSamp, in.world.xz / 233.0 + vec2f(0.31, 0.77)).a;
+  // Screen-space gradients of the world position and of the advection offset (uniform control flow): every ripple
+  // coordinate below is a linear combination of the two plus per-frame constants, so its gradient is too. The texture
+  // lookups themselves (textureSampleGrad, same filtering as textureSample) come after the early exits, so dry and
+  // blown-up fragments skip them.
+  let wDx = dpdx(in.world.xz);
+  let wDy = dpdy(in.world.xz);
+  let advDx = dpdx(adv);
+  let advDy = dpdy(adv);
   if (thick <= 0.0 || in.thick <= -30.0) {
     discard;
   }
@@ -249,6 +248,21 @@ fn fsWater(in: WOut) -> @location(0) vec4f {
     let glitch = mix(vec3f(2.8, 0.15, 1.4), vec3f(3.2, 1.6, 0.2), flicker * hash12(cellId + vec2f(7.0, 3.0)));
     return vec4f(mix(glitch * shore, in.haze.rgb * shore, in.haze.a), shore);
   }
+
+  let gA0 = (wDx - advDx * ph0) / 13.0;
+  let hA0 = (wDy - advDy * ph0) / 13.0;
+  let gA1 = (wDx - advDx * ph1) / 13.0;
+  let hA1 = (wDy - advDy * ph1) / 13.0;
+  let a0 = rippleSample(pA - adv * ph0 / 13.0, gA0, hA0);
+  let a1 = rippleSample(pA - adv * ph1 / 13.0 + vec2f(0.37, 0.61), gA1, hA1);
+  let b0 = rippleSample(pB - adv * ph0 / 4.1 + vec2f(0.21, 0.13) * F.time * 0.12, gA0 * (13.0 / 4.1), hA0 * (13.0 / 4.1));
+  let b1 = rippleSample(pB - adv * ph1 / 4.1 + vec2f(0.53, 0.19) + vec2f(0.21, 0.13) * F.time * 0.12, gA1 * (13.0 / 4.1), hA1 * (13.0 / 4.1));
+  let m0 = rippleSample(pM - adv * ph0 / 70.0, gA0 * (13.0 / 70.0), hA0 * (13.0 / 70.0));
+  let m1 = rippleSample(pM - adv * ph1 / 70.0 + vec2f(0.71, 0.29), gA1 * (13.0 / 70.0), hA1 * (13.0 / 70.0));
+  let rA = mix(a0, a1, blend);
+  let rB = mix(b0, b1, blend);
+  let rM = mix(m0, m1, blend);
+  let slickFar = textureSampleGrad(rippleTex, repSamp, in.world.xz / 233.0 + vec2f(0.31, 0.77), wDx / 233.0, wDy / 233.0).a;
 
   // ── Normal: macro η slope + advected ripples (roughness grows with distance instead of aliasing) ─────
   let macroSlope = nrm.ba * F.exag;

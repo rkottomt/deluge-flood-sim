@@ -313,7 +313,7 @@ export function createLocationPicker(ctx: UIContext): Modal {
       // A quick pick's tip says what its load actually offered from now on.
       const pick = quickPickAt(req.center.lat, req.center.lon);
       if (pick && (outcome === undefined || outcome === 'ok')) {
-        loadedPicks.set(pick.name, { waterLevel: !!store.get().scenario?.stage });
+        loadedPicks.set(pick.name, { waterLevel: !!store.get().scenario?.stage, sizeMeters: req.sizeMeters, resolution: req.resolution });
         const b = quick.querySelector<HTMLButtonElement>(`.dl-quick-btn[data-pick="${pick.name}"]`);
         if (b) b.dataset.tip = quickPickTip(pick, loadedPicks.get(pick.name));
       }

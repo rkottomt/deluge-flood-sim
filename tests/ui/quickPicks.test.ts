@@ -18,6 +18,7 @@ test('quick-pick tips only claim what a load found: Houston before loading, with
   const sac = QUICK_PICKS.find((p) => p.name === 'Sacramento')!;
   assert.equal(quickPickTip(sac, undefined), sac.tip);
   assert.match(quickPickTip(sac, { waterLevel: true }), /raise the water$/);
+  assert.match(quickPickTip(houston, { waterLevel: true, sizeMeters: 8000, resolution: 1024 }), /Loaded at 8 km · 1024², it has a water-level control/);
   for (const p of QUICK_PICKS) {
     assert.equal(quickPickAt(p.lat, p.lon), p);
     for (const loaded of [null, { waterLevel: true }, { waterLevel: false }]) assert.ok(quickPickTip(p, loaded).startsWith(p.tip));
