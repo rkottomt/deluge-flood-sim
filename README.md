@@ -211,10 +211,16 @@ Thresholds come in two tiers. **Floors** are "the demo is visibly broken" and ar
 this machine actually measures today plus headroom; they are fatal on a quiet machine and advisory when the run is
 noisy. Every threshold is overridable: `DELUGE_PERF_MIN_FPS=50 npm run test:perf`.
 
-The suite records `pmset` power state with every run. **Low Power Mode changes the answer**: on the demo Air the same
-scenario measured 162× sim speed with it off and 27× with it on. A run with Low Power Mode on is therefore never
-fatal — it prints a banner telling you to turn it off and re-run. Plug in and turn Low Power Mode off before
-believing any number here.
+The suite records `pmset` power state and the busy processes with every run. **Low Power Mode changes the answer**:
+on the demo Air the same scenario measured 162× sim speed with it off and 27× with it on. A run with Low Power Mode
+on is therefore never fatal — it prints a banner telling you to turn it off and re-run. Plug in and turn Low Power
+Mode off before believing any number here.
+
+**Run this suite first, on a cool machine, not after the other two.** The Air is fanless. In the release run the
+crest-and-rain scenario measured 44.6× and missed five *floors* after ~45 minutes of back-to-back GPU suites with a
+macOS background-sync storm running; the same scenario on the same build minutes later, on a quieter machine,
+measured 152× and passed every threshold with margin. Same binary, 3.4× apart. If a run fails, look at the `load`
+and `power` lines it printed before you go looking in the renderer.
 
 ### `npm run test:visual` — the graphics-glitch suite
 
