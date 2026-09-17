@@ -1,7 +1,7 @@
 /**
  * Readback reduction pass (runs only when a readback is due, ~3×/s — never per substep).
  *
- * Instead of mapping the whole rgba32float state (16 B/cell) plus the accounting buffer (12 B/cell) and looping
+ * Instead of mapping the whole rgba32float state (16 B/cell) plus the accounting buffer (8 B/cell) and looping
  * over millions of cells on the main thread, the GPU:
  *   • copies depth h into a compact storage buffer (4 B/cell) → SimSnapshot.depth, and
  *   • reduces everything else to one small record per 16×16 block (layout below).
@@ -19,9 +19,9 @@ import { ACC_PER_CELL, SIM_WGSL, SNAP_WGSL } from './common';
 import { FLOODED_DEPTH, WET_DEPTH } from '../constants';
 
 /** Float32 slots per 16×16 block in the stats buffer. */
-export const STATS_PER_BLOCK = 16;
+export const STATS_PER_BLOCK = 14;
 export const STAT = {
-  /** accX + accXLo and volume + volumeLo are the exact block sums (see header). */
+  /** accIn + accInLo, accOut + accOutLo and volume + volumeLo are the exact block sums (see header). */
   accIn: 0,
   accOut: 1,
   volume: 2,
@@ -39,9 +39,6 @@ export const STAT = {
   accInLo: 11,
   accOutLo: 12,
   volumeLo: 13,
-  /** Float32 rounding booked by the continuity pass (signed). */
-  accRound: 14,
-  accRoundLo: 15,
 } as const;
 
 const f = (x: number) => (Number.isInteger(x) ? `${x}.0` : String(x));
@@ -76,7 +73,6 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
   // so running sums of values snapped to the ULP grid of 512·max never round.
   var mIn = 0.0;
   var mOut = 0.0;
-  var mRound = 0.0;
   var mH = 0.0;
   for (var jj = 0; jj < 16; jj++) {
     let j = by * 16 + jj;
@@ -86,22 +82,18 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
       let a = ${ACC_PER_CELL}u * c;
       mIn = max(mIn, abs(acc[a]));
       mOut = max(mOut, abs(acc[a + 1u]));
-      mRound = max(mRound, abs(acc[a + 2u]));
       let h = textureLoad(exportTex, vec2i(i, j), 0).r;
       if (finite(h)) { mH = max(mH, abs(h)); }
     }
   }
   let eIn = ulpExp(512.0 * mIn);
   let eOut = ulpExp(512.0 * mOut);
-  let eRound = ulpExp(512.0 * mRound);
   let eH = ulpExp(512.0 * mH);
 
   var accIn = 0.0;
   var accInLo = 0.0;
   var accOut = 0.0;
   var accOutLo = 0.0;
-  var accRound = 0.0;
-  var accRoundLo = 0.0;
   var vol = 0.0;
   var volLo = 0.0;
   var maxH = 0.0;
@@ -124,16 +116,12 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
       let a = ${ACC_PER_CELL}u * c;
       let aI = acc[a];
       let aO = acc[a + 1u];
-      let aR = acc[a + 2u];
       let aIQ = snapE(aI, eIn);
       let aOQ = snapE(aO, eOut);
-      let aRQ = snapE(aR, eRound);
       accIn = accIn + aIQ;
       accInLo = accInLo + (aI - aIQ);
       accOut = accOut + aOQ;
       accOutLo = accOutLo + (aO - aOQ);
-      accRound = accRound + aRQ;
-      accRoundLo = accRoundLo + (aR - aRQ);
       if (!finite(h)) {
         nonFinite = nonFinite + 1.0;
         continue;
@@ -177,7 +165,5 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
   blocks[o + ${STAT.accInLo}u] = accInLo;
   blocks[o + ${STAT.accOutLo}u] = accOutLo;
   blocks[o + ${STAT.volumeLo}u] = volLo;
-  blocks[o + ${STAT.accRound}u] = accRound;
-  blocks[o + ${STAT.accRoundLo}u] = accRoundLo;
 }
 `;

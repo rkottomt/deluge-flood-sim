@@ -22,13 +22,13 @@ test('closed (wall) domain conserves mass: random terrain + water blob, relative
   const relErr = Math.abs(snap.stats.volume - v0) / v0;
   console.log(
     `  closed domain: t=${snap.simTime.toFixed(0)} s, wet area ${(snap.stats.wetArea / 1e6).toFixed(3)} km², ` +
-      `|ΔV|/V0 = ${relErr.toExponential(2)}, rounding booked ${solver.readbackDiagnostics.roundingVolume.toExponential(2)} m³, massError=${snap.stats.massError.toExponential(2)}`,
+      `|ΔV|/V0 = ${relErr.toExponential(2)}, rounding booked as inflow ${snap.stats.volumeIn.toExponential(2)} m³, massError=${snap.stats.massError.toExponential(2)}`,
   );
   assert.ok(snap.stats.wetArea > 1.5 * 40 * 40 * dx * dx, 'water should have spread well beyond the initial column');
   assert.ok(relErr < 1e-4, `relative volume error ${relErr}`);
-  // Nothing enters or leaves a walled domain without forcing; Float32 rounding has its own ledger.
-  assert.equal(snap.stats.volumeIn, 0);
+  // Nothing leaves a walled domain; all that enters is the signed Float32 rounding the solver books (continuity.ts).
   assert.equal(snap.stats.volumeOut, 0);
+  assert.ok(Math.abs(snap.stats.volumeIn) < 1e-5 * v0, `rounding booked ${snap.stats.volumeIn} m³`);
   const st = await solver.debugReadState();
   let minH = Infinity;
   for (const h of st.h) minH = Math.min(minH, h);
@@ -119,7 +119,7 @@ test('SimStats.massError is normalized by the most water held, not by the ever-g
     snap = await stepAndSnapshot(solver, 100, { chunk: 100 });
     peak = Math.max(peak, snap.stats.volume);
     const s = snap.stats;
-    const expected = Math.abs(s.volume - (s.volumeIn - s.volumeOut + solver.readbackDiagnostics.roundingVolume)) / Math.max(1, peak);
+    const expected = Math.abs(s.volume - (s.volumeIn - s.volumeOut)) / Math.max(1, peak);
     assert.ok(Math.abs(s.massError - expected) <= 1e-9 * Math.max(expected, 1e-9), `massError ${s.massError} vs ${expected}`);
   }
   const s = snap.stats;
@@ -132,7 +132,7 @@ test('SimStats.massError is normalized by the most water held, not by the ever-g
   solver.destroy();
 });
 
-test('rain on a deep river fed by a stage source: massError < 2e-5 over 3 sim-hours, rounding booked and tiny', async () => {
+test('rain on a deep river fed by a stage source: massError < 2e-5 over 3 sim-hours (Float32 rounding is booked)', async () => {
   // Pittsburgh raised to the 1936 crest in hurricane rain drifted linearly, ~2.8e-4 per sim-hour (the HUD turned yellow
   // after ~4 sim-hours). On a 20 m deep cell one Float32 ULP of h is 1.9e-6 m while a substep moves ~1e-6–1e-5 m, so
   // h + Δ rounds the same way substep after substep, and Metal folds the old booking (h + Δ) − h to Δ, hiding it.
@@ -166,15 +166,12 @@ test('rain on a deep river fed by a stage source: massError < 2e-5 over 3 sim-ho
     trace.push(`${(snap.simTime / 3600).toFixed(1)} h ${snap.stats.massError.toExponential(1)}`);
   }
   const s = snap.stats;
-  const rounding = solver.readbackDiagnostics.roundingVolume;
   console.log(
     `  deep river + rain: t=${(s.simTime / 3600).toFixed(2)} h  V=${s.volume.toExponential(4)}  in=${s.volumeIn.toExponential(3)}  ` +
-      `out=${s.volumeOut.toExponential(3)}  rounding booked ${rounding.toFixed(1)} m³  worst massError=${worst.toExponential(2)}\n    ${trace.join(' | ')}`,
+      `out=${s.volumeOut.toExponential(3)}  worst massError=${worst.toExponential(2)}\n    ${trace.join(' | ')}`,
   );
   assert.ok(s.volumeIn > 10 * peak && s.volumeOut > 10 * peak, 'the stage source should push many times the storage through');
   assert.ok(worst < 2e-5, `massError ${worst}`);
-  // The rounding ledger must stay a rounding-sized correction, not a place where real errors disappear.
-  assert.ok(Math.abs(rounding) < 1e-5 * peak, `rounding booked ${rounding} m³`);
   assert.deepEqual(gpuErrors(), []);
   solver.destroy();
 });

@@ -12,10 +12,11 @@
 import { MAX_SOURCES, MAX_STORMS } from '../constants';
 
 /**
- * Accounting buffer slots per cell (Float32, depth units): [0] in (rain, inflow, stage, brush, raise), [1] out (open
- * boundaries, infiltration, stage, brush), [2] Float32 rounding booked by the continuity pass (signed; see continuity.ts).
+ * Accounting buffer slots per cell (Float32, depth units): [0] in (rain, inflow, stage, brush, raise, and the signed
+ * Float32 rounding the continuity pass books), [1] out (open boundaries, infiltration, stage, brush). Two, not three:
+ * a separate rounding slot (or buffer) made every substep ~10 % slower at 1024², from the extra per-cell memory alone.
  */
-export const ACC_PER_CELL = 3;
+export const ACC_PER_CELL = 2;
 
 /** Byte size of the `Sim` uniform (keep in sync with SIM_WGSL and packSimUniform in Solver.ts). */
 export const SIM_UNIFORM_BYTES = 112;

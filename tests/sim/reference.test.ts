@@ -105,7 +105,9 @@ async function compare(c: Case) {
   const snap = await solver.readbackNow();
   const cpuV = cpu.volume(dx);
   const volRel = Math.abs(snap.stats.volume - cpuV) / Math.max(cpuV, 1);
-  const inRel = Math.abs(snap.stats.volumeIn - cpu.volumeIn) / Math.max(cpu.volumeIn, 1);
+  // The GPU also books its signed Float32 rounding as inflow (shaders/continuity.ts), which the Float64 reference does
+  // not have: allow 1e-6 of the stored volume for it.
+  const inRel = Math.max(0, Math.abs(snap.stats.volumeIn - cpu.volumeIn) - 1e-6 * v0) / Math.max(cpu.volumeIn, 1);
   const outRel = Math.abs(snap.stats.volumeOut - cpu.volumeOut) / Math.max(cpu.volumeOut, 1);
   console.log(
     `  ${c.label}: ${c.steps} steps, max h ${maxH.toFixed(2)} m, max|Δh| ${maxDh.toExponential(2)} m, max|Δq| ${maxDq.toExponential(2)} m²/s, ` +

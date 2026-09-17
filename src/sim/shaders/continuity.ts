@@ -15,9 +15,10 @@
  * reservoir at rest; see the stage loop). Open-boundary outflow is closed on edge cells near inflow sources (bfluxC).
  *
  * Mass accounting: every change to h other than an exchange with a neighbour is added to the accounting buffer
- * (ACC_PER_CELL slots per cell): rain, inflow and stage refills to "in", open-boundary outflow, infiltration and stage
- * drains to "out", Float32 rounding (signed) to "rounding". The stats pass sums it exactly per block and zeroes it in
- * the same command encoder as the depth readback; the CPU adds the blocks in Float64, so SimStats.massError is real.
+ * (ACC_PER_CELL slots per cell): rain, inflow, stage refills and Float32 rounding (signed, ~1e-7 of the volume) to
+ * "in"; open-boundary outflow, infiltration and stage drains to "out". The stats pass sums it exactly per block and
+ * zeroes it in the same command encoder as the depth readback; the CPU adds the blocks in Float64, so
+ * SimStats.massError is real.
  *
  * EXACT TO THE LAST BIT. On a 20 m deep river one Float32 ULP of h is 1.9e-6 m while a substep moves ~1e-6–1e-5 m, so
  * h + Δ rounds by up to half a ULP, with the same sign substep after substep on a steady cell. The old booking
@@ -204,7 +205,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
   }
 
   // ── Infiltration: only where there is water, never more than is available ──
-  if (h > 0.0) {
+  if (sim.infil > 0.0 && h > 0.0) {
     let infQ = snapInc(h, min(sim.infil * sim.dt, h));
     h = h - infQ;
     aOut = aOut + infQ;
@@ -236,11 +237,12 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     if (dv > 0.0) { aIn = aIn + dv; } else { aOut = aOut - dv; }
   }
 
-  if (aIn != 0.0 || aOut != 0.0 || aRound != 0.0) {
+  // Rounding is booked with the inflow (signed): see ACC_PER_CELL for why it has no slot of its own.
+  aIn = aIn + aRound;
+  if (aIn != 0.0 || aOut != 0.0) {
     let idx = ${ACC_PER_CELL}u * (u32(j) * u32(sim.nx) + u32(i));
     acc[idx] = acc[idx] + aIn;
     acc[idx + 1u] = acc[idx + 1u] + aOut;
-    acc[idx + 2u] = acc[idx + 2u] + aRound;
   }
   // Stored qx/qy of the last column/row are the limited boundary outflows (diagnostics + θ smoothing).
   textureStore(stateOut, vec2i(i, j), vec4f(h4, qEs, qSs, sc.a));
