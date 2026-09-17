@@ -25,6 +25,7 @@ import { createStore } from './store';
 import { showDeviceLost, WebGPUUnavailableError, type LighterScene } from './unsupported';
 import { bridgeFor, postNotice } from '../ui/bridge';
 import { ProtectionController, type ProtectionInput } from './protection';
+import { createProtectionWorker } from './protectionWorkerClient';
 import { parseStartupRequest, writeSceneToUrl, type SceneRequest } from './url';
 
 export type LoadOutcome = 'ok' | 'failed' | 'superseded';
@@ -131,7 +132,7 @@ export class App {
         (this.renderer as Partial<DelugeRendererAPI> | null)?.setProtectedMask?.(key ? result!.mask : null);
         this.requestRender();
       },
-    });
+    }, 1000, createProtectionWorker);
     this.sim = new SimSync({
       store: this.store,
       stage: this.stage,
@@ -499,6 +500,7 @@ export class App {
       barrier: solver.getBarrierCPU(),
       depth: snap.depth,
       roads: terrain.roads,
+      terrainVersion: (solver as FloodSolver & { terrainVersion?: number }).terrainVersion,
     };
   }
 

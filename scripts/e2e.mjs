@@ -433,6 +433,13 @@ const FLOWS = [
       const s = await stats();
       r.metrics.volume = s?.volume;
       check(r, 'rivers have water (volume > 0)', (s?.volume ?? 0) > 0, s ? `${m3(s.volume)}, wet ${km2(s.wetArea)}` : 'no stats');
+      // The Try-it strip offers the demo moments in pitch order: Evacuate before the levee, so building the levee
+      // (which replays the rise) visibly re-plans a route that is already on screen.
+      if (PRESET === 'pittsburgh') {
+        const order = await D(() => [...document.querySelectorAll('.dl-try-step')].map((b) => b.dataset.step));
+        const labels = await D(() => [...document.querySelectorAll('.dl-try-step')].map((b) => b.textContent.trim()));
+        check(r, 'Try-it strip order: raise, evacuate, levee, rain, break', order.join(',') === 'flood,evac,levee,rain,break', labels.join(' · '));
+      }
       await sleep(2600); // camera fly-in
       await shot(`01-${PRESET}-loaded`);
     },
@@ -1156,6 +1163,12 @@ const FLOWS = [
         return { p, sides: [s1, s2], status, overtopNotice, stats: d.getStats() };
       });
       const p = res.p;
+      const glow = await D(() => {
+        const d = window.__deluge;
+        return { maskOn: !!d.getRenderer()?.scene?.protectOn, offThread: !!d.app.protection.backend };
+      });
+      check(r, 'protected land glows on the map (mask uploaded)', glow.maskOn, glow.maskOn ? 'mask on' : 'no mask');
+      check(r, 'analysis runs in its Web Worker (not on the main thread)', glow.offThread, glow.offThread ? 'worker' : 'main-thread fallback');
       const dryBehind = Math.min(res.sides[0].depth, res.sides[1].depth);
       const wetFront = Math.max(res.sides[0].depth, res.sides[1].depth);
       check(r, 'land behind the levee stays dry while the river side floods', dryBehind < 0.05 && wetFront > 1, `behind ${num(dryBehind)} m, river side ${num(wetFront)} m`);
@@ -1167,6 +1180,22 @@ const FLOWS = [
       await D((c) => window.__deluge.setCamera(c), levee.camera);
       await sleep(800);
       await shot('13-demo-levee');
+      // The step toggles: "Remove levee" clears the walls, the status line and the glow.
+      const label = await page.locator('.dl-try-step[data-step="levee"]').textContent();
+      await page.click('.dl-try-step[data-step="levee"]');
+      const removed = await page
+        .waitForFunction(
+          () => {
+            const d = window.__deluge;
+            const kept = [...document.querySelectorAll('.dl-try-status-kept')].some((e) => !e.hidden);
+            return (d.getProtection()?.wallCells ?? 0) === 0 && !kept && !d.getRenderer()?.scene?.protectOn;
+          },
+          null,
+          { timeout: 10_000 },
+        )
+        .then(() => true, () => false);
+      const after = await page.locator('.dl-try-step[data-step="levee"]').textContent();
+      check(r, '"Remove levee" clears the walls, the count and the glow', /remove levee/i.test(label ?? '') && removed && /build a levee/i.test(after ?? ''), `“${label?.trim()}” → “${after?.trim()}”, cleared ${removed}`);
       await calm();
     },
   },

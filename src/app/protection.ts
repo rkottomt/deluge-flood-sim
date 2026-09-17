@@ -31,6 +31,13 @@ export interface ProtectionInput {
   /** Current water depth, nx·ny, m. */
   depth: Float32Array;
   roads?: RoadNetwork | null;
+  /** Roads as packed (gx, gy, length) midpoint triples (see roadMidpoints); used instead of `roads` when given. */
+  roadMids?: Float32Array | null;
+  /**
+   * Changes whenever `ground` or `barrier` is edited (the solver's terrainVersion). With it, the wall cells found by
+   * the last run are reused while it stays the same, so a run without walls costs nothing instead of a full-grid scan.
+   */
+  terrainVersion?: number;
 }
 
 export interface ProtectionResult {
@@ -98,6 +105,8 @@ export class ProtectionAnalyzer {
   private readonly waterList = new IntList();
   private readonly maskList = new IntList();
   private readonly walls = new IntList();
+  /** Which barrier array and terrain version `walls` was collected from (null: must rescan). */
+  private wallsOf: { barrier: Float32Array; version: number } | null = null;
   private waterQueue = new Int32Array(0);
 
   private ensure(n: number): void {
@@ -124,13 +133,18 @@ export class ProtectionAnalyzer {
     const n = nx * ny;
     if (!(nx > 0 && ny > 0) || ground.length < n || barrier.length < n || depth.length < n) return EMPTY;
 
-    // Wall cells (without any, this pass is all a run costs).
+    // Wall cells: one pass over the barrier field, repeated only when the terrain changed (a 1024² scan is ~2 ms).
     const walls = this.walls;
-    walls.length = 0;
-    for (let k = 0; k < n; k++) if (barrier[k] > PROTECT_WALL_MIN) walls.push(k);
+    const version = input.terrainVersion;
+    const cached = version !== undefined && this.wallsOf?.barrier === barrier && this.wallsOf.version === version;
+    if (!cached) {
+      walls.length = 0;
+      for (let k = 0; k < n; k++) if (barrier[k] > PROTECT_WALL_MIN) walls.push(k);
+      this.wallsOf = version !== undefined ? { barrier, version } : null;
+    }
     const wallCells = walls.length;
-    this.ensure(n);
     if (!wallCells) return EMPTY;
+    this.ensure(n);
 
     const { water, lvlBare, lvlWall, mask, bareList, wallList, waterList, maskList } = this;
     const bigCells = Math.max(16, Math.ceil(PROTECT_BIG_WATER_M2 / (input.cellSize * input.cellSize)));
@@ -258,15 +272,14 @@ export class ProtectionAnalyzer {
 
     let roadMeters = 0;
     let roadEdges = 0;
-    const roads = input.roads;
-    if (roads) {
-      for (const e of roads.edges) {
-        const mid = Math.floor(e.pts.length / 4) * 2;
-        const gx = e.pts[mid];
-        const gy = e.pts[mid + 1];
+    const mids = input.roadMids ?? (input.roads ? roadMidpoints(input.roads) : null);
+    if (mids) {
+      for (let q = 0; q + 2 < mids.length; q += 3) {
+        const gx = mids[q];
+        const gy = mids[q + 1];
         if (!(gx >= 0 && gy >= 0 && gx < nx && gy < ny)) continue;
         if (mask[Math.floor(gy) * nx + Math.floor(gx)]) {
-          roadMeters += e.length;
+          roadMeters += mids[q + 2];
           roadEdges++;
         }
       }
@@ -283,6 +296,39 @@ export class ProtectionAnalyzer {
       bounds: { x0, y0, x1, y1 },
     };
   }
+}
+
+const midCache = new WeakMap<RoadNetwork, Float32Array>();
+
+/** Each road segment's midpoint vertex and length, packed as (gx, gy, length) triples (cached per network). */
+export function roadMidpoints(roads: RoadNetwork): Float32Array {
+  let mids = midCache.get(roads);
+  if (!mids) {
+    mids = new Float32Array(roads.edges.length * 3);
+    roads.edges.forEach((e, q) => {
+      const mid = Math.floor(e.pts.length / 4) * 2;
+      mids![3 * q] = e.pts[mid] ?? NaN;
+      mids![3 * q + 1] = e.pts[mid + 1] ?? NaN;
+      mids![3 * q + 2] = e.length;
+    });
+    midCache.set(roads, mids);
+  }
+  return mids;
+}
+
+/** Whether any cell carries a wall (stops at the first one). */
+export function hasWalls(barrier: Float32Array): boolean {
+  for (let k = 0; k < barrier.length; k++) if (barrier[k] > PROTECT_WALL_MIN) return true;
+  return false;
+}
+
+/**
+ * Runs analyses off the main thread (src/app/protectionWorkerClient.ts: a Web Worker). A run on a 1024² grid is 2–3 ms
+ * of warm work but often took 10–20 ms on the page's main thread, dropping a frame about every other second during the
+ * levee demo; in a worker the page only copies the depth field.
+ */
+export interface ProtectionBackend {
+  analyze(input: ProtectionInput): Promise<{ result: ProtectionResult; ms: number }>;
 }
 
 /** m² → acres. */
@@ -306,13 +352,24 @@ export class ProtectionController {
   private published = false;
   /** The last run's collapse is waiting for confirmation. */
   private held = false;
-  /** Milliseconds the last analysis took (diagnostics). */
+  /** Milliseconds the last analysis took (diagnostics; in the worker when there is one). */
   lastMs = 0;
   last: ProtectionResult | null = null;
+  /** Whether the barrier held walls at a terrain version (skips runs, and the worker, while there are none). */
+  private walls: { barrier: Float32Array; version: number; any: boolean } | null = null;
+  private backend: ProtectionBackend | null | undefined = undefined;
+  /** A backend run is in flight (runs never overlap); `generation` drops answers from before a reset. */
+  private inFlight = false;
+  private generation = 0;
 
+  /**
+   * `backend` creates the off-thread runner on first use (only once walls exist); without one, or once it fails, the
+   * analysis runs synchronously on this thread.
+   */
   constructor(
     private readonly sink: ProtectionSink,
     private readonly intervalMs = 1000,
+    private readonly createBackend: (() => ProtectionBackend | null) | null = null,
   ) {}
 
   reset(): void {
@@ -320,6 +377,9 @@ export class ProtectionController {
     this.lastRun = -Infinity;
     this.last = null;
     this.held = false;
+    this.walls = null;
+    this.inFlight = false;
+    this.generation++;
     if (this.published) {
       this.published = false;
       this.sink.publish(null);
@@ -336,18 +396,62 @@ export class ProtectionController {
    * erased while paused bring no new readback). `force` skips the interval.
    */
   tick(now: number, input: () => ProtectionInput | null, force = false): void {
-    // A heavy run (a rising flood spreads the level over a lot of shallow land) spaces the next ones out, up to 3×:
-    // at most ~1–2 % of main-thread time.
-    const interval = Math.max(this.intervalMs, Math.min(3 * this.intervalMs, this.lastMs * 80));
+    if (this.inFlight) return;
+    // On this thread, a heavy run (a rising flood spreads the level over a lot of shallow land) spaces the next ones
+    // out, up to 3×: at most ~1–2 % of main-thread time.
+    const interval = this.backend ? this.intervalMs : Math.max(this.intervalMs, Math.min(3 * this.intervalMs, this.lastMs * 80));
     const due = now - this.lastRun >= (this.pending ? interval : 2 * interval);
     if (!force && !due) return;
     const data = input();
     if (!data) return;
     this.pending = false;
     this.lastRun = now;
+    // No walls at this terrain version: nothing to analyse (checked once per terrain edit, stopping at the first wall).
+    const version = data.terrainVersion;
+    if (version === undefined || this.walls?.barrier !== data.barrier || this.walls.version !== version) {
+      this.walls = version === undefined ? null : { barrier: data.barrier, version, any: hasWalls(data.barrier) };
+    }
+    if (this.walls && !this.walls.any) {
+      this.lastMs = 0;
+      this.accept({ ...EMPTY }, now);
+      return;
+    }
+    if (this.backend === undefined) {
+      try {
+        this.backend = this.createBackend?.() ?? null;
+      } catch {
+        this.backend = null;
+      }
+    }
+    const backend = this.backend;
+    if (backend) {
+      const gen = this.generation;
+      this.inFlight = true;
+      backend.analyze(data).then(
+        ({ result, ms }) => {
+          if (gen !== this.generation) return;
+          this.inFlight = false;
+          this.lastMs = ms;
+          this.accept(result, typeof performance !== 'undefined' ? performance.now() : now);
+        },
+        (err: unknown) => {
+          if (gen !== this.generation) return;
+          this.inFlight = false;
+          if (this.backend === backend) this.backend = null;
+          this.pending = true;
+          this.lastRun = -Infinity;
+          console.warn('[deluge] protected-land worker failed, analysing on the main thread:', err);
+        },
+      );
+      return;
+    }
     const t0 = performance.now();
     const result = this.analyzer.analyze(data);
     this.lastMs = performance.now() - t0;
+    this.accept(result, now);
+  }
+
+  private accept(result: ProtectionResult, now: number): void {
     if (result.wallCells === 0) {
       this.last = result;
       this.held = false;

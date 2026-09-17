@@ -5,7 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { RoadNetwork } from '../../src/contracts';
-import { ProtectionAnalyzer, ProtectionController, type ProtectionInput } from '../../src/app/protection';
+import { ProtectionAnalyzer, ProtectionController, roadMidpoints, type ProtectionInput } from '../../src/app/protection';
 
 /**
  * 64×40 valley: a river (rows 30–39, bed 0, surface 3 m) along the south, a flat floodplain (rows 12–29, ground 1 m)
@@ -155,3 +155,99 @@ function withGap(barrier: Float32Array): Float32Array {
   b[15 * 64 + 40] = 4;
   return b;
 }
+
+test('protection: the wall scan is reused while terrainVersion holds and redone when it changes', () => {
+  const v = valley();
+  const a = new ProtectionAnalyzer();
+  assert.equal(a.analyze({ ...v, terrainVersion: 1 }).wallCells, 0);
+  // Same version: the (stale) empty scan is reused, so a wall written without bumping the version is not seen yet.
+  wallRow(v, 28, 0, 63, 4);
+  assert.equal(a.analyze({ ...v, terrainVersion: 1 }).wallCells, 0);
+  // Bumped version: rescanned.
+  const r = a.analyze({ ...v, terrainVersion: 2 });
+  assert.equal(r.wallCells, 64);
+  assert.equal(r.cells, 16 * 64);
+  // Unchanged terrain, changed water: the cached walls give the same answer as a fresh analyzer.
+  v.set(10, 20, 'depth', 1);
+  const again = a.analyze({ ...v, terrainVersion: 2 });
+  const fresh = new ProtectionAnalyzer().analyze(v);
+  assert.equal(again.cells, fresh.cells);
+  assert.equal(again.wallCells, fresh.wallCells);
+  // A different barrier array (a new scene) never reuses the scan, even with an equal version.
+  const other = valley();
+  assert.equal(a.analyze({ ...other, terrainVersion: 2 }).wallCells, 0);
+  // No version given: always scans.
+  assert.equal(new ProtectionAnalyzer().analyze(v).wallCells, 64);
+});
+
+test('protection controller: an off-thread backend is created only once walls exist, never overlaps, and falls back when it fails', async (t) => {
+  const warned: string[] = [];
+  t.mock.method(console, 'warn', (...args: unknown[]) => void warned.push(args.map(String).join(' ')));
+  const published: Array<number | null> = [];
+  const pendingRuns: Array<() => void> = [];
+  let created = 0;
+  let failNext = false;
+  const backendAnalyzer = new ProtectionAnalyzer();
+  const c = new ProtectionController({ publish: (r) => published.push(r ? r.cells : null) }, 1000, () => {
+    created++;
+    return {
+      analyze: (input) =>
+        new Promise((resolve, reject) => {
+          pendingRuns.push(() => (failNext ? reject(new Error('worker died')) : resolve({ result: backendAnalyzer.analyze(input), ms: 2 })));
+        }),
+    };
+  });
+  const v = valley();
+  const flush = async () => {
+    while (pendingRuns.length) pendingRuns.shift()!();
+    await new Promise((r) => setTimeout(r, 0));
+  };
+  // No walls: no backend, nothing published.
+  c.tick(0, () => ({ ...v, terrainVersion: 1 }));
+  assert.equal(created, 0);
+  assert.deepEqual(published, []);
+  // Walls drawn (terrain version bumped): the backend runs it; a second tick while it is in flight does nothing.
+  wallRow(v, 28, 0, 63, 4);
+  c.onSnapshot();
+  c.tick(1000, () => ({ ...v, terrainVersion: 2 }));
+  assert.equal(created, 1);
+  c.onSnapshot();
+  c.tick(5000, () => ({ ...v, terrainVersion: 2 }));
+  assert.equal(pendingRuns.length, 1, 'runs never overlap');
+  await flush();
+  assert.deepEqual(published, [16 * 64]);
+  // A reset while a run is in flight drops its answer.
+  c.onSnapshot();
+  c.tick(10_000, () => ({ ...v, terrainVersion: 2 }));
+  assert.equal(pendingRuns.length, 1);
+  c.reset();
+  await flush();
+  assert.deepEqual(published, [16 * 64, null], 'reset publishes null; the stale answer is dropped');
+  // The backend fails: the next run happens on this thread.
+  failNext = true;
+  c.onSnapshot();
+  c.tick(20_000, () => ({ ...v, terrainVersion: 2 }));
+  await flush();
+  assert.deepEqual(published, [16 * 64, null]);
+  c.onSnapshot();
+  c.tick(20_001, () => ({ ...v, terrainVersion: 2 }));
+  assert.deepEqual(published, [16 * 64, null, 16 * 64], 'synchronous fallback');
+  assert.equal(created, 1);
+  assert.ok(warned.some((w) => /worker failed/.test(w)), 'the fallback is reported');
+});
+
+test('protection: road midpoints packed for the worker give the same street counts', () => {
+  const v = valley();
+  wallRow(v, 28, 0, 63, 4);
+  const road = (pts: number[], length: number) => ({ a: 0, b: 1, length, cls: 'local' as const, pts: new Float32Array(pts) });
+  const roads: RoadNetwork = {
+    nodes: new Float32Array([0, 0, 1, 1]),
+    edges: [road([5, 20, 15, 20, 25, 20], 200), road([5, 33, 25, 33], 200), road([30.5, 15.5, 30.5, 25.5], 100)],
+  };
+  const direct = new ProtectionAnalyzer().analyze({ ...v, roads });
+  const packed = new ProtectionAnalyzer().analyze({ ...v, roadMids: roadMidpoints(roads) });
+  assert.equal(direct.roadEdges, packed.roadEdges);
+  assert.equal(direct.roadMeters, packed.roadMeters);
+  assert.equal(packed.roadEdges, 2);
+  assert.equal(packed.roadMeters, 300);
+});
