@@ -23,6 +23,7 @@ import { startBreakDemo, stopBreakDemo } from './stabilityDemo';
 import { formatStage, hasGauge, raiseStepText } from './stageText';
 import { leveeLength, planLevee, raiseAlong } from './levee';
 import { keptStatus } from './wallCheck';
+import { isCoordinateName } from '../data/placeName';
 
 /**
  * Sim speed used by the quick actions, so a flood visibly develops within seconds. Most GPUs can't reach it on a
@@ -95,9 +96,17 @@ export const PLAY_STORM_ID = 'try-storm';
 /** Its peak rate, mm/hr: a flash-flood thunderstorm (Ellicott City 2016 peaked near 150 mm/hr for minutes). */
 export const PLAY_STORM_RATE = 120;
 
-/** "Storm over Asheville" for "Asheville, North Carolina" (the place part of a terrain name). */
+/**
+ * "Storm over Asheville" for "Asheville, North Carolina" (the place part of a terrain name).
+ *
+ * Also drops a trailing "(40.440, -80.000)": a live area loaded from a link carries its coordinates in the title for
+ * provenance (src/data/live.ts, FINDINGS SEC-01), and splitting on the comma alone would leave "Riverside (40.440"
+ * on the button. An area with no place name at all ("Area near 29.950° N, 90.070° W") gets the generic label rather
+ * than "Storm over Area near 29.950° N". The name itself is already cleaned upstream; this is only where to cut it.
+ */
 export function stormLabel(terrainName: string): string {
-  const place = terrainName.split(/\s[—–-]\s|,/)[0].trim();
+  if (isCoordinateName(terrainName)) return 'Drop a storm';
+  const place = terrainName.split(/\s[—–-]\s|,|\s\(/)[0].trim();
   return place && place.length <= 22 ? `Storm over ${place}` : 'Drop a storm';
 }
 

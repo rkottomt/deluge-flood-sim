@@ -20,7 +20,7 @@
     "test:perf": "node scripts/perf.mjs",
     "test:visual": "node scripts/visual.mjs",
     "test:security": "node scripts/security-test.mjs",
-    "test:suites": "node scripts/perf.mjs --quick && node scripts/visual.mjs --quick && node scripts/security-test.mjs --quick",
+    "test:suites": "node scripts/security-test.mjs --quick && node scripts/visual.mjs --quick && node scripts/perf.mjs --quick",
     "test:all": "npm run typecheck && npm test && node scripts/security-test.mjs && node scripts/visual.mjs && node scripts/perf.mjs",
     "app:dev": "vite build && env -u ELECTRON_RUN_AS_NODE electron electron/main.js",
     "app:build": "node --import tsx electron/check-endpoints.mjs && tsc --noEmit && vite build && node electron/package.mjs",

@@ -250,15 +250,25 @@ async function machineState() {
   const cpuCount = os.cpus().length || 8;
   const loadNorm = load[0] / cpuCount;
   // Another browser or Playwright run sharing the GPU is the most common source of noise here.
-  const gpuHogs = psList
+  const rows = psList
     .split('\n')
     .map((l) => l.trim())
-    .filter((l) => /(Chromium|Google Chrome|Brave|Safari|WebKit|firefox)/i.test(l) && Number(l.split(/\s+/)[0]) > 15);
+    .filter(Boolean);
+  const gpuHogs = rows.filter(
+    (l) => /(Chromium|Google Chrome|Brave|Safari|WebKit|firefox)/i.test(l) && Number(l.split(/\s+/)[0]) > 15,
+  );
+  // …but so is anything else eating the machine. Spotlight reindexing the repo (corespotlightd) sat at 250% CPU
+  // during a calibration run on this laptop and slowed every scenario, without moving the load average much.
+  const cpuHogs = rows.filter((l) => {
+    const cpu = Number(l.split(/\s+/)[0]);
+    return cpu > 80 && !/(Chromium|Google Chrome|Brave|Safari|WebKit|firefox|node$|vite)/i.test(l);
+  });
   const reasons = [];
   if (onBattery) reasons.push(`on battery (${Number.isFinite(pct) ? pct + '%' : 'unknown'})`);
   if (lowPower) reasons.push('Low Power Mode is ON');
   if (loadNorm > 0.7) reasons.push(`load average ${load[0].toFixed(1)} over ${cpuCount} cores`);
   if (gpuHogs.length) reasons.push(`${gpuHogs.length} other browser process(es) busy — the GPU is shared`);
+  if (cpuHogs.length) reasons.push(`busy: ${cpuHogs.map((l) => l.split(/\s+/).slice(1).join(' ').split('/').pop()).join(', ')}`);
   return {
     host: os.hostname(),
     platform: `${os.platform()} ${os.release()}`,
@@ -269,7 +279,7 @@ async function machineState() {
     onBattery,
     batteryPct: Number.isFinite(pct) ? pct : null,
     lowPowerMode: lowPower,
-    busyProcesses: gpuHogs,
+    busyProcesses: gpuHogs.concat(cpuHogs),
     noisy: reasons.length > 0,
     noisyReasons: reasons,
   };

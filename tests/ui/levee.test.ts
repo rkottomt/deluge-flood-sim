@@ -77,6 +77,10 @@ test('Play the flood on an area with nothing to flood it drops a storm over the 
   assert.equal(stormLabel('Boulder, Colorado'), 'Storm over Boulder');
   assert.equal(stormLabel('Pittsburgh — Three Rivers'), 'Storm over Pittsburgh');
   assert.equal(stormLabel('A very long place name that does not fit'), 'Drop a storm');
+  // A live area loaded from a ?name= link carries its coordinates for provenance (SEC-01): the button drops them
+  // rather than cutting them in half at the comma.
+  assert.equal(stormLabel('Riverside (40.440, -80.000)'), 'Storm over Riverside');
+  assert.equal(stormLabel('Area near 29.950° N, 90.070° W'), 'Drop a storm');
 
   const grid = { nx: 1024, ny: 1024 };
   const centred = playStorm(grid, { gx: 400, gy: 600 });

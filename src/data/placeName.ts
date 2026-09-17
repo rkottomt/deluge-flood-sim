@@ -105,14 +105,21 @@ export function coordinateName(lat: number, lon: number): string {
 }
 
 /**
- * True for names that are only coordinates ("29.9500°, -90.0700°", "29.950, -90.070"): worth replacing.
+ * True for names that are only coordinates ("29.9500°, -90.0700°", "29.950, -90.070"), including this module's own
+ * `coordinateName()` output ("Area near 29.950° N, 90.070° W"): worth replacing with a real place name.
+ *
+ * Recognising our own label matters on a reload. `writeSceneToUrl` puts the scene's name in `?name=`, so an area that
+ * failed to reverse-geocode once comes back as "Area near …"; without this prefix the loader would treat that as a
+ * real name and never ask the geocoder again, leaving the area permanently unnamed.
+ *
  * The length guard keeps the (quadratic on whitespace runs) regex off long hostile input — nothing near 64 characters
  * is a bare coordinate pair anyway.
  */
 export function isCoordinateName(name: string | undefined | null): boolean {
   if (!name) return true;
   if (typeof name !== 'string' || name.length > 64) return false;
-  return /^\s*-?\d+(\.\d+)?°?\s*[NS]?\s*,\s*-?\d+(\.\d+)?°?\s*[EW]?\s*$/i.test(name);
+  const bare = name.replace(/^\s*Area near\s+/i, '');
+  return /^\s*-?\d+(\.\d+)?°?\s*[NS]?\s*,\s*-?\d+(\.\d+)?°?\s*[EW]?\s*$/i.test(bare);
 }
 
 /** Reverse-geocode (lat, lon) to "City, State"; null on any failure. */

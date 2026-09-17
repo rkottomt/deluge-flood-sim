@@ -86,6 +86,9 @@ const [built] = await packager({
   appBundleId: 'io.github.rkottomt.deluge',
   appCategoryType: 'public.app-category.education',
   darwinDarkModeSupport: true,
+  // Built by `npm run app:icon` from the favicon in index.html. Packager also probes for macOS 26's newer
+  // `.icon` bundle and prints a WARNING when it finds none; the `.icns` is still used (it lands in
+  // Contents/Resources/electron.icns, which is the name CFBundleIconFile points at).
   ...(existsSync(path.join(REPO, 'electron/icon.icns')) ? { icon: path.join(REPO, 'electron/icon.icns') } : {}),
   // No `osxSign`: there is no Developer ID for this demo, so the bundle keeps the ad-hoc signature that step 3
   // applies. No `protocols`: R13 forbids registering a URL scheme handler.

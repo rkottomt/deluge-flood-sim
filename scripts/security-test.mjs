@@ -209,6 +209,31 @@ async function waitForApp(page, timeoutMs = 60000) {
 }
 
 /**
+ * Which elements currently show `needle`? Returned with each spoof failure so the fix has an address, not just a
+ * verdict: the element's tag/class and the text around the match.
+ */
+async function locateText(page, needles) {
+  return page.evaluate((list) => {
+    const hits = [];
+    const describe = (el) =>
+      `${el.tagName.toLowerCase()}${el.id ? '#' + el.id : ''}${typeof el.className === 'string' && el.className ? '.' + el.className.trim().split(/\s+/).slice(0, 3).join('.') : ''}`;
+    for (const el of document.querySelectorAll('*')) {
+      if (el.children.length) continue; // leaf elements only: otherwise every ancestor matches too
+      const text = el.textContent || '';
+      for (const n of list) {
+        if (text.includes(n)) hits.push({ needle: n, where: describe(el), text: text.slice(0, 160) });
+      }
+      for (const a of el.attributes) {
+        for (const n of list) {
+          if (String(a.value).includes(n)) hits.push({ needle: n, where: `${describe(el)}[${a.name}]`, text: String(a.value).slice(0, 160) });
+        }
+      }
+    }
+    return hits.slice(0, 8);
+  }, needles);
+}
+
+/**
  * Everything the user can read: rendered text plus every attribute value (a payload can hide in a title= tooltip).
  * Deliberately NOT location.search — the address bar still holds whatever the attacker's link said, which is not
  * the app rendering it. Whether the app *rewrites* the address bar is checked separately, in SPOOF-PRESET-LOADED.
@@ -388,6 +413,9 @@ try {
       await page.waitForTimeout(500);
     }
     const found = SPOOF_MARKERS.filter((m) => text.includes(m));
+    // The toast that carries an attacker string is transient; if it has gone by now, locateText finds nothing and
+    // the sampled text above is still the evidence.
+    const where = found.length ? await locateText(page, found) : [];
     // U+202E must never survive into the DOM at all, wherever it came from.
     const bidi = /[‪-‮⁦-⁩]/.test(text);
     const sceneName = await page.evaluate(() => document.querySelector('.dl-scene-name')?.textContent?.trim() ?? '');
@@ -397,8 +425,10 @@ try {
       'SEC-01',
       c.what,
       ok ? 'pass' : 'fail',
-      ok ? `scene title: "${sceneName}"` : `attacker text rendered: ${found.join(' | ')}${bidi ? ' + bidi control char in DOM' : ''} (title: "${sceneName}")`,
-      { sceneName, found, bidi },
+      ok
+        ? `scene title: "${sceneName}"`
+        : `attacker text rendered: ${found.join(' | ')}${bidi ? ' + bidi control char in DOM' : ''} (title: "${sceneName}")${where.length ? ` — in ${where.map((w) => w.where).join(', ')}` : ''}`,
+      { sceneName, found, bidi, where },
     );
     await page.close();
   }
@@ -453,14 +483,23 @@ try {
     // Poison every name-ish string in the real road data, leaving the geometry intact so the layer still loads.
     const poisoned = structuredClone(realRoads);
     let poisonedCount = 0;
+    const NAMEISH = /name|label|title|class|type|attribution/i;
     const walk = (node) => {
       if (Array.isArray(node)) {
         for (const v of node) walk(v);
       } else if (node && typeof node === 'object') {
         for (const [k, v] of Object.entries(node)) {
-          if (typeof v === 'string' && /name|label|title|class|type|attribution/i.test(k)) {
+          if (typeof v === 'string' && NAMEISH.test(k)) {
             node[k] = XSS_PAYLOADS[poisonedCount % XSS_PAYLOADS.length];
             poisonedCount++;
+          } else if (Array.isArray(v) && NAMEISH.test(k)) {
+            // The compact road format keeps every street name in `names: string[]`, indexed by the edges.
+            for (let i = 0; i < v.length; i++) {
+              if (typeof v[i] === 'string') {
+                v[i] = XSS_PAYLOADS[poisonedCount % XSS_PAYLOADS.length];
+                poisonedCount++;
+              } else walk(v[i]);
+            }
           } else walk(v);
         }
       }
