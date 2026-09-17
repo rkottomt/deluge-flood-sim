@@ -18,6 +18,11 @@ export const APP_CONFIG = {
    *    controllers over the same GPU would fight (each backs off when the other's work shows up).
    */
   solverOptions: { gpuBudgetMs: Infinity },
+  /**
+   * While hands-off, a GPU-limited solver whose work budget is down to this many substeps per frame counts as starved:
+   * the renderer's adaptive quality then steps down a little (see SimPressure in src/render/quality.ts).
+   */
+  starvedSubsteps: 3,
   /** Canvas input or camera motion within this window counts as "interacting" (low-latency work budget). */
   interactionHoldMs: 1500,
   /** Store updates that drive the HUD (stats, stepInfo, fps) are throttled to this interval. */

@@ -91,6 +91,8 @@ test('prep: water surface, shoreline extension, walls and wet pyramid', async ()
   const surf = out('rgba16float', N, N);
   const norm = out('rgba16float', N, N);
   const misc = out('rgba16float', N, N);
+  const cells = out('rg32float', N, N);
+  const vtxBed = out('r32float', V, V);
   const wetMips = Math.log2(N) + 1;
   const wet = out('r32float', N, N, wetMips);
 
@@ -121,16 +123,37 @@ test('prep: water surface, shoreline extension, walls and wet pyramid', async ()
     0,
     device.createBindGroup({
       layout: P.prepCells.getBindGroupLayout(0),
-      entries: [...common, { binding: 4, resource: surf.createView() }, { binding: 5, resource: norm.createView() }, { binding: 6, resource: misc.createView() }],
+      entries: [
+        ...common,
+        { binding: 4, resource: surf.createView() },
+        { binding: 5, resource: norm.createView() },
+        { binding: 6, resource: misc.createView() },
+        { binding: 7, resource: cells.createView() },
+      ],
     }),
   );
   cp.dispatchWorkgroups(N / 16, N / 16);
+  cp.setPipeline(P.prepVtxBed);
+  cp.setBindGroup(
+    0,
+    device.createBindGroup({
+      layout: P.prepVtxBed.getBindGroupLayout(0),
+      entries: [common[0], common[1], common[2], { binding: 4, resource: vtxBed.createView() }],
+    }),
+  );
+  cp.dispatchWorkgroups(Math.ceil(V / 16), Math.ceil(V / 16));
   cp.setPipeline(P.prepVerts);
   cp.setBindGroup(
     0,
     device.createBindGroup({
       layout: P.prepVerts.getBindGroupLayout(0),
-      entries: [...common, { binding: 4, resource: vtx.createView() }, { binding: 5, resource: wet.createView() }],
+      entries: [
+        common[0],
+        { binding: 4, resource: vtx.createView() },
+        { binding: 5, resource: wet.createView() },
+        { binding: 6, resource: cells.createView() },
+        { binding: 7, resource: vtxBed.createView() },
+      ],
     }),
   );
   cp.dispatchWorkgroups(Math.ceil(V / 16), Math.ceil(V / 16));
@@ -221,7 +244,13 @@ test('prep: water surface, shoreline extension, walls and wet pyramid', async ()
     0,
     device.createBindGroup({
       layout: P.prepVerts.getBindGroupLayout(0),
-      entries: [...common, { binding: 4, resource: vtx2.createView() }, { binding: 5, resource: wet.createView() }],
+      entries: [
+        common[0],
+        { binding: 4, resource: vtx2.createView() },
+        { binding: 5, resource: wet.createView() },
+        { binding: 6, resource: cells.createView() },
+        { binding: 7, resource: vtxBed.createView() },
+      ],
     }),
   );
   cp2.dispatchWorkgroups(Math.ceil(V / 16), Math.ceil(V / 16));

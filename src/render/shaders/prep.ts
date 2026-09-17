@@ -4,7 +4,11 @@
  *  cells  (nx×ny)  → surfTex rgba16float: h, u, v, foam source          (filterable)
  *                    normTex rgba16float: ∂bed/∂x, ∂bed/∂z, ∂η/∂x, ∂η/∂z (filterable, wet-only η differences)
  *                    miscTex rgba16float: barrier, max depth, 0, 0        (filterable)
- *  verts  (vx×vy)  → vtxTex  rgba32float: bed, water surface, mean depth, wet flag (any of its 4 cells wet)
+ *                    cellTex rg32float:   displayed depth d, water surface bed + d (full precision, for verts)
+ *  vtxBed (vx×vy)  → vtxBedTex r32float: vertex bed (mean ground of its 4 cells + max barrier); only rebuilt when
+ *                    the terrain changes (walls, digging), not every frame
+ *  verts  (vx×vy)  → vtxTex  rgba32float: bed, water surface, mean depth, wet flag (any of its 4 cells wet), from
+ *                    cellTex + vtxBedTex: 4–16 texel loads per vertex instead of 12–36
  *  wet    pyramid  → wetTex  r32float mips: per base quad "water may be visible here", max-downsampled
  *
  * The vertex texture lets both the terrain and water vertex shaders use a single textureLoad per base-grid
@@ -72,6 +76,7 @@ export const PREP_CELLS_WGSL = /* wgsl */ `
 @group(0) @binding(4) var surfOut: texture_storage_2d<rgba16float, write>;
 @group(0) @binding(5) var normOut: texture_storage_2d<rgba16float, write>;
 @group(0) @binding(6) var miscOut: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(7) var cellOut: texture_storage_2d<rg32float, write>;
 
 fn etaSlope(c: vec2i, axis: vec2i, hc: f32, ec: f32) -> f32 {
   let pr = c + axis;
@@ -130,12 +135,15 @@ fn cells(@builtin(global_invocation_id) gid: vec3u) {
   textureStore(normOut, c, vec4f(clamp(sbx, -60.0, 60.0), clamp(sbz, -60.0, 60.0), sex, sez));
   let barrier = textureLoad(barrierTex, c, 0).r;
   textureStore(miscOut, c, vec4f(max(barrier, 0.0), max(s.a, 0.0), speed, 0.0));
+  textureStore(cellOut, c, vec4f(h, b + h, 0.0, 0.0));
 }
 `;
 
 export const PREP_VERTS_WGSL = /* wgsl */ `
 @group(0) @binding(4) var vtxOut: texture_storage_2d<rgba32float, write>;
 @group(0) @binding(5) var wetPrev: texture_2d<f32>;
+@group(0) @binding(6) var cellTex: texture_2d<f32>;
+@group(0) @binding(7) var vtxBedTex: texture_2d<f32>;
 
 /** Was there water within ~4 base quads of this vertex last frame? (conservative; 1 when no hint is available) */
 fn nearWaterLastFrame(kl: vec2i) -> bool {
@@ -152,6 +160,11 @@ fn nearWaterLastFrame(kl: vec2i) -> bool {
   return w > 0.5;
 }
 
+/** (displayed depth, water surface elevation) of a cell, from the cells pass. */
+fn cellAt(p: vec2i) -> vec2f {
+  return textureLoad(cellTex, cl(p), 0).rg;
+}
+
 @compute @workgroup_size(16, 16)
 fn verts(@builtin(global_invocation_id) gid: vec3u) {
   let kl = vec2i(gid.xy);
@@ -159,30 +172,24 @@ fn verts(@builtin(global_invocation_id) gid: vec3u) {
   let base = kl * P.stride;
 
   // A vertex sits on the corner shared by the 4 surrounding cells.
-  var groundSum = 0.0;
-  var barrierMax = 0.0;
   var depthSum = 0.0;
   var depthMax = 0.0;
   var etaWet = 0.0;
   var wetCount = 0.0;
   for (var oy = -1; oy <= 0; oy++) {
     for (var ox = -1; ox <= 0; ox++) {
-      let p = cl(base + vec2i(ox, oy));
-      let z = bed(p);
-      let br = max(textureLoad(barrierTex, p, 0).r, 0.0);
-      groundSum += z - br;
-      barrierMax = max(barrierMax, br);
-      let d = depthOf(state(p));
+      let cd = cellAt(base + vec2i(ox, oy));
+      let d = cd.r;
       depthSum += d;
       depthMax = max(depthMax, d);
       if (d > P.hWet) {
-        etaWet += z + d;
+        etaWet += cd.g;
         wetCount += 1.0;
       }
     }
   }
-  // Ground is averaged (smooth terrain), barriers take the max so one-cell walls keep their full height.
-  let bedV = groundSum * 0.25 + barrierMax;
+  // Ground averaged (smooth terrain), barriers maxed so one-cell walls keep their full height: see PREP_VTXBED_WGSL.
+  let bedV = textureLoad(vtxBedTex, kl, 0).r;
   var surface = bedV - P.collapse;
   if (wetCount > 0.0) {
     surface = min(etaWet / wetCount, bedV + depthMax);
@@ -197,10 +204,9 @@ fn verts(@builtin(global_invocation_id) gid: vec3u) {
     for (var oy = -r - 1; oy <= r; oy++) {
       for (var ox = -r - 1; ox <= r; ox++) {
         if (oy >= -1 && oy <= 0 && ox >= -1 && ox <= 0) { continue; }
-        let p = cl(base + vec2i(ox, oy));
-        let d = depthOf(state(p));
-        if (d > P.hWet) {
-          etaN += bed(p) + d;
+        let cd = cellAt(base + vec2i(ox, oy));
+        if (cd.r > P.hWet) {
+          etaN += cd.g;
           nN += 1.0;
         }
       }
@@ -210,6 +216,30 @@ fn verts(@builtin(global_invocation_id) gid: vec3u) {
     }
   }
   textureStore(vtxOut, kl, vec4f(bedV, surface, depthSum * 0.25, select(0.0, 1.0, wetCount > 0.0)));
+}
+`;
+
+/** Per-vertex bed (terrain only: rebuilt when walls or the ground change, not per frame). */
+export const PREP_VTXBED_WGSL = /* wgsl */ `
+@group(0) @binding(4) var vtxBedOut: texture_storage_2d<r32float, write>;
+
+@compute @workgroup_size(16, 16)
+fn vtxBed(@builtin(global_invocation_id) gid: vec3u) {
+  let kl = vec2i(gid.xy);
+  if (kl.x >= P.vx || kl.y >= P.vy) { return; }
+  let base = kl * P.stride;
+  var groundSum = 0.0;
+  var barrierMax = 0.0;
+  for (var oy = -1; oy <= 0; oy++) {
+    for (var ox = -1; ox <= 0; ox++) {
+      let p = cl(base + vec2i(ox, oy));
+      let br = max(textureLoad(barrierTex, p, 0).r, 0.0);
+      groundSum += bed(p) - br;
+      barrierMax = max(barrierMax, br);
+    }
+  }
+  // Ground is averaged (smooth terrain), barriers take the max so one-cell walls keep their full height.
+  textureStore(vtxBedOut, kl, vec4f(groundSum * 0.25 + barrierMax, 0.0, 0.0, 0.0));
 }
 `;
 

@@ -1,6 +1,6 @@
 import type { AppActions, AppState, FloodRenderer, FloodSolver, StepInfo, ToolController } from '../contracts';
 import { createDelugeDevice, type DelugeGPU } from '../gpu';
-import { createRenderer, type DelugeRendererAPI } from '../render';
+import { createRenderer, type DelugeRendererAPI, type SimPressure } from '../render';
 import { createRouter } from '../routing';
 import { createToolController, mountUI } from '../ui';
 import { createActions } from './actions';
@@ -58,6 +58,9 @@ export class App {
   );
   /** Latest GPU latency sample, ms (0 until the solver has run). */
   lastLatencyMs = 0;
+  /** Fraction of recent stepped frames the solver was throttled (EMA), and the pressure last sent to the renderer. */
+  private throttleEma = 0;
+  private simPressure: SimPressure = 0;
   /** External frame-rate ceiling (e.g. Chrome Energy Saver / Low Power Mode at 30 fps), shared by both controllers. */
   readonly frameCeiling = new FrameCeiling();
   readonly router = createRouter();
@@ -456,12 +459,30 @@ export class App {
    * frame-time target) follows what the user is doing: touching → smooth frames, watching → more sim.
    */
   observeFrameBudget(frameMs: number, info: StepInfo, now: number): void {
-    if (!this.adaptiveBudgetOn) return;
+    // How often the solver could not run the requested sim time (EMA over ~20 frames) → the renderer's quality hint.
+    this.throttleEma += ((info.throttled ? 1 : 0) - this.throttleEma) * 0.05;
+    if (!this.adaptiveBudgetOn) {
+      this.setSimPressure(this.throttleEma > 0.5 ? 1 : 0);
+      return;
+    }
     const interacting = now - Math.max(this.lastInputAt, this.pacer.lastCameraMotion) < APP_CONFIG.interactionHoldMs;
     const mode: BudgetMode = this.runner.active ? 'automation' : interacting ? 'interactive' : 'watching';
     const switched = this.budget.setMode(mode);
     const adapted = this.budget.observe(frameMs, info, now, this.store.get().sim.maxSubstepsPerFrame);
     if (switched || adapted) this.sim.setOverride('governor', { maxSubstepsPerFrame: this.budget.cap });
+    const limited = this.throttleEma > 0.5;
+    const starved = limited && mode === 'watching' && this.budget.cap <= APP_CONFIG.starvedSubsteps;
+    this.setSimPressure(starved ? 2 : limited ? 1 : 0);
+  }
+
+  /**
+   * Tell the renderer's adaptive quality how hard the simulation pushes for GPU time: GPU-limited → hold the level
+   * (don't take frame-time headroom the solver needs), starved while hands-off → step down a little.
+   */
+  setSimPressure(pressure: SimPressure): void {
+    if (pressure === this.simPressure) return;
+    this.simPressure = pressure;
+    (this.renderer as Partial<DelugeRendererAPI> | null)?.setSimPressure?.(pressure);
   }
 
   /**

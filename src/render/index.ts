@@ -27,7 +27,7 @@ import { FRAME_UNIFORM_SIZE } from './shaders/common';
 import { OVERLAY_UNIFORM_SIZE } from './shaders/overlay';
 import { createImageryTexture, createRippleTexture, createSolidTexture } from './textures';
 import { clamp, smoothstep } from './math';
-import { AdaptiveQuality, QUALITY_PRESETS, targetSize, type QualityPreset, type RendererQuality } from './quality';
+import { AdaptiveQuality, QUALITY_PRESETS, targetSize, type QualityPreset, type RendererQuality, type SimPressure } from './quality';
 import { GpuTimer } from './gpuTimer';
 import { WallField, WALL_FIELD_RADIUS, type Rect } from './wallField';
 import { BASE_EXPOSURE, hazardInput } from './tonemap';
@@ -35,7 +35,7 @@ import { footprintRadius, stormWeight } from '../sim/forcing';
 
 export { DEPTH_BANDS, MAX_DEPTH_BANDS, NORMAL_WATER_LEGEND, VELOCITY_BANDS, bandsForMode } from './legend';
 export { OrbitController } from './camera';
-export type { RendererQuality } from './quality';
+export type { RendererQuality, SimPressure } from './quality';
 
 const WATER_MODE_INDEX = { realistic: 0, depth: 1, maxDepth: 2, velocity: 3 } as const;
 
@@ -74,6 +74,12 @@ export interface DelugeRendererAPI extends FloodRenderer {
    * then treats frames at that ceiling as on target instead of stepping resolution down.
    */
   setFrameIntervalFloor(ms: number): void;
+  /**
+   * How hard the simulation is pushing for GPU time (0 keeps up, 1 GPU-limited, 2 starved). 'auto' quality then holds
+   * its level instead of claiming frame-time headroom the solver needs, and when starved steps down (not below 1 render
+   * pixel per CSS pixel).
+   */
+  setSimPressure(pressure: SimPressure): void;
   /**
    * Re-capture the "normally wet" mask (rivers and lakes before any flood) from the solver's current water. setScene
    * does this automatically — it is called right after solver.setInitialWater — so this is only needed if the
@@ -147,7 +153,15 @@ interface SceneGPU {
   waterBG: GPUBindGroup;
   overlayBG: GPUBindGroup;
   prepParams: GPUBuffer;
-  prepCache: Map<GPUTexture, { bed: GPUTexture; barrier: GPUTexture; cells: GPUBindGroup; verts: GPUBindGroup }>;
+  prepCache: Map<GPUTexture, { bed: GPUTexture; barrier: GPUTexture; cells: GPUBindGroup }>;
+  /** Per-cell (depth, water surface) written by the cells pass for the verts pass. */
+  cellTex: GPUTexture;
+  /** Per-vertex bed, rebuilt only when the terrain changes (see terrainKey). */
+  vtxBedTex: GPUTexture;
+  vertsBG: GPUBindGroup;
+  vtxBedBG: { bed: GPUTexture; barrier: GPUTexture; bg: GPUBindGroup } | null;
+  /** Solver terrain version vtxBedTex was built from (-1 = never; solvers without a version rebuild every time). */
+  terrainKey: number;
   roadVerts: GPUBuffer | null;
   roadIndices: GPUBuffer | null;
   roadIndexCount: number;
@@ -410,6 +424,8 @@ class DelugeRenderer implements DelugeRendererAPI {
       );
     }
     const surfTex = tex('surf', nx, ny, 'rgba16float');
+    const cellTex = tex('prep-cells', nx, ny, 'rg32float');
+    const vtxBedTex = tex('vtx-bed', vx, vy, 'r32float');
     const normTex = tex('norm', nx, ny, 'rgba16float');
     const miscTex = tex('misc', nx, ny, 'rgba16float');
     // Zero texels read as "no wall within range" (proximity 0), so only edited rectangles are ever uploaded.
@@ -482,6 +498,17 @@ class DelugeRenderer implements DelugeRendererAPI {
     });
 
     const prepParams = device.createBuffer({ label: 'prep', size: 48, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    const vertsBG = device.createBindGroup({
+      label: 'prep-verts',
+      layout: this.P.prepVerts.getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: { buffer: prepParams } },
+        { binding: 4, resource: vtxTex.createView() },
+        { binding: 5, resource: wetTex.createView() },
+        { binding: 6, resource: cellTex.createView() },
+        { binding: 7, resource: vtxBedTex.createView() },
+      ],
+    });
 
     const relief = Math.max(1, gMax - gMin);
     this.scene = {
@@ -510,6 +537,11 @@ class DelugeRenderer implements DelugeRendererAPI {
       overlayBG,
       prepParams,
       prepCache: new Map(),
+      cellTex,
+      vtxBedTex,
+      vertsBG,
+      vtxBedBG: null,
+      terrainKey: -1,
       roadVerts,
       roadIndices,
       roadIndexCount,
@@ -608,6 +640,8 @@ class DelugeRenderer implements DelugeRendererAPI {
     s.roadStatus.destroy();
     s.prepParams.destroy();
     s.prepCache.clear();
+    s.cellTex.destroy();
+    s.vtxBedTex.destroy();
     this.scene = null;
   }
 
@@ -772,6 +806,10 @@ class DelugeRenderer implements DelugeRendererAPI {
     this.adaptive.floorMs = Number.isFinite(ms) && ms > 0 ? ms : 0;
   }
 
+  setSimPressure(pressure: SimPressure): void {
+    this.adaptive.simPressure = pressure;
+  }
+
   setQuality(quality: RendererQuality): void {
     if (!(quality in QUALITY_PRESETS) && quality !== 'auto') return;
     if (quality === this.qualityMode) return;
@@ -864,16 +902,30 @@ class DelugeRenderer implements DelugeRendererAPI {
         { binding: 4, resource: s.surfTex.createView() },
         { binding: 5, resource: s.normTex.createView() },
         { binding: 6, resource: s.miscTex.createView() },
+        { binding: 7, resource: s.cellTex.createView() },
       ],
     });
-    const verts = d.createBindGroup({
-      label: 'prep-verts',
-      layout: this.P.prepVerts.getBindGroupLayout(0),
-      entries: [...common, { binding: 4, resource: s.vtxTex.createView() }, { binding: 5, resource: s.wetTex.createView() }],
-    });
-    const entry = { bed, barrier, cells, verts };
+    const entry = { bed, barrier, cells };
     s.prepCache.set(state, entry);
     return entry;
+  }
+
+  /** Bind group of the per-vertex bed pass for the solver's current bed / barrier textures. */
+  private vtxBedBindGroup(s: SceneGPU): GPUBindGroup {
+    const { bedTexture: bed, barrierTexture: barrier } = s.solver;
+    if (s.vtxBedBG && s.vtxBedBG.bed === bed && s.vtxBedBG.barrier === barrier) return s.vtxBedBG.bg;
+    const bg = this.device.createBindGroup({
+      label: 'prep-vtxbed',
+      layout: this.P.prepVtxBed.getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: { buffer: s.prepParams } },
+        { binding: 1, resource: bed.createView() },
+        { binding: 2, resource: barrier.createView() },
+        { binding: 4, resource: s.vtxBedTex.createView() },
+      ],
+    });
+    s.vtxBedBG = { bed, barrier, bg };
+    return bg;
   }
 
   /**
@@ -1005,6 +1057,7 @@ class DelugeRenderer implements DelugeRendererAPI {
         this.forcePrep ||
         (changed ? this.framesSincePrep >= preset.prepInterval || useMax !== this.lastPrepUseMax : this.framesSincePrep >= 30);
       if (due && !this.debugSkip.has('prep')) {
+        const editPrep = this.forcePrep || !changed;
         this.forcePrep = false;
         this.framesSincePrep = 0;
         this.lastPrepKey = key;
@@ -1027,12 +1080,23 @@ class DelugeRenderer implements DelugeRendererAPI {
         this.lastPrepUseMaxBuilt = useMax;
         d.queue.writeBuffer(s.prepParams, 0, prep);
         const bgs = this.prepBindGroups(s);
+        // The vertex bed only changes with the terrain: rebuilt when the solver's terrain version moves (every time
+        // for solvers without one), and on detected edits.
+        const tv = (s.solver as FloodSolver & { terrainVersion?: number }).terrainVersion;
+        const terrainKey = typeof tv === 'number' ? tv : -2;
+        const rebuildBed = terrainKey !== s.terrainKey || terrainKey === -2 || editPrep;
+        s.terrainKey = terrainKey;
         const cp = enc.beginComputePass({ label: 'prep', timestampWrites: this.timer.writes('prep') });
+        if (rebuildBed) {
+          cp.setPipeline(this.P.prepVtxBed);
+          cp.setBindGroup(0, this.vtxBedBindGroup(s));
+          cp.dispatchWorkgroups(Math.ceil(s.vx / 16), Math.ceil(s.vy / 16));
+        }
         cp.setPipeline(this.P.prepCells);
         cp.setBindGroup(0, bgs.cells);
         cp.dispatchWorkgroups(Math.ceil(s.nx / 16), Math.ceil(s.ny / 16));
         cp.setPipeline(this.P.prepVerts);
-        cp.setBindGroup(0, bgs.verts);
+        cp.setBindGroup(0, s.vertsBG);
         cp.dispatchWorkgroups(Math.ceil(s.vx / 16), Math.ceil(s.vy / 16));
         cp.setPipeline(this.P.wetBase);
         cp.setBindGroup(0, s.wetBGs[0]);

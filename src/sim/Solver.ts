@@ -169,6 +169,8 @@ export class GpuFloodSolver implements FloodSolver {
   private exportDirty = false;
   /** Incremented whenever the (exported) water state changes: step, brush, raise, reset. */
   private stateVersionN = 0;
+  /** Incremented whenever ground or barrier (bedTexture / barrierTexture) change. */
+  private terrainVersionN = 0;
 
   private sources: WaterSource[] = [];
   private storms: StormCell[] = [];
@@ -540,6 +542,11 @@ export class GpuFloodSolver implements FloodSolver {
     return this.stateVersionN;
   }
 
+  /** Changes whenever bedTexture / barrierTexture change (wall, erase and terrain brushes; terrain reset). */
+  get terrainVersion(): number {
+    return this.terrainVersionN;
+  }
+
   setSources(sources: WaterSource[]): void {
     this.sources = sources.map((s) => ({ ...s }));
     this.forcingDirty = true;
@@ -557,7 +564,10 @@ export class GpuFloodSolver implements FloodSolver {
     if (!rect) return;
     if (op.kind === 'water' && op.amount === 0) return;
     const terrainChanged = applyBrushCPU(op, rect, this.ground, this.barrier, this.nx);
-    if (terrainChanged) this.forcingDirty = true; // stage depth bound depends on the bed
+    if (terrainChanged) {
+      this.forcingDirty = true; // stage depth bound depends on the bed
+      this.terrainVersionN++;
+    }
 
     const res = this.ensureBrushResources();
     const { device } = this;
@@ -1156,6 +1166,7 @@ export class GpuFloodSolver implements FloodSolver {
 
   private uploadTerrain(): void {
     const { nx, ny, device } = this;
+    this.terrainVersionN++;
     const bed = new Float32Array(this.N);
     for (let c = 0; c < this.N; c++) bed[c] = this.ground[c] + this.barrier[c];
     const layout = { bytesPerRow: nx * 4 };

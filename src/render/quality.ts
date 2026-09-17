@@ -26,24 +26,46 @@ export interface QualityPreset {
 }
 
 export const QUALITY_PRESETS: Record<Exclude<RendererQuality, 'auto'>, QualityPreset> = {
-  high: { maxDpr: 2, maxPixels: 2560 * 1600, bloom: true, prepInterval: 1, idleFps: 60, rainDrops: 16000, lodQuadPixels: 2.5 },
-  balanced: { maxDpr: 1.5, maxPixels: 1920 * 1200, bloom: true, prepInterval: 2, idleFps: 30, rainDrops: 12000, lodQuadPixels: 3.5 },
+  high: { maxDpr: 2, maxPixels: 2560 * 1600, bloom: true, prepInterval: 1, idleFps: 60, rainDrops: 16000, lodQuadPixels: 3 },
+  balanced: { maxDpr: 1.5, maxPixels: 1920 * 1200, bloom: true, prepInterval: 2, idleFps: 30, rainDrops: 12000, lodQuadPixels: 4 },
   low: { maxDpr: 1, maxPixels: 1440 * 900, bloom: false, prepInterval: 2, idleFps: 30, rainDrops: 6000, lodQuadPixels: 5 },
 };
 
 /**
  * 'auto' ladder, best → cheapest. Resolution is traded first down to 1 render pixel per CSS pixel; only then do
  * effects go (bloom, water-mesh refresh rate, coarser LOD), and sub-CSS resolution is the last resort.
+ *
+ * LOD density: vertex work (terrain + water meshes, ~1 M triangles at 3 px quads) was half of the renderer's GPU time
+ * in the Pittsburgh flood on the M4; 4 px quads cut the renderer's GPU time by ~15 % (6.5 → 5.3 ms at 1600×1000) with
+ * no visible difference (the imagery carries the detail and shorelines are resolved per fragment).
  */
 export const AUTO_LADDER: QualityPreset[] = [
-  { maxDpr: 2, maxPixels: 2560 * 1600, bloom: true, prepInterval: 1, idleFps: 30, rainDrops: 16000, lodQuadPixels: 2.5 },
-  { maxDpr: 1.5, maxPixels: 1920 * 1200, bloom: true, prepInterval: 2, idleFps: 30, rainDrops: 14000, lodQuadPixels: 3 },
-  { maxDpr: 1.25, maxPixels: 1680 * 1050, bloom: true, prepInterval: 2, idleFps: 30, rainDrops: 12000, lodQuadPixels: 3.5 },
-  { maxDpr: 1, maxPixels: 1600 * 1000, bloom: true, prepInterval: 2, idleFps: 30, rainDrops: 10000, lodQuadPixels: 4 },
-  { maxDpr: 1, maxPixels: 1440 * 900, bloom: false, prepInterval: 2, idleFps: 30, rainDrops: 8000, lodQuadPixels: 5 },
-  { maxDpr: 0.8, maxPixels: 1280 * 800, bloom: false, prepInterval: 3, idleFps: 30, rainDrops: 6000, lodQuadPixels: 6 },
+  { maxDpr: 2, maxPixels: 2560 * 1600, bloom: true, prepInterval: 1, idleFps: 30, rainDrops: 16000, lodQuadPixels: 3 },
+  { maxDpr: 1.5, maxPixels: 1920 * 1200, bloom: true, prepInterval: 2, idleFps: 30, rainDrops: 14000, lodQuadPixels: 4 },
+  { maxDpr: 1.25, maxPixels: 1680 * 1050, bloom: true, prepInterval: 2, idleFps: 30, rainDrops: 12000, lodQuadPixels: 4.5 },
+  { maxDpr: 1, maxPixels: 1600 * 1000, bloom: true, prepInterval: 2, idleFps: 30, rainDrops: 10000, lodQuadPixels: 5 },
+  { maxDpr: 1, maxPixels: 1440 * 900, bloom: false, prepInterval: 2, idleFps: 30, rainDrops: 8000, lodQuadPixels: 6 },
+  { maxDpr: 0.8, maxPixels: 1280 * 800, bloom: false, prepInterval: 3, idleFps: 30, rainDrops: 6000, lodQuadPixels: 7 },
 ];
 const AUTO_START_LEVEL = 1;
+
+/**
+ * How hard the simulation is pushing for GPU time (set by the host; see AdaptiveQuality.simPressure):
+ *   0 — the sim keeps up (or is paused): the renderer may claim headroom;
+ *   1 — the sim is GPU-limited: hold the current level (a better picture would come straight out of sim speed),
+ *       except that quality lost to starvation comes back (up to the default level, not beyond, and not sooner than
+ *       STARVED_RECOVER_MS after the sim was last starved: a throttling spell passed);
+ *   2 — the sim is starved (its work budget is down to a substep or two): step down slowly, at most to
+ *       STARVED_MAX_LEVEL, to give it room.
+ */
+export type SimPressure = 0 | 1 | 2;
+
+/** Starvation steps quality down no further than this level (1 render pixel per CSS pixel, bloom on). */
+export const STARVED_MAX_LEVEL = 3;
+/** Sustained starvation before each step down, ms. */
+const STARVED_STEP_MS = 3000;
+/** Under pressure 1, levels lost to starvation are only won back this long after the sim was last starved, ms. */
+const STARVED_RECOVER_MS = 20000;
 
 /** Frame interval (ms) above which 'auto' steps down (≈ 48 fps) and below which it may step up. */
 const SLOW_MS = 20.8;
@@ -69,6 +91,15 @@ export class AdaptiveQuality {
    * ceiling are not slow — lowering resolution could not make them faster — so the thresholds move above it.
    */
   floorMs = 0;
+  /**
+   * Sim pressure hint (see SimPressure). Frame intervals alone cannot see it: the host's work budget keeps frames on
+   * time by giving the solver fewer substeps, so without the hint quality climbed to the best level while the flood
+   * ran at a fraction of the requested speed.
+   */
+  simPressure: SimPressure = 0;
+  private starvedMs = 0;
+  private lastSampleAt = -Infinity;
+  private lastStarvedAt = -Infinity;
 
   get preset(): QualityPreset {
     return AUTO_LADDER[this.level];
@@ -82,6 +113,7 @@ export class AdaptiveQuality {
     this.cooldownUntil = 0;
     this.raiseHoldMs = 4000;
     this.lastRaiseAt = -Infinity;
+    this.starvedMs = 0;
   }
 
   /**
@@ -91,7 +123,17 @@ export class AdaptiveQuality {
   sample(intervalMs: number, now: number, gpuMs?: number): boolean {
     if (!(intervalMs > 0) || intervalMs > 250) return false;
     this.ema += (intervalMs - this.ema) * 0.12;
+    const elapsed = Math.min(250, Math.max(0, now - this.lastSampleAt));
+    this.lastSampleAt = now;
+    this.starvedMs = this.simPressure === 2 ? this.starvedMs + elapsed : 0;
+    if (this.simPressure === 2) this.lastStarvedAt = now;
     if (now < this.cooldownUntil) return false;
+    if (this.starvedMs > STARVED_STEP_MS && this.level < STARVED_MAX_LEVEL) {
+      this.level++;
+      this.settle(now, 1200);
+      this.starvedMs = 0;
+      return true;
+    }
     const slowThreshold = Math.max(SLOW_MS, this.floorMs * 1.25);
     const fastThreshold = Math.max(FAST_MS, this.floorMs * 1.06);
     this.slowMs = this.ema > slowThreshold ? this.slowMs + intervalMs : 0;
@@ -106,7 +148,10 @@ export class AdaptiveQuality {
     // The solver shares the GPU and sizes its substeps to what is left, so only claim more when the renderer
     // itself is clearly cheap.
     const gpuBusy = gpuMs !== undefined && gpuMs > 6;
-    if (this.fastMs > this.raiseHoldMs && this.level > 0 && !gpuBusy) {
+    const mayRaise =
+      this.simPressure === 0 ||
+      (this.simPressure === 1 && this.level > AUTO_START_LEVEL && now - this.lastStarvedAt > STARVED_RECOVER_MS);
+    if (this.fastMs > this.raiseHoldMs && this.level > 0 && !gpuBusy && mayRaise) {
       this.level--;
       this.lastRaiseAt = now;
       // Short settle: a bad up-step must be undone quickly (the next up-step then needs longer headroom).

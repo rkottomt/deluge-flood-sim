@@ -1,5 +1,5 @@
 /** Creation of all render/compute pipelines and shared bind group layouts. */
-import { NORMAL_WATER_WGSL, PREP_CELLS_WGSL, PREP_VERTS_WGSL, PREP_WGSL, WET_BASE_WGSL, WET_DOWN_WGSL } from './shaders/prep';
+import { NORMAL_WATER_WGSL, PREP_CELLS_WGSL, PREP_VERTS_WGSL, PREP_VTXBED_WGSL, PREP_WGSL, WET_BASE_WGSL, WET_DOWN_WGSL } from './shaders/prep';
 import { TERRAIN_WGSL } from './shaders/terrain';
 import { WATER_WGSL } from './shaders/water';
 import { MARKER_WGSL, RIBBON_WGSL } from './shaders/overlay';
@@ -14,6 +14,7 @@ export interface Pipelines {
   overlayBGL: GPUBindGroupLayout;
   prepCells: GPUComputePipeline;
   prepVerts: GPUComputePipeline;
+  prepVtxBed: GPUComputePipeline;
   wetBase: GPUComputePipeline;
   wetDown: GPUComputePipeline;
   normalWater: GPUComputePipeline;
@@ -81,9 +82,10 @@ export async function createPipelines(device: GPUDevice, canvasFormat: GPUTextur
   const sceneLayout = device.createPipelineLayout({ bindGroupLayouts: [sceneBGL] });
   const overlayLayout = device.createPipelineLayout({ bindGroupLayouts: [overlayBGL] });
 
-  const [prepCellsM, prepVertsM, wetBaseM, wetDownM, normalWaterM, terrainM, waterM, ribbonM, markerM, skyM, rainM, bloomM, tonemapM] = await Promise.all([
+  const [prepCellsM, prepVertsM, prepVtxBedM, wetBaseM, wetDownM, normalWaterM, terrainM, waterM, ribbonM, markerM, skyM, rainM, bloomM, tonemapM] = await Promise.all([
     checkedModule(device, PREP_WGSL + PREP_CELLS_WGSL, 'prep-cells'),
     checkedModule(device, PREP_WGSL + PREP_VERTS_WGSL, 'prep-verts'),
+    checkedModule(device, PREP_WGSL + PREP_VTXBED_WGSL, 'prep-vtxbed'),
     checkedModule(device, WET_BASE_WGSL, 'wet-base'),
     checkedModule(device, WET_DOWN_WGSL, 'wet-down'),
     checkedModule(device, NORMAL_WATER_WGSL, 'normal-water'),
@@ -131,7 +133,7 @@ export async function createPipelines(device: GPUDevice, canvasFormat: GPUTextur
   };
 
   const R = (d: GPURenderPipelineDescriptor) => device.createRenderPipelineAsync(d);
-  const [sky, terrain, skirt, water, waterSkirt, ribbons, markersOpaque, markersBlend, rain, bloom, tonemap, prepCells, prepVerts, wetBase, wetDown, normalWater] =
+  const [sky, terrain, skirt, water, waterSkirt, ribbons, markersOpaque, markersBlend, rain, bloom, tonemap, prepCells, prepVerts, prepVtxBed, wetBase, wetDown, normalWater] =
     await Promise.all([
       R({
         label: 'sky',
@@ -228,10 +230,11 @@ export async function createPipelines(device: GPUDevice, canvasFormat: GPUTextur
       }),
       device.createComputePipelineAsync({ label: 'prep-cells', layout: 'auto', compute: { module: prepCellsM, entryPoint: 'cells' } }),
       device.createComputePipelineAsync({ label: 'prep-verts', layout: 'auto', compute: { module: prepVertsM, entryPoint: 'verts' } }),
+      device.createComputePipelineAsync({ label: 'prep-vtxbed', layout: 'auto', compute: { module: prepVtxBedM, entryPoint: 'vtxBed' } }),
       device.createComputePipelineAsync({ label: 'wet-base', layout: 'auto', compute: { module: wetBaseM, entryPoint: 'wetBase' } }),
       device.createComputePipelineAsync({ label: 'wet-down', layout: 'auto', compute: { module: wetDownM, entryPoint: 'wetDown' } }),
       device.createComputePipelineAsync({ label: 'normal-water', layout: 'auto', compute: { module: normalWaterM, entryPoint: 'normalWater' } }),
     ]);
 
-  return { sceneBGL, overlayBGL, prepCells, prepVerts, wetBase, wetDown, normalWater, sky, terrain, skirt, water, waterSkirt, ribbons, markersOpaque, markersBlend, rain, bloom, tonemap };
+  return { sceneBGL, overlayBGL, prepCells, prepVerts, prepVtxBed, wetBase, wetDown, normalWater, sky, terrain, skirt, water, waterSkirt, ribbons, markersOpaque, markersBlend, rain, bloom, tonemap };
 }

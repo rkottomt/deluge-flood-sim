@@ -8,15 +8,15 @@ import type { StepInfo } from '../contracts';
  * fixed substep count that is smooth at minute 1 stutters at minute 10. A governor owns a substep cap (fed
  * to the solver as `maxSubstepsPerFrame`) and steers it with an AIMD controller, like TCP congestion control:
  *
- *   • over target → decrease (one substep when slightly over, cap × 0.7 when clearly over); that cap is remembered as a ceiling and probed
- *     again only after a backoff (1 s, 2 s, 4 s … 8 s), so the cap settles instead of sawtoothing;
- *   • under target AND this cap is what limits the sim → additive increase.
+ *   • over target → decrease (~10 % when slightly over, × 0.7 when clearly over); that cap is remembered as a
+ *     ceiling and probed again only after a backoff (1 s, 2 s, 4 s … 8 s), so the cap settles instead of sawtoothing;
+ *   • under target AND this cap is what limits the sim → additive increase (half substeps: see `cap`).
  *
  * Two signals, because each is blind to one failure: requestAnimationFrame keeps firing at ~60 Hz while the
  * GPU queue silently backs up (measured on the M4 at 1024²: render-only frames are acknowledged by the GPU
  * after ~13 ms, with 4 substeps after ~51 ms, with 8 after ~72 ms — 3–4 frames of input lag at "57 fps"), and
  * GPU latency alone can't see main-thread stalls. Frame time per window is a trimmed mean (one hitch per
- * window is ignored); latency is the window median of submit → onSubmittedWorkDone. The first frames after
+ * window is ignored); latency is the median of submit → onSubmittedWorkDone over the last ~1 s. The first frames after
  * a (re)start are ignored (shader compilation, tab switches).
  */
 export interface GovernorConfig {
@@ -57,6 +57,8 @@ export class SubstepGovernor {
 
   private window: number[] = [];
   private latencies: number[] = [];
+  /** Latency samples of the previous windows (median over ~1 s: per-frame latency is noisy, see observe). */
+  private latencyHistory: number[][] = [];
   private windowStart = -Infinity;
   private frames = 0;
   /** Cap at which the last decrease happened (probing at/above it waits for the backoff). */
@@ -82,6 +84,7 @@ export class SubstepGovernor {
     this.frames = 0;
     this.window = [];
     this.latencies = [];
+    this.latencyHistory = [];
     this.windowStart = -Infinity;
     this.throttledInWindow = false;
   }
@@ -114,7 +117,12 @@ export class SubstepGovernor {
 
     const frameTime = trimmedMean(this.window);
     // Without enough latency samples (no WebGPU queue callback yet) judge by frame time alone.
-    const latency = this.latencies.length >= 3 ? median(this.latencies) : 0;
+    // Median over this and the previous LATENCY_WINDOWS − 1 windows: single frames differ by several ms (frames
+    // that refresh the water textures or read back stats carry extra work), and a 300 ms median still flickered.
+    this.latencyHistory.push(this.latencies);
+    if (this.latencyHistory.length > LATENCY_WINDOWS) this.latencyHistory.shift();
+    const recent = this.latencyHistory.flat();
+    const latency = recent.length >= 3 ? median(recent) : 0;
     const throttled = this.throttledInWindow;
     this.window = [];
     this.latencies = [];
@@ -125,7 +133,10 @@ export class SubstepGovernor {
       this.backoffMs = MIN_BACKOFF_MS;
     }
     const before = this.cap;
-    if (now < this.settleUntil) return false;
+    if (now < this.settleUntil) {
+      this.latencyHistory = [];
+      return false;
+    }
     const targetMs = Math.max(c.targetMs, this.floorMs * 1.1);
     // Under a frame-rate ceiling one frame of queued work is the ceiling's interval, not a 60 Hz vsync.
     const latencyMs = Math.max(c.latencyMs, this.floorMs * 1.05);
@@ -141,14 +152,21 @@ export class SubstepGovernor {
       this.backoffMs = Math.min(MAX_BACKOFF_MS, this.backoffMs * 2);
       this.lastDecrease = now;
       this.settleUntil = now + 2 * c.windowMs;
+      this.latencyHistory = []; // judged again only on samples taken after the queue drained
     } else if (!over && under && throttled && this.cap < upper) {
-      let next = Math.min(upper, this.cap + Math.max(CAP_STEP, stepRound(this.cap * 0.1)));
+      // Far below target (the GPU queue is idle: e.g. right after the user raised the rivers) grow by a quarter, else
+      // by ~10 %: the first seconds of a flood are the ones people watch.
+      const idle = latency < latencyMs * 0.5 && frameTime < targetMs * 0.92;
+      let next = Math.min(upper, this.cap + Math.max(CAP_STEP, stepRound(this.cap * (idle ? 0.25 : 0.1))));
       if (next >= this.ceiling && now < this.holdUntil) next = Math.max(this.cap, this.ceiling - CAP_STEP);
       this.cap = next;
     }
     return this.cap !== before;
   }
 }
+
+/** Evaluation windows whose latency samples are pooled (3 × 300 ms). */
+const LATENCY_WINDOWS = 3;
 
 /** Resolution of the substep cap. */
 const CAP_STEP = 0.5;

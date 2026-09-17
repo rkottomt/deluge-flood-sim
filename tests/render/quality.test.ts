@@ -1,7 +1,7 @@
 /** Adaptive quality controller: steps down under sustained slow frames, up cautiously, and settles. */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { AdaptiveQuality, AUTO_LADDER, QUALITY_PRESETS, targetSize } from '../../src/render/quality';
+import { AdaptiveQuality, AUTO_LADDER, QUALITY_PRESETS, STARVED_MAX_LEVEL, targetSize } from '../../src/render/quality';
 
 /** Drive the controller with a frame-time function of the current level for `seconds`. */
 function run(q: AdaptiveQuality, seconds: number, frameMs: (level: number) => number, start = 0, gpuMs = 3): number {
@@ -69,4 +69,26 @@ test('ladder is ordered from best to cheapest and presets are sane', () => {
   const [w, h] = targetSize(1440, 900, 3, 2, 2560 * 1600, 8192);
   assert.ok(w * h <= 2560 * 1600 && Math.abs(w / h - 1.6) < 0.01);
   assert.deepEqual(targetSize(800, 600, 1, 2, 4e6, 8192), [800, 600]);
+});
+
+test('sim pressure: a GPU-limited sim holds the level; a starved one steps down slowly, not below 1 px per CSS px', () => {
+  const q = new AdaptiveQuality();
+  const start = q.level;
+  q.simPressure = 1;
+  let t = run(q, 30, () => 16.7, 0, 3);
+  assert.equal(q.level, start, 'fast frames must not raise quality beyond the default while the sim is GPU-limited');
+  q.simPressure = 2;
+  t = run(q, 2, () => 16.7, t, 3);
+  assert.equal(q.level, start, 'no step before the starvation has lasted a few seconds');
+  t = run(q, 60, () => 16.7, t, 3);
+  assert.equal(q.level, STARVED_MAX_LEVEL, `starvation steps down to level ${STARVED_MAX_LEVEL} and no further`);
+  // Still GPU-limited but no longer starved (the throttling passed): back to the default level after a while, no higher.
+  q.simPressure = 1;
+  t = run(q, 10, () => 16.7, t, 3);
+  assert.equal(q.level, STARVED_MAX_LEVEL, 'no recovery right after starving');
+  t = run(q, 90, () => 16.7, t, 3);
+  assert.equal(q.level, start, 'recovers to the default level');
+  q.simPressure = 0;
+  run(q, 60, () => 16.7, t, 3);
+  assert.ok(q.level < start, 'and beyond it once the sim keeps up');
 });

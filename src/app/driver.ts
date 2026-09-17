@@ -106,8 +106,12 @@ export class FrameDriver {
         runner.onStep(advance, this.simClock, now, this.lastSnapshot);
         this.app.observeFrameBudget(frameMs, info, now);
       });
-    } else if (this.lastStepInfo && this.lastStepInfo.substeps !== 0) {
-      this.lastStepInfo = { ...this.lastStepInfo, simSecondsAdvanced: 0, substeps: 0, throttled: false };
+    } else {
+      // Paused / loading / hidden: nothing competes with the renderer for the GPU.
+      this.app.setSimPressure(0);
+      if (this.lastStepInfo && this.lastStepInfo.substeps !== 0) {
+        this.lastStepInfo = { ...this.lastStepInfo, simSecondsAdvanced: 0, substeps: 0, throttled: false };
+      }
     }
     this.wasRunning = running;
     const tools = this.app.tools;
