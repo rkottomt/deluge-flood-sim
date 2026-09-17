@@ -312,6 +312,44 @@ test('url: preset default, preset param, live param', () => {
   assert.equal(bad.warnings.length, 1);
 });
 
+// ─── SEC-01: a shared link may not write into the app's chrome ────────────────────────────────
+test('url: an unknown ?preset= falls back to the default and is never echoed back', () => {
+  const spoof = parseStartupRequest('?preset=<img src=x onerror=alert(1)>');
+  assert.deepEqual(spoof.request, { kind: 'preset', id: 'pittsburgh' });
+  assert.equal(spoof.warnings.length, 1);
+  for (const w of spoof.warnings) assert.ok(!w.includes('img'), `warning echoes the attacker string: ${w}`);
+  // A known id still works, and a valid one raises no warning at all.
+  assert.deepEqual(parseStartupRequest('?preset=sandbox'), { request: { kind: 'preset', id: 'sandbox' }, warnings: [] });
+});
+
+test('url: an invalid ?live= warning is a fixed sentence, not the attacker\'s', () => {
+  const { warnings } = parseStartupRequest('?live=EVACUATE NOW: levee failed. Call 555-0100');
+  assert.equal(warnings.length, 1);
+  assert.ok(!warnings[0].includes('EVACUATE'), warnings[0]);
+  assert.ok(!warnings[0].includes('555-0100'), warnings[0]);
+  assert.match(warnings[0], /expected lat,lon,sizeKm/);
+});
+
+test('url: a ?name= from a link is filtered and flagged as link-supplied', () => {
+  const sentence = parseStartupRequest('?live=40.44,-80.00,5&name=EVACUATE%20NOW%3A%20levee%20failed.%20Call%20555-0100');
+  assert.equal(sentence.request.kind, 'live');
+  if (sentence.request.kind === 'live') {
+    // linkPlaceLabel rejects digits, colons and sentences outright: no name at all reaches the loader.
+    assert.equal(sentence.request.req.name, undefined);
+    assert.equal(sentence.request.req.nameFromLink, undefined);
+  }
+  // A plausible place name survives, but is marked as coming from the link (src/data/live.ts then shows it with
+  // its coordinates, and SceneManager.label keeps it out of the app's own sentences).
+  const plausible = parseStartupRequest('?live=40.44,-80.00,5&name=Riverside');
+  if (plausible.request.kind === 'live') {
+    assert.equal(plausible.request.req.name, 'Riverside');
+    assert.equal(plausible.request.req.nameFromLink, true);
+  }
+  // A bidi override never reaches the loader, even inside an otherwise word-only name.
+  const bidi = parseStartupRequest('?live=40.44,-80.00,5&name=Pittsburgh%20%E2%80%AEYCNEGREME');
+  if (bidi.request.kind === 'live') assert.ok(!/[\u202a-\u202e\u2066-\u2069]/.test(bidi.request.req.name ?? ''));
+});
+
 // ─── overlays ────────────────────────────────────────────────────────────────────────────────
 test('overlays: only report changes, including in-place mutation of tool transients', () => {
   const composer = new OverlayComposer();

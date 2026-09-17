@@ -7,7 +7,9 @@ evacuation route re-plan as roads flood. This document explains how, and why it 
 Contents: [1 Frame pipeline](#1-frame-pipeline) · [2 Module map](#2-module-map) ·
 [3 Numerical method](#3-numerical-method) · [4 Rivers, stages and crests](#4-rivers-stages-and-crests) ·
 [5 Data](#5-data) · [6 Rendering](#6-rendering) · [7 Evacuation routing](#7-evacuation-routing) ·
-[8 App loop and pacing](#8-app-loop-and-pacing) · [9 Validation](#9-validation) · [10 Future work](#10-future-work)
+[8 App loop and pacing](#8-app-loop-and-pacing) · [9 Validation](#9-validation) ·
+[10 Shipping: browser, desktop app and the test suites](#10-shipping-browser-desktop-app-and-the-test-suites) ·
+[11 Future work](#11-future-work)
 
 ---
 
@@ -48,7 +50,8 @@ selection accounts for (§3.6).
 | `src/routing/` | Road graph, flood status per edge, multi-target Dijkstra with wet-road slowdowns and bridge handling. |
 | `src/ui/` | Panels, toolbar and tools, HUD, "Try it" strip (with the one-click demo levee), How it works, location picker. Plain DOM + one CSS file. |
 | `src/app/` | Orchestration: scene loading, store → solver sync, stage ramp and crest fill, protected-land analysis, frame driver, work budget / frame pacing, debug API (`window.__deluge`). |
-| `scripts/` | `bake-presets.ts` (bakes `public/presets/*`), `e2e.mjs` (end-to-end demo flows in headless Chromium on the real GPU), `bench.mjs` (performance benchmark, §8.1), `shot.mjs` (screenshot tool). |
+| `scripts/` | `bake-presets.ts` (bakes `public/presets/*`), `e2e.mjs` (end-to-end demo flows in headless Chromium on the real GPU), `bench.mjs` (performance benchmark, §8.1), `shot.mjs` (screenshot tool), and the three regression suites `perf.mjs`, `visual.mjs`, `security-test.mjs` (§10.3). |
+| `electron/` | The macOS desktop wrapper (§10.2): `main.js` (one hardened main process), `endpoints.js` (the CSP and network allowlist, mirrored from `src/data/csp.ts`), `package.mjs` (asar + fuses + ad-hoc signature), `check-endpoints.mjs`, `verify-renderer.mjs` / `verify-packaged.mjs` (the release gate), `smoke.js` (verification builds only). |
 | `dev/` | Stand-alone harness pages per module: `render.html` (synthetic valley with analytic mock water, or `?preset=<id>` with the real solver), `sim.html`, `data.html`, `ui.html`; `tests/routing/harness.html` for routing. |
 | `tests/<module>/` | `node:test` suites; the sim and render suites run on a real GPU through Dawn (`webgpu` package). |
 
@@ -377,7 +380,61 @@ From `npm test` (tests run on the real GPU through Dawn):
 presets, tools, frame rate, idle power, cancelling a stalled `?live=` link, the one-click levee; `--live` adds a
 live-area flow) in headless Chromium on the real GPU, offline.
 
-## 10. Future work
+## 10. Shipping: browser, desktop app and the test suites
+
+### 10.1 Content-Security-Policy, one source of truth
+
+`src/data/csp.ts` holds the policy and the endpoint list; `vite.config.ts` writes it into `dist/index.html` as a
+`<meta http-equiv>` ahead of the first script tag. It is `default-src 'none'` with `script-src 'self'` — no
+`unsafe-inline`, no `unsafe-eval`, no `wasm-unsafe-eval` (the DEM path is kept uncompressed on purpose, so geotiff
+never needs its WASM decoders) — `worker-src 'self'`, `connect-src` limited to the seven data endpoints, `img-src`
+adding only the Esri tile prefix and `data:`, `object-src`/`base-uri`/`form-action` `'none'`, and `style-src 'self'
+'unsafe-inline'` because `index.html` and the unsupported-browser screen each insert a `<style>` block.
+
+Two directives cannot be expressed in a meta tag, so they only exist where a real server sends headers: the desktop
+wrapper adds `frame-ancestors 'none'` (§10.2). A copy hosted on GitHub Pages can therefore be framed by any origin;
+the impact is limited to what a framed copy could do — there are no accounts, no state-changing server calls and
+nothing stored — and it is called out in the README.
+
+`electron/endpoints.js` mirrors the same list for the main process, and `electron/check-endpoints.mjs` fails the
+desktop build if the two ever drift apart in either direction. `tests/data/csp.test.ts` fails if a new third-party
+host appears in `src/data` without being added to the policy.
+
+### 10.2 The desktop build (`electron/`)
+
+`npm run app:build` typechecks, builds the same static `dist/`, and packages it into `release/Deluge.app`: one
+`BrowserWindow`, no preload, no IPC, no Node in the renderer (`sandbox: true`, `contextIsolation: true`,
+`nodeIntegration: false`), no listening TCP port, and no `file://` — the build is served from a privileged
+`app://deluge/` scheme registered as `standard` + `secure`, which is what makes relative URLs, module workers,
+`fetch('./presets/…')` and `isSecureContext` (a WebGPU requirement) all work. Every response, 404s included, carries
+the CSP plus `frame-ancestors 'none'`, `X-Content-Type-Options`, `Referrer-Policy`, `Cross-Origin-Opener-Policy` and
+`Permissions-Policy`. The path served is resolved, dot-segment- and null-byte-checked, extension-allowlisted and
+confined to the asar root. Navigation off the origin, new windows, webviews and downloads are refused; the only
+external link the app will hand to the OS browser is the repository. Network requests are checked against the same
+endpoint list independently of CSP, which also covers the workers, and every certificate error is fatal. Every
+permission request is denied — including Screen Wake Lock, because the main process holds a `powerSaveBlocker`
+instead, which is stronger and needs no page to be visible. macOS fuses turn off `ELECTRON_RUN_AS_NODE`,
+`NODE_OPTIONS`, `--inspect` and `file://` extra privileges, require asar integrity and refuse to load an app from
+anywhere but the asar; a packaged build also refuses to start if its command line asks it to disarm any of this
+(`--ignore-certificate-errors`, `--disable-web-security`, `--remote-debugging-port`, …). A renderer crash reloads
+with a back-off, and after three crashes in a minute the window shows a recovery page rather than going blank.
+
+`npm run app:check` is the gate: 43 checks, the last 20 of them against the packaged, fused bundle. Because such a
+bundle deliberately cannot be automated from outside, it reports on itself through a hook that `package.mjs` stages
+only into the differently-named verification build.
+
+### 10.3 The three regression suites
+
+Beyond `npm test` and `npm run e2e`, three suites in `scripts/` each build their own production bundle, serve it on
+their own port and drive it in headless Chromium on the real GPU:
+
+| Suite | Asserts |
+| --- | --- |
+| `npm run test:perf` | fps, frame-time p50/p95/p99, achieved sim speed, CPU ms/frame, GPU queue latency, input latency, time-to-interactive and drift over a 60 s sustain run, across six scenarios and two viewports. Floors are always fatal; targets are advisory when the machine is noisy or in Low Power Mode (which moves the numbers by ~6×), and the power state is recorded with every run. |
+| `npm run test:visual` | Fifteen exactly-frozen scenes at 1470×956 @ DPR 2, compared with committed golden images in `tests/visual/baselines/` **and** checked by baseline-free detectors: blank frames, NaN magenta, water unsupported above terrain, shoreline stair-stepping, z-fighting flicker, missing imagery, UI off the canvas, legend-vs-pixel colour agreement. |
+| `npm run test:security` | The penetration test's cases against the *released* bundle (no debug API): link-parameter spoofing, XSS through hostile upstream bodies, the CSP and its violations, response byte caps, `dist/` hygiene, `npm audit`. |
+
+## 11. Future work
 
 * A second-order Kurganov–Petrova central-upwind solver (full shallow-water equations) as a selectable mode for
   dam-break and supercritical scenarios.

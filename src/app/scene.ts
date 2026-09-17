@@ -78,14 +78,19 @@ export class SceneManager {
   /** Human label for a request (for loading messages and errors). */
   static label(request: SceneRequest): string {
     if (request.kind === 'live') {
-      // SEC-01: a name that came from a link is always shown beside the coordinates it claims to describe,
-      // and a coordinate-shaped name is replaced by the real ones. The 3-decimal format matches
-      // withCoordinates() in src/data/placeName.ts on purpose — keep the two in step.
+      /*
+       * SEC-01. This label goes into the app's *own* sentences — the loading card, an error toast, the retry
+       * button, the offline notice — so a name that came from a `?live=&name=` link is not used here at all: the
+       * area is named by its coordinates, which is also the honest thing to say about a place the app has not
+       * loaded yet. A link-supplied name reaches the screen in exactly one place, as the caption of an area that
+       * did load, and there `src/data/live.ts` renders it through `withCoordinates()` so the position it claims
+       * to describe is always beside it. A coordinate-shaped name is likewise replaced by the real coordinates.
+       * The 3-decimal format matches `withCoordinates` on purpose — keep the two in step.
+       */
       const { center, sizeMeters, name, nameFromLink } = request.req;
       const ll = `${center.lat.toFixed(3)}, ${center.lon.toFixed(3)}`;
-      const nm = isCoordinateName(name) ? '' : cleanPlaceLabel(name);
-      if (!nm) return `${ll} (${(sizeMeters / 1000).toFixed(1)} km)`;
-      return nameFromLink ? `${nm} (${ll})` : nm;
+      const nm = nameFromLink || isCoordinateName(name) ? '' : cleanPlaceLabel(name);
+      return nm || `${ll} (${(sizeMeters / 1000).toFixed(1)} km)`;
     }
     // SEC-01: never echo an unknown preset id — it is attacker-controlled text from ?preset=.
     try {

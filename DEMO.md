@@ -17,23 +17,44 @@ Air's whole screen, which is more than a real browser window gives the page (see
 ### The day before, with internet
 
 - [ ] `npm ci` in the repo. This is the only step that needs the network.
-- [ ] `npm run demo`, open http://localhost:4173 in Brave, and click through section 2 once.
+- [ ] Decide how you are presenting — **Deluge.app** (no terminal, no browser) or **`npm run demo` in Brave**. Both
+  are rehearsed; the app is the calmer one in front of a judge.
+- [ ] If Deluge.app: `npm run app:build` (~2 min: typecheck, build, package, fuses, signature — it prints `ok` for
+  each and refuses to produce an app that would not be safe to demo). It writes `release/Deluge.app`, which is *not*
+  in git, so it has to be built on this laptop. Then `open release/Deluge.app` and click through section 2 once.
+- [ ] If Brave: `npm run demo`, open http://localhost:4173, and click through section 2 once.
 
 ### At the table, 10 minutes before
 
 **Power.** Low Power Mode and Energy Saver can cap the page at 30 fps; heat and a busy GPU cut sim speed.
 
 - [ ] Plug in the charger.
-- [ ] **Turn Low Power Mode off.** System Settings → Battery → Low Power Mode → **Never**. It is set per power source,
-  and on this laptop the two disagree: as measured on 17 Sep, battery is off but **the adapter still has it on**, so
-  plugging the charger in switches it back **on**. Check it with the charger in, which is how you will present:
-  `pmset -g | grep lowpowermode` must print `0`.
-- [ ] Keep the screen awake. Deluge asks the browser for a **Screen Wake Lock** while the tab is visible, which holds
-  the display awake in Brave and Chrome with nothing to switch on (it is handed back whenever you leave the tab and
-  taken again when you come back). Checked on this laptop: with the page open in Brave, `pmset -g assertions` lists
-  `pid NNN(Brave Browser): NoDisplaySleepAssertion named: "Blink Wake Lock"`. Safari 18 has no such API, and no lock
-  outvotes closing the lid — so for belt and braces run `caffeinate -dis` in a Terminal tab and leave it running.
-  Without either, the display sleeps after 2 min on battery and 10 min on the adapter.
+- [ ] **Turn Low Power Mode off — it is still on for the charger on this laptop.** System Settings → Battery → Low
+  Power Mode → **Never**. It is set per power source and the two disagree here; re-measured on 17 Sep at the end of
+  the build, plugged in:
+
+  ```
+  pmset -g custom | grep -A1 'AC Power'   →  lowpowermode  1     ← this is the one that bites
+  pmset -g custom | grep -A1 'Battery'    →  lowpowermode  0
+  pmset -g | grep lowpowermode            →  1               ← effective right now: ON
+  ```
+
+  So plugging the charger in switches it back **on**. Set it to Never in System Settings (or
+  `sudo pmset -a lowpowermode 0`), then check with the charger in, which is how you will present:
+  `pmset -g | grep lowpowermode` must print `0`. Every performance number in this kit and in the README was measured
+  with it **off**; the release run on 17 Sep had it on, and `npm run test:perf` says so in its banner and marks itself
+  advisory when it sees it.
+- [ ] Keep the screen awake.
+  - **In Deluge.app:** nothing to do. The app holds a display-sleep assertion from its own main process for as long
+    as a window is open — stronger than the browser lock, because it does not depend on a visible tab. (It also
+    *denies* the page's own Wake Lock request and logs that it did; the block is the main process's job.) Verified in
+    the release gate: `powerSaveBlocker active=true` on the packaged build.
+  - **In Brave:** Deluge asks for a **Screen Wake Lock** while the tab is visible, which holds the display awake in
+    Brave and Chrome with nothing to switch on (it is handed back whenever you leave the tab and taken again when you
+    come back). Checked on this laptop: `pmset -g assertions` lists
+    `pid NNN(Brave Browser): NoDisplaySleepAssertion named: "Blink Wake Lock"`. Safari 18 has no such API.
+  - No lock of either kind outvotes closing the lid, so for belt and braces run `caffeinate -dis` in a Terminal tab
+    and leave it running. Without any of this, the display sleeps after 2 min on battery and 10 min on the adapter.
 - [ ] **Keep the lid open.** Closing it sleeps the Mac, and waking it can reset the GPU (see *If something goes wrong*).
 
 **A quiet GPU.**
@@ -45,12 +66,17 @@ Air's whole screen, which is more than a real browser window gives the page (see
   crest 3 s after the click. With other headless browser tests sharing the GPU (on battery, Low Power Mode on), frames
   mostly still held 50–60 fps, but sim speed fell to 7–33×, the crest took 8–16 s, and a reload took 1.7–12 s.
 
-**Server.**
+**Launch: the app, or the server.** Pick one. Wi-Fi on or off doesn't matter either way: the rehearsal blocked every
+non-localhost request and the built-in scenarios made none, `node scripts/e2e.mjs --prod` passes offline, and the
+packaged app was measured loading Pittsburgh at 59.8 fps with *every* data host pointed at nowhere.
 
-- [ ] Terminal: `cd` into the repo, `npm run demo`. It builds, then serves **http://localhost:4173**. Leave it open.
-  If 4173 is busy: `npm run demo -- --port 5000`.
-- [ ] Wi-Fi on or off doesn't matter. The rehearsal blocked every non-localhost request and the built-in scenarios made
-  none; `node scripts/e2e.mjs --prod` passes offline.
+- [ ] **Deluge.app** — `open release/Deluge.app` (or double-click it in Finder), or `npm run app:dev` to run the
+  wrapper on the current build without packaging. There is no address bar, no DevTools and no terminal on screen. The
+  menus you have: **View ▸ Reload scene (Cmd-R)** and **View ▸ Toggle Full Screen (Ctrl-Cmd-F, or F11)**. The window
+  opens at 1440×792 points on this Air; full screen gives it the whole 1470×956. `?preset=` links do not apply — the
+  app always opens Pittsburgh — but *Pick any US location* works exactly as it does in the browser.
+- [ ] **Or the server** — Terminal: `cd` into the repo, `npm run demo`. It builds, then serves
+  **http://localhost:4173**. Leave it open. If 4173 is busy: `npm run demo -- --port 5000`.
 
 **Browser: Brave, no flags.**
 
@@ -70,8 +96,8 @@ Air's whole screen, which is more than a real browser window gives the page (see
 
 **The page.**
 
-- [ ] Open http://localhost:4173/ (the address becomes `?preset=pittsburgh`) **before the first judge arrives**, and
-  watch it run for a minute.
+- [ ] Open http://localhost:4173/ (the address becomes `?preset=pittsburgh`) — or launch Deluge.app — **before the
+  first judge arrives**, and watch it run for a minute.
 - [ ] Full screen (Ctrl-Cmd-F) at 100 % zoom (Cmd-0). 1470×956 is this Air's whole screen and what the headless
   rehearsals used; a real Brave window hands the page less, because the tab strip and toolbar stay (measured: 1470×752
   in a maximised window). That is fine — the layout was checked at 956, 924, 837, 746 and 718 px tall and nothing
@@ -83,14 +109,15 @@ Air's whole screen, which is more than a real browser window gives the page (see
   - top centre, *Try it*: **Raise to 1936 record · Evacuate · Build a levee · Hurricane rain · Break it**
   - right panel: River stage **16.0 ft**
 
-**Mid-pitch, in one line.** *Screen goes dark:* it shouldn't — the page holds a wake lock in Brave — so wiggle the
-trackpad and start `caffeinate -dis`. *Top right says ≈ 30 fps:* Low Power Mode or Brave's Energy Saver is on; every
-beat still happens, fix it between judges. *"Lost connection to the GPU":* let it reload itself, or pick a button on
-the card — the table below has the detail.
+**Mid-pitch, in one line.** *Screen goes dark:* it shouldn't — Deluge.app blocks display sleep itself and the page
+holds a wake lock in Brave — so wiggle the trackpad and start `caffeinate -dis`. *Top right says ≈ 30 fps:* Low Power
+Mode or Brave's Energy Saver is on; every beat still happens, fix it between judges. *"Lost connection to the GPU":*
+let it reload itself, or pick a button on the card — the table below has the detail.
 
 ### Reset between judges
 
-**Press Cmd-R.** A reload is the clean reset: river back at 16 ft, speed 60×, no walls, no route, the Try-it steps
+**Press Cmd-R.** In the browser it reloads the tab; in Deluge.app the same key is *View ▸ Reload scene* and does the
+same thing. A reload is the clean reset: river back at 16 ft, speed 60×, no walls, no route, the Try-it steps
 unchecked (checked after a full pitch in rehearsal), and the strip comes back even if it was closed. Measured: running
 again 1.7 s after Cmd-R at best, up to 12 s while other GPU work was going on. Don't use `R` for this: it resets only the
 water, so walls stay and a raised river rises again.
@@ -107,6 +134,8 @@ so the fanless Air does less work between judges. Press Space again as the judge
 | The same card with **Reload this scene** *and* **Start with Pittsburgh** | Same thing, but you were on Johnstown, Ellicott City, the sandbox or a live area. **Start with Pittsburgh** is the way out: it is the lightest scenario, needs no network and always loads. A live area or an oversized grid that keeps dying switches to it by itself. |
 | Either card while a scene was still loading | The load is dropped the moment the GPU goes, so nothing carries on behind the card and the address bar still points at what you asked for. |
 | Brave's own crash page, or a blank page | Cmd-R. |
+| **In Deluge.app:** a dark page saying *"The view stopped and could not restart"* with a **Restart Deluge** button | The graphics view crashed three times in a row, so the app stopped reloading it. Click **Restart Deluge**. If it happens again, quit (Cmd-Q) and reopen from the Dock, which gives the GPU a completely fresh start. The four built-in scenes need no network, so staying off *Pick a location* is the safe path. |
+| **In Deluge.app:** the window goes white or blank for a second, then the scene comes back | That is the crash recovery working: the view is reloaded automatically (up to three times in a minute, backing off). Keep talking; say "the GPU driver reset and the app restarted the view". |
 | "This site can't be reached" | The `npm run demo` terminal was closed. Run it again. |
 | ≈ 30 fps top right | Low Power Mode or Energy Saver is on. The demo still works; fix it between judges. |
 | Sim speed in single digits, the HUD says "GPU-limited" | Something else is using the GPU, or the Air is hot. Keep talking: every beat still happens, just more slowly. |

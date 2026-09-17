@@ -241,3 +241,32 @@ test('scene.abandon: a load already past its downloads is invalidated too (cance
     h.restore();
   }
 });
+
+/**
+ * SEC-01. `SceneManager.label` is what the app puts into its own sentences (the loading card, an error toast, the
+ * retry button, the offline notice), so nothing attacker-controlled may appear in it: an unknown preset id is not
+ * echoed, and a name that arrived through a `?live=&name=` link is replaced by the coordinates it claims to
+ * describe. A name the app obtained itself (reverse geocoding) is shown as-is.
+ */
+test('scene: label never echoes a link-supplied name or an unknown preset id', () => {
+  const live = (name: string | undefined, nameFromLink?: boolean) =>
+    SceneManager.label({
+      kind: 'live',
+      req: { center: { lat: 40.4406, lon: -79.9959 }, sizeMeters: 2000, resolution: 512, ...(name ? { name } : {}), ...(nameFromLink ? { nameFromLink } : {}) },
+    });
+
+  // From a link: coordinates only, whatever the name says.
+  assert.equal(live('Pittsburgh YCNEGREME DOOLF', true), '40.441, -79.996 (2.0 km)');
+  assert.equal(live('Riverside', true), '40.441, -79.996 (2.0 km)');
+  // Obtained by the app itself (reverse geocoded, or the picker): used as the label.
+  assert.equal(live('Pittsburgh, Pennsylvania'), 'Pittsburgh, Pennsylvania');
+  // No name, or a name that is only coordinates: the real coordinates and the size.
+  assert.equal(live(undefined), '40.441, -79.996 (2.0 km)');
+  assert.equal(live('40.441, -79.996'), '40.441, -79.996 (2.0 km)');
+  assert.equal(live('Area near 40.441° N, 79.996° W'), '40.441, -79.996 (2.0 km)');
+
+  // Presets: the registry's own name, and never the id an attacker chose.
+  assert.equal(SceneManager.label({ kind: 'preset', id: 'pittsburgh' }), 'Pittsburgh — Three Rivers');
+  const spoofed = SceneManager.label({ kind: 'preset', id: '<img src=x onerror=alert(1)>' });
+  assert.equal(spoofed, 'an unknown preset');
+});

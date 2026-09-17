@@ -5,7 +5,8 @@
  * Runs after `vite build`, and does four things in the order that asar integrity requires:
  *
  *   1. Stage exactly what ships: `main.js`, `endpoints.js`, the built `dist/`, and a minimal package.json.
- *      Nothing else from the repo — no sources, no node_modules, no artifacts.
+ *      Nothing else from the repo — no sources, no node_modules, no artifacts, and (for any bundle not named
+ *      `VERIFY_APP_NAME`) no `smoke.js`, so the shipped app carries no way to run JavaScript in its renderer.
  *   2. `@electron/packager` builds the `.app` with `asar: true` and embeds the asar integrity digest into the
  *      Electron Framework (ELECTRON_REQUIREMENTS.md R11), re-signing that framework ad hoc as it goes.
  *   3. `@electron/fuses` flips the R11 fuse wire in the main binary, then re-signs the whole bundle ad hoc
@@ -20,10 +21,12 @@
  *   --out=<dir>     output directory         (default "release")
  *
  * `npm run app:verify` uses them to build "Deluge Verify.app": the identical pipeline with a different name,
- * which is the only name `electron/main.js` lets the §V smoke hook answer to.
+ * and the only bundle that gets `electron/smoke.js` staged into it (the §V self-report hook — see step 1).
  */
 import { packager } from '@electron/packager';
 import { flipFuses, FuseV1Options, FuseVersion, getCurrentFuseWire } from '@electron/fuses';
+// Imported for its name only: `smoke.js` is deliberately electron-free at the top level so this can read it.
+import { VERIFY_APP_NAME } from './smoke.js';
 import { spawnSync } from 'node:child_process';
 import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -60,6 +63,10 @@ await rm(STAGE, { recursive: true, force: true });
 await mkdir(STAGE, { recursive: true });
 await cp(path.join(REPO, 'electron/main.js'), path.join(STAGE, 'main.js'));
 await cp(path.join(REPO, 'electron/endpoints.js'), path.join(STAGE, 'endpoints.js'));
+// The §V smoke hook runs arbitrary JavaScript in the renderer, so it ships in the verification bundle only.
+// `main.js` imports it dynamically and logs that it was ignored when the file is absent, which is the shipping case.
+const withSmoke = APP_NAME === VERIFY_APP_NAME;
+if (withSmoke) await cp(path.join(REPO, 'electron/smoke.js'), path.join(STAGE, 'smoke.js'));
 await cp(DIST, path.join(STAGE, 'dist'), { recursive: true });
 await writeFile(
   path.join(STAGE, 'package.json'),
@@ -146,6 +153,15 @@ if (bad || sig.status !== 0 || integrity.status !== 0) {
   console.error('\nBuild produced an app that would not be safe to demo.');
   process.exit(1);
 }
+
+// R12: prove the claim rather than trusting the staging step — the hook must be absent from a shipping asar.
+const asarText = (await readFile(path.join(APP_PATH, 'Contents/Resources/app.asar'))).toString('latin1');
+const hookInAsar = asarText.includes('DELUGE_SMOKE_SCRIPT');
+if (hookInAsar !== withSmoke) {
+  console.error(`\nFAIL the §V smoke hook is ${hookInAsar ? 'present in' : 'missing from'} ${APP_NAME}.app's asar (expected ${withSmoke ? 'present' : 'absent'}).`);
+  process.exit(1);
+}
+console.log(`  ok   §V smoke hook ${withSmoke ? 'present (verification build)' : 'absent from the shipped asar'}`);
 
 const size = run('du', ['-sh', APP_PATH]).stdout.trim().split(/\s+/)[0];
 console.log(`\n${path.relative(REPO, APP_PATH)} — ${size}, ad-hoc signed, fuses set.\n`);

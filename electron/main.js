@@ -42,9 +42,14 @@ const REFUSED_SWITCHES = [
   'ignore-certificate-errors', 'ignore-certificate-errors-spki-list', 'ignore-urlfetcher-cert-requests',
   'allow-insecure-localhost', 'unsafely-treat-insecure-origin-as-secure',
   // Same-origin policy, the sandbox and process isolation (R1, R2).
-  'disable-web-security', 'allow-running-insecure-content', 'allow-file-access-from-files', 'no-sandbox',
-  'disable-gpu-sandbox', 'disable-site-isolation-trials', 'disable-site-isolation-for-policy', 'disable-features',
+  'disable-web-security', 'allow-running-insecure-content', 'no-sandbox', 'disable-gpu-sandbox',
+  'disable-site-isolation-trials', 'disable-site-isolation-for-policy', 'disable-features',
   'enable-blink-features', 'enable-experimental-web-platform-features',
+  // NOT listed: `allow-file-access-from-files`, which Electron appends to its own command line by default — a
+  // packaged build refusing it would refuse to start at all (measured: it does). file:// is closed off by other
+  // means anyway: the R11 GrantFileProtocolExtraPrivileges fuse is off, the window only ever loads app://deluge/,
+  // and the R7 navigation handler blocks file:// documents, frames and links.
+  // Also not listed: `host-resolver-rules` — see below.
   // Where the app's traffic goes (R10 covers the request URL; a proxy would move it wholesale).
   'proxy-server', 'proxy-pac-url',
 ];
@@ -370,8 +375,9 @@ function createWindow(ses) {
    * R2: a renderer crash (e.g. a hostile upstream body, SEC-03) recovers into the offline presets.
    *
    * Three reloads inside a minute, backing off, then the recovery page — never a blank window with no message,
-   * which is what one reload per minute used to leave on screen. `Cmd+R` (View ▸ Reload scene) and the button on
-   * the recovery page both reset the counter, because a person asking for a reload is not a crash loop.
+   * which is what one reload per minute used to leave on screen. Only sixty seconds without a crash clear the
+   * counter, so a renderer that dies once per successful load still ends on the recovery page rather than
+   * reloading for ever; the page's own button always gets one more try.
    */
   const MAX_CRASH_RELOADS = 3;
   const CRASH_WINDOW_MS = 60_000;
@@ -402,10 +408,11 @@ function createWindow(ses) {
       if (!win.isDestroyed()) win.loadURL(APP_URL);
     }, delay);
   });
-  // A successful load of the app itself means the loop is over.
+  // Loading the app again — including from the recovery page's own button — takes the window out of recovery.
+  // The crash counter is deliberately *not* reset here: only 60 quiet seconds clear it, so an app that crashes
+  // once per successful load is still recognised as a loop instead of reloading forever.
   win.webContents.on('did-finish-load', () => {
-    if (win.isDestroyed() || win.webContents.getURL() !== APP_URL) return;
-    crashReloads = 0;
+    if (win.isDestroyed() || win.webContents.getURL().includes(RECOVERY_PATH)) return;
     recovering = false;
   });
   win.webContents.on('unresponsive', () => console.error('[deluge] renderer unresponsive'));
