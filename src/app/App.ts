@@ -27,6 +27,7 @@ import { bridgeFor, postNotice } from '../ui/bridge';
 import { ProtectionController, type ProtectionInput } from './protection';
 import { createProtectionWorker } from './protectionWorkerClient';
 import { parseStartupRequest, writeSceneToUrl, type SceneRequest } from './url';
+import { isUnreachableFailure } from '../data/net';
 
 export type LoadOutcome = 'ok' | 'failed' | 'superseded';
 
@@ -392,7 +393,11 @@ export class App {
         return 'superseded';
       }
       const msg = `Could not load ${SceneManager.label(request)}: ${errorMessage(err)}`;
-      this.errors.report('load', msg, err, { toast: !opts.quietToast || !scenes.scene });
+      const toast = !opts.quietToast || !scenes.scene;
+      // A live area that cannot reach its data services (offline, dead wifi) is an expected condition the UI explains
+      // (the picker's offline help), not an app error.
+      if (request.kind === 'live' && isUnreachableFailure(err)) this.errors.warn('load', msg, { toast });
+      else this.errors.report('load', msg, err, { toast });
       if (!scenes.scene && !opts.fallback && !this.gpuLost) await this.loadFallbackScene(request, msg);
       if (opts.rethrow) throw err;
       return 'failed';

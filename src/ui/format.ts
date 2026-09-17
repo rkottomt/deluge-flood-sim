@@ -180,6 +180,20 @@ export function formatDt(s: number | null | undefined): string {
   return `${fmtNum(v, v >= 10 ? 1 : 2)}${THIN}s`;
 }
 
+/**
+ * Substeps per frame (a recent average, see FrameDriver): "4", "3.5", "12"; "<1" when the solver runs less than one
+ * substep a frame (slow speeds carry time between frames); "0" only when it ran none at all.
+ */
+export function formatSubsteps(n: number | null | undefined): string {
+  const b = bad(n);
+  if (b) return b;
+  const v = Math.max(0, n as number);
+  if (v === 0) return '0';
+  if (v < 0.95) return '<1';
+  if (v >= 9.95) return fmtNum(v, 0);
+  return String(Math.round(v * 2) / 2);
+}
+
 /** Route distance: "850 m", "3.4 km". */
 export function formatDistance(m: number | null | undefined): string {
   const b = bad(m);

@@ -184,3 +184,31 @@ test('bridge delivers notices posted before the UI subscribed, and dedupes hover
   b.setHover(null);
   assert.equal(hovers, 2);
 });
+
+test('wall scan inside known wall bounds gives the same answer as the full scan, and null bounds mean no walls', () => {
+  const nx = 64;
+  const ny = 48;
+  const n = nx * ny;
+  const ground = new Float32Array(n);
+  const barrier = new Float32Array(n);
+  const depth = new Float32Array(n);
+  for (let c = 0; c < n; c++) ground[c] = 220 + ((c * 7919) % 13) * 0.3;
+  // A diagonal levee with tapered sides, partly under water.
+  for (let k = 0; k < 30; k++) {
+    const i = 10 + k;
+    const j = 12 + (k >> 1);
+    barrier[j * nx + i] = 3.5;
+    barrier[(j - 1) * nx + i] = Math.max(barrier[(j - 1) * nx + i], 0.9);
+    barrier[(j + 1) * nx + i] = Math.max(barrier[(j + 1) * nx + i], 0.9);
+    if (k % 3 === 0) depth[j * nx + i] = 0.4;
+  }
+  const full = scanWalls(ground, barrier, depth, 222.5, nx);
+  assert.ok(full.cells > 0);
+  const bounded = scanWalls(ground, barrier, depth, 222.5, nx, { x0: 9, y0: 10, x1: 41, y1: 29 });
+  assert.deepEqual(bounded, full);
+  // Bounds reaching past the grid are clipped.
+  assert.deepEqual(scanWalls(ground, barrier, depth, 222.5, nx, { x0: -5, y0: -5, x1: 500, y1: 500 }), full);
+  const none = scanWalls(ground, barrier, depth, 222.5, nx, null);
+  assert.equal(none.cells, 0);
+  assert.equal(none.belowLevel, 0);
+});

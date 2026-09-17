@@ -6,7 +6,7 @@ import type { AppState } from '../contracts';
 import { h, setText, toggleClass, setAttr, type UIContext } from './dom';
 import { icon, iconMarkup, logoMark } from './icons';
 import { segmented } from './controls';
-import { formatClock, fmtNum, formatSpeedup } from './format';
+import { formatClock, fmtNum, formatSpeedup, formatSubsteps } from './format';
 import { SpeedEstimator, speedShortfall } from './stats';
 
 export const SPEEDS: Array<{ value: number; label: string; tip: string }> = [
@@ -228,7 +228,7 @@ export function createTopBar(ctx: UIContext, opts: { onTogglePanel(): void; isPa
       const si = s.stepInfo;
       if (s.paused) return 'paused';
       if (!si) return '—';
-      return `${si.substeps} sub${si.throttled && achieved !== null ? ` · ${formatSpeedup(achieved)}` : ''}`;
+      return `${formatSubsteps(si.substeps)} sub${si.throttled && achieved !== null ? ` · ${formatSpeedup(achieved)}` : ''}`;
     },
     (v) => setText(sub, v),
   );

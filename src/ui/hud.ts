@@ -15,6 +15,7 @@ import {
   formatSpeed,
   formatPercent,
   formatDt,
+  formatSubsteps,
   formatSpeedup,
   formatLatLon,
   fmtNum,
@@ -158,14 +159,14 @@ export function createHud(ctx: UIContext, achievedSpeed: () => number | null): H
     return { el, v };
   };
   const dDt = diag('Δt', 'Adaptive timestep per substep (CFL-limited)');
-  const dSub = diag('substeps', 'Solver substeps this frame');
+  const dSub = diag('substeps', 'Solver substeps per frame (average over the last second)');
   const dCo = diag(
     'Courant',
     'Largest 2-D Courant number seen. Δt aims for 0.7 against a padded wave-speed estimate (the readback is a few hundred ms old), so it usually reads ≈ 0.55; the robust scheme is stable below √θ ≈ 0.89',
   );
   const dFps = diag('fps', 'Rendered frames per second');
   bind((s) => formatDt(s.stepInfo?.dt), (v) => setText(dDt.v, v));
-  bind((s) => (s.stepInfo ? String(s.stepInfo.substeps) : DASH), (v) => setText(dSub.v, v));
+  bind((s) => (s.stepInfo ? formatSubsteps(s.stepInfo.substeps) : DASH), (v) => setText(dSub.v, v));
   bind((s) => (s.stats ? fmtNum(s.stats.courant, 2) : DASH), (v) => setText(dCo.v, v));
   bind(
     (s) => {

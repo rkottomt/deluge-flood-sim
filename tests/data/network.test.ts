@@ -108,3 +108,53 @@ test('live areas are named like places: Nominatim "City, State", otherwise a rea
   for (const raw of ['29.9500°, -90.0700°', '29.950, -90.070', '', undefined]) assert.ok(isCoordinateName(raw), String(raw));
   for (const nm of ['Harrisburg, Pennsylvania', 'Asheville NC', 'Area 51']) assert.ok(!isCoordinateName(nm), nm);
 });
+
+test('offline: a live load fails at once when the browser reports no network, and within a moment after an unreachable probe', async (t) => {
+  t.mock.method(console, 'warn', () => {});
+  const { browserOffline, probeReachable, recentlyUnreachable, resetProbeMemory } = await import('../../src/data/net');
+  const desc = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+  const setOnline = (onLine: boolean) => Object.defineProperty(globalThis, 'navigator', { value: { onLine }, configurable: true, writable: true });
+  try {
+    // navigator.onLine false: no request is even made.
+    setOnline(false);
+    assert.ok(browserOffline());
+    let fetched = 0;
+    const counting = (() => {
+      fetched++;
+      return Promise.reject(new TypeError('Failed to fetch'));
+    }) as typeof fetch;
+    const t0 = performance.now();
+    const msg = await withFetch(counting, () =>
+      loadLiveArea({ center: { lat: 29.76, lon: -95.37 }, sizeMeters: 2000, resolution: 512 }).then(() => 'loaded', (e: Error) => e.message),
+    );
+    assert.equal(msg, ELEVATION_UNREACHABLE_MESSAGE);
+    assert.equal(fetched, 0, 'no download attempted');
+    assert.ok(performance.now() - t0 < 200, `took ${(performance.now() - t0).toFixed(0)} ms`);
+
+    // "Online" but the page's probe just found the data hosts unreachable (the picker's "You're offline"): the load
+    // checks at once instead of after LIVE_DEM_PROBE_MS, even while the downloads hang.
+    setOnline(true);
+    resetProbeMemory();
+    assert.equal(recentlyUnreachable(), false);
+    assert.equal(await withFetch(hangingFetch, () => probeReachable(['https://example.test/probe'], 50)), false);
+    assert.ok(recentlyUnreachable());
+    const t1 = performance.now();
+    const msg2 = await withFetch(hangingFetch, () =>
+      loadLiveArea({ center: { lat: 29.76, lon: -95.37 }, sizeMeters: 2000, resolution: 512 }).then(() => 'loaded', (e: Error) => e.message),
+    );
+    assert.equal(msg2, ELEVATION_UNREACHABLE_MESSAGE);
+    assert.ok(performance.now() - t1 < 4500, `gave up after ${(performance.now() - t1).toFixed(0)} ms (probe timeout 3 s)`);
+    resetProbeMemory();
+  } finally {
+    if (desc) Object.defineProperty(globalThis, 'navigator', desc);
+    else delete (globalThis as { navigator?: unknown }).navigator;
+  }
+});
+
+test('unreachable live loads are told apart from other load failures', async () => {
+  const { isUnreachableFailure } = await import('../../src/data/net');
+  assert.ok(isUnreachableFailure(new Error(ELEVATION_UNREACHABLE_MESSAGE)));
+  assert.ok(isUnreachableFailure(new TypeError('Failed to fetch')));
+  assert.ok(!isUnreachableFailure(new Error('This area is open water')));
+  assert.ok(!isUnreachableFailure(new HttpError('HTTP 500', 500)));
+});

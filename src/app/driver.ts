@@ -15,6 +15,55 @@ export function rainAt(state: Pick<AppState, 'sim' | 'storms'>, gx: number, gy: 
   return rain;
 }
 
+/**
+ * Recent per-frame average of the solver's StepInfo for the HUD. A single frame's substep count is noisy: the solver
+ * carries time between frames and skips a frame whenever the GPU queue is backed up, so a 5 Hz sample of one frame
+ * read "0 sub" at 300× now and then while the achieved speed was high.
+ */
+export class StepAverager {
+  private readonly sub: Float64Array;
+  private readonly adv: Float64Array;
+  private readonly thr: Uint8Array;
+  private head = 0;
+  private count = 0;
+  private lastDt = 0;
+
+  constructor(readonly frames = 60) {
+    this.sub = new Float64Array(frames);
+    this.adv = new Float64Array(frames);
+    this.thr = new Uint8Array(frames);
+  }
+
+  push(info: StepInfo): void {
+    const k = this.head;
+    this.sub[k] = Number.isFinite(info.substeps) ? info.substeps : 0;
+    this.adv[k] = Number.isFinite(info.simSecondsAdvanced) ? info.simSecondsAdvanced : 0;
+    this.thr[k] = info.throttled ? 1 : 0;
+    this.lastDt = info.dt;
+    this.head = (k + 1) % this.frames;
+    this.count = Math.min(this.frames, this.count + 1);
+  }
+
+  reset(): void {
+    this.head = 0;
+    this.count = 0;
+  }
+
+  /** Mean substeps and sim seconds per frame over the window, the latest dt, throttled if most frames were; null if empty. */
+  value(): StepInfo | null {
+    if (this.count === 0) return null;
+    let sub = 0;
+    let adv = 0;
+    let thr = 0;
+    for (let i = 0; i < this.count; i++) {
+      sub += this.sub[i];
+      adv += this.adv[i];
+      thr += this.thr[i];
+    }
+    return { substeps: sub / this.count, simSecondsAdvanced: adv / this.count, dt: this.lastDt, throttled: thr * 2 > this.count };
+  }
+}
+
 /** Treat speeds above this as a numerical blow-up (no real flood flows at > 100 m/s). */
 const BLOWUP_SPEED = 100;
 /** How long ready() waits for the first readback after the first rendered frame. */
@@ -33,6 +82,9 @@ export class FrameDriver {
 
   private lastSnapTime = NaN;
   private lastStepInfo: StepInfo | null = null;
+  /** What the HUD shows: the last second's average (see StepAverager). */
+  private readonly stepAverage = new StepAverager();
+  private hudStepInfo: StepInfo | null = null;
   private lastAdvance = 0;
   private pendingStats: SimStats | null = null;
   private lastHud = -Infinity;
@@ -50,6 +102,8 @@ export class FrameDriver {
     this.lastSnapshot = null;
     this.lastSnapTime = NaN;
     this.lastStepInfo = null;
+    this.stepAverage.reset();
+    this.hudStepInfo = null;
     this.lastAdvance = 0;
     this.pendingStats = null;
     this.sceneFrames = 0;
@@ -98,6 +152,7 @@ export class FrameDriver {
       this.guard('solver.step', () => {
         const info = solver.step(realDt);
         this.lastStepInfo = info;
+        this.stepAverage.push(info);
         // A blown-up solver (stability demo) may report NaN; count the requested time so runFor can't hang.
         const requested = realDt * this.app.sim.effectiveParams().timeScale;
         const advance = Number.isFinite(info.simSecondsAdvanced) ? info.simSecondsAdvanced : requested;
@@ -113,6 +168,8 @@ export class FrameDriver {
       if (this.lastStepInfo && this.lastStepInfo.substeps !== 0) {
         this.lastStepInfo = { ...this.lastStepInfo, simSecondsAdvanced: 0, substeps: 0, throttled: false };
       }
+      // Resuming starts a fresh average (not one diluted by the paused spell or carried over from before it).
+      this.stepAverage.reset();
     }
     this.wasRunning = running;
     const tools = this.app.tools;
@@ -231,7 +288,18 @@ export class FrameDriver {
       patch.stats = this.pendingStats;
       this.pendingStats = null;
     }
-    if (this.lastStepInfo !== state.stepInfo) patch.stepInfo = this.lastStepInfo;
+    // While running: the last second's average; paused: the last frame's (zeroed) info.
+    const stepInfo = this.stepAverage.value() ?? this.lastStepInfo;
+    if (!sameStepInfo(stepInfo, this.hudStepInfo) || state.stepInfo !== this.hudStepInfo) {
+      this.hudStepInfo = stepInfo;
+      patch.stepInfo = stepInfo;
+    }
     this.app.store.set(patch);
   }
+}
+
+function sameStepInfo(a: StepInfo | null, b: StepInfo | null): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return a.substeps === b.substeps && a.simSecondsAdvanced === b.simSecondsAdvanced && a.dt === b.dt && a.throttled === b.throttled;
 }

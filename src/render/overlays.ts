@@ -2,6 +2,7 @@
  * CPU geometry builders for overlays. All positions are in GRID coordinates; heights are resolved on the GPU
  * against the live terrain / water surface so overlays follow edits and vertical exaggeration for free.
  */
+import { cloudDeckHalfThickness } from './atmosphere';
 import type { RoadClass, RoadNetwork, Shelter, StormCell, WaterSource } from '../contracts';
 
 // ── Ribbons ─────────────────────────────────────────────────────────────────────────────────
@@ -548,7 +549,7 @@ export function buildMarkers(
     const Rc = R * 1.3;
     const cap: MarkerStyle = { scaleMode: ScaleMode.Meters, kind: MarkerKind.Cloud, size: Rc, phase: i * 0.3, color: [0.62, 0.65, 0.72, 0.5 + 0.3 * k] };
     const profile: ProfilePoint[] = [];
-    const th = Math.max(R * 0.18, 40);
+    const th = cloudDeckHalfThickness(R);
     for (let j = 0; j <= 8; j++) {
       const t = -Math.PI / 2 + (j / 8) * Math.PI;
       profile.push({ r: Math.cos(t) * Rc, y: Math.sin(t) * th, anchor: hi, n: [Math.cos(t) * 0.4, Math.sin(t)] });

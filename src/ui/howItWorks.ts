@@ -9,7 +9,7 @@
 import { h, fragment, setText, toggleClass, type UIContext } from './dom';
 import { icon, iconMarkup } from './icons';
 import { createModal, type Modal } from './modal';
-import { fmtNum, siParts } from './format';
+import { fmtNum, formatSubsteps, siParts } from './format';
 import { BREAK_TIME_SCALE, startBreakDemo, stopBreakDemo } from './stabilityDemo';
 
 // ─── Tiny math typesetting helpers (static, trusted markup) ─────────────────────────────────────
@@ -326,11 +326,11 @@ export function createHowItWorks(ctx: UIContext): Modal {
     return val;
   };
   const psCells = pipeStat('cells per pass');
-  const psSub = pipeStat('substeps this frame');
+  const psSub = pipeStat('substeps per frame');
   const psDt = pipeStat('Δt per substep');
   const psGpu = pipeStat('GPU');
   bind((s) => (s.grid ? `${s.grid.nx} × ${s.grid.ny}` : '—'), (x) => setText(psCells, x));
-  bind((s) => (s.stepInfo ? String(s.stepInfo.substeps) : '—'), (x) => setText(psSub, x));
+  bind((s) => (s.stepInfo ? formatSubsteps(s.stepInfo.substeps) : '—'), (x) => setText(psSub, x));
   bind((s) => (s.stepInfo ? `${fmtNum(s.stepInfo.dt, 2)} s` : '—'), (x) => setText(psDt, x));
   bind((s) => s.gpuInfo || 'WebGPU', (x) => {
     setText(psGpu, x);

@@ -26,7 +26,8 @@ import { createPipelines, DEPTH_FORMAT, HDR_FORMAT, MSAA, type Pipelines } from 
 import { FRAME_UNIFORM_SIZE } from './shaders/common';
 import { OVERLAY_UNIFORM_SIZE } from './shaders/overlay';
 import { createImageryTexture, createRippleTexture, createSolidTexture } from './textures';
-import { clamp, smoothstep } from './math';
+import { clamp } from './math';
+import { cloudDeckHalfThickness, hazeBoost, OVERCAST_MAX, overcastFor, type CloudDeck } from './atmosphere';
 import { AdaptiveQuality, QUALITY_PRESETS, targetSize, type QualityPreset, type RendererQuality, type SimPressure } from './quality';
 import { GpuTimer } from './gpuTimer';
 import { WallField, WALL_FIELD_RADIUS, type Rect } from './wallField';
@@ -1310,7 +1311,7 @@ class DelugeRenderer implements DelugeRendererAPI {
     f[49] = 0.78;
     f[50] = 0.94;
     const domain = s ? Math.max(s.nx, s.ny) * s.terrain.cellSize : 8000;
-    f[51] = (1 / (domain * 2.6)) * (1 + overcast * 1.2);
+    f[51] = (1 / (domain * 2.6)) * hazeBoost(overcast);
     f[52] = s?.nx ?? 1;
     f[53] = s?.ny ?? 1;
     f[54] = s?.vx ?? 2;
@@ -1387,26 +1388,27 @@ class DelugeRenderer implements DelugeRendererAPI {
     const s = this.scene;
     const t = this.camera.pose.target;
     let stormRain = 0;
+    /** Thickest deck among the cells over the target (its marker's half-thickness, m). */
+    let deckHalf = 0;
     for (const st of this.overlays?.storms ?? []) {
-      stormRain += Math.max(0, st.intensity) * stormWeight(Math.hypot(t.gx - st.gx, t.gy - st.gy), footprintRadius(st.radius));
+      const w = Math.max(0, st.intensity) * stormWeight(Math.hypot(t.gx - st.gx, t.gy - st.gy), footprintRadius(st.radius));
+      stormRain += w;
+      if (w > 0 && s) deckHalf = Math.max(deckHalf, cloudDeckHalfThickness(Math.max(1, st.radius) * s.terrain.cellSize * 0.85));
     }
     // settings.rainRate already includes the storms (and is 0 while paused).
     stormRain = Math.min(stormRain, rain);
-    const globalRain = rain - stormRain;
-    let under = 1;
+    let deck: CloudDeck | null = null;
     if (s && stormRain > 0) {
       const domainSize = Math.max(s.nx, s.ny) * s.terrain.cellSize;
       const cloudY = stormCloudElevation({ minElev: s.groundMin, maxElev: s.groundMax, domainSize }) * this.exaggeration;
-      const margin = domainSize * 0.03;
-      under = 1 - smoothstep(cloudY - margin, cloudY + margin, eyeY);
+      // Under the deck below its base, above it over its top, in between inside it (see atmosphere.ts).
+      deck = { base: cloudY - deckHalf, top: cloudY + deckHalf };
     }
-    const of = (r: number) => smoothstep(0.5, 60, r) * 0.92;
-    const stormOvercast = of(stormRain) * (0.3 + 0.7 * under);
-    return Math.min(0.92, 1 - (1 - of(globalRain)) * (1 - stormOvercast));
+    return overcastFor(rain - stormRain, stormRain, eyeY, deck);
   }
 
   private exposure(): number {
-    return BASE_EXPOSURE * (1 + (this.overcast / 0.92) * 0.35);
+    return BASE_EXPOSURE * (1 + (this.overcast / OVERCAST_MAX) * 0.35);
   }
 
   /** HDR shader inputs (rgb per band) whose tone-mapped colours are the legend colours at this frame's exposure. */

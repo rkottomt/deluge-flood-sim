@@ -90,6 +90,19 @@ export class ErrorReporter {
     return text;
   }
 
+  /**
+   * An expected failure the UI explains (e.g. a live area while offline): logged as a warning, toasted unless
+   * `toast: false`, and not recorded in `errors` (which lists what went wrong in the app itself).
+   */
+  warn(source: string, message: string, opts: { toast?: boolean } = {}): string {
+    const text = `[${source}] ${message}`;
+    const n = (this.counts.get(text) ?? 0) + 1;
+    this.counts.set(text, n);
+    if (n <= MAX_CONSOLE_REPEATS) console.warn(`[deluge]${text}`);
+    if (opts.toast !== false) this.toast(message);
+    return text;
+  }
+
   /** Show a message in the UI toast (rate limited). Not recorded as an error. */
   toast(message: string, force = false): void {
     const store = this.store;

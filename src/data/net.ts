@@ -200,18 +200,53 @@ export const DATA_HOST_PROBES = [
  * and broken venue wifi report online); an opaque no-cors response is enough to prove reachability.
  */
 export async function probeReachable(urls: readonly string[] = DATA_HOST_PROBES, timeoutMs = 3000): Promise<boolean> {
-  if (typeof navigator !== 'undefined' && navigator.onLine === false) return false;
+  if (browserOffline()) return noteProbe(false);
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
     await Promise.any(urls.map((u) => fetch(u, { method: 'HEAD', mode: 'no-cors', cache: 'no-store', signal: ctrl.signal })));
-    return true;
+    return noteProbe(true);
   } catch {
-    return false;
+    return noteProbe(false);
   } finally {
     clearTimeout(timer);
     ctrl.abort();
   }
+}
+
+/** The browser itself reports no network (navigator.onLine false). "Online" is not trusted (see probeReachable). */
+export function browserOffline(): boolean {
+  return typeof navigator !== 'undefined' && navigator.onLine === false;
+}
+
+const clockMs = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+let lastProbe: { ok: boolean; at: number } | null = null;
+
+function noteProbe(ok: boolean): boolean {
+  lastProbe = { ok, at: clockMs() };
+  return ok;
+}
+
+/**
+ * The latest probeReachable answer (from anywhere in the page, e.g. the location picker's offline check) came back
+ * unreachable less than `maxAgeMs` ago: a live load then checks reachability at once instead of after a grace period.
+ */
+export function recentlyUnreachable(maxAgeMs = 120_000): boolean {
+  return !!lastProbe && !lastProbe.ok && clockMs() - lastProbe.at < maxAgeMs;
+}
+
+/** Test hook: forget the latest probe answer. */
+export function resetProbeMemory(): void {
+  lastProbe = null;
+}
+
+/**
+ * A live load failed because the data services could not be reached (offline, dead wifi): an expected condition the UI
+ * explains, not a bug.
+ */
+export function isUnreachableFailure(e: unknown): boolean {
+  const msg = e instanceof Error ? e.message : String(e);
+  return msg === ELEVATION_UNREACHABLE_MESSAGE || isNetworkFailure(e);
 }
 
 /** Message of a live load that could not reach the elevation service at all (the UI maps it to its offline help). */

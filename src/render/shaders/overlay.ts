@@ -87,20 +87,27 @@ fn vsRibbon(v: RIn) -> ROut {
       let hazardMap = O.waterMode > 0.5;
       // HDR red: a thin line needs a brighter colour than a wide ribbon to read (the tone mapper maps 1.0 to mid-grey).
       let rgb = select(vec3f(2.4, 0.30, 0.22), vec3f(0.10, 0.10, 0.12), hazardMap);
-      // Strongest at mid range; from the overview a whole flooded district of them would net the flood in red.
-      let near = mix(mix(0.45, 1.0, smoothstep(350.0, 1500.0, d0)), 1.0, emph);
+      // Strongest at mid range; from the overview a whole flooded district of them would net the flood in red. Up close
+      // (a few hundred metres) the water over the street says "flooded" by itself, and the lines ran as busy red bands
+      // along every highway lane and bridge beside the evacuation route: there they get thinner on screen and, where
+      // the street is well under water, fainter — evacuation or not, so the route stays the brightest line in view.
+      let close = 1.0 - smoothstep(300.0, 1600.0, d0);
+      let midUp = smoothstep(350.0, 1500.0, d0);
+      let near = mix(mix(0.45, 1.0, midUp), mix(0.6, 1.0, midUp), emph);
       let farOff = smoothstep(1500.0, 7000.0, d0);
+      let submerged = select(0.0, smoothstep(0.15, 1.2, s.g - s.r), s.a > 0.5);
       let a = mix(0.72, 0.92, emph) * mix(fade * mix(0.6, 1.0, importance), 1.0, emph * importance) * near
-            * (1.0 - farOff * mix(0.5, 0.3, emph));
+            * (1.0 - farOff * mix(0.5, 0.3, emph)) * (1.0 - 0.35 * submerged * close);
       color = vec4f(rgb, a);
       // Pixel limits measured across the line on screen: a street seen at a grazing angle across the view is
       // foreshortened by the sine of the view elevation, and a fixed ground width would thin it to nothing.
       let across = dot(vec3f(perp.x, 0.0, perp.y), toCenter / max(d0, 1e-3));
       let pxM = d0 * F.elev.w / max(sqrt(max(1.0 - across * across, 0.0)), 0.3);
       minHalfPx = 0.0;
-      let evacScale = mix(1.0, 1.25, emph);
-      let minPx = mix(mix(1.05, 1.3, importance), mix(0.6, 0.95, importance), farOff) * evacScale;
-      halfW = clamp(0.3 * v.attr.z, minPx * pxM, max(1.6 * evacScale, minPx) * pxM);
+      let evacScale = mix(1.0, 1.25, emph * (1.0 - close));
+      let calm = mix(1.0, 0.7, close);
+      let minPx = mix(mix(1.05, 1.3, importance), mix(0.6, 0.95, importance), farOff) * evacScale * calm;
+      halfW = clamp(0.3 * v.attr.z, minPx * pxM, max(1.6 * evacScale * calm, minPx) * pxM);
       coreFrac = 0.0; // flag for the fragment shader: dashed
     }
   } else if (kind == 1u) {
@@ -321,7 +328,12 @@ fn fsMarker(in: MOut, @builtin(front_facing) front: bool) -> @location(0) vec4f 
       let over = 1.0 - smoothstep(0.9, 1.8, length(rel.xz) / max(in.size, 1.0));
       let steep = smoothstep(0.3, 0.85, V.y);
       let seeThrough = above * max(over, steep);
-      let a = in.color.a * edge * (0.65 + 0.35 * nz) * mix(1.0, 0.03, seeThrough);
+      // Camera inside the deck (zooming in under a storm passes through it): every fragment of its body lies between
+      // the eye and the ground and the view turned uniformly grey, so the deck fades out around the camera. The body is
+      // an ellipsoid of radius size and half-thickness max(0.18·R, 40) with R = size / 1.3 (cloudDeckHalfThickness).
+      let halfThick = max(in.size / 1.3 * 0.18, 40.0);
+      let inDeck = 1.0 - smoothstep(0.9, 1.4, length(vec2f(length(rel.xz) / max(in.size, 1.0), rel.y / halfThick)));
+      let a = in.color.a * edge * (0.65 + 0.35 * nz) * mix(1.0, 0.03, max(seeThrough, inDeck));
       let top = max(n.y, 0.0);
       let lum = luminance(F.skyHorizon);
       let rgb = in.color.rgb * lum * (0.55 + 0.9 * top + 0.35 * nz) + F.sunColor * top * 0.04 * (1.0 - F.opts.w);

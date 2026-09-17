@@ -12,7 +12,7 @@ import { isLikelyUS, squareDomain } from './geo';
 import { fetchImagery, IMAGERY_ATTRIBUTION } from './imagery';
 import { detectLiveWater, finishLiveTerrain, type LiveTerrainResult } from './liveTerrain';
 import type { LiveWorkerRequest, LiveWorkerResponse } from './liveWorker';
-import { ELEVATION_UNREACHABLE_MESSAGE, probeReachable } from './net';
+import { browserOffline, ELEVATION_UNREACHABLE_MESSAGE, probeReachable, recentlyUnreachable } from './net';
 import { coordinateName, isCoordinateName, reverseGeocodeName } from './placeName';
 import { fetchRoadNetwork } from './roads';
 
@@ -32,6 +32,11 @@ export const LIVE_DEM_DEADLINE_MS = 90_000;
  */
 export const LIVE_DEM_PROBE_MS = 9_000;
 /**
+ * First reachability check when the page already found the data hosts unreachable (the picker's "You're offline",
+ * i.e. "Offline — try anyway"): right away, so the attempt fails in about a second instead of ~9 s.
+ */
+export const LIVE_DEM_PROBE_OFFLINE_MS = 0;
+/**
  * Once the elevation is ready, imagery, roads and the place name get this long to finish; the area then loads without
  * whatever is missing (TerrainData.imagery / roads null) instead of waiting on a slow service. Esri renders a 2048²
  * export before sending a byte, which measured 5–12 s on a good connection and occasionally over 15 s, so the grace
@@ -50,6 +55,8 @@ export async function loadLiveArea(req: LiveAreaRequest, onProgress?: ProgressFn
   const sizeMeters = Math.min(20000, Math.max(1000, req.sizeMeters));
   const n = req.resolution;
   if (![512, 1024, 2048].includes(n)) throw new Error(`Unsupported resolution ${n}`);
+  // The browser says there is no network at all: nothing to try (retries and fallbacks would only take seconds).
+  if (browserOffline()) throw new Error(ELEVATION_UNREACHABLE_MESSAGE);
   if (!isLikelyUS(lat, lon)) {
     console.warn('[data] location may be outside USGS 3DEP coverage; Terrarium fallback will be used if needed');
   }
@@ -140,12 +147,12 @@ export async function loadLiveArea(req: LiveAreaRequest, onProgress?: ProgressFn
         void probeReachable().then((ok) => {
           if (settled || ctrl.signal.aborted) return;
           if (!ok) {
-            console.warn(`[data] no elevation after ${LIVE_DEM_PROBE_MS / 1000}+ s and the data hosts do not answer: giving up`);
+            console.warn('[data] no elevation yet and the data hosts do not answer: giving up');
             unreachable();
           } else timers.push(setTimeout(probe, LIVE_DEM_PROBE_MS));
         });
       };
-      timers.push(setTimeout(probe, LIVE_DEM_PROBE_MS));
+      timers.push(setTimeout(probe, recentlyUnreachable() ? LIVE_DEM_PROBE_OFFLINE_MS : LIVE_DEM_PROBE_MS));
       demP.then(
         (v) => {
           settled = true;

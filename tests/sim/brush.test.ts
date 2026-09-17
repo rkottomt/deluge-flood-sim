@@ -188,3 +188,46 @@ test('raiseWaterSurface lifts water in place: h = max(h, base + offset − bed),
   assert.deepEqual(gpuErrors(), []);
   solver.destroy();
 });
+
+test('reset restores the initial water on the current bed: walls raised after the last reset are in the restored state', async () => {
+  const nx = 64;
+  const ny = 48;
+  const dx = 5;
+  const elevation = roughTerrain(nx, ny, 11, 4, 120);
+  const depth = new Float32Array(nx * ny);
+  for (let j = 5; j < 40; j++) for (let i = 4; i < 30; i++) depth[j * nx + i] = Math.max(0, 123 - elevation[j * nx + i]);
+  const solver = await makeSolver({ nx, ny, cellSize: dx, elevation, depth, params: { boundary: 'wall', manningN: 0.03 } });
+  const expectReset = async (label: string) => {
+    const s = await solver.debugReadState();
+    let hErr = 0;
+    let zErr = 0;
+    let q = 0;
+    const ground = solver.getGroundCPU();
+    const barrier = solver.getBarrierCPU();
+    for (let c = 0; c < nx * ny; c++) {
+      hErr = Math.max(hErr, Math.abs(s.h[c] - depth[c]));
+      zErr = Math.max(zErr, Math.abs(s.z[c] - (Math.fround(ground[c] + barrier[c]) - solver.z0)));
+      q = Math.max(q, Math.abs(s.qx[c]), Math.abs(s.qy[c]));
+    }
+    assert.ok(hErr < 1e-5, `${label}: depth restored (max error ${hErr})`);
+    assert.ok(zErr < 1e-4, `${label}: bed channel = ground + barrier (max error ${zErr})`);
+    assert.equal(q, 0, `${label}: discharge cleared`);
+  };
+  await stepAndSnapshot(solver, 300);
+  solver.reset();
+  await expectReset('plain reset');
+  // Walls and a dug channel after that reset, then more flow, then reset again (the cached initial state is patched).
+  solver.applyBrush({ kind: 'wall', ax: 10, ay: 10, bx: 40, by: 30, radius: 1.2, height: 3 });
+  solver.applyBrush({ kind: 'terrain', gx: 20, gy: 20, radius: 4, delta: -1.5 });
+  const bounds = solver.wallBounds;
+  assert.ok(bounds && bounds.x0 <= 10 && bounds.y0 <= 10 && bounds.x1 >= 41 && bounds.y1 >= 31, `wall bounds ${JSON.stringify(bounds)}`);
+  await stepAndSnapshot(solver, 300);
+  solver.reset();
+  await expectReset('after walls and digging');
+  // Terrain reset clears the walls and the bounds.
+  solver.reset({ resetTerrain: true });
+  await expectReset('terrain reset');
+  assert.equal(solver.wallBounds, null);
+  assert.deepEqual(gpuErrors(), []);
+  solver.destroy();
+});

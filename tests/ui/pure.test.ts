@@ -155,3 +155,13 @@ test('astronomical values from a blown-up solver stay short', () => {
   assert.equal(f.formatKm2(3e24), `3.0e18${T}km²`);
   assert.ok(f.formatAcres(3e24).length < 16);
 });
+
+test('substeps per frame read as a steady average, never a stray 0 while the solver runs', () => {
+  assert.equal(f.formatSubsteps(0), '0');
+  assert.equal(f.formatSubsteps(0.04), '<1');
+  assert.equal(f.formatSubsteps(1), '1');
+  assert.equal(f.formatSubsteps(3.62), '3.5');
+  assert.equal(f.formatSubsteps(4.8), '5');
+  assert.equal(f.formatSubsteps(12.4), '12');
+  assert.equal(f.formatSubsteps(NaN), f.formatSubsteps(NaN)); // whatever bad() prints, consistently
+});

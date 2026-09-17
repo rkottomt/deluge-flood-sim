@@ -49,8 +49,8 @@ export function dramaticStage(ctrl: StageControl): { ft: number; label: string }
   return { ft: range.max, label: `${fmtNum(range.max, 0)} ft` };
 }
 
-/** "Play the flood" never flies closer than this, m: below it a storm scenario's view drops under the storm's cloud deck
- * and the renderer greys it out (Ellicott City's baked framing is already 1.1 km away), and the imagery turns soft. */
+/** "Play the flood" never flies closer than this, m: closer, a storm scenario's view drops under the storm's cloud deck
+ * into its darker overcast (Ellicott City's baked framing is already 1.1 km away), and the imagery turns soft. */
 export const CLOSE_UP_MIN_M = 1500;
 
 /**
