@@ -12,7 +12,7 @@
   "east": -76.77599108516732,
   "north": 39.29245428330387
  },
- "attribution": "Elevation: USGS 3DEP · Imagery © Esri, Maxar, Earthstar Geographics · Roads: U.S. Census Bureau TIGER/Line",
+ "attribution": "Elevation: USGS 3DEP · Imagery: USDA NAIP via USGS The National Map · Roads: U.S. Census Bureau TIGER/Line",
  "scenario": {
   "description": "Historic Ellicott City sits at the bottom of a hill where the Hudson, Tiber and New Cut branches converge and empty into the Patapsco River — and Main Street is the overflow channel when they flash. On July 30, 2016, 6.6 inches of rain fell in three hours (nearly 6 in two); the branches tore down Main Street, the Patapsco rose over the lower town, and two people died. On May 27, 2018 almost the same rain fell again (6.56 inches in three hours at the gauge, heavier just to the south) and one man died — two roughly 1-in-1,000-year storms in 22 months. A 75 mm/hr storm cell (the 2016 peak two-hour rate) sits over the branches while the Patapsco runs at its 2016 peak of 22,800 ft³/s. Try walls or a detention pond upstream.",
   "sources": [
@@ -648,7 +648,7 @@
   "roads": "roads.json"
  },
  "bake": {
-  "bakedAt": "2026-09-17T03:32:12.386Z",
+  "bakedAt": "2026-09-17T03:55:37.030Z",
   "demSource": "usgs3dep",
   "demRepairedCells": 36,
   "center": {

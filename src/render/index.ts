@@ -553,12 +553,13 @@ class DelugeRenderer implements DelugeRendererAPI {
 
   /** Recompute the wall field where the barrier changed and upload the changed rectangle. */
   private uploadWallField(s: SceneGPU): boolean {
-    const rect = s.wallField.update();
-    if (!rect) return false;
+    const patch = s.wallField.update();
+    if (!patch) return false;
+    const rect = patch.rect;
     const w = rect.x1 - rect.x0;
     const h = rect.y1 - rect.y0;
     if (w <= 0 || h <= 0) return true;
-    const data = s.wallField.packHalf(rect, s.groundMin);
+    const data = s.wallField.packHalf(patch, s.groundMin);
     this.device.queue.writeTexture({ texture: s.wallTex, origin: { x: rect.x0, y: rect.y0 } }, data, { bytesPerRow: w * 8 }, { width: w, height: h });
     return true;
   }
@@ -582,7 +583,7 @@ class DelugeRenderer implements DelugeRendererAPI {
       h.ttl--;
     }
     this.hotRects = this.hotRects.filter((h) => h.ttl > 0);
-    wf.scanSome(65_536);
+    wf.scanSome();
     const edited = wf.consumeEdits();
     if (this.uploadWallField(s) || edited) {
       this.forcePrep = true;

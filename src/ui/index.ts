@@ -35,7 +35,9 @@ export function mountUI(root: HTMLElement, store: Store, actions: AppActions): v
   root.classList.add('dl-ui');
 
   const binder = new Binder();
+  const disposers: Array<() => void> = [];
   const ctx: UIContext = {
+    own: (fn) => void disposers.push(fn),
     store,
     actions,
     bind: binder.bind.bind(binder),
@@ -96,6 +98,7 @@ export function mountUI(root: HTMLElement, store: Store, actions: AppActions): v
   const removeAdaptive = installAdaptiveEffects(root, store);
 
   mounted.set(root, () => {
+    disposers.splice(0).forEach((fn) => fn());
     unsubscribe();
     removeAdaptive();
     removeTooltips();

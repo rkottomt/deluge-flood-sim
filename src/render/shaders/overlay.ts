@@ -43,6 +43,7 @@ struct ROut {
   @location(3) @interpolate(flat) kind: u32,
   @location(4) @interpolate(flat) color: vec4f,
   @location(5) coreFrac: f32,
+  @location(6) @interpolate(flat) halfWidth: f32,   // metres, after the screen-space minimum
 }
 
 @vertex
@@ -112,6 +113,7 @@ fn vsRibbon(v: RIn) -> ROut {
   o.kind = kind;
   o.color = color;
   o.coreFrac = coreFrac;
+  o.halfWidth = halfW;
   return o;
 }
 
@@ -120,8 +122,9 @@ fn fsRibbon(in: ROut) -> @location(0) vec4f {
   let a = abs(in.side);
   let aw = fwidth(in.side);
   let haze = hazeAmount(in.world);
-  // Screen-space dash coordinate for flooded roads (~11 px period); derivatives in uniform control flow.
-  let dashCoord = in.along / (max(distance(in.world, F.camPos) * F.elev.w, 1e-3) * 11.0);
+  // Dash coordinate for flooded roads: ~11 px period, but never shorter than a few road widths (up close a wide
+  // road would otherwise look hatched). Derivatives in uniform control flow.
+  let dashCoord = in.along / max(max(distance(in.world, F.camPos) * F.elev.w, 1e-3) * 11.0, in.halfWidth * 5.0);
   let dashFw = max(fwidth(dashCoord), 1e-4);
   if (in.kind == 0u) {
     if (in.coreFrac < 0.5) {

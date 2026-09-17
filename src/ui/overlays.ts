@@ -171,7 +171,7 @@ export function createNotices(ctx: UIContext, extra: { top?: HTMLElement[]; bott
     notice.classList.add('dl-show');
     noticeTimer.arm(n.durationMs ?? 7000);
   };
-  bridgeFor(store).onNotice(showNotice);
+  ctx.own(bridgeFor(store).onNotice(showNotice));
   // A new scene makes scene-specific notices stale.
   bind((s) => s.terrainName, () => current && hideNotice());
 

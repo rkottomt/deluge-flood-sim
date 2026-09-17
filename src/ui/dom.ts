@@ -124,6 +124,8 @@ export interface UIContext {
   setRender(patch: Partial<AppState['render']>): void;
   /** Open/close one of the modal panels. */
   setPanel(name: keyof AppState['panels'], open: boolean): void;
+  /** Register cleanup to run when the UI is unmounted (listeners outside the store, e.g. on the UI bridge). */
+  own(dispose: () => void): void;
 }
 
 /** Arrays compared element-wise by identity. */

@@ -255,7 +255,7 @@ fn wetDown(@builtin(global_invocation_id) gid: vec3u) {
 `;
 
 /**
- * "Normally wet" mask, captured once per scene right after the initial fill (FloodRenderer.setScene is called right
+ * "Normally wet" mask (r exact, g softened), captured once per scene right after the initial fill (FloodRenderer.setScene is called right
  * after solver.setInitialWater, whose reset writes h = initial depth): 1 where the cell holds water before any
  * flood (rivers, lakes). Same test as the solver's dry-at-reset mask (h < 0.01 m = dry) behind SimStats.floodedArea,
  * so the hazard maps colour exactly the land the HUD counts as flooded.
@@ -269,8 +269,17 @@ fn normalWater(@builtin(global_invocation_id) gid: vec3u) {
   let size = vec2i(textureDimensions(dst));
   let p = vec2i(gid.xy);
   if (p.x >= size.x || p.y >= size.y) { return; }
-  let h = textureLoad(stateTex, p, 0).r;
-  let wet = select(0.0, 1.0, h >= 0.01 && h < 1000.0);
-  textureStore(dst, p, vec4f(wet, 0.0, 0.0, 1.0));
+  // r: the wet test itself; g: a 5×5 box average of it, a soft ramp over a couple of cells along the old bank that
+  // the water shader samples once (a hard per-cell edge would stair-step across the flood).
+  var sum = 0.0;
+  for (var oy = -2; oy <= 2; oy++) {
+    for (var ox = -2; ox <= 2; ox++) {
+      let q = clamp(p + vec2i(ox, oy), vec2i(0), size - 1);
+      let h = textureLoad(stateTex, q, 0).r;
+      sum += select(0.0, 1.0, h >= 0.01 && h < 1000.0);
+    }
+  }
+  let hc = textureLoad(stateTex, p, 0).r;
+  textureStore(dst, p, vec4f(select(0.0, 1.0, hc >= 0.01 && hc < 1000.0), sum / 25.0, 0.0, 1.0));
 }
 `;

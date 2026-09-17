@@ -29,7 +29,7 @@ import type {
 } from '../src/contracts';
 import { createDelugeDevice } from '../src/gpu';
 import { createRenderer, type DelugeRendererAPI, type RendererQuality } from '../src/render';
-import { createMockScene } from '../src/render/mockSolver';
+import { createMockScene } from './render.mockSolver';
 
 const q = new URLSearchParams(location.search);
 const num = (k: string, d: number) => (q.has(k) && Number.isFinite(Number(q.get(k))) ? Number(q.get(k)) : d);

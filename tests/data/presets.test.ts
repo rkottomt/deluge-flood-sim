@@ -268,10 +268,14 @@ for (const id of BAKED) {
     assert.ok(lo > -100 && hi < 2000 && hi - lo > 20, `elevation range ${lo}…${hi}`);
     assert.ok(Math.abs(cellSizeFor(meta.bounds, meta.nx) / meta.cellSize - 1) < 2e-3, 'cellSize matches bounds');
     const size = jpegSize(jpg);
-    assert.equal(size.width, 2048);
-    assert.equal(size.height, 2048);
+    // 4096² (the Esri export limit): ≤ 2 m per texel on every preset, sharp at close camera distances.
+    assert.equal(size.width, 4096);
+    assert.equal(size.height, 4096);
+    assert.ok((meta.nx * meta.cellSize) / size.width <= 2, 'imagery ≤ 2 m per texel');
     assert.match(meta.attribution, /USGS 3DEP/);
-    assert.match(meta.attribution, /Esri/);
+    // Committed imagery must be redistributable: USDA NAIP (public domain), not Esri exports.
+    assert.match(meta.attribution, /USDA NAIP/);
+    assert.doesNotMatch(meta.attribution, /Esri/);
     assert.ok(meta.scenario.description.length > 200);
     const info = listPresets().find((p) => p.id === id);
     assert.ok(info && info.name === meta.name);
@@ -293,7 +297,9 @@ test('pittsburgh: stage control matches the Point gauge story', { skip: !fs.exis
   assert.ok(st, 'stage control');
   const normalFt = (st.normalLevel - st.gaugeDatum) / FT;
   assert.ok(normalFt > 13 && normalFt < 19, `normal pool reads ${normalFt.toFixed(1)} ft on the gauge`);
-  assert.equal(st.floodStageFt, 25);
+  // NWS PTTP1 categories: action 18, minor (flood stage) 22, moderate 25 (the Parkway "bathtub" closes), major 28 ft.
+  assert.equal(st.floodStageFt, 22);
+  assert.match(meta.scenario.description, /flood stage is 22 ft/);
   const record = st.marks!.find((m) => /1936/.test(m.label))!;
   assert.equal(record.ft, 46);
   const recordOffset = record.ft * FT + st.gaugeDatum - st.normalLevel;

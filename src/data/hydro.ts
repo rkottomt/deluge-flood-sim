@@ -16,7 +16,8 @@
  *      Euclidean distance (cells) to the nearest dry cell.
  *
  * Live areas (no hand-placed waypoints) use `detectWaterBodies`: large flat connected regions whose
- * surroundings are higher (lakes, pools, wide rivers) get a 3 m burn.
+ * surroundings are higher (lakes, pools, wide rivers) get a 3 m burn, after `openWaterGaps` has reopened low
+ * ridges that the DEM leaves across detected water (bridge-removal / collection-seam artifacts).
  */
 
 export interface GridPoint {
@@ -1347,20 +1348,25 @@ export interface GapOptions {
 }
 
 /**
- * Open thin, low dry bands that cut across detected water (live areas). USGS 3DEP removes bridges from its
- * bare-earth DEMs and hydro-flattens rivers, but where a water polygon was split (at a bridge, or at a seam
- * between collections) the surface under the gap is interpolated from the banks and a ridge up to about a metre
- * high is left across the channel — e.g. from downtown Harrisburg to City Island. In the simulation that ridge is a
- * dam that splits the river and holds back a head when the stage rises.
+ * Open thin, low dry bands that cut across detected water (live areas). USGS 3DEP hydro-flattens rivers and removes
+ * bridges from its bare-earth DEMs, but where a water polygon was split (at a bridge, or at a seam between
+ * collections) the surface in the gap is interpolated from the banks, leaving a ridge about a metre high across the
+ * channel. At ~5 m pixels Harrisburg has one from downtown to the tip of City Island, where the imagery shows open
+ * water and no road. In the simulation such a ridge is a dam: it splits the river and holds back a head when the
+ * stage rises.
  *
  * A band is opened (its cells join the adjacent body at the surface level, so the burn carves it like the rest of
  * the channel) only if it matches that signature, so real features survive:
  *   - every cell lies on a short straight run (≤ maxWidth, along a row, column or diagonal) of dry cells with
  *     detected water at BOTH ends, whose two levels agree within `levelTolerance` (a dam holds a head — kept), and
- *     that stands at most `maxHeight` above that surface (embankments, causeways and levees are higher — kept);
+ *     that stands at most `maxHeight` above that surface (higher embankments and levees are kept);
  *   - the band touches substantial land (≥ minLandArea or the domain edge) at two or more separate places, i.e. it
  *     connects shore to shore or shore to a large island. Narrow islands (no land contact), bars, spits and piers
- *     (one contact) and islets are kept.
+ *     (one contact) and islets are kept;
+ *   - no mapped road crosses it (`roads`). Real road causeways (Miami's MacArthur Causeway, the fill between Florida
+ *     Keys) have the same shape and height as the artifact; a bridge ridge with a road on it stays too.
+ * Scanning 21 live-area DEMs of 18 places (river towns, dams, lakes, Miami, the Keys) at 2.4–10 m cells, these rules open only the
+ * Harrisburg ridge and a narrow channel between two Susquehanna islands.
  * Mutates the bodies (indices/levels/cells). Returns the number of cells and bands opened.
  */
 export function openWaterGaps(

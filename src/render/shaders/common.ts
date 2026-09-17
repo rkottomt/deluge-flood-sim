@@ -249,6 +249,11 @@ struct WallHit {
   crest: f32,   // its crest elevation (m)
 }
 
+/** Cheap pre-test (one tap): is any wall within the field's range of this point? */
+fn wallNear(uv: vec2f) -> bool {
+  return F.wall.x > 0.5 && textureSampleLevel(wallTex, linSamp, uv, 0.0).r > 0.0;
+}
+
 fn wallAt(uv: vec2f) -> WallHit {
   // Four bilinear taps half a cell apart (a 2×2-cell tent): the field measures distance to wall CELL centres, whose
   // contours are stair-stepped along diagonal walls; the small blur rounds them into a smooth outline.

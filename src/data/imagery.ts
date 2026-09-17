@@ -1,6 +1,7 @@
 /**
- * Aerial imagery from the Esri World Imagery MapServer `export` endpoint: one request, exact mercator bbox,
- * north-up JPEG. In browsers the JPEG is decoded to an ImageBitmap; in Node (bake script) callers keep bytes.
+ * Aerial imagery for an exact mercator bbox as a north-up JPEG: Esri World Imagery (MapServer `export`, global) for live
+ * areas, USDA NAIP (ImageServer `exportImage`, US, public domain) for the baked presets. In browsers the JPEG is decoded
+ * to an ImageBitmap; in Node (bake script) callers keep bytes.
  */
 import type { ProgressFn } from '../contracts';
 import type { MercatorBBox } from './geo';
@@ -8,6 +9,15 @@ import { fetchBytes } from './net';
 
 export const ESRI_IMAGERY_EXPORT = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/export';
 export const IMAGERY_ATTRIBUTION = 'Imagery © Esri, Maxar, Earthstar Geographics';
+/**
+ * USDA NAIP orthoimagery (≈ 0.6 m, US only, public domain) from The National Map. Esri's World Imagery item states the
+ * layer "is not intended to be used to export tiles for offline" use outside ArcGIS apps, so this is the source to
+ * bake redistributable preset imagery from (scripts/bake-presets.ts, the default). Exports are limited to 4000 px.
+ */
+export const NAIP_IMAGERY_EXPORT = 'https://imagery.nationalmap.gov/arcgis/rest/services/USGSNAIPPlus/ImageServer/exportImage';
+export const NAIP_ATTRIBUTION = 'Imagery: USDA NAIP via USGS The National Map';
+export const NAIP_MAX_EXPORT = 4000;
+export type ImagerySource = 'esri' | 'naip';
 
 export function esriImageryUrl(m: MercatorBBox, width: number, height: number): string {
   const f = (v: number) => v.toFixed(3);
@@ -17,15 +27,26 @@ export function esriImageryUrl(m: MercatorBBox, width: number, height: number): 
   );
 }
 
-/** Download the imagery JPEG bytes covering exactly `m`. */
+export function naipImageryUrl(m: MercatorBBox, width: number, height: number): string {
+  const f = (v: number) => v.toFixed(3);
+  return (
+    `${NAIP_IMAGERY_EXPORT}?bbox=${f(m.xmin)},${f(m.ymin)},${f(m.xmax)},${f(m.ymax)}` +
+    `&bboxSR=3857&imageSR=3857&size=${width},${height}&format=jpg&bandIds=0,1,2&f=image`
+  );
+}
+
+/** Download the imagery JPEG bytes covering exactly `m` from `source` (default Esri World Imagery). */
 export async function fetchImageryBytes(
   m: MercatorBBox,
   size = 2048,
   onProgress?: ProgressFn,
   signal?: AbortSignal,
+  source: ImagerySource = 'esri',
 ): Promise<Uint8Array> {
+  if (source === 'naip' && size > NAIP_MAX_EXPORT) throw new Error(`NAIP exports are limited to ${NAIP_MAX_EXPORT} px (asked ${size})`);
   onProgress?.('Requesting aerial imagery…', 0);
-  const buf = await fetchBytes(esriImageryUrl(m, size, size), {
+  const url = source === 'naip' ? naipImageryUrl(m, size, size) : esriImageryUrl(m, size, size);
+  const buf = await fetchBytes(url, {
     // The server renders the export before sending a byte; a 4096² export (the bake size) can take over a minute.
     timeoutMs: size > 2048 ? 180000 : 60000,
     retries: 2,

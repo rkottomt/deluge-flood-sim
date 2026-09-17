@@ -173,12 +173,10 @@ fn fsWater(in: WOut) -> @location(0) vec4f {
   let s = textureSampleLevel(surfTex, linSamp, uv, 0.0);
   let nrm = textureSampleLevel(normTex, linSamp, uv, 0.0);
   let misc = textureSampleLevel(miscTex, linSamp, uv, 0.0);
-  // 1 where this is the normal river / lake (wet before any flood), 0 on land the flood has reached. Four taps
-  // ~1.2 cells apart soften the cell-stepped boundary into a short gradient along the old bank.
-  let me = 1.2 / F.grid;
-  let normalWetRaw = 0.25 * (textureSampleLevel(normalWetTex, linSamp, uv + vec2f(me.x, me.y), 0.0).r + textureSampleLevel(normalWetTex, linSamp, uv + vec2f(-me.x, me.y), 0.0).r
-                           + textureSampleLevel(normalWetTex, linSamp, uv + vec2f(me.x, -me.y), 0.0).r + textureSampleLevel(normalWetTex, linSamp, uv - me, 0.0).r);
-  let normalWet = select(0.0, normalWetRaw, F.wall.w > 0.5);
+  // 1 where this is the normal river / lake (wet before any flood), 0 on land the flood has reached (the softened
+  // channel ramps over a couple of cells along the old bank; the exact mask keeps creeks narrower than the ramp).
+  let nw = textureSampleLevel(normalWetTex, linSamp, uv, 0.0);
+  let normalWet = select(0.0, max(nw.r, nw.g), F.wall.w > 0.5);
   let floodLand = 1.0 - normalWet;
 
   let mode = i32(F.waterMode + 0.5);
@@ -230,7 +228,7 @@ fn fsWater(in: WOut) -> @location(0) vec4f {
   }
   // A wall whose crest is above this water: its crest, faces and casing are drawn by the terrain pass with a
   // screen-space minimum width, so the water must not paint over them where they overhang the channel.
-  if (F.wall.x > 0.5 && in.skirt < 0.5) {
+  if (in.skirt < 0.5 && wallNear(uv)) {
     let wh = wallAt(uv);
     if (wh.h > WALL_MIN_H && wh.d < wallProfile(max(pixelFoot, 1e-3)).casing && wh.crest > in.world.y / F.exag + 0.02) {
       discard;
@@ -281,7 +279,7 @@ fn fsWater(in: WOut) -> @location(0) vec4f {
   let slick = ((rM.w - 0.5) * 0.6 + (slickFar - 0.5) * 0.8 + (rA.w - 0.5) * 0.3 * detailFade) * 0.55;
   let riverSed = mix(vec3f(0.115, 0.088, 0.054), vec3f(0.032, 0.040, 0.027), deep);
   let floodSed = mix(vec3f(0.185, 0.150, 0.095), vec3f(0.130, 0.112, 0.076), smoothstep(0.5, 5.0, thick));
-  let sediment = mix(riverSed, floodSed, floodLand) * (1.0 + slick * mix(mix(0.6, 1.0, turbulence), 1.5, floodLand));
+  let sediment = mix(riverSed, floodSed, floodLand) * (1.0 + slick * mix(0.6, 1.0, turbulence));
   let body = sediment * lightIn;
   // Thin rain sheet-flow (a few cm over grass or pavement) is not visible from the air: fade it in with depth.
   let film = mix(1.0, smoothstep(0.012, 0.06, thick), floodLand);
@@ -298,18 +296,22 @@ fn fsWater(in: WOut) -> @location(0) vec4f {
   alpha = mix(alpha, 1.0, foamMask * 0.75);
 
   // Wet edge of the flood: a crisp pale line ~1.5–3 px inside the waterline on land that was dry before, so the
-  // flood extent reads at any distance. Only where the water a few pixels inland is a real flood (≥ 5 cm), not
-  // rain sheet-flow, and never along the normal river banks.
+  // flood front reads at any distance. Only where the water a few pixels inland is a real flood (≥ 5 cm), not
+  // rain sheet-flow; only where the land a dozen pixels outward is still dry, so the specks of roofs and yards
+  // poking out of a flooded neighbourhood do not each get an outline; never along the normal river banks.
   let gl = length(thickGrad);
   let pxFromShore = thick / max(gl, 1e-6);
-  let inward = select(vec2f(0.0), thickGrad / gl, gl > 1e-6);
-  let probeUv = uv + (uvDx * inward.x + uvDy * inward.y) * 5.0;
-  let hInside = textureSampleLevel(surfTex, linSamp, probeUv, 0.0).r;
-  let edge = smoothstep(0.6, 1.4, pxFromShore) * (1.0 - smoothstep(2.4, 3.6, pxFromShore))
-           * smoothstep(0.03, 0.08, hInside) * smoothstep(0.5, 0.9, floodLand) * select(1.0, 0.0, in.skirt > 0.5);
-  let edgeCol = vec3f(0.80, 0.77, 0.68) * lightIn * 0.62;
-  rgb = mix(rgb, edgeCol, edge * 0.85);
-  alpha = mix(alpha, 1.0, edge * 0.85);
+  if (pxFromShore < 3.6 && floodLand > 0.5 && in.skirt < 0.5) {
+    let inward = select(vec2f(0.0), thickGrad / gl, gl > 1e-6);
+    let stepPx = uvDx * inward.x + uvDy * inward.y;
+    let hInside = textureSampleLevel(surfTex, linSamp, uv + stepPx * 5.0, 0.0).r;
+    let hOutside = textureSampleLevel(surfTex, linSamp, uv - stepPx * 12.0, 0.0).r;
+    let edge = smoothstep(0.6, 1.4, pxFromShore) * (1.0 - smoothstep(2.4, 3.6, pxFromShore))
+             * smoothstep(0.03, 0.08, hInside) * (1.0 - smoothstep(0.005, 0.03, hOutside)) * smoothstep(0.5, 0.9, floodLand);
+    let edgeCol = vec3f(0.80, 0.77, 0.68) * lightIn * 0.62;
+    rgb = mix(rgb, edgeCol, edge * 0.75);
+    alpha = mix(alpha, 1.0, edge * 0.75);
+  }
 
   if (mode != 0) {
     // ── Hazard colormap: discrete bands (anti-aliased edges), gently lit, over the photoreal water ──────

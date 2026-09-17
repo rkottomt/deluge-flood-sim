@@ -1,4 +1,6 @@
 /**
+ * DEV HARNESS FIXTURE (dev/render.html only; never part of the app bundle — the app runs the real solver in src/sim).
+ *
  * MockFloodSolver — a FloodSolver stand-in for renderer development and screenshots. It does NOT solve the
  * shallow-water equations: the water state is an animated analytic field computed by a compute shader
  * (a river whose stage rises and falls over the floodplain, a fast steep creek, swirling flow), written
@@ -14,9 +16,9 @@ import type {
   StormCell,
   TerrainData,
   WaterSource,
-} from '../contracts';
-import { DEFAULT_SIM_PARAMS } from '../contracts';
-import { buildMockImagery, buildMockTerrain, type MockTerrain } from './mockTerrain';
+} from '../src/contracts';
+import { DEFAULT_SIM_PARAMS } from '../src/contracts';
+import { buildMockImagery, buildMockTerrain, type MockTerrain } from './render.mockTerrain';
 
 const MOCK_WGSL = /* wgsl */ `
 struct M {

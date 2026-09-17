@@ -11,6 +11,7 @@ import { zeroClampFraction } from '../../src/data/dem';
 import { burnWaterBodies, detectWaterBodies } from '../../src/data/hydro';
 import { computeInitialWater } from '../../src/data/initialWater';
 import { buildLiveScenario } from '../../src/data/live';
+import { detectLiveWater, finishLiveTerrain } from '../../src/data/liveTerrain';
 
 const N = 256;
 const CELL = 10;
@@ -114,4 +115,39 @@ test('zero-clamp signature: many cells at ~0 m and no negatives', () => {
   assert.equal(zeroClampFraction(real), 0, 'genuine negative elevations → not clamped');
   const mountains = Float32Array.from({ length: 10000 }, (_, k) => 1500 + (k % 100));
   assert.equal(zeroClampFraction(mountains), 0);
+});
+
+test('live pipeline: a low ridge left across the river (bridge removal / seam artifact) is opened when road data is loaded', () => {
+  // The Harrisburg case: a hydro-flattened river with an oblique ridge ≤ 1 m high from one bank to the other.
+  const { z, roads } = valley();
+  const ridge = (i: number, j: number) => Math.abs(j - 128) <= 12 && Math.abs(i - (100 + (j - 116) * 0.5)) <= 4;
+  for (let j = 0; j < N; j++) {
+    for (let i = 0; i < N; i++) {
+      if (!ridge(i, j)) continue;
+      const surface = 100.4 - 0.4 * (i / N);
+      z[j * N + i] = surface + 0.2 + 0.8 * (1 - Math.abs(i - (100 + (j - 116) * 0.5)) / 4.5);
+    }
+  }
+  const run = (withRoads: boolean) => {
+    const bodies = detectLiveWater(z, N, CELL);
+    const r = finishLiveTerrain(z, N, CELL, bodies, withRoads ? roads : null, 'Ridge Valley', 'usgs3dep');
+    const h0 = computeInitialWater({ nx: N, ny: N, elevation: r.elevation }, r.scenario);
+    let dryRidge = 0;
+    let ridgeCells = 0;
+    for (let j = 0; j < N; j++) {
+      for (let i = 0; i < N; i++) {
+        if (!ridge(i, j) || Math.abs(j - 128) > 10) continue;
+        ridgeCells++;
+        if (h0[j * N + i] < 0.5) dryRidge++;
+      }
+    }
+    return { stats: r.stats, dryRidge, ridgeCells, h0 };
+  };
+  const without = run(false);
+  assert.equal(without.stats.openedBands, 0, 'no roads: ridges are left alone (a causeway would look the same)');
+  assert.ok(without.dryRidge > without.ridgeCells * 0.8, `ridge dry without opening (${without.dryRidge}/${without.ridgeCells})`);
+  const opened = run(true);
+  assert.equal(opened.stats.openedBands, 1);
+  assert.equal(opened.dryRidge, 0, 'the ridge is river bed under the initial water');
+  assert.ok(opened.h0[128 * N + 60] > 2.5 && opened.h0[128 * N + 200] > 2.5, 'river full on both sides');
 });

@@ -4,11 +4,15 @@
  *
  *   npx tsx scripts/bake-presets.ts            # all presets
  *   npx tsx scripts/bake-presets.ts johnstown  # one preset
+ *   options: --refresh (refetch cached downloads), --imagery=naip|esri (default naip), --out=<dir> (default
+ *   public/presets). Baked imagery is committed and served offline, so it comes from USDA NAIP (public domain, via The
+ *   National Map): Esri's World Imagery item says the layer is not intended for exporting imagery for offline use
+ *   outside ArcGIS apps. NAIP is also orthorectified, so buildings and TIGER roads line up (see src/data/imagery.ts).
  *
  * Steps per preset: USGS 3DEP DEM (1024²) → no-data/seam repair → river centerlines from waypoints →
  * pool level measured from the DEM → channel burn with smooth banks → sources placed on the channel spine at
  * the domain edges → initial fill seeds along the centerlines (verified: no water outside the channel) →
- * shelters snapped to high road nodes (verified above the maximum stage) → Esri imagery 4096² JPEG →
+ * shelters snapped to high road nodes (verified above the maximum stage) → aerial imagery 4096² JPEG →
  * TIGERweb roads → compact roads.json.
  */
 import fs from 'node:fs';
@@ -17,7 +21,7 @@ import type { CameraPose, ScenarioPreset, Shelter, StageControl, StormCell, Wate
 import { fetchDEM } from '../src/data/dem';
 import { geoToGrid, squareDomain } from '../src/data/geo';
 import { burnRivers, edgeRuns, edgeStageDiscAvoiding, findRiverEnds, growEdgeRun, flatThreshold, localRelief, type BurnResult, type RiverSpec } from '../src/data/hydro';
-import { fetchImageryBytes, IMAGERY_ATTRIBUTION } from '../src/data/imagery';
+import { fetchImageryBytes, IMAGERY_ATTRIBUTION, type ImagerySource, NAIP_ATTRIBUTION, NAIP_MAX_EXPORT } from '../src/data/imagery';
 import { computeInitialWater } from '../src/data/initialWater';
 import { type PresetMeta, PRESETS, validatePresetMeta } from '../src/data/presets';
 import { buildRoadNetwork, encodeRoads, fetchTigerRoads, type RawRoad, ROADS_ATTRIBUTION_TIGER, roadStats } from '../src/data/roads';
@@ -217,7 +221,9 @@ const PRESET_DEFS: PresetDef[] = [
 // ────────────────────────────────────────────────────────────────────────────────────────────────
 
 const HERE = import.meta.dirname ?? path.dirname(new URL(import.meta.url).pathname);
-const OUT = path.resolve(HERE, '../public/presets');
+const argValue = (name: string) => process.argv.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3);
+const OUT = path.resolve(argValue('out') ?? path.resolve(HERE, '../public/presets'));
+const IMAGERY_SOURCE: ImagerySource = argValue('imagery') === 'esri' ? 'esri' : 'naip';
 /** Raw downloads are cached here (gitignored) so re-bakes are fast and reproducible; pass --refresh to refetch. */
 const CACHE = path.resolve(HERE, '../artifacts/bake-cache');
 const REFRESH = process.argv.includes('--refresh');
@@ -501,12 +507,22 @@ async function bake(def: PresetDef) {
   };
 
   // ── Imagery
-  // 4096² is the Esri export limit (maxImageWidth/Height): ≈ 2 m per texel over Pittsburgh's 8 km, sharp at the 0.5–2 km
-  // camera distances where walls get drawn and streets inspected. (8192² would need tiled requests and ~360 MB of GPU
-  // memory with mips — too much next to the solver on a fanless laptop.)
-  const jpg = await cachedBytes(def.id, JSON.stringify({ ...JSON.parse(requestKey), imagery: IMAGERY_SIZE }), `imagery-${IMAGERY_SIZE}.jpg`, () =>
-    fetchImageryBytes(merc, IMAGERY_SIZE),
-  );
+  // 4096²: ≈ 2 m per texel over Pittsburgh's 8 km, sharp at the 0.5–2 km camera distances where walls get drawn and
+  // streets inspected. (8192² would cost ~360 MB of GPU memory with mips — too much next to the solver on a fanless
+  // laptop.) NAIP exports are limited to 4000 px, so NAIP always comes as four stitched 2048² quadrants.
+  const imageryKey = JSON.stringify({ ...JSON.parse(requestKey), imagery: IMAGERY_SIZE, ...(IMAGERY_SOURCE === 'esri' ? {} : { source: IMAGERY_SOURCE }) });
+  const imageryFile = `imagery-${IMAGERY_SOURCE === 'esri' ? '' : `${IMAGERY_SOURCE}-`}${IMAGERY_SIZE}.jpg`;
+  const jpg = await cachedBytes(def.id, imageryKey, imageryFile, async () => {
+    if (IMAGERY_SOURCE === 'naip' && IMAGERY_SIZE > NAIP_MAX_EXPORT) return fetchImageryStitched(merc, IMAGERY_SIZE, IMAGERY_SOURCE);
+    try {
+      return await fetchImageryBytes(merc, IMAGERY_SIZE, undefined, undefined, IMAGERY_SOURCE);
+    } catch (e) {
+      // The server renders a whole export before answering and its gateway gives up after ~90 s (HTTP 504), which a
+      // 4096² export of a rural area can exceed. Fetch the four quadrants instead and stitch them.
+      log(def.id, `  single ${IMAGERY_SIZE}² imagery export failed (${(e as Error).message}); fetching 2×2 quadrants`);
+      return fetchImageryStitched(merc, IMAGERY_SIZE, IMAGERY_SOURCE);
+    }
+  });
 
   // ── Write
   const dir = path.join(OUT, def.id);
@@ -520,7 +536,7 @@ async function bake(def: PresetDef) {
     ny: N,
     cellSize,
     bounds,
-    attribution: `Elevation: USGS 3DEP · ${IMAGERY_ATTRIBUTION} · ${ROADS_ATTRIBUTION_TIGER}`,
+    attribution: `Elevation: USGS 3DEP · ${IMAGERY_SOURCE === 'naip' ? NAIP_ATTRIBUTION : IMAGERY_ATTRIBUTION} · ${ROADS_ATTRIBUTION_TIGER}`,
     scenario,
     files: { elevation: 'elevation.f32', imagery: 'imagery.jpg', roads: 'roads.json' },
     bake: {
@@ -543,6 +559,49 @@ async function bake(def: PresetDef) {
   fs.writeFileSync(path.join(dir, 'roads.json'), JSON.stringify(encodeRoads(roads)));
   const sizes = ['meta.json', 'elevation.f32', 'imagery.jpg', 'roads.json'].map((f) => `${f} ${(fs.statSync(path.join(dir, f)).size / 1e6).toFixed(2)} MB`);
   log(def.id, `wrote ${sizes.join(', ')} in ${((performance.now() - t0) / 1000).toFixed(1)} s`);
+}
+
+/**
+ * `size`² imagery for `merc` from four (size/2)² exports of its exact quadrants — the same pixel grid as one export —
+ * stitched and re-encoded (JPEG, quality 0.92) in headless Chromium, the one image codec among the dev dependencies.
+ */
+async function fetchImageryStitched(merc: { xmin: number; ymin: number; xmax: number; ymax: number }, size: number, source: ImagerySource): Promise<Uint8Array> {
+  const half = size / 2;
+  const xm = (merc.xmin + merc.xmax) / 2;
+  const ym = (merc.ymin + merc.ymax) / 2;
+  const quads = [
+    { xmin: merc.xmin, xmax: xm, ymin: ym, ymax: merc.ymax },
+    { xmin: xm, xmax: merc.xmax, ymin: ym, ymax: merc.ymax },
+    { xmin: merc.xmin, xmax: xm, ymin: merc.ymin, ymax: ym },
+    { xmin: xm, xmax: merc.xmax, ymin: merc.ymin, ymax: ym },
+  ];
+  const parts: Uint8Array[] = [];
+  for (const q of quads) parts.push(await fetchImageryBytes(q, half, undefined, undefined, source));
+  const { chromium } = await import('playwright');
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    const b64 = await page.evaluate(
+      async ({ parts, half }) => {
+        const canvas = new OffscreenCanvas(half * 2, half * 2);
+        const ctx = canvas.getContext('2d')!;
+        for (let q = 0; q < 4; q++) {
+          const bytes = Uint8Array.from(atob(parts[q]), (c) => c.charCodeAt(0));
+          const bmp = await createImageBitmap(new Blob([bytes], { type: 'image/jpeg' }));
+          if (bmp.width !== half || bmp.height !== half) throw new Error(`quadrant ${q} is ${bmp.width}×${bmp.height}`);
+          ctx.drawImage(bmp, (q % 2) * half, (q >> 1) * half);
+        }
+        const out = new Uint8Array(await (await canvas.convertToBlob({ type: 'image/jpeg', quality: 0.92 })).arrayBuffer());
+        let bin = '';
+        for (let i = 0; i < out.length; i += 0x8000) bin += String.fromCharCode(...out.subarray(i, i + 0x8000));
+        return btoa(bin);
+      },
+      { parts: parts.map((p) => Buffer.from(p).toString('base64')), half },
+    );
+    return new Uint8Array(Buffer.from(b64, 'base64'));
+  } finally {
+    await browser.close();
+  }
 }
 
 /** Cells between a position along an edge and a run [t0, t1] of edge cells (0 inside the run). */
@@ -570,7 +629,7 @@ function inflowPlacement(burn: BurnResult, river: number, which: 'upstream' | 'd
 }
 
 async function main() {
-  const only = process.argv.slice(2);
+  const only = process.argv.slice(2).filter((a) => !a.startsWith('--'));
   const defs = only.length ? PRESET_DEFS.filter((d) => only.includes(d.id)) : PRESET_DEFS;
   if (!defs.length) throw new Error(`unknown preset(s): ${only.join(', ')}; known: ${PRESET_DEFS.map((d) => d.id).join(', ')}`);
   for (const d of defs) await bake(d);

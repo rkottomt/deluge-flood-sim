@@ -125,7 +125,7 @@ fn fsTerrain(in: VOut) -> @location(0) vec4f {
   var casing = 0.0;
   var shadow = 0.0;
   var crestGlint = 0.0;
-  if (F.wall.x > 0.5) {
+  if (wallNear(uv)) {
     let wh = wallAt(uv);
     if (wh.h > WALL_MIN_H && wh.d < (F.wall.y - 0.5) * F.cellSize) {
       let pxM = max(distance(in.world, F.camPos) * F.elev.w, 1e-3);

@@ -15,11 +15,13 @@ after(() => {
 
 const N = 64;
 
-/** Read a float texture (r32float, rgba32float or rgba16float) back as float32 channels. */
+/** Read a texture (r32float, rgba32float, rgba16float or rgba8unorm) back as float32 channels. */
 async function readTexture(device: GPUDevice, tex: GPUTexture, w: number, h: number, mip = 0): Promise<Float32Array> {
   const half = tex.format === 'rgba16float';
+  const unorm8 = tex.format === 'rgba8unorm';
   const channels = tex.format === 'r32float' ? 1 : 4;
-  const bpp = channels * (half ? 2 : 4);
+  const bpc = unorm8 ? 1 : half ? 2 : 4;
+  const bpp = channels * bpc;
   const bytesPerRow = Math.ceil((w * bpp) / 256) * 256;
   const buf = device.createBuffer({ size: bytesPerRow * h, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
   const enc = device.createCommandEncoder();
@@ -38,8 +40,8 @@ async function readTexture(device: GPUDevice, tex: GPUTexture, w: number, h: num
   };
   for (let j = 0; j < h; j++) {
     for (let i = 0; i < w * channels; i++) {
-      const o = j * bytesPerRow + i * (half ? 2 : 4);
-      out[j * w * channels + i] = half ? halfToFloat(bytes.getUint16(o, true)) : bytes.getFloat32(o, true);
+      const o = j * bytesPerRow + i * bpc;
+      out[j * w * channels + i] = unorm8 ? bytes.getUint8(o) / 255 : half ? halfToFloat(bytes.getUint16(o, true)) : bytes.getFloat32(o, true);
     }
   }
   buf.unmap();
@@ -236,6 +238,31 @@ test('prep: water surface, shoreline extension, walls and wet pyramid', async ()
   const s = await readTexture(device, surf, N, N);
   assert.ok(close(s[(20 * N + 10) * 4], 1, 1e-2) && close(s[(20 * N + 10) * 4 + 1], 0.5, 1e-2));
   assert.equal(s[(20 * N + 30) * 4 + 3], 0);
+
+  // Normally-wet mask (captured once per scene): r = wet test (h ≥ 1 cm), g = 5×5 average for a soft old bank.
+  const normal = device.createTexture({ size: [N, N], format: 'rgba8unorm', usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.COPY_SRC });
+  const enc3 = device.createCommandEncoder();
+  const cp3 = enc3.beginComputePass();
+  cp3.setPipeline(P.normalWater);
+  cp3.setBindGroup(
+    0,
+    device.createBindGroup({
+      layout: P.normalWater.getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: stateTex.createView() },
+        { binding: 1, resource: normal.createView() },
+      ],
+    }),
+  );
+  cp3.dispatchWorkgroups(N / 16, N / 16);
+  cp3.end();
+  device.queue.submit([enc3.finish()]);
+  const nm = await readTexture(device, normal, N, N);
+  assert.equal(nm[(20 * N + 10) * 4], 1, 'river is normally wet');
+  assert.equal(nm[(20 * N + 30) * 4], 0, 'protected land is not');
+  assert.equal(nm[(20 * N + 10) * 4 + 1], 1, 'soft mask is 1 deep in the river');
+  assert.ok(Math.abs(nm[(20 * N + 19) * 4 + 1] - 15 / 25) < 0.01, `soft mask at the bank ${nm[(20 * N + 19) * 4 + 1]}`);
+  assert.equal(nm[(20 * N + 22) * 4 + 1], 0, 'soft mask is 0 three cells past the bank');
 
   assert.deepEqual(errors, []);
 });

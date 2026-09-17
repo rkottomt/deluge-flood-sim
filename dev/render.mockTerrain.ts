@@ -4,7 +4,7 @@
  * and a concrete floodwall. Also produces procedural aerial imagery and a road network.
  * (Development/test fixture only — the app uses real USGS data.)
  */
-import type { RoadClass, RoadEdge, RoadNetwork } from '../contracts';
+import type { RoadClass, RoadEdge, RoadNetwork } from '../src/contracts';
 
 export interface MockTerrain {
   n: number;

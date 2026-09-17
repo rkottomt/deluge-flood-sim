@@ -212,10 +212,12 @@ export function createWelcome(ctx: UIContext): HTMLElement {
     }
   }
 
-  bridgeFor(store).wallDrawn.on(() => {
-    wallDrawn = true;
-    sync(store.get());
-  });
+  ctx.own(
+    bridgeFor(store).wallDrawn.on(() => {
+      wallDrawn = true;
+      sync(store.get());
+    }),
+  );
   bind(
     (s) =>
       `${!!s.terrainName}|${!!s.loading}|${s.scenario === null}|${s.stageOffset}|${s.sim.rainRate}|${s.sim.timeScale}|${s.paused}|${s.sim.stabilityMode}|${!!s.evacStart}`,

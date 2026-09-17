@@ -153,7 +153,7 @@ export function createToolbar(ctx: UIContext): { toolbar: HTMLElement; options: 
     }
   };
   const bridge = bridgeFor(store);
-  bridge.hoverChanged.on((hov) => store.get().tool === 'wall' && renderWallCheck(hov, store.get()));
+  ctx.own(bridge.hoverChanged.on((hov) => store.get().tool === 'wall' && renderWallCheck(hov, store.get())));
   bind(
     (s) => `${s.tool}|${s.wallHeight}|${s.stageOffset}|${s.scenario === null}`,
     (_k, s) => s.tool === 'wall' && renderWallCheck(bridge.hover, s),
