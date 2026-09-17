@@ -62,10 +62,10 @@ From `npm test` (the solver tests run on a real GPU through Dawn):
 
 | Check | Result |
 | --- | --- |
-| Lake at rest on rough terrain, 2000 steps ([wellbalanced](tests/sim/wellbalanced.test.ts)) | max \|u\| = 1.5·10⁻⁵ m/s |
-| Dam break vs the Ritter analytic solution ([dambreak](tests/sim/dambreak.test.ts)) | profile error 1.5 % (L1) |
-| Closed domain mass conservation ([conservation](tests/sim/conservation.test.ts)) | \|ΔV\|/V₀ = 3.3·10⁻⁷ |
-| Open domain with rain, storms, inflow, stage, infiltration ([conservation](tests/sim/conservation.test.ts)) | mass error ≤ 4.9·10⁻⁶ |
+| Lake at rest on rough terrain, 2000 steps ([wellbalanced](tests/sim/wellbalanced.test.ts)) | max \|u\| = 1.9·10⁻⁵ m/s |
+| Dam break vs the Ritter analytic solution ([dambreak](tests/sim/dambreak.test.ts)) | profile error 1.6 % (L1) |
+| Closed domain mass conservation ([conservation](tests/sim/conservation.test.ts)) | \|ΔV\|/V₀ = 2.0·10⁻⁷ |
+| Open domain with rain, storms, inflow, stage, infiltration ([conservation](tests/sim/conservation.test.ts)) | mass error ≤ 1.9·10⁻⁶ |
 | Rain on a tilted plane at steady state ([boundary](tests/sim/boundary.test.ts)) | outflow / rain = 1.000 |
 | Channels at 0–60° to the grid ([channel](tests/sim/channel.test.ts)) | depth within 6 % of Manning's normal depth |
 | GPU (Float32, parallel) vs Float64 CPU reference, 5 cases × 400 steps ([reference](tests/sim/reference.test.ts)) | max \|Δh\| ≤ 3.4·10⁻⁵ m |

@@ -221,8 +221,8 @@ Monongahela and Ohio cross the domain edge.
   `npx tsx scripts/bake-presets.ts` and work fully offline: Pittsburgh (three rivers), Johnstown (Conemaugh valley,
   1936 peak inflows), Ellicott City (2016 flash flood), and a procedural sandbox.
 * **Live areas** are cancellable. A download that stalls mid-transfer fails after 20 s without data, and the elevation
-  has a 90 s overall deadline (the error then says the service can't be reached). Imagery, roads and the reverse-geocoded place name get 15 s once
-  the elevation is ready; after that the area loads without them.
+  has a 90 s overall deadline (the error then says the service can't be reached). Imagery, roads and the reverse-geocoded place name get 25 s once
+  the elevation is ready (Esri renders a 2048² export for 5–12 s before sending a byte); after that the area loads without them.
 
 ## 6. Rendering
 
@@ -257,7 +257,8 @@ and a frame ceiling detector notices browser 30 fps caps (Chrome Energy Saver, m
 starves. The renderer's adaptive quality gets a *sim pressure* hint: while the solver is GPU-limited it holds the
 default level (it neither climbs above it nor keeps a better level claimed while the sim kept up), and while hands-off
 with the budget down to ≤ 3 substeps (a hot fanless laptop) it steps down, at most to 1 render pixel per CSS pixel, and
-recovers 20 s after the starvation ends.
+recovers 20 s after the starvation ends. GPU device loss shows a recovery card and reloads once. `window.__deluge`
+exposes the debug API used by `scripts/e2e.mjs`.
 
 ### 8.1 Performance budget (measured)
 
@@ -286,8 +287,7 @@ the GPU emulated ~35 % slower (extra compute each frame) the budget drops to 1�
 at 58–60 fps (p95 19–24 ms), sim speed falls to ~15–20× and quality steps down to 1 render pixel per CSS pixel; within
 3 s of the load going away the budget is back to 6 substeps. Expectation (estimated, not measured on an Air): a cool
 Air runs the crest flood like the table (~70× at 60 fps, ~90× under Chrome's 30 fps battery cap); as it heats up sim
-speed degrades toward ~15–20× while the frame rate holds at 60 fps. Plug it in and keep it cool before judging. GPU
-device loss shows a recovery card and reloads once. `window.__deluge` exposes the debug API used by `scripts/e2e.mjs`.
+speed degrades toward ~15–20× while the frame rate holds at 60 fps. Plug it in and keep it cool before judging.
 
 ## 9. Validation
 
@@ -295,10 +295,10 @@ From `npm test` (tests run on the real GPU through Dawn):
 
 | Check | Result | Test |
 | --- | --- | --- |
-| Lake at rest on rough terrain, 2000 steps | max \|u\| = 1.5·10⁻⁵ m/s | `tests/sim/wellbalanced.test.ts` |
-| Dam break vs the Ritter solution at t = 20 s | profile L1 error 1.5 %, front (5 % depth) ratio 1.03 | `tests/sim/dambreak.test.ts` |
-| Closed domain mass conservation | \|ΔV\|/V0 = 3.3·10⁻⁷ | `tests/sim/conservation.test.ts` |
-| Open domain with rain, storm, inflow, stage, infiltration | worst massError 4.9·10⁻⁶ | `tests/sim/conservation.test.ts` |
+| Lake at rest on rough terrain, 2000 steps | max \|u\| = 1.9·10⁻⁵ m/s | `tests/sim/wellbalanced.test.ts` |
+| Dam break vs the Ritter solution at t = 20 s | profile L1 error 1.6 %, front (5 % depth) ratio 1.01 | `tests/sim/dambreak.test.ts` |
+| Closed domain mass conservation | \|ΔV\|/V0 = 2.0·10⁻⁷ | `tests/sim/conservation.test.ts` |
+| Open domain with rain, storm, inflow, stage, infiltration | worst massError 1.9·10⁻⁶ | `tests/sim/conservation.test.ts` |
 | Rain on a tilted plane, steady state | outflow / rain = 1.000 | `tests/sim/boundary.test.ts` |
 | River sloping to an open edge | depth / normal depth = 1.000 at the outlet | `tests/sim/boundary.test.ts` |
 | Walled channels at 0 / 30 / 45 / 60° to the grid | depth / Manning normal depth 0.98 – 1.05 | `tests/sim/channel.test.ts` |
@@ -308,7 +308,7 @@ From `npm test` (tests run on the real GPU through Dawn):
 | Stale-CFL abuse, heavy rain on steep terrain | no NaN, no negative depth | `tests/sim/robustness.test.ts`, `stability.test.ts` |
 
 `npm run e2e` drives the ten judge flows (load, raise to the crest, levee, rain, evacuation, break and recover,
-presets, tools, live area) in headless Chromium on the real GPU, offline.
+presets, tools, frame rate, idle power; `--live` adds a live-area flow) in headless Chromium on the real GPU, offline.
 
 ## 10. Future work
 

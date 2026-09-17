@@ -434,3 +434,50 @@ test('evac: updateFlood is throttled, route recomputed on inputs, store updated 
   evac.recomputeRoute();
   assert.equal(store.get().route, null);
 });
+
+test('evac: stability-demo and diverged readbacks keep the last road status and route', () => {
+  const store = createStore(createInitialState());
+  let floods = 0;
+  const router: EvacuationRouter = {
+    setNetwork() {},
+    updateFlood() {
+      floods++;
+      return new Uint8Array(4);
+    },
+    route() {
+      return { state: 'blocked', polyline: null, lengthMeters: 0, etaSeconds: 0, shelter: null, message: 'No safe route — flooded' };
+    },
+  };
+  const evac = new EvacController(router, store, new ErrorReporter());
+  store.set({ evacStart: { gx: 3, gy: 3 } });
+  evac.onSnapshot(snap(1), 1000);
+  assert.equal(floods, 1);
+  const route = store.get().route;
+  assert.equal(route?.state, 'blocked');
+  const status = evac.roadStatus;
+
+  for (const bad of [
+    { maxDepth: Infinity },
+    { maxSpeed: NaN },
+    { volume: NaN },
+    { volume: -1 },
+  ]) {
+    const s = snap(2);
+    evac.onSnapshot({ ...s, depth: new Float32Array(256).fill(NaN), stats: { ...s.stats, ...bad } }, 5000);
+  }
+  evac.tick(9000);
+  assert.equal(floods, 1, 'diverged depths never reach the router');
+  assert.equal(evac.roadStatus, status);
+  assert.equal(store.get().route, route, 'the route card is not re-planned from NaN water');
+
+  // The naive scheme's readbacks before it visibly diverges are not trusted either.
+  store.set({ sim: { ...store.get().sim, stabilityMode: 'naive' } });
+  evac.onSnapshot(snap(3), 10000);
+  evac.tick(20000);
+  assert.equal(floods, 1, 'stability-demo readbacks never reach the router');
+  assert.equal(store.get().route, route);
+
+  store.set({ sim: { ...store.get().sim, stabilityMode: 'robust' } });
+  evac.onSnapshot(snap(4), 30000); // robust solver restored → normal updates resume
+  assert.equal(floods, 2);
+});

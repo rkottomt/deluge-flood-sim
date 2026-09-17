@@ -27,9 +27,11 @@ const tick = () => new Promise<void>((r) => setTimeout(r, 0));
 export const LIVE_DEM_DEADLINE_MS = 90_000;
 /**
  * Once the elevation is ready, imagery, roads and the place name get this long to finish; the area then loads without
- * whatever is missing (TerrainData.imagery / roads null) instead of waiting on a slow service.
+ * whatever is missing (TerrainData.imagery / roads null) instead of waiting on a slow service. Esri renders a 2048²
+ * export before sending a byte, which measured 5–12 s on a good connection and occasionally over 15 s, so the grace
+ * leaves room for that (the load stays cancellable meanwhile).
  */
-export const LIVE_EXTRAS_GRACE_MS = 15_000;
+export const LIVE_EXTRAS_GRACE_MS = 25_000;
 
 /**
  * Load a live area. `signal` cancels everything (downloads and conditioning); the returned promise then rejects with

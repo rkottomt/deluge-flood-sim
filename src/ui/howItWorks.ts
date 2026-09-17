@@ -279,7 +279,7 @@ export function createHowItWorks(ctx: UIContext): Modal {
     </g>
 
     <path d="M470 178 V206 H112 V228" class="dl-pipe-flow" marker-end="url(#dl-arrow)"/>
-    <text x="300" y="199" text-anchor="middle" class="dl-pipe-note">once per frame</text>
+    <text x="300" y="199" text-anchor="middle" class="dl-pipe-note">when the picture refreshes</text>
 
     <g class="dl-pipe-box dl-pipe-box-alt">
       <rect x="22" y="230" width="180" height="78" rx="12"/>
@@ -333,7 +333,7 @@ export function createHowItWorks(ctx: UIContext): Modal {
     h(
       'p',
       null,
-      'All state lives in GPU textures that ping-pong between the two passes: momentum writes the face fluxes, continuity turns them into new depths. Every substep of a frame is encoded into a single command buffer, then the result is exported to the renderer and — a few times a second — read back asynchronously for statistics and routing. The CPU never waits for the GPU.',
+      'All state lives in GPU textures that ping-pong between the two passes: momentum writes the face fluxes, continuity turns them into new depths. Every substep of a frame is encoded into a single command buffer; the result is exported to the renderer when it redraws the water (about every other frame) and — a few times a second — read back asynchronously for statistics and routing. The CPU never waits for the GPU.',
     ),
     h('div', { class: 'dl-pipe-wrap' }, pipelineSvg),
     pipeStats,

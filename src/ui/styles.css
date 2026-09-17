@@ -4386,6 +4386,10 @@
     padding: 0 2px;
     font-size: 11.5px;
   }
+  /* "300× → 44×" does not fit a flexible phone-width segment (it spilled over 1200×); the HUD keeps the reading. */
+  .dl-seg-achieved {
+    display: none;
+  }
   .dl-notices {
     left: calc(var(--dl-gap) * 2 + var(--dl-tool-w));
     right: var(--dl-gap);

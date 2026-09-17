@@ -42,10 +42,12 @@ export const APP_CONFIG = {
   fallbackPreset: 'sandbox',
   /**
    * A ?live= startup load falls back to the offline default preset when its download makes no progress for this
-   * long, or has not finished after the deadline (a healthy 1024² area loads in well under 15 s).
+   * long, or has not finished after the deadline (a healthy 1024² area loads in well under 15 s). The stall limit
+   * stays above the optional-download grace (LIVE_EXTRAS_GRACE_MS, 25 s: while Esri renders an export no bytes arrive), and the
+   * deadline above the elevation download plus that grace.
    */
-  startupLiveStallMs: 15_000,
-  startupLiveDeadlineMs: 40_000,
+  startupLiveStallMs: 27_000,
+  startupLiveDeadlineMs: 45_000,
 };
 
 /** The initial application state before any terrain is loaded. */

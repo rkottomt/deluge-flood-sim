@@ -30,8 +30,18 @@ export class EvacController {
     this.lastUpdate = -Infinity;
   }
 
-  /** A new snapshot arrived; it is processed now or on a later tick (rate limit). */
+  /**
+   * A new snapshot arrived; it is processed now or on a later tick (rate limit). Readbacks from the stability demo's
+   * naive solver, and any diverged readback (NaN / infinite depths), are ignored, so the road status and route keep
+   * describing the last physical flood. Otherwise the blow-up's oscillating and NaN depths read as dry roads and the
+   * route card announces "Re-planned — safe route" straight through the flood while the map shows magenta noise.
+   * Restoring the robust solver resets the water, and the next readback updates everything again.
+   */
   onSnapshot(snap: SimSnapshot, now: number): void {
+    if (this.store.get().sim.stabilityMode === 'naive' || !snapshotIsPhysical(snap)) {
+      this.pending = null;
+      return;
+    }
     this.pending = snap;
     this.tick(now);
   }
@@ -68,6 +78,12 @@ export class EvacController {
     // Copy the polyline so a router that reuses buffers can't mutate what the store/renderer hold.
     if (!sameRoute(s.route, next)) this.store.set({ route: { ...next, polyline: next.polyline?.slice() ?? null } });
   }
+}
+
+/** False when the solver has blown up (non-finite totals or extrema), so its depth field means nothing. */
+export function snapshotIsPhysical(snap: SimSnapshot): boolean {
+  const { maxDepth, maxSpeed, volume } = snap.stats;
+  return Number.isFinite(maxDepth) && Number.isFinite(maxSpeed) && Number.isFinite(volume) && volume >= 0;
 }
 
 /** Routes are equal for display purposes if state, geometry size, length, ETA, shelter and message match. */

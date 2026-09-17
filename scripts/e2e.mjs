@@ -407,7 +407,7 @@ const FLOWS = [
       const readyMs = await waitReady(60_000);
       r.metrics.loadSeconds = readyMs / 1000;
       check(r, 'ready < 10 s after navigation', readyMs < 10_000, `${(readyMs / 1000).toFixed(2)} s (cold ${r.metrics.coldLoadSeconds.toFixed(1)} s)`);
-      check(r, 'DESIGN target < 5 s', readyMs < 5_000, `${(readyMs / 1000).toFixed(2)} s`, { soft: true });
+      check(r, 'load target < 5 s', readyMs < 5_000, `${(readyMs / 1000).toFixed(2)} s`, { soft: true });
 
       const s0 = await state(['presetId', 'terrainName', 'grid', 'gpuInfo']);
       check(r, `preset is ${PRESET} (no fallback)`, s0.presetId === PRESET, `${s0.presetId} “${s0.terrainName}”`);
@@ -760,6 +760,32 @@ const FLOWS = [
     async run(r) {
       await calm();
       await runFor(30);
+      // A flooded evacuation start first: the blow-up's NaN depths must not read as dry roads and "re-plan" a safe route.
+      const crest = await crestOffset();
+      let routeBefore = null;
+      if (crest) {
+        await D((o) => window.__deluge.setStageOffset(o), crest.offset);
+        await runFor(300);
+        // Deeply flooded streets near the centre (not the river channel), nearest first.
+        const starts = await D(() => {
+          const g = window.__deluge.sampleGrid('depth', 8);
+          const c = [];
+          for (let y = 0; y < g.h; y++)
+            for (let x = 0; x < g.w; x++) {
+              const dep = g.data[y * g.w + x];
+              if (dep >= 1.5 && dep <= 4) c.push({ gx: (x + 0.5) * 8, gy: (y + 0.5) * 8, dist: Math.hypot(x - g.w / 2, y - g.h / 2) });
+            }
+          return c.sort((p, q) => p.dist - q.dist).slice(0, 6);
+        });
+        for (const p of starts) {
+          await D((q) => window.__deluge.setEvacStart({ gx: q.gx, gy: q.gy }), p);
+          const blocked = await page
+            .waitForFunction(() => window.__deluge.getRoute()?.state === 'blocked', null, { timeout: 2500 })
+            .then(() => true)
+            .catch(() => false);
+          if (blocked) break;
+        }
+      }
       await D(() => window.__deluge.actions.cameraFrameAll());
       await sleep(1600); // camera flight
       // Use the real UI: "How it works" → "Break it" (falls back to the debug API if the UI changed).
@@ -784,6 +810,13 @@ const FLOWS = [
       await D(() => window.__deluge.store.set({ panels: { ...window.__deluge.getState().panels, howItWorks: false } }));
       const params = await D(() => window.__deluge.getState().sim);
       check(r, 'naive mode active', params.stabilityMode === 'naive' && params.cfl > 1, `${params.stabilityMode}, CFL ${params.cfl} via ${via}`);
+      // The route the robust solver last planned (routing ignores the naive solver's readbacks from here on).
+      if (crest) {
+        routeBefore = await D(() => {
+          const rt = window.__deluge.getRoute();
+          return rt && { state: rt.state, message: rt.message };
+        });
+      }
       let runNote = 'completed';
       await runFor(60).catch((e) => {
         runNote = `runFor: ${e.message}`;
@@ -798,6 +831,17 @@ const FLOWS = [
         broken.massError > 0.05;
       r.metrics.broken = broken;
       check(r, 'instability evident', blewUp, `maxSpeed ${broken?.maxSpeed}, maxDepth ${broken?.maxDepth}, massError ${broken?.massError} (${runNote})`);
+      await sleep(800); // several route intervals of diverged readbacks
+      const routeBroken = await D(() => {
+        const rt = window.__deluge.getRoute();
+        return rt && { state: rt.state, message: rt.message };
+      });
+      check(
+        r,
+        'the blow-up does not re-plan the evacuation (NaN water is not dry road)',
+        !!routeBefore && routeBefore.state !== 'ok' && routeBroken?.state === routeBefore.state && routeBroken?.message === routeBefore.message,
+        `before “${routeBefore?.state}: ${routeBefore?.message ?? 'no route'}” → during blow-up “${routeBroken?.state}: ${routeBroken?.message ?? 'no route'}”`,
+      );
       await shot('06a-stability-blowup');
 
       // Restore through the banner's button (debug API fallback).
@@ -816,6 +860,7 @@ const FLOWS = [
       check(r, 'robust mode restored', sim.stabilityMode === 'robust' && sim.cfl <= 1, `${sim.stabilityMode}, CFL ${sim.cfl}`);
       check(r, 'stats sane after recovery', statsFinite(healed) && healed.maxSpeed < 30 && healed.massError < 0.01, `maxSpeed ${num(healed?.maxSpeed)} m/s, maxDepth ${num(healed?.maxDepth)} m, massError ${num((healed?.massError ?? NaN) * 100, 4)} %`);
       await shot('06b-stability-recovered');
+      await D(() => window.__deluge.setEvacStart(null));
     },
   },
   {
