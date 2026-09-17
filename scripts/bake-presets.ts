@@ -56,6 +56,14 @@ interface PresetDef {
   /** Flat navigation pool: measured from the DEM near this initial guess (m). */
   pool?: { guess: number };
   stage?: Omit<StageControl, 'normalLevel'> & { normalLevel?: number };
+  /**
+   * Water-surface drop (m) from the upstream stage boundaries to the downstream one, at normal pool and at a named
+   * crest. Half of it is added above the gauge level at upstream boundaries and half taken off at the downstream
+   * one, so the gauge (at the confluence) still reads the slider's stage; in between it grows linearly with the
+   * slider offset (WaterSource.offsetScale). With every boundary at one level nothing drives the rivers: at the
+   * 1936 crest floodplain drainage pulled all three rivers backwards (the Ohio ran INTO downtown at ~2,500 m³/s).
+   */
+  confluenceHead?: { normal: number; crestFt: number; crest: number };
   shelters: Array<{ name: string; at: LonLat; /** search radius for a high road node, m */ search?: number }>;
   storms: Array<{ id: string; at: LonLat; radiusMeters: number; intensity: number }>;
   rainRate: number;
@@ -112,6 +120,10 @@ const PRESET_DEFS: PresetDef[] = [
       ],
       maxOffset: 12,
     },
+    // Measured on the GPU solver after 1–2 h at each stage (all three rivers flow downstream; the Point stays within
+    // ±4 cm of the gauge reading): ±0.075 m at normal pool gives ~300–650 m³/s at 0.25 m/s, close to the rivers'
+    // mean flows; ±0.2 m at 46 ft gives Allegheny 3,560, Monongahela 2,950 and Ohio 3,070 m³/s with no fast jets.
+    confluenceHead: { normal: 0.15, crestFt: 46, crest: 0.4 },
     shelters: [
       { name: 'Cathedral of Learning (Pitt, Oakland)', at: [-79.95319, 40.4443], search: 250 },
       { name: 'Mount Washington — Grandview Ave', at: [-80.0105, 40.4362], search: 350 },
@@ -243,8 +255,26 @@ async function cachedBytes(id: string, key: string, name: string, fetcher: () =>
   fs.writeFileSync(keyFile, key);
   return bytes;
 }
+const r3 = (v: number) => Math.round(v * 1000) / 1000;
 const r2 = (v: number) => Math.round(v * 100) / 100;
 const r1 = (v: number) => Math.round(v * 10) / 10;
+
+/**
+ * Level above the gauge level (m) and slider offsetScale of a stage source at a river's upstream or downstream end
+ * (see PresetDef.confluenceHead): upstream +head/2, downstream −head/2, head growing linearly from `normal` at
+ * offset 0 to `crest` at the crest's offset.
+ */
+function stageHead(def: PresetDef, which: 'upstream' | 'downstream', normalLevel: number | null): { level: number; offsetScale: number } {
+  const ch = def.confluenceHead;
+  if (!ch || !def.stage || normalLevel === null) return { level: 0, offsetScale: 1 };
+  const crestOffset = ch.crestFt * FT + def.stage.gaugeDatum - normalLevel;
+  if (!(crestOffset > 0)) throw new Error(`${def.id}: confluenceHead crest ${ch.crestFt} ft is not above normal pool`);
+  const sign = which === 'upstream' ? 1 : -1;
+  return {
+    level: r3((sign * ch.normal) / 2),
+    offsetScale: Math.round((1 + (sign * (ch.crest - ch.normal)) / 2 / crestOffset) * 1e5) / 1e5,
+  };
+}
 
 function log(id: string, ...args: unknown[]) {
   console.log(`[${id}]`, ...args);
@@ -410,10 +440,11 @@ async function bake(def: PresetDef) {
         // Cover the crossing as wide as it gets at the top of the stage slider (see growEdgeRun).
         const level = normalLevel ?? r2(end.level);
         const ceiling = level + (def.stage?.maxOffset ?? 0);
+        const head = stageHead(def, which, normalLevel);
         const grown = growEdgeRun(end.edge, run[0], run[1], N, N, (k) => h0[k] > 0.01 || (elevation[k] < ceiling && elevation[k] >= level));
-        const { run: [t0, t1], ...disc } = edgeStageDiscAvoiding(end.edge, [run[0], run[1]], grown, N, N, (k) => h0[k] <= 0.01 && elevation[k] < level);
-        sources.push({ id, type: 'stage', ...disc, level, label: cfg.label });
-        log(def.id, `  source ${id} covers ${end.edge} edge cells ${t0}..${t1} (wet ${run[0]}..${run[1]}): disc (${disc.gx}, ${disc.gy}) r=${disc.radius}`);
+        const { run: [t0, t1], ...disc } = edgeStageDiscAvoiding(end.edge, [run[0], run[1]], grown, N, N, (k) => h0[k] <= 0.01 && elevation[k] < level + Math.max(0, head.level));
+        sources.push({ id, type: 'stage', ...disc, level: r3(level + head.level), ...(head.offsetScale !== 1 ? { offsetScale: head.offsetScale } : {}), label: cfg.label });
+        log(def.id, `  source ${id} covers ${end.edge} edge cells ${t0}..${t1} (wet ${run[0]}..${run[1]}): disc (${disc.gx}, ${disc.gy}) r=${disc.radius}, head ${head.level >= 0 ? '+' : ''}${head.level} m, offsetScale ${head.offsetScale}`);
       }
     }
   });

@@ -22,7 +22,8 @@
     "gx": 831.5,
     "gy": -27.89,
     "radius": 60.63,
-    "level": 216.3,
+    "level": 216.375,
+    "offsetScale": 1.01369,
     "label": "Allegheny River"
    },
    {
@@ -31,7 +32,8 @@
     "gx": 918,
     "gy": 1024,
     "radius": 23.01,
-    "level": 216.3,
+    "level": 216.375,
+    "offsetScale": 1.01369,
     "label": "Monongahela River"
    },
    {
@@ -40,7 +42,8 @@
     "gx": -275.13,
     "gy": 276,
     "radius": 308.08,
-    "level": 216.3,
+    "level": 216.225,
+    "offsetScale": 0.98631,
     "label": "Ohio River"
    }
   ],
@@ -210,7 +213,7 @@
   "roads": "roads.json"
  },
  "bake": {
-  "bakedAt": "2026-09-17T03:55:35.113Z",
+  "bakedAt": "2026-09-17T04:32:28.577Z",
   "demSource": "usgs3dep",
   "demRepairedCells": 0,
   "center": {

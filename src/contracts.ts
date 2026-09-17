@@ -147,6 +147,14 @@ export type WaterSource =
       radius: number;
       /** Target water-surface ELEVATION in meters (not depth). Cells in the footprint are relaxed to it. */
       level: number;
+      /**
+       * How much of the river-stage slider offset this source follows (default 1): level = base + offsetScale·offset.
+       * Where rivers meet, upstream boundaries use a little more than 1 and the downstream boundary a little less,
+       * so the water-surface slope that drives the rivers downstream grows with the flood, as it does in a real
+       * crest (with every boundary at one level nothing drives the rivers, and floodplain drainage pulled them
+       * backwards).
+       */
+      offsetScale?: number;
       label?: string;
     };
 

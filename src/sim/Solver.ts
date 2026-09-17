@@ -59,6 +59,7 @@ import { FORCING_UNIFORM_BYTES, SIM_UNIFORM_BYTES } from './shaders/common';
 import { continuityWGSL } from './shaders/continuity';
 import { exportWGSL } from './shaders/exportState';
 import { momentumWGSL } from './shaders/momentum';
+import { RAISE_UNIFORM_BYTES, raiseWGSL } from './shaders/raise';
 import { STAT, STATS_PER_BLOCK, statsWGSL } from './shaders/stats';
 
 const WG = 16;
@@ -127,6 +128,8 @@ export class GpuFloodSolver implements FloodSolver {
   private readonly continuityPipe: GPUComputePipeline;
   private readonly exportPipe: GPUComputePipeline;
   private readonly brushPipe: GPUComputePipeline;
+  private readonly raisePipe: GPUComputePipeline;
+  private readonly raiseLayout: GPUBindGroupLayout;
   private readonly statsPipe: GPUComputePipeline;
   private readonly brushLayout: GPUBindGroupLayout;
   private readonly bgMomentum: GPUBindGroup[];
@@ -136,6 +139,16 @@ export class GpuFloodSolver implements FloodSolver {
   /** [exportParity] */
   private readonly bgStats: GPUBindGroup[];
   private brushRes: { tex: GPUTexture[]; bg: GPUBindGroup[] } | null = null;
+  /** raiseWaterSurface: the uploaded base array (by identity), its texture, bind groups and channel cells. */
+  private raiseRes: {
+    base: Float32Array;
+    tex: GPUTexture;
+    buf: GPUBuffer;
+    bg: GPUBindGroup[];
+    /** Indices of cells with a finite base, and their base (m). */
+    cells: Int32Array;
+    levels: Float32Array;
+  } | null = null;
   private readonly gx: number;
   private readonly gy: number;
 
@@ -206,6 +219,8 @@ export class GpuFloodSolver implements FloodSolver {
       exportP: GPUComputePipeline;
       brush: GPUComputePipeline;
       brushLayout: GPUBindGroupLayout;
+      raise: GPUComputePipeline;
+      raiseLayout: GPUBindGroupLayout;
       stats: GPUComputePipeline;
     },
   ) {
@@ -281,6 +296,8 @@ export class GpuFloodSolver implements FloodSolver {
     this.exportPipe = pipes.exportP;
     this.brushPipe = pipes.brush;
     this.brushLayout = pipes.brushLayout;
+    this.raisePipe = pipes.raise;
+    this.raiseLayout = pipes.raiseLayout;
     this.statsPipe = pipes.stats;
 
     // ── Bind groups for both ping-pong parities (never created per substep) ──
@@ -435,6 +452,7 @@ export class GpuFloodSolver implements FloodSolver {
         storageTex(7, 'r32float'),
         storageBuf(8),
       ]),
+      make('sim.raise', raiseWGSL, [uniform(0, RAISE_UNIFORM_BYTES), sampled(1), sampled(2), storageTex(3, 'rgba32float'), storageBuf(4)]),
       make('sim.stats', statsWGSL, [
         uniform(0, SIM_UNIFORM_BYTES),
         sampled(1),
@@ -448,7 +466,7 @@ export class GpuFloodSolver implements FloodSolver {
       await device.popErrorScope();
       throw e;
     }
-    const [momentum, continuity, exportP, brush, stats] = built;
+    const [momentum, continuity, exportP, brush, raise, stats] = built;
     let solver: GpuFloodSolver;
     try {
       solver = new GpuFloodSolver(
@@ -462,6 +480,8 @@ export class GpuFloodSolver implements FloodSolver {
         exportP: exportP.pipeline,
         brush: brush.pipeline,
         brushLayout: brush.layout,
+        raise: raise.pipeline,
+        raiseLayout: raise.layout,
         stats: stats.pipeline,
       },
       );
@@ -526,6 +546,58 @@ export class GpuFloodSolver implements FloodSolver {
     if (op.kind === 'water' && op.amount > 0) {
       this.hBoost = Math.max(this.hBoost, this.hRead + op.amount);
       this.hBoostSeq = this.editSeq;
+    }
+    const map = this.maybeEncodeReadback(enc, false);
+    device.queue.submit([enc.finish()]);
+    map?.();
+  }
+
+  /**
+   * Raise the water surface in place (rivers rising to a new stage): for every cell with a finite `base`,
+   * h = max(h, base + offset − (ground + barrier)). NaN leaves a cell alone. Discharge is kept; the added water is
+   * booked as inflow (volumeIn and massError stay exact); stateTexture is re-exported, so it shows even while paused.
+   *
+   * `base` (nx·ny water-surface elevations, m) is treated as immutable: it is uploaded to the GPU once per distinct
+   * array object, after which a call costs one small uniform write and one full-grid pass — cheap enough to follow a
+   * slider or a rising hydrograph several times a second. Pass a new array when the base changes.
+   */
+  raiseWaterSurface(base: Float32Array, offset = 0): void {
+    if (this.destroyed || !base || base.length !== this.N || !Number.isFinite(offset)) return;
+    const res = this.ensureRaiseResources(base);
+    if (res.cells.length === 0) return;
+    const { device } = this;
+    // CFL: the deepest water the raise can create, and the speed of the bores it releases where it lifts the surface
+    // above the latest readback (the same dam-break estimate as a stage raise, see forcingSpeedEstimate).
+    const depth = this.snapshot?.depth ?? this.initialDepth;
+    let hMax = 0;
+    let dhMax = 0;
+    for (let k = 0; k < res.cells.length; k++) {
+      const c = res.cells[k];
+      const d = res.levels[k] + offset - (this.ground[c] + this.barrier[c]);
+      if (d > hMax) hMax = d;
+      const dh = d - depth[c];
+      if (dh > dhMax) dhMax = dh;
+    }
+    if (!(hMax > 0)) return;
+    const u = new ArrayBuffer(RAISE_UNIFORM_BYTES);
+    new Int32Array(u, 0, 2).set([this.nx, this.ny]);
+    new Float32Array(u, 8, 1)[0] = offset;
+    device.queue.writeBuffer(res.buf, 0, u);
+    const enc = device.createCommandEncoder({ label: 'sim.raise' });
+    const pass = enc.beginComputePass({ label: 'sim.raise' });
+    pass.setPipeline(this.raisePipe);
+    pass.setBindGroup(0, res.bg[this.cur]);
+    pass.dispatchWorkgroups(this.gx, this.gy);
+    pass.end();
+    this.cur = 1 - this.cur;
+    this.writeSimUniform(0);
+    this.encodeExport(enc);
+    this.editSeq++;
+    this.hBoost = Math.max(this.hBoost, hMax);
+    this.hBoostSeq = this.editSeq;
+    if (dhMax > 0) {
+      this.uBoost = Math.max(this.uBoost, Math.min(this.options.uMax, 2 * Math.sqrt(GRAVITY * dhMax)));
+      this.uBoostTime = this.simTime;
     }
     const map = this.maybeEncodeReadback(enc, false);
     device.queue.submit([enc.finish()]);
@@ -652,6 +724,8 @@ export class GpuFloodSolver implements FloodSolver {
       t.destroy();
     }
     for (const t of this.brushRes?.tex ?? []) t.destroy();
+    this.raiseRes?.tex.destroy();
+    this.raiseRes?.buf.destroy();
     for (const b of [this.accBuf, this.simBuf, this.forcingBuf, this.brushBuf, this.depthBuf, this.blocksBuf, this.dryMaskBuf]) {
       b.destroy();
     }
@@ -1018,6 +1092,57 @@ export class GpuFloodSolver implements FloodSolver {
     device.queue.writeTexture({ texture: this.groundTex }, this.ground, layout, size);
     device.queue.writeTexture({ texture: this.barrierTexture }, this.barrier, layout, size);
     device.queue.writeTexture({ texture: this.bedTexture }, bed, layout, size);
+  }
+
+  private ensureRaiseResources(base: Float32Array): NonNullable<GpuFloodSolver['raiseRes']> {
+    if (this.raiseRes?.base === base) return this.raiseRes;
+    const { device, nx, ny, N } = this;
+    let res = this.raiseRes;
+    if (!res) {
+      const tex = device.createTexture({
+        label: 'sim.raise.base',
+        size: { width: nx, height: ny },
+        format: 'r32float',
+        usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+      });
+      const buf = device.createBuffer({ label: 'sim.raise', size: RAISE_UNIFORM_BYTES, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+      const bg = [0, 1].map((p) =>
+        device.createBindGroup({
+          label: `sim.raise${p}`,
+          layout: this.raiseLayout,
+          entries: [
+            { binding: 0, resource: { buffer: buf } },
+            { binding: 1, resource: this.stateTex[p].createView() },
+            { binding: 2, resource: tex.createView() },
+            { binding: 3, resource: this.stateTex[1 - p].createView() },
+            { binding: 4, resource: { buffer: this.accBuf } },
+          ],
+        }),
+      );
+      res = { base, tex, buf, bg, cells: new Int32Array(0), levels: new Float32Array(0) };
+    }
+    const rel = new Float32Array(N);
+    let count = 0;
+    for (let c = 0; c < N; c++) {
+      const v = base[c];
+      if (Number.isFinite(v)) {
+        rel[c] = v - this.z0;
+        count++;
+      } else {
+        rel[c] = -1e30;
+      }
+    }
+    const cells = new Int32Array(count);
+    const levels = new Float32Array(count);
+    for (let c = 0, k = 0; c < N; c++) {
+      const v = base[c];
+      if (!Number.isFinite(v)) continue;
+      cells[k] = c;
+      levels[k++] = v;
+    }
+    device.queue.writeTexture({ texture: res.tex }, rel, { bytesPerRow: nx * 4 }, { width: nx, height: ny });
+    this.raiseRes = { ...res, base, cells, levels };
+    return this.raiseRes;
   }
 
   private ensureBrushResources(): { tex: GPUTexture[]; bg: GPUBindGroup[] } {

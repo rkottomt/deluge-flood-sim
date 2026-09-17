@@ -127,5 +127,14 @@ export const MAX_STORMS = 8;
 /** mm/hr → m/s */
 export const MMHR_TO_MS = 1 / 3.6e6;
 
+/**
+ * Open-boundary outflow is switched off on domain-edge cells within (radius + this many cells) of an INFLOW source.
+ * Inflows sit on a river just inside the edge it enters through; the mound the source builds spreads both ways, and
+ * without the mask 20–58 % of a preset river's discharge left straight back out of that edge (Johnstown's Stonycreek
+ * lost 963 of 1,671 m³/s). A radius + 8 mask still leaked through the edge cells just outside it; + 24 stops the
+ * leak (see continuity.ts bfluxC). Only edge cells are affected, and only near inflows.
+ */
+export const INFLOW_EDGE_MASK_CELLS = 24;
+
 /** Minimum effective footprint radius (cells) for sources / brushes so a footprint always covers a cell center. */
 export const MIN_FOOTPRINT_RADIUS = 0.75;

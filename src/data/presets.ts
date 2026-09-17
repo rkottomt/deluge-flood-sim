@@ -100,6 +100,9 @@ export function validatePresetMeta(m: PresetMeta): string[] {
     }
     if (src.type === 'inflow' && !(src.discharge > 0)) errs.push(`inflow ${src.id} has no discharge`);
     if (src.type === 'stage' && !isNum(src.level)) errs.push(`stage ${src.id} has no level`);
+    if (src.type === 'stage' && src.offsetScale !== undefined && !(isNum(src.offsetScale) && src.offsetScale > 0.5 && src.offsetScale < 2)) {
+      errs.push(`stage ${src.id} offsetScale must be a number between 0.5 and 2`);
+    }
   }
   for (const st of s.storms) if (!inside(st.gx, st.gy) || !(st.radius > 0)) errs.push(`storm ${st.id} invalid`);
   for (const sh of s.shelters) if (!inside(sh.gx, sh.gy) || !sh.name) errs.push(`shelter ${sh.name} invalid`);

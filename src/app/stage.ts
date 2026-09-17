@@ -6,7 +6,10 @@ const FT = 0.3048;
  * Tracks the BASE water-surface level of every stage source so the river-stage slider offsets from the
  * scenario's normal levels instead of accumulating. Invariant maintained by the app:
  *
- *     store.sources[k].level === base(k) + store.stageOffset      for every stage source k
+ *     store.sources[k].level === base(k) + scale(k) · store.stageOffset      for every stage source k
+ *
+ * scale(k) = source.offsetScale ?? 1 (upstream boundaries of a confluence rise slightly faster than the downstream
+ * one, so the rivers keep flowing downstream at every stage).
  *
  * Sources arriving from the UI/debug API (added, removed or edited) re-derive their base from the
  * current offset; a stage-offset change rewrites the levels from the stored bases.
@@ -26,13 +29,13 @@ export class StageLevels {
     for (const s of sources) {
       if (s.type !== 'stage') continue;
       live.add(s.id);
-      this.bases.set(s.id, s.level - offset);
+      this.bases.set(s.id, s.level - offsetScaleOf(s) * offset);
     }
     for (const id of [...this.bases.keys()]) if (!live.has(id)) this.bases.delete(id);
   }
 
   /**
-   * Return `sources` with stage levels = base + offset. Returns the SAME array when nothing changes
+   * Return `sources` with stage levels = base + offsetScale·offset. Returns the SAME array when nothing changes
    * (so callers can skip a store update).
    */
   apply(sources: WaterSource[], offset: number): WaterSource[] {
@@ -40,13 +43,19 @@ export class StageLevels {
     const out = sources.map((s) => {
       if (s.type !== 'stage') return s;
       const base = this.bases.get(s.id) ?? s.level;
-      const level = base + offset;
+      const level = base + offsetScaleOf(s) * offset;
       if (level === s.level) return s;
       changed = true;
       return { ...s, level };
     });
     return changed ? out : sources;
   }
+}
+
+/** Fraction of the stage slider offset a stage source follows (WaterSource.offsetScale, default 1). */
+export function offsetScaleOf(source: WaterSource & { type: 'stage' }): number {
+  const k = source.offsetScale;
+  return typeof k === 'number' && Number.isFinite(k) && k > 0 ? k : 1;
 }
 
 /** Deep-enough copies of scenario lists so UI edits never mutate the preset itself. */

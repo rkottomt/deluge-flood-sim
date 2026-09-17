@@ -11,7 +11,7 @@
  * prognostic variable, it is evaluated each step from the open-boundary rule (or 0 for walls). The value
  * stored in qx/qy of the last column/row is that (limited) boundary flux, kept for diagnostics/smoothing.
  */
-import { GRAVITY, MAX_SOURCES } from './constants';
+import { GRAVITY, INFLOW_EDGE_MASK_CELLS, MAX_SOURCES } from './constants';
 import { footprintWeight, stormWeight, type PackedForcing } from './forcing';
 
 export interface SchemeStepParams {
@@ -91,6 +91,36 @@ export function boundaryFlux(
   let q = Math.max(qNormal, uIn * hc);
   if (p.robust) q = Math.min(q, hc * Math.min(p.uMax, p.boundaryFroudeMax * Math.sqrt(g * hc)));
   return q;
+}
+
+/**
+ * boundaryFlux with the inflow-source mask of the continuity pass (bfluxC in shaders/continuity.ts): 0 on edge cells
+ * within radius + INFLOW_EDGE_MASK_CELLS of an inflow source.
+ */
+export function boundaryFluxMasked(
+  h: ArrayLike<number>,
+  z: ArrayLike<number>,
+  qx: ArrayLike<number>,
+  qy: ArrayLike<number>,
+  nx: number,
+  ny: number,
+  i: number,
+  j: number,
+  di: number,
+  dj: number,
+  p: SchemeStepParams,
+): number {
+  const f = p.forcing;
+  if (f) {
+    for (let k = 0; k < f.nSources; k++) {
+      const o = 8 * k;
+      if (f.data[o + 3] !== 0) continue;
+      // Float32 like the uniform, so the comparison matches the shader at the mask rim.
+      const reach = Math.fround(f.data[o + 2] + INFLOW_EDGE_MASK_CELLS);
+      if (Math.fround(Math.hypot(i + 0.5 - f.data[o], j + 0.5 - f.data[o + 1])) < reach) return 0;
+    }
+  }
+  return boundaryFlux(h, z, qx, qy, nx, ny, i, j, di, dj, p);
 }
 
 /** Face flow depth hf = max(ηL, ηR) − max(zL, zR), arranged so bed differences cancel before depths add. */
@@ -306,13 +336,13 @@ export class CpuReferenceSolver {
 
     // ── Pass B: limiter + continuity + forcing ──────────────────────────────────────────────────────
     const r = p.dt / p.dx;
-    // Face fluxes of an arbitrary cell (boundary faces from the open-boundary rule).
+    // Face fluxes of an arbitrary cell (boundary faces from the open-boundary rule, closed near inflow sources).
     const faces = (i: number, j: number): [number, number, number, number] => {
       const c = j * nx + i;
-      const qE = i === nx - 1 ? boundaryFlux(h, z, qx, qy, nx, ny, i, j, -1, 0, p) : fx[c];
-      const qW = i === 0 ? -boundaryFlux(h, z, qx, qy, nx, ny, i, j, 1, 0, p) : fx[c - 1];
-      const qS = j === ny - 1 ? boundaryFlux(h, z, qx, qy, nx, ny, i, j, 0, -1, p) : fy[c];
-      const qN = j === 0 ? -boundaryFlux(h, z, qx, qy, nx, ny, i, j, 0, 1, p) : fy[c - nx];
+      const qE = i === nx - 1 ? boundaryFluxMasked(h, z, qx, qy, nx, ny, i, j, -1, 0, p) : fx[c];
+      const qW = i === 0 ? -boundaryFluxMasked(h, z, qx, qy, nx, ny, i, j, 1, 0, p) : fx[c - 1];
+      const qS = j === ny - 1 ? boundaryFluxMasked(h, z, qx, qy, nx, ny, i, j, 0, -1, p) : fy[c];
+      const qN = j === 0 ? -boundaryFluxMasked(h, z, qx, qy, nx, ny, i, j, 0, 1, p) : fy[c - nx];
       return [qE, qW, qS, qN];
     };
     const kOf = (i: number, j: number) => {
@@ -378,6 +408,8 @@ export class CpuReferenceSolver {
         volOut += h2 - h3;
         // Stage sources relax the depth toward max(0, level − z).
         let h4 = h3;
+        let qEs = qE;
+        let qSs = qS;
         if (f) {
           for (let k = 0; k < f.nSources; k++) {
             const o = 8 * k;
@@ -385,6 +417,11 @@ export class CpuReferenceSolver {
             const R = f.data[o + 2];
             const d = Math.hypot(gx - f.data[o], gy - f.data[o + 1]);
             if (d >= R + 0.5) continue;
+            // Momentum sponge: faces with both cells fully inside the disc forget their discharge.
+            if (d <= R - 0.5) {
+              if (i < nx - 1 && Math.hypot(gx + 1 - f.data[o], gy - f.data[o + 1]) <= R - 0.5) qEs = 0;
+              if (j < ny - 1 && Math.hypot(gx - f.data[o], gy + 1 - f.data[o + 1]) <= R - 0.5) qSs = 0;
+            }
             const a = p.stageAlpha * footprintWeight(d, R);
             const target = Math.max(0, f.data[o + 4] - z[c]);
             const before = h4;
@@ -395,8 +432,8 @@ export class CpuReferenceSolver {
           }
         }
         newH[c] = h4;
-        newQx[c] = qE;
-        newQy[c] = qS;
+        newQx[c] = qEs;
+        newQy[c] = qSs;
       }
     }
     this.h = newH;
