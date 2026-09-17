@@ -96,15 +96,34 @@ export function buildLiveScenario(
   const waterLevel = mainBody?.level ?? bodies[0]?.level ?? sample[Math.floor(sample.length * 0.05)] ?? median;
   const floodCeiling = waterLevel + (stage ? stage.maxOffset : 12);
   const shelters = pickHighShelters(elev, nx, ny, cellSize, roads, bodies, floodCeiling, 4);
+  const lowRefuges = shelters.filter((sh) => sh.name.startsWith(HIGHEST_GROUND_PREFIX)).length;
 
   const sizeKm = (nx * cellSize) / 1000;
+  const fmt1 = (v: number) => (Math.round(v * 10) / 10).toString();
   const description =
     `${name}: ${sizeKm.toFixed(1)} km × ${sizeKm.toFixed(1)} km of live ${demSource === 'usgs3dep' ? 'USGS 3DEP' : 'Terrarium'} ` +
     `elevation at ${cellSize.toFixed(1)} m per cell` +
     (bodies.length ? `, with ${bodies.length} water surface${bodies.length === 1 ? '' : 's'} detected and pre-filled` : '') +
-    '. Add rain or a storm cell, drop inflow sources on streams' +
+    '. ' +
+    // There is no river gauge for an arbitrary area: say what the slider measures (and that nothing drives it if no
+    // water crosses the edge), so "33 ft" is not read as a gauge reading and "Play the flood" is not expected to flood.
+    (stage
+      ? `The water-level control raises the water up to ${fmt1(stage.maxOffset)} m (${Math.round(stage.maxOffset / 0.3048)} ft) ` +
+        'above the surface detected at load; it is not a river gauge reading. '
+      : bodies.some((b) => b.touchesEdge)
+        ? 'No water body large enough to raise crosses the edge of the area, so there is no water-level control. '
+        : 'No river or lake surface was detected in the elevation data (narrow or tree-lined channels can be missed), ' +
+          'so nothing floods on its own and there is no water-level control. ') +
+    'Add rain or a storm cell, drop inflow sources on streams' +
     (stage ? ', raise the water level' : '') +
-    ', and set an evacuation start point to see which roads stay dry.';
+    ', and set an evacuation start point to see which roads stay dry.' +
+    (lowRefuges
+      ? lowRefuges === shelters.length
+        ? ` No intersection here stands ${stage ? 'clear of the highest water level the control reaches' : bodies.length ? 'well above the water' : 'well above the lowest ground'}, so the ` +
+          'evacuation targets are only the highest ground nearby: in a big flood, shelter in place.'
+        : ` Only ${shelters.length - lowRefuges} of the ${shelters.length} evacuation targets stand clear of the highest water; ` +
+          'the others are only the highest ground nearby.'
+      : '');
 
   return {
     description,
@@ -123,13 +142,13 @@ export function buildLiveScenario(
   };
 }
 
+/** Stage slider range for live areas, m above the detected surface. */
+const LIVE_STAGE_MAX_OFFSET = 10;
+
 /**
  * Stage-source footprints for every place the water body crosses the domain edge: one disc per run of the body's
  * edge cells, covering the whole run (see edgeStageDisc), at the body's surface level in the middle of the run.
  */
-/** Stage slider range for live areas, m above the detected surface. */
-const LIVE_STAGE_MAX_OFFSET = 10;
-
 function edgeSourcePoints(
   b: WaterBody,
   nx: number,
@@ -160,11 +179,15 @@ function edgeSourcePoints(
   return out;
 }
 
+/** Name prefix of a live-area evacuation target that does NOT clear the flood ceiling (see pickHighShelters). */
+export const HIGHEST_GROUND_PREFIX = 'Highest ground';
+
 /**
  * Pick up to `count` shelters for a live area: road intersections (degree ≥ 3, so they're in town and reachable)
  * at least 3 m above `ceiling` and ≥ 150 m from detected water, spread out by farthest-point sampling that
- * starts near the domain center. Where no ground clears the ceiling (e.g. New Orleans) the highest intersections
- * away from water are used. Names come from the street at the intersection.
+ * starts near the domain center. Where too little ground clears the ceiling (e.g. New Orleans) the highest
+ * intersections away from water are used, and those are named "Highest ground — <street> (<z> m)" rather than
+ * "Shelter — <street> (<z> m)": they are the best refuge nearby, not a place that stays dry at the top of the range.
  */
 export function pickHighShelters(
   elev: Float32Array,
@@ -235,9 +258,15 @@ export function pickHighShelters(
     if (bestD * cellSize < 200) break;
     chosen.push(best);
   }
-  return chosen.map((c, idx) => ({
-    name: `${c.name ? `Shelter — ${c.name}` : `High ground ${String.fromCharCode(65 + idx)}`} (${Math.round(c.z)} m)`,
-    gx: Math.round(c.gx * 100) / 100,
-    gy: Math.round(c.gy * 100) / 100,
-  }));
+  return chosen.map((c, idx) => {
+    const clear = c.z >= ceiling + 3;
+    const label = c.name
+      ? `${clear ? 'Shelter' : HIGHEST_GROUND_PREFIX} — ${c.name}`
+      : `${clear ? 'High ground' : HIGHEST_GROUND_PREFIX} ${String.fromCharCode(65 + idx)}`;
+    return {
+      name: `${label} (${Math.round(c.z)} m)`,
+      gx: Math.round(c.gx * 100) / 100,
+      gy: Math.round(c.gy * 100) / 100,
+    };
+  });
 }

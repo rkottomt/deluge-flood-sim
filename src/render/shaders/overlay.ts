@@ -74,7 +74,7 @@ fn vsRibbon(v: RIn) -> ROut {
     let fade = mix(1.0 - smoothstep(far.x, far.y, d0), 1.0, importance);
     if (st == 0u) { color = vec4f(0.93, 0.92, 0.88, O.roadAlpha * fade); minHalfPx = mix(0.7, 1.1, importance); }
     // Wet (passable, slow): orange, clear of both the golden sandbag walls the user builds and the red flooded lines.
-    else if (st == 1u) { color = vec4f(1.35, 0.34, 0.03, 0.9 * mix(fade, 1.0, 0.5)); minHalfPx = 1.2; }
+    else if (st == 1u) { color = vec4f(1.2, 0.31, 0.03, 0.9 * mix(fade, 1.0, 0.5)); minHalfPx = 1.2; }
     else {
       // Flooded (impassable) roads lie under the flood itself, which already says "flooded": draw them as thin
       // dashed centre lines that do not hide the water, minor streets fading with distance. A real-width ribbon

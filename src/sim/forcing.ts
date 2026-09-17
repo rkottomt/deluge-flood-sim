@@ -45,6 +45,8 @@ export interface PackedForcing {
   stageDepthMax: number;
   /** Total inflow discharge actually represented (sources fully outside the domain are dropped), m³/s. */
   inflowTotal: number;
+  /** Largest storm-cell intensity packed, m/s (for the CFL estimate). */
+  stormRateMax: number;
   /** Number of sources / storms dropped because the fixed-size arrays were full. */
   dropped: number;
 }
@@ -111,6 +113,7 @@ export function packForcing(
   }
 
   let nStorms = 0;
+  let stormRateMax = 0;
   const stormBase = 2 * MAX_SOURCES * 4;
   for (const st of storms) {
     if (nStorms >= MAX_STORMS) {
@@ -121,8 +124,9 @@ export function packForcing(
     data[o] = st.gx;
     data[o + 1] = st.gy;
     data[o + 2] = footprintRadius(st.radius);
-    data[o + 3] = Math.max(0, st.intensity) * MMHR_TO_MS;
+    data[o + 3] = Math.max(0, Number.isFinite(st.intensity) ? st.intensity : 0) * MMHR_TO_MS;
+    stormRateMax = Math.max(stormRateMax, data[o + 3]);
     nStorms++;
   }
-  return { data, nSources, nStorms, stageDepthMax, inflowTotal, dropped };
+  return { data, nSources, nStorms, stageDepthMax, inflowTotal, stormRateMax, dropped };
 }

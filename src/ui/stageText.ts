@@ -72,8 +72,10 @@ export function weatherBadge(i: {
   const storm = Math.max(0, i.stormPeak);
   const v = Math.max(rain, storm);
   if (v > 0) {
-    parts.push(storm > rain ? `Storm ${formatRain(storm)}` : formatRain(v));
+    // Next to a raised river the badge has room for a word, not a rate (the rain slider right below has the rate).
+    if (parts.length) parts.push(storm > rain ? 'storm' : 'rain');
+    else parts.push(storm > rain ? `Storm ${formatRain(storm)}` : formatRain(v));
     severity = maxSev(severity, rainCategory(v).severity);
   }
-  return parts.length ? { text: parts.join(' · '), severity } : { text: 'Dry', severity: 'calm' };
+  return parts.length ? { text: parts.join(' + '), severity } : { text: 'Dry', severity: 'calm' };
 }

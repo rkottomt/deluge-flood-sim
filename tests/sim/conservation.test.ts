@@ -22,10 +22,12 @@ test('closed (wall) domain conserves mass: random terrain + water blob, relative
   const relErr = Math.abs(snap.stats.volume - v0) / v0;
   console.log(
     `  closed domain: t=${snap.simTime.toFixed(0)} s, wet area ${(snap.stats.wetArea / 1e6).toFixed(3)} km², ` +
-      `|ΔV|/V0 = ${relErr.toExponential(2)}, limiter residue in=${snap.stats.volumeIn.toExponential(2)} m³, massError=${snap.stats.massError.toExponential(2)}`,
+      `|ΔV|/V0 = ${relErr.toExponential(2)}, rounding booked ${solver.readbackDiagnostics.roundingVolume.toExponential(2)} m³, massError=${snap.stats.massError.toExponential(2)}`,
   );
   assert.ok(snap.stats.wetArea > 1.5 * 40 * 40 * dx * dx, 'water should have spread well beyond the initial column');
   assert.ok(relErr < 1e-4, `relative volume error ${relErr}`);
+  // Nothing enters or leaves a walled domain without forcing; Float32 rounding has its own ledger.
+  assert.equal(snap.stats.volumeIn, 0);
   assert.equal(snap.stats.volumeOut, 0);
   const st = await solver.debugReadState();
   let minH = Infinity;
@@ -130,11 +132,11 @@ test('SimStats.massError is normalized by the most water held, not by the ever-g
   solver.destroy();
 });
 
-test('rain on a deep river fed by a stage source: massError stays < 1e-4 over 3 sim-hours (rounding is booked)', async () => {
-  // Pittsburgh with the river raised to the 1936 crest and hurricane rain drifted linearly (≈2.8e-4 per sim-hour): on a
-  // 20 m deep cell one Float32 ULP is 1.9e-6 m while a substep's rain or flux divergence is ~1e-8 m, so the update of h
-  // rounds with the same sign substep after substep. Shader compilers reassociate float math ((h + d) − h → d), so the
-  // booking must use increments snapped to the ULP grid of h (continuity.ts snapInc), not a measured difference.
+test('rain on a deep river fed by a stage source: massError < 2e-5 over 3 sim-hours, rounding booked and tiny', async () => {
+  // Pittsburgh raised to the 1936 crest in hurricane rain drifted linearly, ~2.8e-4 per sim-hour (the HUD turned yellow
+  // after ~4 sim-hours). On a 20 m deep cell one Float32 ULP of h is 1.9e-6 m while a substep moves ~1e-6–1e-5 m, so
+  // h + Δ rounds the same way substep after substep, and Metal folds the old booking (h + Δ) − h to Δ, hiding it.
+  // Before the fix this case read 6.2e-4; with exact continuity but plain Float32 block sums in the stats pass, 3.7e-5.
   const nx = 64;
   const ny = 48;
   const dx = 20;
@@ -145,28 +147,34 @@ test('rain on a deep river fed by a stage source: massError stays < 1e-4 over 3 
       const c = j * nx + i;
       const bed = 100 - 2e-4 * i * dx;
       const inChannel = j >= 8 && j < 40;
-      // A 20 m deep channel between rain-fed floodplains that drain into it.
-      elevation[c] = inChannel ? bed - 20 : bed + 1 + 0.02 * Math.min(j - 8, 39 - j) * -dx;
+      // A 20 m deep channel between rain-fed floodplains that rise away from it.
+      elevation[c] = inChannel ? bed - 20 : bed + 1 + 0.02 * dx * Math.max(8 - j, j - 39);
       if (inChannel) depth[c] = 20;
     }
   }
   const solver = await makeSolver({ nx, ny, cellSize: dx, elevation, depth, params: { boundary: 'open', rainRate: 100, manningN: 0.03 } });
-  solver.setSources([{ id: 'crest', type: 'stage', gx: 0, gy: ny / 2, radius: 14, level: 100 + 2 }]);
+  // The river's upstream edge held 2 m above its initial level (a raised crest), draining through the downstream edge.
+  solver.setSources([{ id: 'crest', type: 'stage', gx: 0, gy: ny / 2, radius: 14, level: 102 }]);
   let snap = await solver.readbackNow();
   let worst = 0;
-  const hours: string[] = [];
+  let peak = 0;
+  const trace: string[] = [];
   while (snap.simTime < 3 * 3600) {
     snap = await stepAndSnapshot(solver, 2000, { chunk: 200 });
     worst = Math.max(worst, snap.stats.massError);
-    hours.push(`${(snap.simTime / 3600).toFixed(2)} h ${snap.stats.massError.toExponential(1)}`);
+    peak = Math.max(peak, snap.stats.volume);
+    trace.push(`${(snap.simTime / 3600).toFixed(1)} h ${snap.stats.massError.toExponential(1)}`);
   }
   const s = snap.stats;
+  const rounding = solver.readbackDiagnostics.roundingVolume;
   console.log(
     `  deep river + rain: t=${(s.simTime / 3600).toFixed(2)} h  V=${s.volume.toExponential(4)}  in=${s.volumeIn.toExponential(3)}  ` +
-      `out=${s.volumeOut.toExponential(3)}  worst massError=${worst.toExponential(2)}\n    ${hours.join(' | ')}`,
+      `out=${s.volumeOut.toExponential(3)}  rounding booked ${rounding.toFixed(1)} m³  worst massError=${worst.toExponential(2)}\n    ${trace.join(' | ')}`,
   );
-  assert.ok(s.volumeIn > s.volume && s.volumeOut > 0, 'the river should carry water through the domain');
-  assert.ok(worst < 1e-4, `massError ${worst}`);
+  assert.ok(s.volumeIn > 10 * peak && s.volumeOut > 10 * peak, 'the stage source should push many times the storage through');
+  assert.ok(worst < 2e-5, `massError ${worst}`);
+  // The rounding ledger must stay a rounding-sized correction, not a place where real errors disappear.
+  assert.ok(Math.abs(rounding) < 1e-5 * peak, `rounding booked ${rounding} m³`);
   assert.deepEqual(gpuErrors(), []);
   solver.destroy();
 });

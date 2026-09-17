@@ -98,7 +98,7 @@ test('weather badge: a raised river is not "Dry"', () => {
   assert.deepEqual(weatherBadge({ rainRate: 0, stormPeak: 0, stage: PGH, stageOffsetApplied: 0 }), { text: 'Dry', severity: 'calm' });
   assert.deepEqual(weatherBadge({ rainRate: 0, stormPeak: 0, stage: PGH, stageOffsetApplied: offset1936 }), { text: 'River 46\u00a0ft', severity: 'danger' });
   const both = weatherBadge({ rainRate: 100, stormPeak: 0, stage: PGH, stageOffsetApplied: 2 });
-  assert.match(both.text, /^River 23\sft · 100\smm\/hr$/);
+  assert.match(both.text, /^River 23\sft \+ rain$/);
   assert.equal(both.severity, 'danger');
   assert.match(weatherBadge({ rainRate: 5, stormPeak: 60, stage: null, stageOffsetApplied: 0 }).text, /^Storm 60/);
   assert.equal(weatherBadge({ rainRate: 0, stormPeak: 0, stage: LIVE, stageOffsetApplied: 3 }).text, 'Water +3.0\u00a0m');

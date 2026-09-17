@@ -20,13 +20,13 @@ const CELL = 10;
  * A valley with a river flowing west → east (surface 100 m, gently sloping), a town grid of streets on both
  * banks, and hills rising north and south to 140 m.
  */
-function valley() {
+function valley(maxRise = 40) {
   const z = new Float32Array(N * N);
   for (let j = 0; j < N; j++) {
     for (let i = 0; i < N; i++) {
       const d = Math.abs(j - 128);
       const surface = 100.4 - 0.4 * (i / N);
-      z[j * N + i] = d <= 12 ? surface : surface + Math.min(40, 0.8 * (d - 12) + 0.004 * (d - 12) ** 2);
+      z[j * N + i] = d <= 12 ? surface : surface + Math.min(maxRise, 0.8 * (d - 12) + 0.004 * (d - 12) ** 2);
     }
   }
   // Street grid every 16 cells; a street node is a grid intersection.
@@ -103,7 +103,36 @@ test('live scenario: stage sources on the river at both edges, shelters high, dr
     }
   }
   assert.match(s.description, /Test Valley/);
+  // No gauge for a live area: the description says what the water-level control measures.
+  assert.match(s.description, /up to 10 m \(33 ft\) above the surface detected at load; it is not a river gauge reading/);
+  assert.doesNotMatch(s.description, /highest ground nearby/);
   assert.ok(s.camera && s.camera.distance > 0);
+});
+
+test('live scenario: where no ground clears the flood ceiling (a flat river city), targets are named "Highest ground", not "Shelter"', () => {
+  // The New Orleans case: the town rises only 4 m above the river, the slider reaches +10 m.
+  const { z, roads } = valley(4);
+  const bodies = detectWaterBodies(z, N, N, CELL);
+  const burned = burnWaterBodies(z, N, N, bodies, 3, 2);
+  const s = buildLiveScenario(burned.elevation, N, N, CELL, bodies, burned.fills, roads, 'Flat Town', 'usgs3dep');
+  assert.ok(s.stage, 'river crossing the edge gives a water-level control');
+  assert.ok(s.shelters.length >= 2);
+  for (const sh of s.shelters) assert.match(sh.name, /^Highest ground — \d+ (St|Ave) \(\d+ m\)$/);
+  assert.match(s.description, /No intersection here stands clear of the highest water level the control reaches/);
+  assert.match(s.description, /shelter in place/);
+});
+
+test('live scenario: no water detected (a dry hillside) — the description says nothing floods on its own', () => {
+  const z = new Float32Array(N * N);
+  for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) z[j * N + i] = 200 + 0.05 * i + 3 * Math.sin(i / 9) * Math.cos(j / 11) + 0.02 * j;
+  const bodies = detectWaterBodies(z, N, N, CELL);
+  assert.equal(bodies.length, 0);
+  const s = buildLiveScenario(z, N, N, CELL, bodies, [], null, 'Dry Hill', 'usgs3dep');
+  assert.equal(s.stage, null);
+  assert.equal(s.sources.length, 0);
+  assert.match(s.description, /No river or lake surface was detected/);
+  assert.match(s.description, /nothing floods on its own/);
+  assert.doesNotMatch(s.description, /above the water/);
 });
 
 test('zero-clamp signature: many cells at ~0 m and no negatives', () => {

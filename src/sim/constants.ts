@@ -89,6 +89,20 @@ export interface SolverOptions {
    * themselves (the Deluge app's governor, src/app/governor.ts).
    */
   gpuBudgetMs: number;
+  /**
+   * Rain on dry or shallow ground (robust-mode CFL; see Solver.computeDt). A dry live area reads back no water, so dt
+   * sat at dtMax = 5 s and the first readbacks after the rain started showed Courant 4–19 (the local guard kept it
+   * stable, the HUD showed it in red). While it rains, the CFL estimate assumes:
+   *  • rainRunoffSpeed: waves at least this fast (m/s, at 100 mm/hr) until readbacks show faster ones. Sheet flow on
+   *    steep rough ground reaches ~0.5–1.2 m/s within the first minute, before any readback can show it. Manning sheet
+   *    flow speed grows as (rain rate)^0.4, so 300 mm/hr assumes 3.1 m/s and 10 mm/hr 0.8 m/s.
+   *  • rainPondingFactor: the deepest water rising this many times faster than the rain falls for as long as the
+   *    readback lags. Runoff collects in hollows: on rough 6 m terrain, 100 mm/hr for 6 minutes left 0.23–0.25 m in
+   *    the deepest one (waves ≈ 2.2 m/s), 300 mm/hr 0.8 m (≈ 4 m/s) — ~50× the rain depth. At 1200× a readback window
+   *    is ~6 sim-minutes, so this matters at high time scales.
+   */
+  rainRunoffSpeed: number;
+  rainPondingFactor: number;
   /** Multiplicative + additive safety margins applied to the lagged (stale) readback maxima for CFL. */
   cflDepthMargin: number;
   cflSpeedMargin: number;
@@ -110,6 +124,8 @@ export const DEFAULT_SOLVER_OPTIONS: SolverOptions = {
   dtMax: 5,
   readbackIntervalMs: 300,
   gpuBudgetMs: 8,
+  rainRunoffSpeed: 2,
+  rainPondingFactor: 50,
   cflDepthMargin: 1.15,
   cflSpeedMargin: 1.25,
 };

@@ -71,6 +71,8 @@ import { STAT, STATS_PER_BLOCK, statsWGSL } from './shaders/stats';
 const WG = 16;
 /** Re-measure the GPU budget at most this often while it cannot limit the substeps (see substepCap). */
 const PROBE_IDLE_MS = 500;
+/** Upper bound on the readback lag the rain CFL estimate assumes, simulated s (hollows fill and spill; see rainDepthAhead). */
+const RAIN_LAG_MAX_S = 1200;
 const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
 
 interface StagingSet {
@@ -223,6 +225,9 @@ export class GpuFloodSolver implements FloodSolver {
    */
   private uBoost = 0;
   private uBoostTime = -Infinity;
+  /** Simulated time of the latest processed readback, and the simulated time between the last two (s). */
+  private readSimTime = 0;
+  private readSpan = 0;
   private editSeq = 0;
 
   /** Adaptive substep budget (measured GPU ms per substep → substeps per frame). */
@@ -727,6 +732,8 @@ export class GpuFloodSolver implements FloodSolver {
     // Float32 arithmetic like the stats pass, so a lake at rest reads back exactly this value (dt stays constant).
     this.waveRead = Math.fround(Math.sqrt(Math.fround(Math.fround(GRAVITY) * Math.fround(hMax))));
     this.hBoost = 0;
+    this.readSimTime = 0;
+    this.readSpan = 0;
     this.peakVolume = this.initialVolume;
     this.resetMaxPending = true;
     // All sources start acting on the initial water: the first window must not run on the calm reset state's dt.
@@ -869,9 +876,13 @@ export class GpuFloodSolver implements FloodSolver {
       // still combined the conservative way; any face the estimate misses is caught by the momentum pass's local
       // Courant guard.
       // A speed boost (flow about to start) is assumed to reach the deepest water.
-      const hKnown = Math.max(this.hBoost, this.forcing.stageDepthMax, this.uBoost > 0 ? this.hRead : 0, 0.01) * o.cflDepthMargin;
+      const hKnown =
+        Math.max(this.hBoost, this.forcing.stageDepthMax, this.uBoost > 0 ? this.hRead : 0, this.rainDepthAhead(), 0.01) * o.cflDepthMargin;
       const known = Math.sqrt(GRAVITY * hKnown) + this.uBoost * o.cflSpeedMargin + 0.1;
-      const read = Math.sqrt(GRAVITY * 0.01 * o.cflDepthMargin) + this.waveRead * o.cflSpeedMargin + 0.1;
+      // Rain on dry ground: sheet flow speeds up long before a readback can show it (SolverOptions.rainRunoffSpeed).
+      const rainMmHr = this.rainRateNow() / MMHR_TO_MS;
+      const waveRead = rainMmHr > 0 ? Math.max(this.waveRead, o.rainRunoffSpeed * Math.pow(rainMmHr / 100, 0.4)) : this.waveRead;
+      const read = Math.sqrt(GRAVITY * 0.01 * o.cflDepthMargin) + waveRead * o.cflSpeedMargin + 0.1;
       wave = Math.max(known, read);
     } else {
       // Naive mode uses the textbook local-inertial timestep (Bates et al. 2010), dt = C·dx/√(g·h_max): no flow
@@ -880,6 +891,29 @@ export class GpuFloodSolver implements FloodSolver {
     }
     const dt = (cfl * this.cellSize) / (Math.SQRT2 * wave);
     return Math.min(o.dtMax, Math.max(o.dtMin, Number.isFinite(dt) ? dt : o.dtMin));
+  }
+
+  /** Heaviest rain falling anywhere right now (global rain + the most intense storm cell), m/s. */
+  private rainRateNow(): number {
+    const r = this.params.rainRate;
+    return (Number.isFinite(r) ? Math.max(0, r) : 0) * MMHR_TO_MS + this.forcing.stormRateMax;
+  }
+
+  /**
+   * Robust-mode CFL: the deepest water rain can make before a readback shows it, m (0 without rain). Rain collects in
+   * hollows ~rainPondingFactor× faster than it falls, for as long as the readback lags: the simulated time since the
+   * latest readback plus one more readback window (the span between the last two, or timeScale × readbackIntervalMs
+   * before there were two). At 1200× that window is ~6 sim-minutes, and rain starting on a dry live area used to run
+   * its first window at dtMax. Deep rivers already read back faster waves than this adds, so they are unaffected.
+   */
+  private rainDepthAhead(): number {
+    const rain = this.rainRateNow();
+    if (!(rain > 0)) return 0;
+    const p = this.params;
+    const scale = Number.isFinite(p.timeScale) ? Math.max(0, p.timeScale) : 0;
+    const window = this.readSpan > 0 ? this.readSpan : (scale * this.options.readbackIntervalMs) / 1000;
+    const lag = Math.min(RAIN_LAG_MAX_S, Math.max(0, this.simTime - this.readSimTime) + window);
+    return this.hRead + this.options.rainPondingFactor * rain * lag;
   }
 
   /**
@@ -1412,6 +1446,8 @@ export class GpuFloodSolver implements FloodSolver {
     this.waveRead = Number.isFinite(maxWave) ? maxWave : Infinity;
     if (meta.seq >= this.hBoostSeq) this.hBoost = 0;
     if (meta.simTime > this.uBoostTime) this.uBoost = 0;
+    if (meta.simTime > this.readSimTime) this.readSpan = meta.simTime - this.readSimTime;
+    this.readSimTime = meta.simTime;
     this.diagnostics = { nonFiniteCells: nonFinite, minDepth: minH, processMs: now() - t0, roundingVolume: this.volumeRounding };
   }
 

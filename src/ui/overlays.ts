@@ -104,8 +104,8 @@ export function createNotices(ctx: UIContext, extra: { top?: HTMLElement[]; bott
     h(
       'span',
       { class: 'dl-naive-text' },
-      h('span', { class: 'dl-naive-line' }, h('b', null, 'Stability demo'), ' — naive explicit solver at Courant 1.8, one small splash mid-view', h('span', { class: 'dl-naive-slow' }), '.'),
-      h('span', { class: 'dl-naive-legend' }, h('i', { class: 'dl-naive-swatch', 'aria-hidden': 'true' }), 'Magenta speckle = cells whose depth became infinite or NaN'),
+      h('span', { class: 'dl-naive-line' }, h('b', null, 'Stability demo'), ' — naive explicit solver at Courant 1.8', h('span', { class: 'dl-naive-slow' }), '.'),
+      h('span', { class: 'dl-naive-legend' }, h('i', { class: 'dl-naive-swatch', 'aria-hidden': 'true' }), 'Magenta speckle = depth ∞ or NaN, spreading from one small splash mid-view'),
     ),
     h(
       'button',

@@ -164,3 +164,72 @@ test('the first readbacks after switching on a big inflow or raising a stage lev
   await run('inflow 1,500 m³/s', (s) => s.setSources([{ id: 'q', type: 'inflow', gx: nx / 2, gy: 10, radius: 4, discharge: 1500 }]));
   await run('stage raised 8 m', (s) => s.setSources([{ id: 'st', type: 'stage', gx: nx / 2, gy: 0, radius: 12, level: 108 }]));
 });
+
+test('rain starting on dry terrain stays within the Courant limit from the first readback, at demo time scales', async () => {
+  // A dry live area reads back no water, so dt sat at dtMax = 5 s when rain started: the first readbacks showed
+  // Courant 4–19 (Houston at 300×/1200× with hurricane rain; the local guard kept it stable, the HUD showed it red).
+  // Rough tilted terrain, open edges, app-like stepping (frames of 1/60 s, readbacks every ~300 ms, host-paced budget).
+  const nx = 128;
+  const ny = 128;
+  const dx = 5.9;
+  const elevation = roughTerrain(nx, ny, 7, 80, 100);
+  for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) elevation[j * nx + i] -= 0.2 * j * dx;
+  const worstByCase: string[] = [];
+  for (const [rainRate, timeScale] of [
+    [100, 300],
+    [100, 1200],
+    [300, 1200],
+  ] as const) {
+    const solver = await makeSolver({
+      nx,
+      ny,
+      cellSize: dx,
+      elevation,
+      params: { boundary: 'open', manningN: 0.035, timeScale, maxSubstepsPerFrame: 64 },
+      options: { gpuBudgetMs: Infinity },
+    });
+    await solver.readbackNow();
+    const dryDt = solver.computeDt();
+    solver.params = { ...solver.params, rainRate };
+    const rainDt = solver.computeDt();
+    const courants: number[] = [];
+    let last = -1;
+    for (let f = 0; f < 2000 && courants.length < 6; f++) {
+      solver.step(1 / 60);
+      await solver.flush();
+      const snap = solver.getSnapshot();
+      if (snap && snap.simTime > 0 && snap.simTime !== last) {
+        last = snap.simTime;
+        courants.push(snap.stats.courant);
+      }
+      await new Promise((r) => setTimeout(r, 16));
+    }
+    worstByCase.push(
+      `${rainRate} mm/hr at ${timeScale}×: dt dry ${dryDt.toFixed(2)} s → ${rainDt.toFixed(2)} s; Courant ${courants.map((c) => c.toFixed(2)).join(', ')}`,
+    );
+    assert.ok(courants.length >= 4, 'readbacks should arrive');
+    for (const c of courants) assert.ok(c <= solver.options.robustCflMax, `${rainRate} mm/hr at ${timeScale}×: Courant ${c}`);
+    assert.equal(dryDt, solver.options.dtMax, 'a dry domain should start at dtMax');
+    assert.ok(rainDt < dryDt, 'rain should lower dt before any readback shows it');
+    assert.equal(solver.readbackDiagnostics.nonFiniteCells, 0);
+    solver.destroy();
+  }
+  console.log(`  ${worstByCase.join('\n  ')}`);
+  assert.deepEqual(gpuErrors(), []);
+});
+
+test('rain does not slow down a scene whose readbacks already show faster waves (a river at pool)', async () => {
+  const nx = 64;
+  const ny = 64;
+  const dx = 8;
+  const elevation = new Float32Array(nx * ny).fill(100);
+  const depth = new Float32Array(nx * ny).fill(6);
+  const solver = await makeSolver({ nx, ny, cellSize: dx, elevation, depth, params: { boundary: 'wall', timeScale: 1200 } });
+  await solver.readbackNow();
+  const dry = solver.computeDt();
+  solver.params = { ...solver.params, rainRate: 100 };
+  const wet = solver.computeDt();
+  console.log(`  6 m lake: dt ${dry.toFixed(3)} s without rain, ${wet.toFixed(3)} s with 100 mm/hr at 1200×`);
+  assert.equal(wet, dry);
+  solver.destroy();
+});

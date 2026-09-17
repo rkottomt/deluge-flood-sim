@@ -201,16 +201,19 @@ const PRESET_DEFS: PresetDef[] = [
     ],
     storms: [],
     rainRate: 0,
-    // Looking up the Little Conemaugh valley (north-east) over downtown: the flood comes down the valley toward the
-    // camera and spreads over the Point, Woodvale and Kernville. At the achievable ~45–55× sim speed downtown is
-    // visibly under water ~10 s after "Play the flood" (0.56 km² flooded at T+10 min, 1.9 km² at T+30 min).
-    camera: { at: [-78.921, 40.3262], distance: 3400, yaw: 0.85, pitch: 0.55 },
+    // Looking north-east over downtown with the Little Conemaugh valley running up to the top right: the flood enters
+    // there at T+5–10 min, fills the valley through Woodvale by T+20 and covers downtown by T+30 (the flood needs
+    // ~15 min to travel the 4.5 km of valley in the domain). At the ~45–50× the M4 reaches with "Play the flood" that is
+    // 10–35 s of real time, all inside the frame and clear of the HUD and the side panel at 1470×956. (The old view, 3.4
+    // km from a target 1.3 km further south-west, left the valley — where the flood shows first — off the top edge.)
+    camera: { at: [-78.91033, 40.33043], distance: 4000, yaw: 0.62, pitch: 0.6 },
     // Sources: Coleman et al. (2016) and USGS peak-flow records (see the constants above); 1889 timeline and toll from
     // the National Park Service (Johnstown Flood National Memorial); 1977 from USGS Open-File Report 78-963.
     description: () =>
       'Johnstown fills a narrow valley where the Little Conemaugh and Stonycreek rivers join to form the ' +
-      'Conemaugh. On May 31, 1889, after a night of heavy rain, the South Fork Dam 14 miles up the Little ' +
-      'Conemaugh gave way; 57 minutes later its lake hit the city as a wall of water and debris that killed ' +
+      'Conemaugh. On May 31, 1889, after a night of heavy rain, the South Fork Dam on a branch of the Little ' +
+      'Conemaugh 14 miles upstream gave way, and 57 minutes later its lake struck the city as a wall of water and ' +
+      'debris that killed ' +
       `2,209 people. Here that flood comes down the valley into today's city: about ${JOHNSTOWN_1889_INFLOW.toLocaleString('en-US')} m³/s ` +
       `(${cfsLabel(JOHNSTOWN_1889_INFLOW)} ft³/s), Lake Conemaugh's 14.5 million m³ spread over the roughly 65 minutes it took ` +
       'to drain (the breach itself peaked at 7,200–9,000 m³/s), while the Stonycreek runs at a typical yearly ' +
