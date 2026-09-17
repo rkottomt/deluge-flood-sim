@@ -36,13 +36,16 @@
  *  w = min(1, K·hf/hf_neighbour) (K = smoothingDepthRatio): a neighbour more than K× deeper counts less, so a deep
  *  channel's discharge is not poured into a thin shoreline film; |minmod(L, G)| ≤ |L| inherits that protection.
  *
- * ADVECTION is evaluated only where the 4 neighbouring faces of the same orientation (the stencil of the
- * upwind momentum fluxes) are all wet (advWeight). Next to a dry or blocked face the first-order upwind flux of a
- * staircase bank is dominated by the stair steps, not by resolved flow: dry neighbours counted as u = 0 act as
- * no-slip walls, and even with free slip the upwind dissipation of the 90° turns kept a 30° channel 20 %
- * too deep. Those faces use the local-inertial balance instead (Bates et al. 2010, as LISFLOOD-FP does
- * everywhere). Interior faces — where fronts are carried and the Ritter speed comes from — keep full advection.
- * tests/sim/channel.test.ts pins Manning normal depth in walled channels at 0/30/45/60°.
+ * ADVECTION next to dry or blocked faces. The upwind momentum fluxes of a face use its 4 neighbouring faces of the
+ * same orientation. Where one of them is dry or blocked — every stair step of a bank not aligned with the grid —
+ * the first-order upwind flux is dominated by the stair steps, not by resolved flow: a dry neighbour counted as
+ * u = 0 acts as a no-slip wall, and even with free slip (a dry neighbour takes this face's velocity, velN) the
+ * upwind dissipation of the 90° turns kept a 30° channel 21 % too deep. Such faces therefore keep only a
+ * fraction wallAdvection (SolverOptions, 0.1) of the free-slip advection (advWeight), i.e. they are close to the
+ * local-inertial balance (Bates et al. 2010, as LISFLOOD-FP uses everywhere). Not zero: without any advection at
+ * those faces nothing dissipates grid-scale circulations along banks, and a rough-terrain lake at n = 0.01 spun up
+ * 10 m/s jets (0.05 already suppresses them). Interior faces — where fronts are carried and the Ritter speed comes
+ * from — keep full advection. tests/sim/channel.test.ts pins Manning normal depth in walled channels at 0–60°.
  *
  * LOCAL COURANT GUARD (robust mode). dt comes from maxima read back asynchronously, so it can be stale: a dam
  * break piling water against a wall deepens it faster than the CPU learns about it. For each face we compute
@@ -75,19 +78,28 @@ fn isWet(hf: f32) -> bool {
 }
 
 // Wet/dry weight of a neighbouring face with flow depth hfN seen from a wet face of depth hf: 0 when the neighbour
-// is dry or blocked (hfN < hMin), 1 once it holds max(hMin, 1 % of hf) more — a neighbour 100× shallower than this
-// face is still "dry" for the purpose of the advection stencil. A threshold, but a CONTINUOUS one: a film hovering
-// at the wet/dry threshold cannot switch the advection of a deep face on and off, and neither can rounding (Metal
-// compiles with fast-math, so a film's face depth max(η) − max(z) carries the Float32 rounding of the bed
-// elevation: ~1e-6 m at 10 m above the datum, ~1e-5 m at 100 m).
+// is dry or blocked (hfN < hMin), 1 once it holds max(hMin, 1 % of hf) more (a neighbour 100× shallower than this
+// face is still "dry" here). A threshold, but a CONTINUOUS one: a film hovering at the wet/dry threshold cannot
+// switch terms of a deep face on and off, and neither can rounding (Metal compiles with fast-math, so a film's face
+// depth max(η) − max(z) carries the Float32 rounding of the bed elevation: ~1e-6 m at 10 m above the datum).
 fn wetRamp(hfN: f32, hf: f32) -> f32 {
   return clamp((hfN - sim.hMin) / max(sim.hMin, 0.01 * hf), 0.0, 1.0);
 }
 
+// Velocity of a neighbouring face for the advection stencil: its own velocity when wet, this face's velocity uC
+// when dry or blocked (free slip; a dry face's u = 0 would act as a no-slip wall). Blended over hMin..2·hMin only
+// for continuity: a film's own velocity, however noisy, must stay in the upwind stencil — replacing it by uC up
+// to 1 % of hf (as wetRamp would) removed enough dissipation to let a low-friction lake spin up again.
+fn velN(q: f32, hfN: f32, uC: f32) -> f32 {
+  let w = clamp(hfN / sim.hMin - 1.0, 0.0, 1.0);
+  if (w <= 0.0) { return uC; }
+  return mix(uC, vel(q, hfN), w);
+}
+
 // Advection weight of a face with depth hf from the depths of its 4 neighbouring parallel faces: 1 when all are
-// wet, 0 when any is dry or blocked (see header).
+// wet, sim.wallAdv when any is dry or blocked (see header).
 fn advWeight(hf: f32, hfA: f32, hfB: f32, hfC: f32, hfD: f32) -> f32 {
-  return wetRamp(min(min(hfA, hfB), min(hfC, hfD)), hf);
+  return mix(sim.wallAdv, 1.0, wetRamp(min(min(hfA, hfB), min(hfC, hfD)), hf));
 }
 
 // Laplacian weight of a neighbouring parallel face with flow depth hfN: 1, or less if the neighbour is more than
@@ -180,11 +192,10 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
       let hfS = faceDepth(s.r, s.a, se.r, se.a);
       let hfN = faceDepth(n.r, n.a, ne.r, ne.a);
       var adv = 0.0;
-      let wAdv = advWeight(hf, hfW, hfE, hfS, hfN);
-      if (sim.advection != 0 && wAdv > 0.0) {
-        let uW = vel(w.g, hfW);
+      if (sim.advection != 0) {
         let uC = vel(c.g, hf);
-        let uE = vel(e.g, hfE);
+        let uW = velN(w.g, hfW, uC);
+        let uE = velN(e.g, hfE, uC);
         // x-flux of x-momentum at the cell centres left/right of the face.
         let qbL = 0.5 * (w.g + c.g);
         let qbR = 0.5 * (c.g + e.g);
@@ -193,11 +204,11 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
         // y-flux of x-momentum at the corners south/north of the face.
         let vS = 0.5 * (c.b + e.b);
         let vN = 0.5 * (n.b + ne.b);
-        let uS = vel(s.g, hfS);
-        let uN = vel(n.g, hfN);
+        let uS = velN(s.g, hfS, uC);
+        let uN = velN(n.g, hfN, uC);
         let gS = vS * select(uS, uC, vS >= 0.0);
         let gN = vN * select(uC, uN, vN >= 0.0);
-        adv = wAdv * ((mR - mL) + (gS - gN)) / sim.dx;
+        adv = advWeight(hf, hfW, hfE, hfS, hfN) * ((mR - mL) + (gS - gN)) / sim.dx;
       }
       var qNe = ne.b;
       if (j == 0) { qNe = -bflux(e.r, i + 1, j, 0, 1); }
@@ -220,22 +231,21 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
       let hfE = faceDepth(e.r, e.a, se.r, se.a);
       let hfW = faceDepth(w.r, w.a, sw.r, sw.a);
       var adv = 0.0;
-      let wAdv = advWeight(hf, hfN, hfS, hfE, hfW);
-      if (sim.advection != 0 && wAdv > 0.0) {
-        let vN = vel(n.b, hfN);
+      if (sim.advection != 0) {
         let vC = vel(c.b, hf);
-        let vS = vel(s.b, hfS);
+        let vN = velN(n.b, hfN, vC);
+        let vS = velN(s.b, hfS, vC);
         let qbU = 0.5 * (n.b + c.b);
         let qbD = 0.5 * (c.b + s.b);
         let mU = qbU * select(vC, vN, qbU >= 0.0);
         let mD = qbD * select(vS, vC, qbD >= 0.0);
         let uE = 0.5 * (c.g + s.g);
         let uW = 0.5 * (w.g + sw.g);
-        let vE = vel(e.b, hfE);
-        let vW = vel(w.b, hfW);
+        let vE = velN(e.b, hfE, vC);
+        let vW = velN(w.b, hfW, vC);
         let gE = uE * select(vE, vC, uE >= 0.0);
         let gW = uW * select(vC, vW, uW >= 0.0);
-        adv = wAdv * ((mD - mU) + (gE - gW)) / sim.dx;
+        adv = advWeight(hf, hfN, hfS, hfE, hfW) * ((mD - mU) + (gE - gW)) / sim.dx;
       }
       var qSw = sw.g;
       if (i == 0) { qSw = -bflux(s.r, i, j + 1, 1, 0); }

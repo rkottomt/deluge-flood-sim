@@ -28,6 +28,8 @@ export interface SchemeStepParams {
   froudeMax: number;
   /** Include the (conservative, upwind) convective acceleration terms. */
   advection: boolean;
+  /** Fraction of advection kept on faces whose advection stencil touches a dry/blocked face (SolverOptions.wallAdvection). */
+  wallAdvection: number;
   /** Global rain rate, m/s. */
   rain: number;
   /** Infiltration rate, m/s. */
@@ -50,7 +52,7 @@ const g = GRAVITY;
  *  • normal flow: ghost cell with the same depth and a surface lower by dx·S, S = max(boundaryMinSlope,
  *    min(bed slope, surface slope)) toward the edge between the first and second inner cells (boundaryMinSlope
  *    alone if either is dry): q = h^{5/3}·√S / n;
- *  • transmissive: the outward discharge through the last interior face (old state).
+ *  • transmissive: q = u_in·h with u_in the outward velocity of the last interior face (old state).
  * See bflux in shaders/common.ts for why.
  */
 export function boundaryFlux(
@@ -84,7 +86,9 @@ export function boundaryFlux(
   if (dj < 0) qIn = qy[a];
   if (di > 0) qIn = -qx[c];
   if (dj > 0) qIn = -qy[c];
-  let q = Math.max(qNormal, qIn);
+  const hfIn = faceDepth(hc, z[c], h[a], z[a]);
+  const uIn = qIn > 0 && hfIn >= p.hMin ? Math.min(qIn / hfIn, p.uMax) : 0;
+  let q = Math.max(qNormal, uIn * hc);
   if (p.robust) q = Math.min(q, hc * Math.min(p.uMax, p.boundaryFroudeMax * Math.sqrt(g * hc)));
   return q;
 }
@@ -200,13 +204,21 @@ export class CpuReferenceSolver {
     const hfxOf = (i: number, j: number) => faceDepth(h[at(i, j)], z[at(i, j)], h[at(i + 1, j)], z[at(i + 1, j)]);
     const hfyOf = (i: number, j: number) => faceDepth(h[at(i, j)], z[at(i, j)], h[at(i, j + 1)], z[at(i, j + 1)]);
     const wet = (hf: number) => hf >= p.hMin;
-    // Advection weight: 1 if the 4 neighbouring parallel faces are wet, 0 if any is dry (wetRamp).
-    const advWeight = (hf: number, a: number, b: number, c: number, d: number) => wetRamp(Math.min(a, b, c, d), hf, p.hMin);
     // Velocity of a WET face for the advection term, bounded by uMax in robust mode.
     const vel = (q: number, hf: number) => {
       const u = q / hf;
       return p.robust ? Math.min(p.uMax, Math.max(-p.uMax, u)) : u;
     };
+    // Neighbour velocity in the advection stencil: its own when wet, the face's own (free slip) when dry, blended
+    // over hMin..2·hMin.
+    const velN = (q: number, hfN: number, uC: number) => {
+      const w = Math.min(1, Math.max(0, hfN / p.hMin - 1));
+      return w <= 0 ? uC : uC + (vel(q, hfN) - uC) * w;
+    };
+    // Advection weight: 1 if the 4 neighbouring parallel faces are wet, wallAdvection if any is dry (wetRamp blend).
+    const wallAdv = Math.min(1, Math.max(0, p.wallAdvection));
+    const advWeight = (hf: number, a: number, b: number, c: number, d: number) =>
+      wallAdv + (1 - wallAdv) * wetRamp(Math.min(a, b, c, d), hf, p.hMin);
     // Net outflow of every cell (old fluxes; the west/north domain-edge fluxes from the boundary rule, the stored
     // qx/qy of the last column/row are the east/south ones).
     const div = new Float64Array(N);
@@ -239,12 +251,10 @@ export class CpuReferenceSolver {
           const hfS = hfxOf(i, j + 1);
           const hfN = hfxOf(i, j - 1);
           let adv = 0;
-          // Advection only where the whole stencil (the 4 neighbouring x-faces) is wet.
-          const wAdv = advWeight(hf, hfW, hfE, hfS, hfN);
-          if (p.advection && wet(hf) && wAdv > 0) {
-            const uW = vel(qW, hfW);
+          if (p.advection && wet(hf)) {
             const uC = vel(qx[c], hf);
-            const uE = vel(qE, hfE);
+            const uW = velN(qW, hfW, uC);
+            const uE = velN(qE, hfE, uC);
             // x-momentum flux q·u at the two adjacent cell centres (upwind velocity).
             const qbL = 0.5 * (qW + qx[c]);
             const qbR = 0.5 * (qx[c] + qE);
@@ -253,9 +263,9 @@ export class CpuReferenceSolver {
             // y-flux of x-momentum q·v at the two adjacent corners.
             const vS = 0.5 * (qy[c] + qy[e]);
             const vN = 0.5 * (qyN + qyNE);
-            const gS = vS * (vS >= 0 ? uC : vel(qx[at(i, j + 1)], hfS));
-            const gN = vN * (vN >= 0 ? vel(qx[at(i, j - 1)], hfN) : uC);
-            adv = (wAdv * (mR - mL + (gS - gN))) / p.dx;
+            const gS = vS * (vS >= 0 ? uC : velN(qx[at(i, j + 1)], hfS, uC));
+            const gN = vN * (vN >= 0 ? velN(qx[at(i, j - 1)], hfN, uC) : uC);
+            adv = (advWeight(hf, hfW, hfE, hfS, hfN) * (mR - mL + (gS - gN))) / p.dx;
           }
           const dq = wet(hf) ? smoothingIncrement(hf, qx[c], qW, hfW, qE, hfE, div[e] - div[c], p) : 0;
           fx[c] = momentum(hf, S, qx[c], dq, qPerp, adv, p);
@@ -274,20 +284,19 @@ export class CpuReferenceSolver {
           const hfE = hfyOf(i + 1, j);
           const hfW = hfyOf(i - 1, j);
           let adv = 0;
-          const wAdv = advWeight(hf, hfN, hfS, hfE, hfW);
-          if (p.advection && wet(hf) && wAdv > 0) {
-            const vN = vel(qN, hfN);
+          if (p.advection && wet(hf)) {
             const vC = vel(qy[c], hf);
-            const vS = vel(qS, hfS);
+            const vN = velN(qN, hfN, vC);
+            const vS = velN(qS, hfS, vC);
             const qbU = 0.5 * (qN + qy[c]);
             const qbD = 0.5 * (qy[c] + qS);
             const mU = qbU * (qbU >= 0 ? vN : vC);
             const mD = qbD * (qbD >= 0 ? vC : vS);
             const uE = 0.5 * (qx[c] + qx[s]);
             const uW = 0.5 * (qxW + qxSW);
-            const gE = uE * (uE >= 0 ? vC : vel(qy[at(i + 1, j)], hfE));
-            const gW = uW * (uW >= 0 ? vel(qy[at(i - 1, j)], hfW) : vC);
-            adv = (wAdv * (mD - mU + (gE - gW))) / p.dx;
+            const gE = uE * (uE >= 0 ? vC : velN(qy[at(i + 1, j)], hfE, vC));
+            const gW = uW * (uW >= 0 ? velN(qy[at(i - 1, j)], hfW, vC) : vC);
+            adv = (advWeight(hf, hfN, hfS, hfE, hfW) * (mD - mU + (gE - gW))) / p.dx;
           }
           const dq = wet(hf) ? smoothingIncrement(hf, qy[c], qN, hfN, qS, hfS, div[s] - div[c], p) : 0;
           fy[c] = momentum(hf, S, qy[c], dq, qPerp, adv, p);

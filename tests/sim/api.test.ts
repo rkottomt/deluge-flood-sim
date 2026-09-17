@@ -165,6 +165,40 @@ test('adaptive GPU budget: measures ms/substep from real frames and caps substep
   solver.destroy();
 });
 
+test('gpuBudgetMs = Infinity switches the GPU budget off: no measurements, substeps capped by maxSubstepsPerFrame only', async () => {
+  const n = 256;
+  const elevation = roughTerrain(n, n, 8, 15, 100);
+  const solver = await makeSolver({
+    nx: n,
+    ny: n,
+    cellSize: 8,
+    elevation,
+    depth: lakeAtRest(elevation, 100),
+    params: { timeScale: 3600, maxSubstepsPerFrame: 40, rainRate: 20 },
+    options: { gpuBudgetMs: Infinity },
+  });
+  const initialEstimate = solver.gpuMsPerSubstep;
+  for (let f = 0; f < 30; f++) {
+    const info = solver.step(1 / 60);
+    await solver.flush();
+    assert.equal(info.substeps, 40, `frame ${f}: substeps ${info.substeps}`);
+  }
+  assert.equal(solver.gpuMsPerSubstep, initialEstimate, 'no GPU timing samples may be taken while the budget is off');
+  solver.gpuBudgetMs = 8; // back on: measured again
+  for (let f = 0; f < 20; f++) {
+    solver.step(1 / 60);
+    await solver.flush();
+  }
+  if (solver.gpuBudgetUsesTimestamps) assert.notEqual(solver.gpuMsPerSubstep, initialEstimate);
+  solver.gpuBudgetMs = Infinity;
+  assert.equal(solver.gpuBudgetMs, Infinity);
+  solver.gpuBudgetMs = NaN; // ignored
+  solver.gpuBudgetMs = 0; // ignored
+  assert.equal(solver.gpuBudgetMs, Infinity);
+  assert.deepEqual(gpuErrors(), []);
+  solver.destroy();
+});
+
 test('GpuWorkBudget estimator: fast convergence, spike-resistant, follows sustained slowdowns', async () => {
   const budget = new GpuWorkBudget({ features: new Set(), queue: {} } as unknown as GPUDevice, 8, 2);
   for (let k = 0; k < 5; k++) budget.addSample(0.5);
@@ -174,6 +208,8 @@ test('GpuWorkBudget estimator: fast convergence, spike-resistant, follows sustai
   assert.ok(budget.msPerSubstep < 0.8, `single spike moved estimate to ${budget.msPerSubstep}`);
   for (let k = 0; k < 30; k++) budget.addSample(1.5); // thermal throttling: sustained 3× slower
   assert.ok(Math.abs(budget.msPerSubstep - 1.5) < 0.1, `tracks slowdown: ${budget.msPerSubstep}`);
+  const off = new GpuWorkBudget({ features: new Set(), queue: {} } as unknown as GPUDevice, Infinity, 2);
+  assert.equal(off.cap(), Infinity);
   budget.addSample(NaN);
   budget.addSample(-1);
   assert.ok(Number.isFinite(budget.msPerSubstep));

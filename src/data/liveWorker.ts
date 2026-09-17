@@ -9,7 +9,7 @@
  *   ← { type: 'done', elevation, scenario, stats }           elevation's buffer is transferred
  *   ← { type: 'error', message }
  */
-import type { RoadNetwork } from '../contracts';
+import type { RoadNetwork, ScenarioPreset } from '../contracts';
 import type { WaterBody } from './hydro';
 import { detectLiveWater, finishLiveTerrain } from './liveTerrain';
 
@@ -18,7 +18,7 @@ export type LiveWorkerRequest =
   | { type: 'finish'; roads: RoadNetwork | null; name: string; demSource: string };
 
 export type LiveWorkerResponse =
-  | { type: 'done'; elevation: Float32Array; scenario: import('../contracts').ScenarioPreset; stats: { bodies: number; openedBands: number; openedCells: number } }
+  | { type: 'done'; elevation: Float32Array; scenario: ScenarioPreset; stats: { bodies: number; openedBands: number; openedCells: number } }
   | { type: 'error'; message: string };
 
 const scope = self as unknown as { onmessage: ((e: MessageEvent<LiveWorkerRequest>) => void) | null; postMessage(m: LiveWorkerResponse, transfer?: Transferable[]): void };

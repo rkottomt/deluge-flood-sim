@@ -339,7 +339,7 @@ fn fsWater(in: WOut) -> @location(0) vec4f {
       hz = mix(hz, vec3f(1.6), speck * 0.3);
     }
     hz += spec * 0.15;
-    let ha = 0.93;
+    let ha = 0.97;
     rgb = mix(rgb, hz * ha, weight);
     alpha = mix(alpha, ha, weight);
     // In the depth maps the normal river is muted so the flood colours carry the picture.

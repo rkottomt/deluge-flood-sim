@@ -6,7 +6,7 @@
  * minute 1 stutters at minute 10. The solver therefore MEASURES what a substep costs on the GPU right now and
  * caps substeps so its compute work per frame stays within `budgetMs` (8 ms by default). When the requested
  * sim speed needs more, the solver runs fewer substeps and reports `throttled` — simulated speed degrades,
- * the frame rate does not.
+ * the frame rate does not. budgetMs = Infinity turns the budget off (the solver then takes no measurements).
  *
  * Measurement:
  *  • Preferred: WebGPU timestamp queries around the frame's compute pass (exact GPU execution time, excluding
@@ -67,8 +67,9 @@ export class GpuWorkBudget {
     }
   }
 
-  /** Substeps that fit the budget (≥ 1). */
+  /** Substeps that fit the budget (≥ 1; Infinity when the budget is off, budgetMs = Infinity). */
   cap(): number {
+    if (!Number.isFinite(this.budgetMs)) return Infinity;
     return Math.max(1, Math.floor(this.budgetMs / Math.max(1e-3, this.msPerSubstep) - EXPORT_SUBSTEP_EQUIV));
   }
 

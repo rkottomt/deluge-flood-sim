@@ -24,7 +24,7 @@ struct Sim {
   robust: i32, openBnd: i32, nSrc: i32, nStorm: i32,
   stageAlpha: f32, invN: f32, minSlope: f32, advection: i32,
   resetMax: i32, velDepth: f32, crGuard: f32, smoothRatio: f32,
-  bFrMax: f32, _pad0: f32, _pad1: f32, _pad2: f32,
+  bFrMax: f32, wallAdv: f32, _pad1: f32, _pad2: f32,
 };
 `;
 
@@ -70,16 +70,18 @@ fn faceDepth(hL: f32, zL: f32, hR: f32, zR: f32) -> f32 {
 //    S never depends on this cell's own depth: an outflow that DEcreased as the edge cell filled would be
 //    anti-diffusive, i.e. unstable in an explicit scheme.
 //
-// 2. TRANSMISSIVE: the discharge arriving through the last interior face (previous step). On its own, normal flow
-//    needs the edge cell to pond until h^{5/3}·√S/n matches what arrives; once a river backs up its surface is flat,
-//    S drops to minSlope, and a river sloping to the edge ran ~2.5× its normal depth over its last ~2 km. With
-//    the max the edge cell simply passes on what reaches it, so a river leaves at the depth it arrives with. It
-//    never drains the edge cell below what normal flow would, so it adds no feedback, and it depends only on the
-//    neighbouring face, not on this cell's depth.
+// 2. TRANSMISSIVE (zero-gradient velocity): q = u_in·h, with u_in = q/hf of the last interior face (previous
+//    step). On its own, normal flow needs the edge cell to pond until h^{5/3}·√S/n matches what arrives; once a
+//    river backs up its surface is flat, S drops to minSlope, and a river sloping to the edge ran ~2.5× its normal
+//    depth over its last ~2 km. With this term a river leaves at the velocity and depth it arrives with. Using the
+//    arriving VELOCITY rather than the arriving discharge keeps the edge depth pinned to its neighbour's (a
+//    shallower edge cell passes less than arrives and fills up, a deeper one drains): passing on the discharge
+//    alone leaves the edge depth undetermined below normal depth, and a river drifted into an M2 drawdown toward
+//    the edge. Outflow grows with this cell's depth, so the term is diffusive (stable) like normal flow.
 // Robust mode caps the result at Froude bFrMax (1 = critical flow, q = h·√(g·h)): water pouring over a free edge
 // (a weir brink) cannot leave faster than critical flow. Rivers reach the edge subcritical and are unaffected; the
-// cap matters where terrain drops toward the edge: without it an edge cell whose bed lies below a pool's surface
-// became a supercritical drain hole (the transmissive term passes on whatever pours into it).
+// cap matters where terrain drops toward the edge: without it an edge cell below a pool's surface became a
+// supercritical drain hole.
 fn bflux(h: f32, i: i32, j: i32, di: i32, dj: i32) -> f32 {
   if (sim.openBnd == 0 || !(h >= sim.hMin)) { return 0.0; }
   let a = st(i + di, j + dj);
@@ -90,15 +92,19 @@ fn bflux(h: f32, i: i32, j: i32, di: i32, dj: i32) -> f32 {
     let surfS = ((b.a - a.a) + (b.r - a.r)) / sim.dx;
     S = max(min(bedS, surfS), sim.minSlope);
   }
-  var qNormal = pow(h, 5.0 / 3.0) * sqrt(S) * sim.invN;
-  // Outward discharge through the last interior face: stored as the east/south face flux of the inner neighbour
-  // for the east/south edges, and as this cell's own east/south face flux (sign flipped) for the west/north edges.
+  let qNormal = pow(h, 5.0 / 3.0) * sqrt(S) * sim.invN;
+  // Outward discharge through the last interior face: stored as the east/south face flux of the inner neighbour for
+  // the east/south edges, and as this cell's own east/south face flux (sign flipped) for the west/north edges.
+  let c = st(i, j);
   var qIn = 0.0;
   if (di < 0) { qIn = a.g; }
   if (dj < 0) { qIn = a.b; }
-  if (di > 0) { qIn = -st(i, j).g; }
-  if (dj > 0) { qIn = -st(i, j).b; }
-  var q = max(qNormal, qIn);
+  if (di > 0) { qIn = -c.g; }
+  if (dj > 0) { qIn = -c.b; }
+  let hfIn = faceDepth(h, c.a, a.r, a.a);
+  var uIn = 0.0;
+  if (qIn > 0.0 && hfIn >= sim.hMin) { uIn = min(qIn / hfIn, sim.uMax); }
+  var q = max(qNormal, uIn * h);
   if (sim.robust != 0) {
     q = min(q, h * min(sim.uMax, sim.bFrMax * sqrt(sim.g * h)));
   }

@@ -4,7 +4,7 @@
  * Usage in a node:test file:
  *   import { after } from 'node:test';
  *   import { getDevice, finishGpuTests } from '../helpers/gpu';
- *   after(finishGpuTests);   // Dawn keeps the process alive; this exits once the tests are done.
+ *   after(finishGpuTests);   // lets queued GPU work finish; the process then exits on its own
  */
 import { create, globals } from 'webgpu';
 import { createDelugeDevice, type DelugeGPU } from '../../src/gpu';
@@ -47,9 +47,15 @@ export function gpuErrors(): readonly string[] {
   return errors;
 }
 
-/** Call from `after()`: gives pending callbacks a moment, then exits (Dawn would keep node alive). */
+/**
+ * Call from `after()`: waits for GPU work still queued by the file's tests. It does NOT exit the process: Dawn
+ * (webgpu ≥ 0.6) no longer keeps Node alive, and a process.exit() here used to race node:test's reporter, so a file
+ * run directly (`node --import tsx file.test.ts`) printed ✖ yet exited 0.
+ */
 export async function finishGpuTests(): Promise<void> {
-  setTimeout(() => process.exit(process.exitCode ?? 0), 50);
+  if (!gpuPromise) return;
+  const { device } = await gpuPromise;
+  await device.queue.onSubmittedWorkDone();
 }
 
 export interface TestSolverSetup {

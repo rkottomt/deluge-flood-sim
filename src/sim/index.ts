@@ -5,7 +5,8 @@
  * pipeline + timestep + readback: Solver.ts, adaptive GPU budget: budget.ts, CPU cross-check: cpuReference.ts.
  *
  * Beyond the FloodSolver contract, the concrete GpuFloodSolver exposes (all optional for callers):
- *   solver.gpuBudgetMs          GPU compute ms per frame the solver may use (default 8; raise while fast-forwarding)
+ *   solver.gpuBudgetMs          GPU compute ms per frame the solver may use (default 8; Infinity = off, e.g. when
+ *                               the host paces the solver itself)
  *   solver.gpuMsPerSubstep      measured GPU cost of one substep (timestamp queries when available)
  *   solver.readbackDiagnostics  { nonFiniteCells, minDepth, processMs } of the latest readback
  *   solver.time                 simulated time of the work submitted so far (snapshots lag slightly)

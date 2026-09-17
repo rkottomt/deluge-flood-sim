@@ -13,14 +13,15 @@ export const GRAVITY = 9.81;
  */
 export interface SolverOptions {
   /**
-   * de Almeida (2012) θ-smoothing weight. q̃ = θ·q_c + (1−θ)/2·(q_up + q_down). θ = 1 disables smoothing.
-   * 0.7–0.9 damps the grid-scale (checkerboard) oscillations that the plain local-inertial scheme develops
-   * at low friction, at the cost of a little numerical diffusion. Note it also lowers the 2-D Courant stability
-   * limit from 1 to √θ (see robustCflMax and Solver.computeDt).
+   * de Almeida (2012) θ-smoothing weight: q̃ = q_c + (1−θ)/2·L with L = (q_up − q_c) + (q_down − q_c), limited by
+   * the divergence-damping increment (minmod, shaders/momentum.ts) so only divergent — gravity-wave — grid-scale
+   * patterns are damped, not flow turning along a staircase bank. θ = 1 disables smoothing. 0.7–0.9 damps the
+   * checkerboard oscillations the plain local-inertial scheme develops at low friction. It also lowers the 2-D
+   * Courant stability limit from 1 to √θ (see robustCflMax and Solver.computeDt).
    */
   theta: number;
   /**
-   * K in the θ-smoothing neighbour weight w = min(1, K·hf/hf_neighbour): a neighbouring face contributes fully
+   * K in the smoothing neighbour weight w = min(1, K·hf/hf_neighbour): a neighbouring face contributes fully
    * unless it is more than K× deeper than this face. Stops smoothing from pouring a deep channel's discharge
    * into a thin shoreline film (spurious velocities, slow drift of a lake at rest) while leaving ordinary
    * depth variations — and uniform discharge — untouched.
@@ -32,6 +33,14 @@ export interface SolverOptions {
    * Ritter dam-break solution; without it fronts on frictionless beds advance at roughly half speed.
    */
   advection: boolean;
+  /**
+   * Fraction of the (free-slip) advection kept on faces whose advection stencil touches a dry or blocked face — the
+   * stair steps of every bank that is not aligned with the grid (see shaders/momentum.ts). 1 = full advection
+   * everywhere: channels at 30° to the grid run ~20 % deeper than Manning's normal depth. 0 = none there: exact
+   * normal depth, but nothing damps grid-scale circulations along banks (a rough-terrain lake at n = 0.01 spun up
+   * 10 m/s jets). 0.1: within 7 % of normal depth at 0–60° (tests/sim/channel.test.ts), lakes stay calm.
+   */
+  wallAdvection: number;
   /** Face flow depth below which a face carries no flux (wetting/drying threshold), m. */
   hMin: number;
   /** Robust mode velocity cap, m/s. */
@@ -43,8 +52,8 @@ export interface SolverOptions {
    */
   froudeMax: number;
   /**
-   * Minimum slope S of the open (free outflow) boundary: outflow is normal flow q = h^{5/3}·√S/n with
-   * S = max(local bed slope, boundaryMinSlope). Where terrain is flat at the edge — rivers, whose channels
+   * Minimum slope S of the open (free outflow) boundary: outflow is at least normal flow q = h^{5/3}·√S/n with
+   * S = max(local bed slope, boundaryMinSlope) (and at least what arrives at the edge's velocity; see bflux). Where terrain is flat at the edge — rivers, whose channels
    * are flat after hydro-conditioning — this IS the river's energy slope and it sets the discharge leaving
    * the domain. 1e-4 is typical of large rivers: a 6 m deep Ohio at Pittsburgh then carries ~2,000 m³/s at
    * ~1 m/s (real mean flow ≈ 900 m³/s) and ~11,000 m³/s at the 1936 stage (record ≈ 16,000 m³/s); 1e-3 would
@@ -75,7 +84,9 @@ export interface SolverOptions {
   readbackIntervalMs: number;
   /**
    * GPU time budget for the solver per rendered frame, ms. The solver measures its own GPU cost per substep
-   * and caps substeps so the UI stays interactive (in addition to SimParams.maxSubstepsPerFrame).
+   * (timestamp queries) and caps substeps so the UI stays interactive (in addition to
+   * SimParams.maxSubstepsPerFrame). Infinity = off: no measurement readbacks; for hosts that pace the solver
+   * themselves (the Deluge app's governor, src/app/governor.ts).
    */
   gpuBudgetMs: number;
   /** Multiplicative + additive safety margins applied to the lagged (stale) readback maxima for CFL. */
@@ -87,6 +98,7 @@ export const DEFAULT_SOLVER_OPTIONS: SolverOptions = {
   theta: 0.8,
   smoothingDepthRatio: 4,
   advection: true,
+  wallAdvection: 0.1,
   hMin: 1e-4,
   uMax: 15,
   froudeMax: 8,

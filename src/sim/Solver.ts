@@ -13,7 +13,11 @@
  *            sums/maxima of the accounting buffer and state, the accounting buffer is ZEROED IN THE SAME ENCODER
  *            (no substep lost or counted twice), both are copied to MAP_READ buffers → mapAsync → Float64 stats.
  *   Budget   the frame's compute pass carries timestamp queries; measured GPU ms/substep caps the substeps per
- *            frame so solver work stays within ~8 ms (budget.ts) — sim speed degrades, frame rate does not.
+ *            frame so solver work stays within options.gpuBudgetMs (8 ms by default; budget.ts) — sim speed
+ *            degrades, frame rate does not. gpuBudgetMs = Infinity switches the budget (and its GPU timestamp
+ *            readbacks) off, for hosts that pace the solver themselves (the Deluge app: src/app/governor.ts).
+ *            While the budget cannot bind (it allows ≥ 2× maxSubstepsPerFrame) it is re-measured only every
+ *            PROBE_IDLE_MS instead of every frame.
  *
  * ── Why it stays stable (the short version for judges) ──────────────────────────────────────────────────
  *   1. CFL-adaptive timestep  dt = Cr·dx / (√2·(√(g·h_max) + |u|_max)) — the 2-D Courant condition of the
@@ -49,7 +53,7 @@ import {
   WET_DEPTH,
   type SolverOptions,
 } from './constants';
-import { packForcing, type PackedForcing } from './forcing';
+import { footprintRadius, footprintWeight, packForcing, type PackedForcing } from './forcing';
 import { brushWGSL, BRUSH_UNIFORM_BYTES } from './shaders/brush';
 import { FORCING_UNIFORM_BYTES, SIM_UNIFORM_BYTES } from './shaders/common';
 import { continuityWGSL } from './shaders/continuity';
@@ -58,6 +62,8 @@ import { momentumWGSL } from './shaders/momentum';
 import { STAT, STATS_PER_BLOCK, statsWGSL } from './shaders/stats';
 
 const WG = 16;
+/** Re-measure the GPU budget at most this often while it cannot limit the substeps (see substepCap). */
+const PROBE_IDLE_MS = 500;
 const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
 
 interface StagingSet {
@@ -141,11 +147,15 @@ export class GpuFloodSolver implements FloodSolver {
   private storms: StormCell[] = [];
   private forcing: PackedForcing;
   private forcingDirty = true;
+  /** setSources since the last refreshForcing (a terrain edit also re-packs the forcing, but starts no new flow). */
+  private sourcesChanged = false;
   private warnedDropped = false;
 
   private initialDepth: Float32Array;
   private dryAtReset: Uint8Array;
   private initialVolume = 0;
+  /** Largest stored volume seen since reset (normalizes SimStats.massError), m³. */
+  private peakVolume = 0;
   private resetMaxPending = true;
 
   private simTime = 0;
@@ -169,10 +179,18 @@ export class GpuFloodSolver implements FloodSolver {
   /** Known sudden depth (water brush) not yet visible in a readback, and the edit sequence that caused it. */
   private hBoost = 0;
   private hBoostSeq = 0;
+  /**
+   * Flow speed that sources just (re)configured will produce but no readback shows yet (inflow jets, water released
+   * by raising a stage level), m/s, and the simulated time it was set at. Cleared by the first readback whose
+   * window ran after that time (see forcingSpeedEstimate).
+   */
+  private uBoost = 0;
+  private uBoostTime = -Infinity;
   private editSeq = 0;
 
   /** Adaptive substep budget (measured GPU ms per substep → substeps per frame). */
   private readonly budget: GpuWorkBudget;
+  private lastProbeMs = -Infinity;
   private inflight = 0;
   private inflightSince = 0;
   private destroyed = false;
@@ -470,6 +488,7 @@ export class GpuFloodSolver implements FloodSolver {
   setSources(sources: WaterSource[]): void {
     this.sources = sources.map((s) => ({ ...s }));
     this.forcingDirty = true;
+    this.sourcesChanged = true;
   }
 
   setStorms(storms: StormCell[]): void {
@@ -580,7 +599,12 @@ export class GpuFloodSolver implements FloodSolver {
     this.hRead = hMax;
     this.uRead = 0;
     this.hBoost = 0;
+    this.peakVolume = this.initialVolume;
     this.resetMaxPending = true;
+    // All sources start acting on the initial water: the first window must not run on the calm reset state's dt.
+    this.refreshForcing();
+    this.uBoost = this.forcingSpeedEstimate();
+    this.uBoostTime = 0;
 
     const enc = this.device.createCommandEncoder({ label: 'sim.reset' });
     enc.clearBuffer(this.accBuf);
@@ -667,14 +691,15 @@ export class GpuFloodSolver implements FloodSolver {
   }
 
   /**
-   * GPU compute budget per frame, ms (default options.gpuBudgetMs = 8). The app may raise it while fast-forwarding
-   * (automation) or lower it on battery; substeps per frame = budget / measured ms-per-substep.
+   * GPU compute budget per frame, ms (default options.gpuBudgetMs = 8). A host may raise it while fast-forwarding
+   * (automation) or lower it on battery; substeps per frame = budget / measured ms-per-substep. Infinity switches the
+   * budget off: no GPU timing readbacks, substeps limited by params.maxSubstepsPerFrame alone.
    */
   get gpuBudgetMs(): number {
     return this.budget.budgetMs;
   }
   set gpuBudgetMs(ms: number) {
-    if (Number.isFinite(ms) && ms > 0) this.budget.budgetMs = ms;
+    if (ms > 0) this.budget.budgetMs = ms; // rejects NaN and ≤ 0; accepts Infinity
   }
 
   /**
@@ -710,7 +735,7 @@ export class GpuFloodSolver implements FloodSolver {
     if (robust) {
       // The maxima are stale (last readback, up to a few hundred ms old): inflate them.
       h *= o.cflDepthMargin;
-      u = this.uRead * o.cflSpeedMargin + 0.1;
+      u = Math.max(this.uRead, this.uBoost) * o.cflSpeedMargin + 0.1;
     }
     const dt = (cfl * this.cellSize) / (Math.SQRT2 * (Math.sqrt(GRAVITY * h) + u));
     return Math.min(o.dtMax, Math.max(o.dtMin, Number.isFinite(dt) ? dt : o.dtMin));
@@ -803,8 +828,9 @@ export class GpuFloodSolver implements FloodSolver {
     const { device } = this;
     this.writeSimUniform(dt);
     const enc = device.createCommandEncoder({ label: 'sim.frame' });
-    // Frames driven by step() are timed on the GPU to keep the substep budget current.
-    const probe = fromStep ? this.budget.beginFrame(n) : null;
+    // Frames driven by step() are timed on the GPU to keep the substep budget current (see shouldProbe).
+    const probe = fromStep && this.shouldProbe() ? this.budget.beginFrame(n) : null;
+    if (probe) this.lastProbeMs = now();
     const pass = enc.beginComputePass({ label: 'sim.substeps', timestampWrites: probe?.timestampWrites });
     for (let k = 0; k < n; k++) {
       pass.setPipeline(this.momentumPipe);
@@ -855,9 +881,24 @@ export class GpuFloodSolver implements FloodSolver {
     this.resetMaxPending = false;
   }
 
+  private userSubstepCap(): number {
+    return Math.max(1, Math.floor(Number.isFinite(this.params.maxSubstepsPerFrame) ? this.params.maxSubstepsPerFrame : 1));
+  }
+
+  /**
+   * Whether this frame should carry GPU timestamp queries for the budget: never when the budget is off (Infinity);
+   * every frame while the budget can limit the substeps (or has too few samples); otherwise every PROBE_IDLE_MS, so
+   * the estimate still follows thermal throttling without a GPU→CPU readback on every frame.
+   */
+  private shouldProbe(): boolean {
+    if (!Number.isFinite(this.budget.budgetMs)) return false;
+    if (this.budget.samples < 5 || this.budget.cap() < 2 * this.userSubstepCap()) return true;
+    return now() - this.lastProbeMs >= PROBE_IDLE_MS;
+  }
+
   /** Substeps allowed this frame: user cap ∩ measured GPU budget; 0 if the GPU queue is backed up. */
   private substepCap(): number {
-    const userCap = Math.max(1, Math.floor(Number.isFinite(this.params.maxSubstepsPerFrame) ? this.params.maxSubstepsPerFrame : 1));
+    const userCap = this.userSubstepCap();
     const budget = this.budget.cap();
     if (this.inflight >= 3) {
       // Several frames of solver work still queued on the GPU: skip a frame so latency cannot build up.
@@ -902,6 +943,7 @@ export class GpuFloodSolver implements FloodSolver {
     fv[22] = o.robustCflMax;
     fv[23] = o.smoothingDepthRatio;
     fv[24] = o.boundaryFroudeMax;
+    fv[25] = Math.min(1, Math.max(0, o.wallAdvection));
     this.device.queue.writeBuffer(this.simBuf, 0, this.simBytes);
   }
 
@@ -910,10 +952,56 @@ export class GpuFloodSolver implements FloodSolver {
     this.forcingDirty = false;
     this.forcing = this.packForcingNow();
     this.device.queue.writeBuffer(this.forcingBuf, 0, this.forcing.data);
+    if (this.sourcesChanged) {
+      this.sourcesChanged = false;
+      const u = this.forcingSpeedEstimate();
+      if (u > this.uRead) {
+        this.uBoost = Math.max(this.uBoost, u);
+        this.uBoostTime = this.simTime;
+      }
+    }
     if (this.forcing.dropped > 0 && !this.warnedDropped) {
       this.warnedDropped = true;
       console.warn(`[sim] only ${MAX_SOURCES} sources and ${MAX_STORMS} storm cells are supported; extras ignored`);
     }
+  }
+
+  /**
+   * Flow speed the current sources are about to produce, for the CFL estimate until a readback shows it (m/s, ≤ uMax).
+   * The timestep otherwise comes from the latest readback, which after a reset or a source change still shows the
+   * calm state: Johnstown's 1936 inflows reached 5–6 m/s within the first window and the HUD read Courant 1.3–1.4.
+   *  • inflow: water spills out of the footprint across its rim, perimeter P = 2π·(R + ½)·dx, at critical flow for
+   *    q = Q/P, u_c = (g·q)^{1/3}; a jet running off downhill reaches about twice that → 2·u_c.
+   *  • stage: raising the level by Δh above the current water surface releases a dam break, front speed 2·√(g·Δh).
+   *    Δh from the latest snapshot's depth (the initial water right after a reset).
+   */
+  private forcingSpeedEstimate(): number {
+    const { nx, ny, cellSize, ground, barrier } = this;
+    const depth = this.snapshot?.depth ?? this.initialDepth;
+    let u = 0;
+    for (const s of this.sources.slice(0, MAX_SOURCES)) {
+      const R = footprintRadius(s.radius);
+      if (s.type === 'inflow') {
+        const Q = Number.isFinite(s.discharge) ? Math.max(0, s.discharge) : 0;
+        if (Q > 0) u = Math.max(u, 2 * Math.cbrt((GRAVITY * Q) / (2 * Math.PI * (R + 0.5) * cellSize)));
+        continue;
+      }
+      if (!Number.isFinite(s.level)) continue;
+      const i0 = Math.max(0, Math.floor(s.gx - R - 1));
+      const i1 = Math.min(nx - 1, Math.ceil(s.gx + R + 1));
+      const j0 = Math.max(0, Math.floor(s.gy - R - 1));
+      const j1 = Math.min(ny - 1, Math.ceil(s.gy + R + 1));
+      let dh = 0;
+      for (let j = j0; j <= j1; j++) {
+        for (let i = i0; i <= i1; i++) {
+          if (footprintWeight(Math.hypot(i + 0.5 - s.gx, j + 0.5 - s.gy), R) <= 0) continue;
+          const c = j * nx + i;
+          dh = Math.max(dh, s.level - (ground[c] + barrier[c] + depth[c]));
+        }
+      }
+      if (dh > 0) u = Math.max(u, 2 * Math.sqrt(GRAVITY * dh));
+    }
+    return Math.min(u, this.options.uMax);
   }
 
   private packForcingNow(): PackedForcing {
@@ -1077,6 +1165,7 @@ export class GpuFloodSolver implements FloodSolver {
     this.volumeOut += accOut * area;
     const volume = vol * area;
     const expected = this.initialVolume + this.volumeIn - this.volumeOut;
+    if (Number.isFinite(volume)) this.peakVolume = Math.max(this.peakVolume, volume);
     const blownUp = nonFinite > 0;
     const stats: SimStats = {
       simTime: meta.simTime,
@@ -1087,7 +1176,11 @@ export class GpuFloodSolver implements FloodSolver {
       floodedArea: flooded * area,
       volumeIn: this.volumeIn,
       volumeOut: this.volumeOut,
-      massError: Math.abs(volume - expected) / Math.max(1, this.initialVolume + this.volumeIn),
+      // Normalized by the most water the scene has held, not by initial + inflow volume: inflow keeps growing
+      // (Pittsburgh's stage discs exchange ~10,000 m³/s with the open edge while the rivers stand still), which
+      // made the percentage shrink the longer the sim ran whatever the solver did. The peak never shrinks, so a
+      // scene draining toward empty cannot inflate the ratio either.
+      massError: Math.abs(volume - expected) / Math.max(1, this.initialVolume, this.peakVolume),
       // 2-D Courant number (see computeDt): stable below 1 (below √θ ≈ 0.89 with smoothing).
       courant: blownUp ? Infinity : (Math.SQRT2 * maxWave * meta.dtMax) / this.cellSize,
     };
@@ -1097,6 +1190,7 @@ export class GpuFloodSolver implements FloodSolver {
     this.hRead = maxH;
     this.uRead = Math.sqrt(maxSp2);
     if (meta.seq >= this.hBoostSeq) this.hBoost = 0;
+    if (meta.simTime > this.uBoostTime) this.uBoost = 0;
     this.diagnostics = { nonFiniteCells: nonFinite, minDepth: minH, processMs: now() - t0 };
   }
 

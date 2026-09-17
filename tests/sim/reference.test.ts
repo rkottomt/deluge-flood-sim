@@ -65,6 +65,7 @@ async function compare(c: Case) {
     uMax: o.uMax,
     froudeMax: o.froudeMax,
     advection: o.advection,
+    wallAdvection: o.wallAdvection,
     rain: Math.fround(p.rainRate / 3.6e6),
     infiltration: Math.fround(p.infiltrationRate / 3.6e6),
     open: p.boundary === 'open',

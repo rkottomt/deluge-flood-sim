@@ -100,3 +100,32 @@ test('SimStats.massError < 1e-3 in an open domain with rain, storm, inflow, stag
   assert.deepEqual(gpuErrors(), []);
   solver.destroy();
 });
+
+test('SimStats.massError is normalized by the most water held, not by the ever-growing inflow volume', async () => {
+  // A stage source on an open edge exchanges water with the boundary while storage stays constant (Pittsburgh's
+  // river discs do ~10,000 m³/s). Normalizing by initial + inflow volume made the percentage shrink without bound.
+  const nx = 64;
+  const ny = 32;
+  const dx = 10;
+  const elevation = new Float32Array(nx * ny);
+  for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) elevation[j * nx + i] = 100 - 0.002 * i * dx;
+  const solver = await makeSolver({ nx, ny, cellSize: dx, elevation, params: { boundary: 'open', manningN: 0.03 } });
+  solver.setSources([{ id: 'stage', type: 'stage', gx: 0, gy: ny / 2, radius: 8, level: 103 }]);
+  let peak = 0;
+  let snap = await solver.readbackNow();
+  for (let k = 0; k < 40; k++) {
+    snap = await stepAndSnapshot(solver, 100, { chunk: 100 });
+    peak = Math.max(peak, snap.stats.volume);
+    const s = snap.stats;
+    const expected = Math.abs(s.volume - (s.volumeIn - s.volumeOut)) / Math.max(1, peak);
+    assert.ok(Math.abs(s.massError - expected) <= 1e-9 * Math.max(expected, 1e-9), `massError ${s.massError} vs ${expected}`);
+  }
+  const s = snap.stats;
+  console.log(
+    `  churn: in=${s.volumeIn.toExponential(2)} m³ vs peak storage ${peak.toExponential(2)} m³, massError ${s.massError.toExponential(2)}`,
+  );
+  assert.ok(s.volumeIn > 5 * peak, 'test should push far more water through than it stores');
+  assert.ok(s.massError < 1e-3);
+  assert.deepEqual(gpuErrors(), []);
+  solver.destroy();
+});

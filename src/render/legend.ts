@@ -47,7 +47,7 @@ export const MAX_DEPTH_BANDS: HazardBand[] = [
 ];
 
 export const VELOCITY_BANDS: HazardBand[] = [
-  { min: 0, max: 0.5, color: '#857657', label: '< 0.5 m/s', note: 'Ponding (plain water)' },
+  { min: 0, max: 0.5, color: '#7a7264', label: '< 0.5 m/s', note: 'Ponding (plain water)' },
   { min: 0.5, max: 1, color: '#e4c87c', label: '0.5–1 m/s', note: 'Walking pace' },
   { min: 1, max: 2, color: '#eaac5f', label: '1–2 m/s', note: 'Dangerous to wade' },
   { min: 2, max: 3, color: '#f08f4c', label: '2–3 m/s', note: 'Moves cars' },
@@ -59,7 +59,7 @@ export const VELOCITY_BANDS: HazardBand[] = [
  * Legend entry for the normal river / lake in the depth and max-depth maps: water that was there before the flood
  * is not coloured by depth (its depth is not a hazard), only shown as muted plain water.
  */
-export const NORMAL_WATER_LEGEND = { color: '#4a4f4c', label: 'Normal river', note: 'Water there before the flood' } as const;
+export const NORMAL_WATER_LEGEND = { color: '#3c454b', label: 'Normal river', note: 'Water there before the flood' } as const;
 
 /** Whether a mode's map leaves the normal river uncoloured (and the legend should show NORMAL_WATER_LEGEND). */
 export function showsNormalWater(mode: string): boolean {
