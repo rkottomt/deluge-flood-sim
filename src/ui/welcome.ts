@@ -443,24 +443,35 @@ export function createWelcome(ctx: UIContext): HTMLElement {
       sync(store.get());
     }),
   );
-  // The first time walls keep real land dry (per wall layout), say so once: the moment a levee pays off.
+  // The first time walls keep real land dry (per wall layout), say so once: the moment a levee pays off. Only once the
+  // river has arrived and two analyses agree: while the flood still spreads the estimate overshoots (193 acres for a
+  // levee that settles at ~139), and a notice frozen at that number would contradict the live count under the strip.
   let announcedWalls = -1;
+  let prevArea = 0;
   ctx.own(
     bridge.protectionChanged.on((p) => {
       // Walls erased (by any means): the demo levee is gone too.
       if (!p) leveeUp = false;
       const kept = keptStatus(p);
-      if (p && kept && p.areaM2 >= ANNOUNCE_M2 && Math.abs(p.wallCells - announcedWalls) > 0.1 * Math.max(1, announcedWalls)) {
+      const s = store.get();
+      const settled = !riverStatus(s) && !!p && prevArea > 0 && Math.abs(p.areaM2 - prevArea) <= 0.15 * prevArea;
+      prevArea = p?.areaM2 ?? 0;
+      if (p && kept && settled && p.areaM2 >= ANNOUNCE_M2 && Math.abs(p.wallCells - announcedWalls) > 0.1 * Math.max(1, announcedWalls)) {
         announcedWalls = p.wallCells;
+        const who = leveeUp ? 'The levee' : 'Your walls';
+        // With the strip showing, its status line carries the live number: the notice doesn't repeat a snapshot of it.
+        const counted = !dismissed;
         postNotice(store, {
           kind: 'success',
           key: 'walls-protect',
-          title: kept.text.replace(/^Walls keep/, leveeUp ? 'The levee keeps' : 'Your walls keep'),
-          message: 'Green on the map: land that would be under water at this level without the walls.',
+          title: counted ? `${who} ${leveeUp ? 'is' : 'are'} holding` : kept.text.replace(/^Walls keep/, `${who} keep${leveeUp ? 's' : ''}`),
+          message: counted
+            ? 'Green on the map: land that would be under water at this level without the walls. The line under the Try-it buttons counts it as the water moves.'
+            : 'Green on the map: land that would be under water at this level without the walls.',
           durationMs: 8000,
         });
       }
-      sync(store.get());
+      sync(s);
     }),
   );
   bind(

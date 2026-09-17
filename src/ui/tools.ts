@@ -34,6 +34,8 @@ export const MAX_SOURCES = 16;
 export const MAX_STORMS = 8;
 /** How often walls are checked against the water (overtopping notices), ms. */
 const WALL_SCAN_MS = 1500;
+/** Shortest gap between wall scans triggered by wall edits, ms. */
+const WALL_RESCAN_MIN_MS = 250;
 /** Simulated seconds after a wall is drawn before water on top of it counts as overtopping. */
 const OVERTOP_SETTLE_S = 120;
 /** A stage change is judged against existing walls once the slider has been still this long, ms. */
@@ -320,7 +322,9 @@ export function createToolController(canvas: HTMLCanvasElement, deps: ToolContro
 
   function armWallScan(solver: FloodSolver) {
     wallScan.armed = true;
-    wallScan.nextAt = 0;
+    // Soon, but at most a few times a second: the one-click levee raises walls on every frame for ~2 s, and each scan
+    // walks the whole grid.
+    wallScan.nextAt = Math.min(wallScan.nextAt, wallScan.lastAt + WALL_RESCAN_MIN_MS);
     // A wall raised under standing water briefly carries that water on top; judge overtopping once it has drained.
     wallScan.settleUntil = (solver.getSnapshot?.()?.simTime ?? 0) + OVERTOP_SETTLE_S;
     // …and check the new wall against the river stage right away.
@@ -462,10 +466,11 @@ export function createToolController(canvas: HTMLCanvasElement, deps: ToolContro
    * Walls vs water, every WALL_SCAN_MS: tell the user when water pours over a wall they built, and — right after
    * they raise the river — when the new level is higher than their walls. Each message fires once per wall layout.
    */
-  const wallScan = { nextAt: 0, armed: false, overtopSig: NaN, stageSig: NaN, lastSim: 0, settleUntil: 0, stageChangedAt: 0, stageDirty: false };
+  const wallScan = { nextAt: 0, lastAt: -Infinity, armed: false, overtopSig: NaN, stageSig: NaN, lastSim: 0, settleUntil: 0, stageChangedAt: 0, stageDirty: false };
   function checkWalls(t: number) {
     if (!wallScan.armed || t < wallScan.nextAt) return;
     wallScan.nextAt = t + WALL_SCAN_MS;
+    wallScan.lastAt = t;
     const solver = deps.getSolver();
     if (!solver) return;
     let ground: Float32Array, barrier: Float32Array;

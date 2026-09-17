@@ -246,9 +246,13 @@ Monongahela and Ohio cross the domain edge.
   within two cells of it; its level capped at the 95th percentile of those cells + 0.15 m so run-up spray does not
   count) spreads over land below its level twice — over the bare ground, and over ground + walls. Land that would
   stand ≥ 0.3 m deep without the walls but not with them, and is dry now, is *protected*: the renderer tints it green,
-  and the Try-it strip and wall card report the acres and streets. It costs one pass over the barrier field plus the
-  land near the walls (~3–10 ms on the main thread for Pittsburgh's levee) and ignores how long a gap would take to fill
-  the land behind it. A sudden collapse is confirmed by a second run before it is shown. Pittsburgh's scenario carries
+  and the Try-it strip and wall card report the acres and streets. It ignores how long a gap would take to fill the land
+  behind it. A run is ~2–3 ms of warm work on the land near the walls, but on the page's main thread it often took
+  10–20 ms (a dropped frame about every other second during the levee demo), so it runs in a Web Worker
+  (`src/app/protectionWorker.ts`): the page copies the depth field per run (~1–2 ms), and ground + barrier only after a
+  terrain edit. Without walls nothing runs (one scan per terrain edit, stopping at the first wall); naive or diverged
+  readbacks (Break it) are skipped, so the last physical answer stays up. A sudden collapse is confirmed by a second run
+  before it is shown, and the one-time success notice waits until the river has arrived and two runs agree. Pittsburgh's scenario carries
   a demo levee (`ScenarioPreset.levee`, baked): a 2.4 km floodwall along the North Shore from bluff to bluff with its
   crest 1 m above the 1936 record. *Build a levee* resets the water if the flood is already out, raises it along its
   line in ~2 s (each ~40 m piece tall enough for the lowest ground under it), and replays the rise; at the crest it

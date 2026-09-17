@@ -65,6 +65,8 @@ export const PROTECT_WALL_MIN = 0.2;
 export const PROTECT_DEPTH = 0.3;
 /** A body of water needs this much area to press on a wall (smaller ones are ponds and puddles), m². */
 export const PROTECT_BIG_WATER_M2 = 50_000;
+/** A run waits until the terrain has not changed for this long, ms (see ProtectionController.tick). */
+const EDIT_QUIET_MS = 300;
 /** Cells from a wall cell within which water counts as pressing against it. */
 const SEED_RING = 2;
 /** Seeds stand at most this far above the 95th percentile of all seeds (see analyze), m. */
@@ -361,6 +363,10 @@ export class ProtectionController {
   /** A backend run is in flight (runs never overlap); `generation` drops answers from before a reset. */
   private inFlight = false;
   private generation = 0;
+  /** The depth field, barrier array and terrain version of the last run. */
+  private lastInput: { depth: Float32Array; barrier: Float32Array; version: number } | null = null;
+  /** The newest terrain edit seen by tick, and when. */
+  private editSeen: { barrier: Float32Array; version: number; at: number } | null = null;
 
   /**
    * `backend` creates the off-thread runner on first use (only once walls exist); without one, or once it fails, the
@@ -378,6 +384,8 @@ export class ProtectionController {
     this.last = null;
     this.held = false;
     this.walls = null;
+    this.lastInput = null;
+    this.editSeen = null;
     this.inFlight = false;
     this.generation++;
     if (this.published) {
@@ -404,10 +412,20 @@ export class ProtectionController {
     if (!force && !due) return;
     const data = input();
     if (!data) return;
+    // Walls going up (a drag, the one-click levee raising a piece every frame): wait until the edits pause rather than
+    // copying the terrain for the worker on every run.
+    const version = data.terrainVersion;
+    if (version !== undefined && this.lastInput && (this.lastInput.barrier !== data.barrier || this.lastInput.version !== version)) {
+      if (this.editSeen?.barrier !== data.barrier || this.editSeen.version !== version) this.editSeen = { barrier: data.barrier, version, at: now };
+      if (!force && now - this.editSeen.at < EDIT_QUIET_MS) return;
+    }
     this.pending = false;
     this.lastRun = now;
+    // Same water on the same terrain as the last run (paused): nothing new to say.
+    const seen = this.lastInput;
+    if (!force && seen && data.terrainVersion !== undefined && seen.depth === data.depth && seen.barrier === data.barrier && seen.version === data.terrainVersion) return;
+    this.lastInput = data.terrainVersion !== undefined ? { depth: data.depth, barrier: data.barrier, version: data.terrainVersion } : null;
     // No walls at this terrain version: nothing to analyse (checked once per terrain edit, stopping at the first wall).
-    const version = data.terrainVersion;
     if (version === undefined || this.walls?.barrier !== data.barrier || this.walls.version !== version) {
       this.walls = version === undefined ? null : { barrier: data.barrier, version, any: hasWalls(data.barrier) };
     }
@@ -438,6 +456,7 @@ export class ProtectionController {
           if (gen !== this.generation) return;
           this.inFlight = false;
           if (this.backend === backend) this.backend = null;
+          this.lastInput = null;
           this.pending = true;
           this.lastRun = -Infinity;
           console.warn('[deluge] protected-land worker failed, analysing on the main thread:', err);
@@ -467,6 +486,7 @@ export class ProtectionController {
     if (!this.held && prev && prev.areaM2 > 0 && result.areaM2 < prev.areaM2 * 0.5 && result.wallCells === prev.wallCells) {
       this.held = true;
       this.pending = true;
+      this.lastInput = null; // confirm even if the water has not changed (paused)
       this.lastRun = now - this.intervalMs / 2;
       return;
     }

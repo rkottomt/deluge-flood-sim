@@ -209,16 +209,18 @@ test('protection controller: an off-thread backend is created only once walls ex
   // Walls drawn (terrain version bumped): the backend runs it; a second tick while it is in flight does nothing.
   wallRow(v, 28, 0, 63, 4);
   c.onSnapshot();
-  c.tick(1000, () => ({ ...v, terrainVersion: 2 }));
+  c.tick(1000, () => ({ ...v, depth: v.depth.slice(), terrainVersion: 2 }));
+  assert.equal(created, 0, 'waits while the terrain is being edited');
+  c.tick(1400, () => ({ ...v, depth: v.depth.slice(), terrainVersion: 2 }));
   assert.equal(created, 1);
   c.onSnapshot();
-  c.tick(5000, () => ({ ...v, terrainVersion: 2 }));
+  c.tick(5000, () => ({ ...v, depth: v.depth.slice(), terrainVersion: 2 }));
   assert.equal(pendingRuns.length, 1, 'runs never overlap');
   await flush();
   assert.deepEqual(published, [16 * 64]);
   // A reset while a run is in flight drops its answer.
   c.onSnapshot();
-  c.tick(10_000, () => ({ ...v, terrainVersion: 2 }));
+  c.tick(10_000, () => ({ ...v, depth: v.depth.slice(), terrainVersion: 2 }));
   assert.equal(pendingRuns.length, 1);
   c.reset();
   await flush();
@@ -226,13 +228,20 @@ test('protection controller: an off-thread backend is created only once walls ex
   // The backend fails: the next run happens on this thread.
   failNext = true;
   c.onSnapshot();
-  c.tick(20_000, () => ({ ...v, terrainVersion: 2 }));
+  c.tick(20_000, () => ({ ...v, depth: v.depth.slice(), terrainVersion: 2 }));
   await flush();
   assert.deepEqual(published, [16 * 64, null]);
   c.onSnapshot();
-  c.tick(20_001, () => ({ ...v, terrainVersion: 2 }));
+  c.tick(20_001, () => ({ ...v, depth: v.depth.slice(), terrainVersion: 2 }));
   assert.deepEqual(published, [16 * 64, null, 16 * 64], 'synchronous fallback');
   assert.equal(created, 1);
+  // Paused: the same depth field on the same terrain is not analysed again.
+  const frozen = { ...v, depth: v.depth.slice(), terrainVersion: 2 };
+  c.onSnapshot();
+  c.tick(30_000, () => frozen);
+  c.onSnapshot();
+  c.tick(40_000, () => frozen);
+  assert.deepEqual(published, [16 * 64, null, 16 * 64, 16 * 64], 'unchanged input runs once');
   assert.ok(warned.some((w) => /worker failed/.test(w)), 'the fallback is reported');
 });
 

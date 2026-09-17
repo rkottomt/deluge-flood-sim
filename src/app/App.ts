@@ -9,7 +9,7 @@ import { createDebugApi, type DelugeDebug } from './debugApi';
 import { APP_CONFIG, createInitialState } from './defaults';
 import { FrameDriver } from './driver';
 import { errorMessage, ErrorReporter } from './errors';
-import { EvacController } from './evac';
+import { EvacController, snapshotIsPhysical } from './evac';
 import { WorkBudget, type BudgetMode } from './governor';
 import { FrameCeiling } from './frameCeiling';
 import { GpuLatencyProbe } from './latency';
@@ -492,6 +492,8 @@ export class App {
     if (!scene || !snap) return null;
     const { solver, terrain } = scene;
     if (snap.nx !== solver.nx || snap.ny !== solver.ny) return null;
+    // A blown-up or naive solver's water (stability demo) says nothing about the walls: keep the last physical answer.
+    if (this.store.get().sim.stabilityMode !== 'robust' || !snapshotIsPhysical(snap)) return null;
     return {
       nx: solver.nx,
       ny: solver.ny,

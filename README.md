@@ -42,7 +42,7 @@ URL options: `?preset=pittsburgh|johnstown|ellicott|sandbox`, or any US area wit
 4. **Break it** (Try-it strip or How it works) swaps in a textbook explicit solver and drops one small splash mid-view;
    it blows up within seconds. **Restore** recovers.
 
-![The one-click levee along the North Shore at the 1936 crest: the land it keeps dry is green, the Try-it strip counts 135 acres and 11 km of streets](docs/levee-north-shore.jpg)
+![The one-click levee along the North Shore at the 1936 crest: the land it keeps dry is green, the Try-it strip counts the acres and streets it saves](docs/levee-north-shore.jpg)
 
 On a live area with no river crossing the map edge (picked with *Pick any US location*), the first button drops a
 thunderstorm over the view instead.
