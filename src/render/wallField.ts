@@ -313,32 +313,26 @@ export class WallField {
   }
 
   /**
-   * rgba16float texels for a rectangle: r = distance (cells), g = wall height (m), b = crest elevation (m) relative
-   * to `elevOrigin` (half floats keep ~0.25 m precision over a few hundred metres of relief), a = 0.
+   * rgba16float texels for a rectangle: r = proximity 1 − distance/(radius + 1) (so an all-zero texture means "no
+   * wall anywhere" and bilinear filtering interpolates distance), g = wall height (m), b = crest elevation (m)
+   * relative to elevOrigin (half floats keep ~0.25 m precision over a few hundred metres of relief), a = 0.
    */
   packHalf(rect: Rect, elevOrigin: number): Uint16Array {
     const w = rect.x1 - rect.x0;
     const h = rect.y1 - rect.y0;
     const out = new Uint16Array(w * h * 4);
     const { nx, dist, height, crest } = this;
-    const hCap = toHalf(this.radius + 1);
-    const zero = toHalf(0);
+    const cap = this.radius + 1;
     for (let y = 0; y < h; y++) {
       const src = (rect.y0 + y) * nx;
       for (let x = 0; x < w; x++) {
         const s = src + rect.x0 + x;
-        const o = (y * w + x) * 4;
         const d = dist[s];
-        if (d > this.radius) {
-          out[o] = hCap;
-          out[o + 1] = zero;
-          out[o + 2] = zero;
-        } else {
-          out[o] = toHalf(d);
-          out[o + 1] = toHalf(height[s]);
-          out[o + 2] = toHalf(crest[s] - elevOrigin);
-        }
-        out[o + 3] = zero;
+        if (d > this.radius) continue; // zeros
+        const o = (y * w + x) * 4;
+        out[o] = toHalf(1 - d / cap);
+        out[o + 1] = toHalf(height[s]);
+        out[o + 2] = toHalf(crest[s] - elevOrigin);
       }
     }
     return out;

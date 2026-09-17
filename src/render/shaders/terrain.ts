@@ -159,7 +159,10 @@ fn fsTerrain(in: VOut) -> @location(0) vec4f {
       // Saturated burlap/sand tan so the levee stands apart from roofs, roads and trees; light concrete otherwise.
       let sandbag = vec3f(0.60, 0.33, 0.085) * bag * jitter;
       let joint = 1.0 - (1.0 - smoothstep(0.0, 0.04, abs(fract((in.world.x - in.world.z) / 5.0) - 0.5) * 2.0)) * 0.35 * detailFade;
-      let concreteCol = vec3f(0.60, 0.59, 0.55) * joint;
+      // Light concrete up close; when the wall is only a few pixels wide it takes the same golden accent as sandbags
+      // (and the wall preview), so every wall the user built reads as theirs against pale roofs and roads.
+      let farAccent = smoothstep(4.0, 1.5, 0.5 * F.cellSize / pxM);
+      let concreteCol = mix(vec3f(0.60, 0.59, 0.55) * joint, vec3f(0.60, 0.40, 0.14), farAccent * 0.75);
       albedo = mix(albedo, mix(sandbag, concreteCol, concrete), wallBody);
 
       // Drop shadow on the side away from the sun (length from the wall height, at least a couple of pixels),

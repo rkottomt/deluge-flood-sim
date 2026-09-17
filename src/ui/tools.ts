@@ -33,6 +33,8 @@ export const MAX_SOURCES = 16;
 export const MAX_STORMS = 8;
 /** How often walls are checked against the water (overtopping notices), ms. */
 const WALL_SCAN_MS = 1500;
+/** Simulated seconds after a wall is drawn before water on top of it counts as overtopping. */
+const OVERTOP_SETTLE_S = 120;
 /** A stage change is judged against existing walls once the slider has been still this long, ms. */
 const STAGE_SETTLE_MS = 700;
 /** Cursor ring colours. */
@@ -279,6 +281,11 @@ export function createToolController(canvas: HTMLCanvasElement, deps: ToolContro
     lastWallEnd = { gx: simple[simple.length - 2], gy: simple[simple.length - 1] };
     wallScan.armed = true;
     wallScan.nextAt = 0;
+    // A wall raised under standing water briefly carries that water on top; judge overtopping once it has drained.
+    wallScan.settleUntil = (solver.getSnapshot?.()?.simTime ?? 0) + OVERTOP_SETTLE_S;
+    // …and check the new wall against the river stage right away.
+    wallScan.stageDirty = true;
+    wallScan.stageChangedAt = 0;
     bridge.wallDrawn.emit();
   }
 
@@ -416,7 +423,7 @@ export function createToolController(canvas: HTMLCanvasElement, deps: ToolContro
    * Walls vs water, every WALL_SCAN_MS: tell the user when water pours over a wall they built, and — right after
    * they raise the river — when the new level is higher than their walls. Each message fires once per wall layout.
    */
-  const wallScan = { nextAt: 0, armed: false, overtopSig: NaN, stageSig: NaN, lastSim: 0, stageChangedAt: 0, stageDirty: false };
+  const wallScan = { nextAt: 0, armed: false, overtopSig: NaN, stageSig: NaN, lastSim: 0, settleUntil: 0, stageChangedAt: 0, stageDirty: false };
   function checkWalls(t: number) {
     if (!wallScan.armed || t < wallScan.nextAt) return;
     wallScan.nextAt = t + WALL_SCAN_MS;
@@ -440,10 +447,17 @@ export function createToolController(canvas: HTMLCanvasElement, deps: ToolContro
       return;
     }
     // Water reset → the same walls may be overtopped again later.
-    if (snap && snap.simTime < wallScan.lastSim - 1) wallScan.overtopSig = NaN;
+    if (snap && snap.simTime < wallScan.lastSim - 1) {
+      wallScan.overtopSig = NaN;
+      wallScan.settleUntil = snap.simTime + OVERTOP_SETTLE_S;
+    }
     if (snap) wallScan.lastSim = snap.simTime;
 
-    if (scan.overtopped >= 3 && scan.signature !== wallScan.overtopSig && s.sim.stabilityMode === 'robust') {
+    const settled = !!snap && snap.simTime >= wallScan.settleUntil;
+    // One notice per scan; overtopping (what is happening) wins over the stage warning (what will happen).
+    let posted = false;
+    if (settled && scan.overtopped >= 3 && scan.signature !== wallScan.overtopSig && s.sim.stabilityMode === 'robust') {
+      posted = true;
       wallScan.overtopSig = scan.signature;
       const need = Math.min(WALL_MAX, Math.ceil(scan.neededHeight * 2) / 2);
       const share = Math.max(1, Math.round((scan.overtopped / scan.cells) * 100));
@@ -465,7 +479,7 @@ export function createToolController(canvas: HTMLCanvasElement, deps: ToolContro
     if (wallScan.stageDirty && t - wallScan.stageChangedAt >= STAGE_SETTLE_MS && ctrl && level !== null) {
       wallScan.stageDirty = false;
       const sig = scan.signature * 31 + Math.round(level * 10);
-      if (scan.belowLevel >= 3 && sig !== wallScan.stageSig) {
+      if (!posted && scan.belowLevel >= 3 && sig !== wallScan.stageSig) {
         wallScan.stageSig = sig;
         const need = Math.min(WALL_MAX, Math.ceil(scan.neededHeight * 2) / 2);
         const share = Math.max(1, Math.round((scan.belowLevel / scan.cells) * 100));

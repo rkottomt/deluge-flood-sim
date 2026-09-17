@@ -17,26 +17,24 @@
  *   cap  robust mode clamps |q| ≤ hf·min(uMax, FrMax·√(g·hf)) — a last line of defence on thin films.
  *
  * SMOOTHING. A staggered explicit scheme is non-dissipative for gravity waves, so at low friction it keeps
- * grid-scale (2Δx) sloshing forever. de Almeida et al. (2012) damp it with θ-smoothing along each face's
- * normal, q̃ = q + (1−θ)/2·L with the 1-D Laplacian L = (q_up − q) + (q_down − q). On its own L is also
- * a strong artificial viscosity (≈ 0.1·dx²/dt ≈ 10 m²/s on a 7 m grid) acting on EVERY grid-scale pattern —
- * including the zig-zag a river MUST follow to run diagonally across a raster (it turns 90° at every stair
- * step of its banks). That viscosity made channels not aligned with the grid run 3–5× deeper than Manning's
- * normal depth. We therefore limit L by the divergence-damping increment G = D_R − D_L, where D is the
- * discrete divergence (net outflow) of the two cells sharing the face — the same operator the continuity
- * pass uses:
- *     L, G same sign → the smaller one;   opposite signs → 0          (minmod).
- *  • gravity-wave noise is DIVERGENT: L and G agree, the damping is de Almeida's (G ⊇ L plus transverse
- *    terms of the same sign). The 2-D checkerboard is damped exactly as before, so the stability limit
- *    Cr ≤ √θ (Solver.computeDt) is unchanged; for any other Fourier mode the damping lies between 0 and
- *    de Almeida's, which only relaxes the limit.
+ * grid-scale (2Δx) sloshing forever. de Almeida et al. (2012) damp it with θ-smoothing along each face's normal,
+ * q̃ = q + (1−θ)/2·L with the 1-D Laplacian L = w_up·(q_up − q) + w_down·(q_down − q). On its own L is also a
+ * strong artificial viscosity (≈ 0.1·dx²/dt ≈ 10 m²/s on a 7 m grid) acting on EVERY grid-scale pattern,
+ * including the zig-zag a river MUST follow to run diagonally across a raster (it turns 90° at every stair step
+ * of its banks): channels not aligned with the grid ran 3–5× deeper than Manning's normal depth. So L is
+ * limited by the divergence-damping increment G = D_R − D_L, where D is the discrete divergence (net outflow) of
+ * the two cells sharing the face, the same operator the continuity pass uses:
+ *     L, G same sign → the one closer to 0;   opposite signs → 0          (minmod).
+ *  • gravity-wave noise is DIVERGENT: L and G agree (G = L plus transverse terms of the same sign), the damping
+ *    is de Almeida's. The 2-D checkerboard is damped exactly as before, so the stability limit Cr ≤ √θ
+ *    (Solver.computeDt) is unchanged; for any other Fourier mode the damping lies between 0 and de Almeida's,
+ *    which only relaxes the limit.
  *  • flow turning around a stair step is DIVERGENCE-FREE (G = 0): not damped at all.
+ *  • a wet/dry front or flow into a dead end is 1-D and divergent (G = L): damped as before. A dry face stores
+ *    q = 0, which is simply its value in L; no wet/dry switch is needed.
  *  • uniform flow: L = G = 0, preserved exactly; still water: q = 0 stays 0 (well-balanced).
- *  L uses neighbour weights w = min(1, K·hf/hf_neighbour) (K = smoothingDepthRatio), w = 0 for a dry/blocked
- *  neighbour — i.e. that neighbour counts as "equal to this face" (zero-gradient / free slip), never as 0.
- *  (Counting a wall as q = 0 bled 10 % of the discharge per substep out of every face next to a wall or a
- *  wet/dry edge.) The depth weight keeps a deep channel's discharge from being poured into a thin shoreline
- *  film; since |minmod(L, G)| ≤ |L|, G inherits that protection.
+ *  w = min(1, K·hf/hf_neighbour) (K = smoothingDepthRatio): a neighbour more than K× deeper counts less, so a deep
+ *  channel's discharge is not poured into a thin shoreline film; |minmod(L, G)| ≤ |L| inherits that protection.
  *
  * ADVECTION is evaluated only where the 4 neighbouring faces of the same orientation (the stencil of the
  * upwind momentum fluxes) are all wet (advWeight). Next to a dry or blocked face the first-order upwind flux of a
@@ -76,22 +74,26 @@ fn isWet(hf: f32) -> bool {
   return hf >= sim.hMin;
 }
 
-// Wet/dry ramp of a face depth: 0 below hMin, 1 above 2·hMin. Physically the same as a hMin threshold, but it keeps
-// the update a continuous function of the state, so a film hovering at the threshold cannot switch a whole term
-// on and off (and Float32 vs Float64 rounding cannot either: tests/sim/reference.test.ts).
-fn wetRamp(hf: f32) -> f32 {
-  return clamp(hf / sim.hMin - 1.0, 0.0, 1.0);
+// Wet/dry weight of a neighbouring face with flow depth hfN seen from a wet face of depth hf: 0 when the neighbour
+// is dry or blocked (hfN < hMin), 1 once it holds max(hMin, 1 % of hf) more — a neighbour 100× shallower than this
+// face is still "dry" for the purpose of the advection stencil. A threshold, but a CONTINUOUS one: a film hovering
+// at the wet/dry threshold cannot switch the advection of a deep face on and off, and neither can rounding (Metal
+// compiles with fast-math, so a film's face depth max(η) − max(z) carries the Float32 rounding of the bed
+// elevation: ~1e-6 m at 10 m above the datum, ~1e-5 m at 100 m).
+fn wetRamp(hfN: f32, hf: f32) -> f32 {
+  return clamp((hfN - sim.hMin) / max(sim.hMin, 0.01 * hf), 0.0, 1.0);
 }
 
-// Advection weight from the depths of the 4 neighbouring parallel faces: 1 when all are wet, 0 when any is dry or
-// blocked (see header).
-fn advWeight(hfA: f32, hfB: f32, hfC: f32, hfD: f32) -> f32 {
-  return wetRamp(min(min(hfA, hfB), min(hfC, hfD)));
+// Advection weight of a face with depth hf from the depths of its 4 neighbouring parallel faces: 1 when all are
+// wet, 0 when any is dry or blocked (see header).
+fn advWeight(hf: f32, hfA: f32, hfB: f32, hfC: f32, hfD: f32) -> f32 {
+  return wetRamp(min(min(hfA, hfB), min(hfC, hfD)), hf);
 }
 
-// Laplacian weight of a neighbouring parallel face with flow depth hfN (0 = dry/blocked or much deeper; see header).
+// Laplacian weight of a neighbouring parallel face with flow depth hfN: 1, or less if the neighbour is more than
+// K× deeper (see header). No wet/dry switch: a dry face stores q = 0, which is simply its value.
 fn smoothW(hf: f32, hfN: f32) -> f32 {
-  return wetRamp(hfN) * min(1.0, sim.smoothRatio * hf / max(hfN, sim.hMin));
+  return min(1.0, sim.smoothRatio * hf / max(hfN, sim.hMin));
 }
 
 fn minmod(a: f32, b: f32) -> f32 {
@@ -178,7 +180,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
       let hfS = faceDepth(s.r, s.a, se.r, se.a);
       let hfN = faceDepth(n.r, n.a, ne.r, ne.a);
       var adv = 0.0;
-      let wAdv = advWeight(hfW, hfE, hfS, hfN);
+      let wAdv = advWeight(hf, hfW, hfE, hfS, hfN);
       if (sim.advection != 0 && wAdv > 0.0) {
         let uW = vel(w.g, hfW);
         let uC = vel(c.g, hf);
@@ -218,7 +220,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
       let hfE = faceDepth(e.r, e.a, se.r, se.a);
       let hfW = faceDepth(w.r, w.a, sw.r, sw.a);
       var adv = 0.0;
-      let wAdv = advWeight(hfN, hfS, hfE, hfW);
+      let wAdv = advWeight(hf, hfN, hfS, hfE, hfW);
       if (sim.advection != 0 && wAdv > 0.0) {
         let vN = vel(n.b, hfN);
         let vC = vel(c.b, hf);

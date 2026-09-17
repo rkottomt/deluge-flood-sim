@@ -257,6 +257,8 @@ export function createLocationPicker(ctx: UIContext): Modal {
       probing = null;
       if (!ok && !offlinePresets.childElementCount) renderOfflinePresets();
       offlineBanner.hidden = ok;
+      // Offline, the banner says what matters; keep the column short enough to show the Load button.
+      usNote.hidden = !ok;
       syncLoad();
       return ok;
     });
@@ -310,6 +312,7 @@ export function createLocationPicker(ctx: UIContext): Modal {
     }
     loadError.hidden = false;
     syncLoad();
+    loadBtn.scrollIntoView({ block: 'nearest' });
   });
 
   function syncLoad() {

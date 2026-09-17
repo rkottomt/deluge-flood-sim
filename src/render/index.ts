@@ -930,6 +930,10 @@ class DelugeRenderer implements DelugeRendererAPI {
     }
     this.camera.update(dt);
 
+    // Terrain / wall edits are looked for on every call (≈0.2 ms), including frames the idle cap then skips: a
+    // detected edit changes the frame signature, so the next call draws it.
+    if (this.scene) this.watchEdits(this.scene);
+
     // Idle frame cap: when nothing but the clock changed (camera still, same solver state, same overlays and
     // settings, no rain), draw at most `idleFps` — saves GPU/thermal budget on fanless laptops.
     let preset = this.preset();
@@ -954,7 +958,6 @@ class DelugeRenderer implements DelugeRendererAPI {
 
     const s = this.scene;
     if (s) {
-      this.watchEdits(s);
       s.lod.refreshSome();
       const [lo, hi] = s.lod.range;
       s.hf.minElev = lo;

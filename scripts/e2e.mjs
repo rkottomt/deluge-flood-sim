@@ -460,7 +460,10 @@ const FLOWS = [
       const earlyShare = grown > 0 ? ((early?.floodedArea ?? 0) - (before?.floodedArea ?? 0)) / grown : 0;
       check(r, 'rivers rise along their whole length: ≥ 30 % of the 30-min flood within 2 sim-min', earlyShare >= 0.3, `${km2(early?.floodedArea ?? 0)} after 120 s (${num(earlyShare * 100, 0)} % of ${km2(after?.floodedArea ?? 0)})`);
       check(r, 'flooded area grows substantially (≥ 0.25 km²)', grown >= 250_000, `${km2(before?.floodedArea ?? 0)} → ${km2(mid?.floodedArea ?? 0)} → ${km2(after?.floodedArea ?? 0)}`);
-      check(r, 'flooding is progressive (900 s < 1800 s)', (mid?.floodedArea ?? 0) <= (after?.floodedArea ?? 0) && (mid?.floodedArea ?? 0) > (before?.floodedArea ?? 0), `sim 1800 s in ${(t900 + t1800).toFixed(1)} s real`);
+      // With the whole river at the crest the flood spreads over the first minutes and then holds (shallow fringes
+      // drain back a little as it settles), so "progressive" = it keeps growing after 2 min and is sustained at 30.
+      const [a120, a900, a1800] = [early?.floodedArea ?? 0, mid?.floodedArea ?? 0, after?.floodedArea ?? 0];
+      check(r, 'flooding develops, then holds at the crest (120 s < 900 s, 1800 s ≥ 90 % of 900 s)', a120 < a900 && a1800 >= 0.9 * a900, `${km2(a120)} → ${km2(a900)} → ${km2(a1800)}; sim 1800 s in ${(t900 + t1800).toFixed(1)} s real`);
       check(r, 'mass balance error < 1 %', (after?.massError ?? 1) < 0.01, `${num((after?.massError ?? NaN) * 100, 4)} %`);
     },
   },

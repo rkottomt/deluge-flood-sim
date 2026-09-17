@@ -68,16 +68,18 @@ fn faceDepth(hL: f32, zL: f32, hR: f32, zR: f32) -> f32 {
 //       pool surface pins the banks), hillside sheet flow leaves at its own slope (surface ∥ bed), and a single dry
 //       bump next to the edge can't fake a cliff.
 //    S never depends on this cell's own depth: an outflow that DEcreased as the edge cell filled would be
-//    anti-diffusive, i.e. unstable in an explicit scheme. Robust mode caps this part at Froude bFrMax (1 = critical
-//    flow, q = h·√(g·h)): water pouring over a free edge (a weir brink) cannot leave faster than critical flow.
+//    anti-diffusive, i.e. unstable in an explicit scheme.
 //
 // 2. TRANSMISSIVE: the discharge arriving through the last interior face (previous step). On its own, normal flow
 //    needs the edge cell to pond until h^{5/3}·√S/n matches what arrives; once a river backs up its surface is flat,
 //    S drops to minSlope, and a river sloping to the edge ran ~2.5× its normal depth over its last ~2 km. With
 //    the max the edge cell simply passes on what reaches it, so a river leaves at the depth it arrives with. It
 //    never drains the edge cell below what normal flow would, so it adds no feedback, and it depends only on the
-//    neighbouring face, not on this cell's depth. Robust mode bounds it by the interior velocity/Froude cap
-//    (the face it copies obeyed that cap already; this re-applies it at the edge cell's own depth).
+//    neighbouring face, not on this cell's depth.
+// Robust mode caps the result at Froude bFrMax (1 = critical flow, q = h·√(g·h)): water pouring over a free edge
+// (a weir brink) cannot leave faster than critical flow. Rivers reach the edge subcritical and are unaffected; the
+// cap matters where terrain drops toward the edge: without it an edge cell whose bed lies below a pool's surface
+// became a supercritical drain hole (the transmissive term passes on whatever pours into it).
 fn bflux(h: f32, i: i32, j: i32, di: i32, dj: i32) -> f32 {
   if (sim.openBnd == 0 || !(h >= sim.hMin)) { return 0.0; }
   let a = st(i + di, j + dj);
@@ -96,12 +98,10 @@ fn bflux(h: f32, i: i32, j: i32, di: i32, dj: i32) -> f32 {
   if (dj < 0) { qIn = a.b; }
   if (di > 0) { qIn = -st(i, j).g; }
   if (dj > 0) { qIn = -st(i, j).b; }
-  qIn = max(qIn, 0.0);
+  var q = max(qNormal, qIn);
   if (sim.robust != 0) {
-    let c = sqrt(sim.g * h);
-    qNormal = min(qNormal, h * min(sim.uMax, sim.bFrMax * c));
-    qIn = min(qIn, h * min(sim.uMax, sim.frMax * c));
+    q = min(q, h * min(sim.uMax, sim.bFrMax * sqrt(sim.g * h)));
   }
-  return max(qNormal, qIn);
+  return q;
 }
 `;

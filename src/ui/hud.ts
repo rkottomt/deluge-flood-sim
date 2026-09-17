@@ -173,10 +173,13 @@ export function createHud(ctx: UIContext, achievedSpeed: () => number | null): H
     naive,
     probeLine,
   );
-  collapseBtn.addEventListener('click', () => {
-    const c = el.classList.toggle('dl-collapsed');
+  const setCollapsed = (c: boolean) => {
+    el.classList.toggle('dl-collapsed', c);
     collapseBtn.setAttribute('aria-label', c ? 'Expand statistics' : 'Collapse statistics');
-  });
+  };
+  collapseBtn.addEventListener('click', () => setCollapsed(!el.classList.contains('dl-collapsed')));
+  // On a phone the full HUD would cover a third of the map: start collapsed there.
+  if (typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 600px)').matches) setCollapsed(true);
   bind((s) => s.paused || !s.stats, (idle) => toggleClass(el, 'dl-idle', idle));
   void store;
   return el;

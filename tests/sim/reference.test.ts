@@ -23,6 +23,12 @@ interface Case {
   tol: number;
   /** Fixed timestep, s (default 0.25). */
   dt?: number;
+  /**
+   * Re-start the CPU from the GPU state before every step and compare single steps. For chaotic flows, where
+   * Float32 vs Float64 rounding (~1e-7 m per step) grows exponentially and a free-running comparison would test
+   * the chaos rather than the transcription.
+   */
+  resync?: boolean;
   /** Extra uniform depth everywhere (m). */
   fill?: number;
   options?: Record<string, unknown>;
@@ -70,19 +76,32 @@ async function compare(c: Case) {
     forcing: packForcing(c.sources ?? [], c.storms ?? [], nx, ny, dx, z0, (k) => elevation[k]),
   };
   const v0 = cpu.volume(dx);
-  for (let k = 0; k < c.steps; k++) cpu.step(sp);
-  solver.runSubsteps(c.steps, dt);
-  const snap = await solver.readbackNow();
-  const gpu = await solver.debugReadState();
-
   let maxDh = 0;
   let maxDq = 0;
   let maxH = 0;
-  for (let k = 0; k < nx * ny; k++) {
-    maxDh = Math.max(maxDh, Math.abs(gpu.h[k] - cpu.h[k]));
-    maxDq = Math.max(maxDq, Math.abs(gpu.qx[k] - cpu.qx[k]), Math.abs(gpu.qy[k] - cpu.qy[k]));
-    maxH = Math.max(maxH, cpu.h[k]);
+  const diff = (gpu: { h: Float32Array; qx: Float32Array; qy: Float32Array }) => {
+    for (let k = 0; k < nx * ny; k++) {
+      maxDh = Math.max(maxDh, Math.abs(gpu.h[k] - cpu.h[k]));
+      maxDq = Math.max(maxDq, Math.abs(gpu.qx[k] - cpu.qx[k]), Math.abs(gpu.qy[k] - cpu.qy[k]));
+      maxH = Math.max(maxH, cpu.h[k]);
+    }
+  };
+  if (c.resync) {
+    for (let k = 0; k < c.steps; k++) {
+      cpu.step(sp);
+      solver.runSubsteps(1, dt);
+      const gpu = await solver.debugReadState();
+      diff(gpu);
+      cpu.h = Float64Array.from(gpu.h);
+      cpu.qx = Float64Array.from(gpu.qx);
+      cpu.qy = Float64Array.from(gpu.qy);
+    }
+  } else {
+    for (let k = 0; k < c.steps; k++) cpu.step(sp);
+    solver.runSubsteps(c.steps, dt);
+    diff(await solver.debugReadState());
   }
+  const snap = await solver.readbackNow();
   const cpuV = cpu.volume(dx);
   const volRel = Math.abs(snap.stats.volume - cpuV) / Math.max(cpuV, 1);
   const inRel = Math.abs(snap.stats.volumeIn - cpu.volumeIn) / Math.max(cpu.volumeIn, 1);
@@ -97,9 +116,10 @@ async function compare(c: Case) {
 
 const cases: Case[] = [
   { label: 'wall, friction', params: { boundary: 'wall', manningN: 0.03 }, steps: 400, tol: 2e-3 },
-  // Frictionless sloshing over rough terrain amplifies Float32 rounding through wet/dry threshold crossings
-  // (step 1 differs by ~3e-7 m, then grows chaotically), so this case is kept short.
-  { label: 'wall, frictionless', params: { boundary: 'wall', manningN: 0 }, steps: 100, tol: 2e-3 },
+  // Frictionless sloshing over rough terrain is chaotic: Float32 rounding (step 1 differs by ~3e-7 m) grows
+  // exponentially through wet/dry edges and upwind switches, so a free-running comparison drifts apart within
+  // ~100 steps whatever the transcription. Compare single steps from the GPU state instead (much tighter tolerance).
+  { label: 'wall, frictionless (per step)', params: { boundary: 'wall', manningN: 0 }, steps: 400, tol: 1e-4, resync: true },
   { label: 'open, no advection', params: { boundary: 'open', manningN: 0.02 }, steps: 400, tol: 2e-3, options: { advection: false } },
   {
     label: 'open + rain + infiltration + storm + inflow + stage',

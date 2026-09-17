@@ -250,9 +250,14 @@ struct WallHit {
 }
 
 fn wallAt(uv: vec2f) -> WallHit {
-  let w = textureSampleLevel(wallTex, linSamp, uv, 0.0);
+  // Four bilinear taps half a cell apart (a 2×2-cell tent): the field measures distance to wall CELL centres, whose
+  // contours are stair-stepped along diagonal walls; the small blur rounds them into a smooth outline.
+  let e = 0.5 / F.grid;
+  let w = 0.25 * (textureSampleLevel(wallTex, linSamp, uv + vec2f(e.x, e.y), 0.0) + textureSampleLevel(wallTex, linSamp, uv + vec2f(-e.x, e.y), 0.0)
+                + textureSampleLevel(wallTex, linSamp, uv + vec2f(e.x, -e.y), 0.0) + textureSampleLevel(wallTex, linSamp, uv - e, 0.0));
   var o: WallHit;
-  o.d = (1.0 - w.r) * F.wall.y * F.cellSize;
+  // The blur lifts the distance on the centre line by ~0.35 cells; take that back so the crest keeps its width.
+  o.d = max((1.0 - w.r) * F.wall.y - 0.35, 0.0) * F.cellSize;
   o.h = w.g;
   o.crest = w.b + F.wall.z;
   return o;

@@ -15,7 +15,7 @@ const MIN_PITCH = 0.035;
 /** Lowest pitch once the camera is far out (≥ half the domain away): anything lower only shows the nearest hill. */
 const FAR_MIN_PITCH = 0.2;
 /** Lowest pitch with the eye well outside the diorama (it would look at the terrain block's side wall). */
-const OUTSIDE_MIN_PITCH = 0.42;
+const OUTSIDE_MIN_PITCH = 0.3;
 const MAX_PITCH = Math.PI / 2;
 
 /** Scene information the controller needs (supplied by the renderer). */
@@ -320,7 +320,7 @@ export class OrbitController implements CameraController {
       const ox = Math.max(0, Math.abs(ex) - (e.nx / 2) * e.cellSize);
       const oz = Math.max(0, Math.abs(ez) - (e.ny / 2) * e.cellSize);
       const outside = Math.hypot(ox, oz);
-      return Math.max(byDistance, MIN_PITCH + (OUTSIDE_MIN_PITCH - MIN_PITCH) * smooth(0, 0.15 * size, outside));
+      return Math.max(byDistance, MIN_PITCH + (OUTSIDE_MIN_PITCH - MIN_PITCH) * smooth(0, 0.25 * size, outside));
     };
     let lo = byDistance;
     let hi = MAX_PITCH;

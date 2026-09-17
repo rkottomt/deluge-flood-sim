@@ -4,8 +4,7 @@
 import { h, setText, toggleClass, type UIContext } from './dom';
 import { icon, logoMark } from './icons';
 import { bridgeFor, type Notice } from './bridge';
-import { stopBreakDemo } from './stabilityDemo';
-import { fmtNum } from './format';
+import { BREAK_TIME_SCALE, stopBreakDemo } from './stabilityDemo';
 
 const TIPS = [
   'Tip: press ? any time for shortcuts and a 30-second tour.',
@@ -86,7 +85,7 @@ export function createNotices(ctx: UIContext, extra: { top?: HTMLElement[]; bott
     h(
       'span',
       { class: 'dl-naive-text' },
-      h('span', { class: 'dl-naive-line' }, h('b', null, 'Stability demo'), ' — naive explicit solver at Courant 1.8, slowed to ', h('b', { class: 'dl-naive-speed' }), ' so you can watch.'),
+      h('span', { class: 'dl-naive-line' }, h('b', null, 'Stability demo'), ' — naive explicit solver at Courant 1.8', h('span', { class: 'dl-naive-slow' }), '.'),
       h('span', { class: 'dl-naive-legend' }, h('i', { class: 'dl-naive-swatch', 'aria-hidden': 'true' }), 'Magenta speckle = cells whose depth became infinite or NaN'),
     ),
     h(
@@ -96,9 +95,12 @@ export function createNotices(ctx: UIContext, extra: { top?: HTMLElement[]; bott
       h('span', null, 'Restore robust solver'),
     ),
   );
-  const speedText = banner.querySelector('.dl-naive-speed') as HTMLElement;
+  const slowText = banner.querySelector('.dl-naive-slow') as HTMLElement;
   bind((s) => s.sim.stabilityMode === 'naive', (on) => toggleClass(banner, 'dl-show', on));
-  bind((s) => s.sim.timeScale, (v) => setText(speedText, `${fmtNum(v, v < 10 ? 1 : 0).replace(/\.0$/, '')}×`));
+  bind(
+    (s) => s.sim.timeScale === BREAK_TIME_SCALE,
+    (slow) => setText(slowText, slow ? `, slowed to ${BREAK_TIME_SCALE}× so you can watch it start` : ''),
+  );
 
   // Error toast (real failures only; limits and guidance use the notice toast below).
   const toastMsg = h('p', { class: 'dl-toast-msg' });

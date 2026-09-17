@@ -81,7 +81,10 @@ export function createRouteChip(ctx: UIContext, opts: { reveal(): void }): HTMLE
         void el.offsetWidth;
         el.classList.add('dl-replanned');
         clearTimeout(flashTimer);
-        flashTimer = window.setTimeout(() => el.classList.remove('dl-replanned'), 2400);
+        flashTimer = window.setTimeout(() => {
+          el.classList.remove('dl-replanned');
+          setText(label, 'Safe route to');
+        }, 4000);
         setText(label, 'Re-planned — safe route to');
       }
       lastShelter = name;

@@ -46,12 +46,11 @@ const g = GRAVITY;
 
 /**
  * Free-outflow boundary flux magnitude (outward, ≥ 0) of edge cell (i, j); (di, dj) points into the domain.
- * max(normal flow, transmissive):
+ * max(normal flow, transmissive), capped at Froude boundaryFroudeMax in robust mode:
  *  • normal flow: ghost cell with the same depth and a surface lower by dx·S, S = max(boundaryMinSlope,
  *    min(bed slope, surface slope)) toward the edge between the first and second inner cells (boundaryMinSlope
- *    alone if either is dry): q = h^{5/3}·√S / n, capped at Froude boundaryFroudeMax in robust mode;
- *  • transmissive: the outward discharge through the last interior face (old state), capped at the interior
- *    velocity/Froude cap in robust mode.
+ *    alone if either is dry): q = h^{5/3}·√S / n;
+ *  • transmissive: the outward discharge through the last interior face (old state).
  * See bflux in shaders/common.ts for why.
  */
 export function boundaryFlux(
@@ -79,19 +78,15 @@ export function boundaryFlux(
     const surfS = (z[b] - z[a] + (h[b] - h[a])) / p.dx;
     S = Math.max(Math.min(bedS, surfS), p.boundaryMinSlope);
   }
-  let qNormal = (Math.pow(hc, 5 / 3) * Math.sqrt(S)) / Math.max(p.manningN, 0.01);
+  const qNormal = (Math.pow(hc, 5 / 3) * Math.sqrt(S)) / Math.max(p.manningN, 0.01);
   let qIn = 0;
   if (di < 0) qIn = qx[a];
   if (dj < 0) qIn = qy[a];
   if (di > 0) qIn = -qx[c];
   if (dj > 0) qIn = -qy[c];
-  qIn = Math.max(qIn, 0);
-  if (p.robust) {
-    const cw = Math.sqrt(g * hc);
-    qNormal = Math.min(qNormal, hc * Math.min(p.uMax, p.boundaryFroudeMax * cw));
-    qIn = Math.min(qIn, hc * Math.min(p.uMax, p.froudeMax * cw));
-  }
-  return Math.max(qNormal, qIn);
+  let q = Math.max(qNormal, qIn);
+  if (p.robust) q = Math.min(q, hc * Math.min(p.uMax, p.boundaryFroudeMax * Math.sqrt(g * hc)));
+  return q;
 }
 
 /** Face flow depth hf = max(ηL, ηR) − max(zL, zR), arranged so bed differences cancel before depths add. */
@@ -100,9 +95,12 @@ export function faceDepth(hL: number, zL: number, hR: number, zR: number): numbe
   return Math.max(hL + (zL - zf), hR + (zR - zf));
 }
 
-/** Wet/dry ramp of a face depth: 0 below hMin, 1 above 2·hMin (a continuous hMin threshold; see shaders/momentum.ts). */
-export function wetRamp(hf: number, hMin: number): number {
-  return Math.min(1, Math.max(0, hf / hMin - 1));
+/**
+ * Wet/dry weight of a neighbouring face with depth hfN seen from a wet face of depth hf: 0 below hMin, 1 above
+ * hMin + max(hMin, 1 % of hf) (a continuous wet/dry threshold for the advection stencil; see shaders/momentum.ts).
+ */
+export function wetRamp(hfN: number, hf: number, hMin: number): number {
+  return Math.min(1, Math.max(0, (hfN - hMin) / Math.max(hMin, 0.01 * hf)));
 }
 
 /** minmod(a, b): the smaller-magnitude argument if both have the same sign, else 0. */
@@ -112,9 +110,9 @@ export function minmod(a: number, b: number): number {
 }
 
 /**
- * Smoothing increment of one face: minmod(L, G) with L the depth-weighted 1-D Laplacian along the face normal
- * (a dry/blocked or much deeper neighbour counts as equal to this face) and G = divJump = D_R − D_L, the jump in
- * net cell outflow across the face (see shaders/momentum.ts).
+ * Smoothing increment of one face: minmod(L, G) with L the 1-D Laplacian along the face normal (a much deeper
+ * neighbour weighted down) and G = divJump = D_R − D_L, the jump in net cell outflow across the face (see
+ * shaders/momentum.ts).
  */
 export function smoothingIncrement(
   hf: number,
@@ -126,7 +124,7 @@ export function smoothingIncrement(
   divJump: number,
   p: SchemeStepParams,
 ): number {
-  const w = (hfN: number) => wetRamp(hfN, p.hMin) * Math.min(1, (p.smoothingDepthRatio * hf) / Math.max(hfN, p.hMin));
+  const w = (hfN: number) => Math.min(1, (p.smoothingDepthRatio * hf) / Math.max(hfN, p.hMin));
   return minmod(w(hfUp) * (qUp - qc) + w(hfDn) * (qDn - qc), divJump);
 }
 
@@ -203,7 +201,7 @@ export class CpuReferenceSolver {
     const hfyOf = (i: number, j: number) => faceDepth(h[at(i, j)], z[at(i, j)], h[at(i, j + 1)], z[at(i, j + 1)]);
     const wet = (hf: number) => hf >= p.hMin;
     // Advection weight: 1 if the 4 neighbouring parallel faces are wet, 0 if any is dry (wetRamp).
-    const advWeight = (a: number, b: number, c: number, d: number) => wetRamp(Math.min(a, b, c, d), p.hMin);
+    const advWeight = (hf: number, a: number, b: number, c: number, d: number) => wetRamp(Math.min(a, b, c, d), hf, p.hMin);
     // Velocity of a WET face for the advection term, bounded by uMax in robust mode.
     const vel = (q: number, hf: number) => {
       const u = q / hf;
@@ -242,7 +240,7 @@ export class CpuReferenceSolver {
           const hfN = hfxOf(i, j - 1);
           let adv = 0;
           // Advection only where the whole stencil (the 4 neighbouring x-faces) is wet.
-          const wAdv = advWeight(hfW, hfE, hfS, hfN);
+          const wAdv = advWeight(hf, hfW, hfE, hfS, hfN);
           if (p.advection && wet(hf) && wAdv > 0) {
             const uW = vel(qW, hfW);
             const uC = vel(qx[c], hf);
@@ -276,7 +274,7 @@ export class CpuReferenceSolver {
           const hfE = hfyOf(i + 1, j);
           const hfW = hfyOf(i - 1, j);
           let adv = 0;
-          const wAdv = advWeight(hfN, hfS, hfE, hfW);
+          const wAdv = advWeight(hf, hfN, hfS, hfE, hfW);
           if (p.advection && wet(hf) && wAdv > 0) {
             const vN = vel(qN, hfN);
             const vC = vel(qy[c], hf);

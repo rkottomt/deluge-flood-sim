@@ -72,7 +72,8 @@ test('wall field: exact bounded EDT, fringe threshold, crest, incremental update
 
   const packed = f.packHalf({ x0: 100, y0: 40, x1: 103, y1: 42 }, 100);
   assert.equal(packed.length, 3 * 2 * 4);
-  assert.equal(packed[(1 * 3 + 1) * 4], toHalf(0));
+  assert.equal(packed[(1 * 3 + 1) * 4], toHalf(1), "proximity 1 on the wall cell");
+  assert.equal(packed[(1 * 3 + 1) * 4 + 1], toHalf(2));
 });
 
 test('toHalf encodes representative values', () => {

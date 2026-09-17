@@ -4330,6 +4330,111 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+/* Phone width (a judge opening the shared link on a phone): the top bar becomes two rows (brand + actions,
+   then the full-width transport), the HUD spans the bottom and starts collapsed, the side panel is a bottom
+   sheet, and floating notices keep clear of the tool rail. */
+@media (max-width: 600px) {
+  .dl-ui {
+    --dl-top: calc(var(--dl-gap) * 2 + var(--dl-bar-h) * 2 + 8px);
+  }
+  .dl-topbar {
+    height: auto;
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-rows: var(--dl-bar-h) var(--dl-bar-h);
+    row-gap: 8px;
+  }
+  .dl-brand {
+    grid-column: 1;
+    grid-row: 1;
+    padding: 0 12px;
+  }
+  .dl-wordmark {
+    font-size: 17px;
+  }
+  .dl-actions {
+    grid-column: 2;
+    grid-row: 1;
+    padding: 0 6px;
+  }
+  .dl-transport {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    gap: 8px;
+    padding: 0 6px;
+  }
+  .dl-clock {
+    min-width: 0;
+    flex: none;
+  }
+  .dl-clock-label {
+    display: none;
+  }
+  .dl-clock-value {
+    font-size: 15px;
+  }
+  .dl-speed {
+    flex: 1;
+    min-width: 0;
+  }
+  .dl-speed .dl-seg-btn {
+    flex: 1;
+    min-width: 0;
+    padding: 0 2px;
+    font-size: 11.5px;
+  }
+  .dl-notices {
+    left: calc(var(--dl-gap) * 2 + var(--dl-tool-w));
+    right: var(--dl-gap);
+    width: auto;
+    max-width: none;
+    min-width: 0;
+    transform: none;
+  }
+  .dl-welcome-head {
+    font-size: 11.5px;
+  }
+  .dl-panel-open .dl-welcome.dl-show,
+  .dl-panel-open .dl-notices-bottom {
+    display: none;
+  }
+  .dl-hud {
+    left: var(--dl-gap);
+    right: var(--dl-gap);
+    width: auto;
+  }
+  .dl-hud-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .dl-hud-diag {
+    flex-wrap: wrap;
+    row-gap: 4px;
+  }
+  .dl-notices-bottom {
+    left: var(--dl-gap);
+    right: var(--dl-gap);
+    bottom: calc(var(--dl-gap) + 52px);
+  }
+  .dl-route-dest {
+    max-width: 52vw;
+  }
+  .dl-naive-legend {
+    display: none;
+  }
+  .dl-panel {
+    top: auto;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: auto;
+    max-height: 72vh;
+    border-radius: 18px 18px 0 0;
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    background: linear-gradient(180deg, rgba(22, 30, 42, 0.97), rgba(13, 18, 27, 0.97));
+  }
+  .dl-panel.dl-closed {
+    transform: translateY(calc(100% + 24px));
+  }
+}
 /*
  * Low-effects glass. Backdrop blur is re-rendered by the compositor every frame the canvas changes, which is
  * real GPU work on a thermally throttled fanless laptop. When the measured frame rate sags (see

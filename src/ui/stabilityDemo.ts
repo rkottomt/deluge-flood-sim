@@ -3,20 +3,18 @@
  * (How it works, the getting-started strip, the Advanced switch, the red banner).
  *
  * At normal speeds the naive scheme's Δt is ~1.3 s and it diverges within about ten steps, i.e. in a fraction of
- * a second at 60×: the ripple → spike → NaN sequence is never visible. The demo therefore slows the clock to
- * BREAK_TIME_SCALE while it runs (a few real seconds of growth) and puts the user's speed back afterwards.
+ * a second at 60×: the calm → spike → NaN sequence is never visible. The demo therefore slows the clock to
+ * BREAK_TIME_SCALE until the solution has diverged (a few real seconds), then puts the user's speed back so the
+ * NaN noise visibly spreads.
  */
 import type { Store } from '../contracts';
 import type { UIContext } from './dom';
+import { isDiverged } from './stats';
 
 /** Sim speed while the naive solver runs. */
 export const BREAK_TIME_SCALE = 3;
 
 const saved = new WeakMap<Store, number>();
-
-export function isBreakDemo(store: Store): boolean {
-  return store.get().sim.stabilityMode === 'naive';
-}
 
 export function startBreakDemo(ctx: Pick<UIContext, 'store' | 'actions'>): void {
   const { store, actions } = ctx;
@@ -33,21 +31,36 @@ export function stopBreakDemo(ctx: Pick<UIContext, 'store' | 'actions'>): void {
   ctx.actions.setStabilityDemo(false);
 }
 
+/** Real time the slowed clock keeps running after the solution has diverged, before the user's speed returns. */
+const AFTER_DIVERGE_MS = 1500;
+
 /**
- * Put the user's sim speed back whenever the demo ends — from any button, or when the app leaves it on its own
- * (loading a scene). A speed the user picked during the demo is kept.
+ * Put the user's sim speed back once the slow part is over: shortly after the solution diverges (so the NaN
+ * noise then spreads at the user's speed), or whenever the demo ends — from any button, or when the app leaves
+ * it on its own (loading a scene). A speed the user picked during the demo is kept.
  */
 export function installBreakDemoRestore(ctx: UIContext): void {
   const { store, bind } = ctx;
+  let timer = 0;
+  const restore = () => {
+    clearTimeout(timer);
+    const prev = saved.get(store);
+    if (prev === undefined) return;
+    saved.delete(store);
+    const sim = store.get().sim;
+    if (sim.timeScale === BREAK_TIME_SCALE) store.set({ sim: { ...sim, timeScale: prev } });
+  };
   bind(
     (s) => s.sim.stabilityMode,
     (mode) => {
-      if (mode !== 'robust') return;
-      const prev = saved.get(store);
-      if (prev === undefined) return;
-      saved.delete(store);
-      const sim = store.get().sim;
-      if (sim.timeScale === BREAK_TIME_SCALE) store.set({ sim: { ...sim, timeScale: prev } });
+      if (mode === 'robust') restore();
+    },
+  );
+  bind(
+    (s) => s.sim.stabilityMode === 'naive' && isDiverged(s.stats),
+    (diverged) => {
+      clearTimeout(timer);
+      if (diverged) timer = window.setTimeout(restore, AFTER_DIVERGE_MS);
     },
   );
 }

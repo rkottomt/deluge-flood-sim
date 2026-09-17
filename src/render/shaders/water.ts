@@ -173,8 +173,12 @@ fn fsWater(in: WOut) -> @location(0) vec4f {
   let s = textureSampleLevel(surfTex, linSamp, uv, 0.0);
   let nrm = textureSampleLevel(normTex, linSamp, uv, 0.0);
   let misc = textureSampleLevel(miscTex, linSamp, uv, 0.0);
-  // 1 where this is the normal river / lake (wet before any flood), 0 on land the flood has reached.
-  let normalWet = select(0.0, textureSampleLevel(normalWetTex, linSamp, uv, 0.0).r, F.wall.w > 0.5);
+  // 1 where this is the normal river / lake (wet before any flood), 0 on land the flood has reached. Four taps
+  // ~1.2 cells apart soften the cell-stepped boundary into a short gradient along the old bank.
+  let me = 1.2 / F.grid;
+  let normalWetRaw = 0.25 * (textureSampleLevel(normalWetTex, linSamp, uv + vec2f(me.x, me.y), 0.0).r + textureSampleLevel(normalWetTex, linSamp, uv + vec2f(-me.x, me.y), 0.0).r
+                           + textureSampleLevel(normalWetTex, linSamp, uv + vec2f(me.x, -me.y), 0.0).r + textureSampleLevel(normalWetTex, linSamp, uv - me, 0.0).r);
+  let normalWet = select(0.0, normalWetRaw, F.wall.w > 0.5);
   let floodLand = 1.0 - normalWet;
 
   let mode = i32(F.waterMode + 0.5);
@@ -276,8 +280,8 @@ fn fsWater(in: WOut) -> @location(0) vec4f {
   // Two incommensurate scales so the tiling never lines up.
   let slick = ((rM.w - 0.5) * 0.6 + (slickFar - 0.5) * 0.8 + (rA.w - 0.5) * 0.3 * detailFade) * 0.55;
   let riverSed = mix(vec3f(0.115, 0.088, 0.054), vec3f(0.032, 0.040, 0.027), deep);
-  let floodSed = mix(vec3f(0.215, 0.170, 0.105), vec3f(0.150, 0.125, 0.082), smoothstep(0.5, 5.0, thick));
-  let sediment = mix(riverSed, floodSed, floodLand) * (1.0 + slick * mix(0.6, 1.0, turbulence));
+  let floodSed = mix(vec3f(0.185, 0.150, 0.095), vec3f(0.130, 0.112, 0.076), smoothstep(0.5, 5.0, thick));
+  let sediment = mix(riverSed, floodSed, floodLand) * (1.0 + slick * mix(mix(0.6, 1.0, turbulence), 1.5, floodLand));
   let body = sediment * lightIn;
   // Thin rain sheet-flow (a few cm over grass or pavement) is not visible from the air: fade it in with depth.
   let film = mix(1.0, smoothstep(0.012, 0.06, thick), floodLand);
