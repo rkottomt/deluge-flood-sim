@@ -626,6 +626,7 @@ export class App {
     this.publishStage(performance.now());
     this.sim.pushAll();
     this.crest.onSceneChanged();
+    this.crest.prewarm();
     this.evac.reset();
     this.protection.reset();
     this.probe?.reset();

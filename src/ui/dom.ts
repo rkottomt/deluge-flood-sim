@@ -143,3 +143,18 @@ export function isTypingTarget(t: EventTarget | null): boolean {
   }
   return false;
 }
+
+/**
+ * Resolves once the next animation frame has been rendered (rAF, then a macrotask after it). Multi-step click handlers
+ * await it between heavy steps so their work lands in separate frames instead of one long one. Without
+ * requestAnimationFrame (tests) it resolves on the next macrotask.
+ */
+export function afterNextFrame(): Promise<void> {
+  return new Promise<void>((resolve) => {
+    if (typeof requestAnimationFrame !== 'function') {
+      setTimeout(resolve, 0);
+      return;
+    }
+    requestAnimationFrame(() => setTimeout(resolve, 0));
+  });
+}

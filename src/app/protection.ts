@@ -440,6 +440,13 @@ export class ProtectionController {
       } catch {
         this.backend = null;
       }
+      if (this.backend) {
+        // Starting the worker costs the page a few ms, and its first run copies the terrain too: run on the next tick.
+        this.lastInput = null;
+        this.pending = true;
+        this.lastRun = -Infinity;
+        return;
+      }
     }
     const backend = this.backend;
     if (backend) {

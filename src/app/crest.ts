@@ -41,6 +41,11 @@ export interface RaiseWaterSurface {
   raiseWaterSurface(base: Float32Array, offset?: number): void;
 }
 
+/** Optional solver extension: upload a raise base ahead of the first raiseWaterSurface call. */
+export interface PrepareRaiseSurface {
+  prepareRaiseSurface(base: Float32Array): void;
+}
+
 export function canRaiseInPlace(solver: FloodSolver): solver is FloodSolver & RaiseWaterSurface {
   return typeof (solver as Partial<RaiseWaterSurface>).raiseWaterSurface === 'function';
 }
@@ -161,6 +166,22 @@ export class CrestFill {
     this.baseKey = '';
     this.lastChangeAt = -Infinity;
     this.gesturePristine = false;
+  }
+
+  /**
+   * Find the river channels (and upload them to the solver) now, while a scene loads: the first raise otherwise did
+   * it in the frame of the click (~25 ms on Pittsburgh). No-op without stage sources.
+   */
+  prewarm(): void {
+    const scene = this.deps.getScene();
+    if (!scene || !this.deps.store.get().sources.some((s) => s.type === 'stage')) return;
+    const base = this.channelBase(scene);
+    if (!base || !canRaiseInPlace(scene.solver)) return;
+    try {
+      (scene.solver as FloodSolver & Partial<PrepareRaiseSurface>).prepareRaiseSurface?.(base);
+    } catch (err) {
+      this.deps.errors.report('sim', `prepareRaiseSurface failed: ${errorMessage(err)}`, err);
+    }
   }
 
   /** The applied stage offset changed (App calls this as the stage ramp moves, a few centimetres at a time). */

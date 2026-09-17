@@ -56,23 +56,31 @@ export function suggestEvacStarts(i: EvacSuggestInput): Array<{ gx: number; gy: 
     const y = Math.min(ny - 1, Math.max(0, Math.floor(gy)));
     return arr[y * nx + x];
   };
-  const wetNear = (gx: number, gy: number): number | null => {
-    // Lowest water surface within ~4 % of the domain (16 probes on two rings), or null if none is wet.
-    if (!depth) return null;
-    let best: number | null = null;
-    for (const r of [0.02 * scale, 0.04 * scale]) {
-      for (let a = 0; a < 8; a++) {
-        const x = gx + r * Math.cos((a * Math.PI) / 4);
-        const y = gy + r * Math.sin((a * Math.PI) / 4);
-        if (x < 0 || y < 0 || x >= nx || y >= ny) continue;
-        const d = sample(x, y, depth);
-        if (d > 0.3) {
-          const surf = sample(x, y, ground) + d;
-          if (best === null || surf < best) best = surf;
-        }
+  // 16 probes on two rings (2 % and 4 % of the domain), offsets computed once: this runs for thousands of street
+  // nodes inside the "Evacuate" click.
+  const probes = new Float64Array(32);
+  for (let ring = 0; ring < 2; ring++) {
+    const r = (ring + 1) * 0.02 * scale;
+    for (let a = 0; a < 8; a++) {
+      probes[(ring * 8 + a) * 2] = r * Math.cos((a * Math.PI) / 4);
+      probes[(ring * 8 + a) * 2 + 1] = r * Math.sin((a * Math.PI) / 4);
+    }
+  }
+  const wetNear = (gx: number, gy: number, water: Float32Array): number | null => {
+    // Lowest water surface within ~4 % of the domain, or null if none is wet.
+    let best = Infinity;
+    for (let p = 0; p < 16; p++) {
+      const x = gx + probes[2 * p];
+      const y = gy + probes[2 * p + 1];
+      if (!(x >= 0 && y >= 0 && x < nx && y < ny)) continue;
+      const c = Math.floor(y) * nx + Math.floor(x);
+      const d = water[c];
+      if (d > 0.3) {
+        const surf = ground[c] + d;
+        if (surf < best) best = surf;
       }
     }
-    return best;
+    return best < Infinity ? best : null;
   };
 
   type Cand = { gx: number; gy: number; tier: number; score: number };
@@ -85,7 +93,7 @@ export function suggestEvacStarts(i: EvacSuggestInput): Array<{ gx: number; gy: 
     if (depth && sample(gx, gy, depth) > 0.05) continue;
     let nearShelter = false;
     for (const s of i.shelters) {
-      if (Math.hypot(s.gx - gx, s.gy - gy) < shelterClear) {
+      if ((s.gx - gx) * (s.gx - gx) + (s.gy - gy) * (s.gy - gy) < shelterClear * shelterClear) {
         nearShelter = true;
         break;
       }
@@ -95,17 +103,18 @@ export function suggestEvacStarts(i: EvacSuggestInput): Array<{ gx: number; gy: 
     if (!Number.isFinite(g)) continue;
     let tier = 3;
     if (i.floodLevel !== null && g < i.floodLevel - 0.3 && (i.currentLevel === null || g > i.currentLevel + 1)) tier = 1;
-    else {
-      const surf = wetNear(gx, gy);
+    else if (depth) {
+      const surf = wetNear(gx, gy, depth);
       if (surf !== null && g > surf + 0.5 && g < surf + 6) tier = 2;
     }
-    cands.push({ gx, gy, tier, score: Math.hypot(gx - i.focus.gx, gy - i.focus.gy) });
+    // Squared distance to the focus: same order, no Math.hypot per node.
+    cands.push({ gx, gy, tier, score: (gx - i.focus.gx) * (gx - i.focus.gx) + (gy - i.focus.gy) * (gy - i.focus.gy) });
   }
   cands.sort((a, b) => a.tier - b.tier || a.score - b.score);
 
   const out: Array<{ gx: number; gy: number }> = [];
   for (const c of cands) {
-    if (out.some((o) => Math.hypot(o.gx - c.gx, o.gy - c.gy) < spacing)) continue;
+    if (out.some((o) => (o.gx - c.gx) * (o.gx - c.gx) + (o.gy - c.gy) * (o.gy - c.gy) < spacing * spacing)) continue;
     out.push({ gx: c.gx, gy: c.gy });
     if (out.length >= max) break;
   }

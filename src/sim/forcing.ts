@@ -36,6 +36,33 @@ export function stormWeight(d: number, R: number): number {
   return 1 - smoothstep(0.3 * R, R, d);
 }
 
+/** The cells (row-major indices) where a source footprint has weight > 0, in row-major order, with their weights. */
+export interface Footprint {
+  cells: Int32Array;
+  weights: Float64Array;
+}
+
+/** Footprint of a source of `radius` cells at (gx, gy), clipped to the nx × ny grid. */
+export function sourceFootprint(gx: number, gy: number, radius: number, nx: number, ny: number): Footprint {
+  const R = footprintRadius(radius);
+  const x0 = Math.max(0, Math.floor(gx - R - 1));
+  const x1 = Math.min(nx - 1, Math.ceil(gx + R + 1));
+  const y0 = Math.max(0, Math.floor(gy - R - 1));
+  const y1 = Math.min(ny - 1, Math.ceil(gy + R + 1));
+  const cells: number[] = [];
+  const weights: number[] = [];
+  for (let j = y0; j <= y1; j++) {
+    for (let i = x0; i <= x1; i++) {
+      const w = footprintWeight(Math.hypot(i + 0.5 - gx, j + 0.5 - gy), R);
+      if (w > 0) {
+        cells.push(j * nx + i);
+        weights.push(w);
+      }
+    }
+  }
+  return { cells: Int32Array.from(cells), weights: Float64Array.from(weights) };
+}
+
 export interface PackedForcing {
   /** FORCING_FLOATS floats ready for the uniform buffer. */
   data: Float32Array;
@@ -54,7 +81,7 @@ export interface PackedForcing {
 /**
  * Pack sources and storms. `bedAt` (row-major index → bed meters, NOT datum-relative) bounds the depth a stage
  * source can create (given as a lookup so no combined array has to be allocated); z0 is the solver's internal
- * elevation datum.
+ * elevation datum. `footprintOf` may supply cached footprints (see sourceFootprint; same cells and weights).
  */
 export function packForcing(
   sources: readonly WaterSource[],
@@ -64,6 +91,7 @@ export function packForcing(
   cellSize: number,
   z0: number,
   bedAt: (index: number) => number,
+  footprintOf?: (source: WaterSource) => Footprint,
 ): PackedForcing {
   const data = new Float32Array(FORCING_FLOATS);
   const cellArea = cellSize * cellSize;
@@ -78,21 +106,13 @@ export function packForcing(
       continue;
     }
     const R = footprintRadius(s.radius);
-    const x0 = Math.max(0, Math.floor(s.gx - R - 1));
-    const x1 = Math.min(nx - 1, Math.ceil(s.gx + R + 1));
-    const y0 = Math.max(0, Math.floor(s.gy - R - 1));
-    const y1 = Math.min(ny - 1, Math.ceil(s.gy + R + 1));
+    const fp = footprintOf ? footprintOf(s) : sourceFootprint(s.gx, s.gy, s.radius, nx, ny);
     let wSum = 0;
     let minBed = Infinity;
-    for (let j = y0; j <= y1; j++) {
-      for (let i = x0; i <= x1; i++) {
-        const w = footprintWeight(Math.hypot(i + 0.5 - s.gx, j + 0.5 - s.gy), R);
-        if (w > 0) {
-          wSum += w;
-          const b = bedAt(j * nx + i);
-          if (b < minBed) minBed = b;
-        }
-      }
+    for (let k = 0; k < fp.cells.length; k++) {
+      wSum += fp.weights[k];
+      const b = bedAt(fp.cells[k]);
+      if (b < minBed) minBed = b;
     }
     if (!(wSum > 0)) continue; // footprint entirely outside the domain
     const o = nSources * 8;

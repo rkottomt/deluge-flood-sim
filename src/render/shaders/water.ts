@@ -238,6 +238,18 @@ fn fsWater(in: WOut) -> @location(0) vec4f {
   // Soft shoreline: fade over a few cm, widened by the pixel footprint to stay anti-aliased at any distance.
   let shore = smoothstep(0.0, max(0.03, thickFw * 1.5), thick);
 
+  // Numerical blow-up (stability demo): the prep pass marks non-finite cells with foam = 8 and raises them into a field
+  // of spikes. Paint them as hot, flickering magenta "garbage" (HDR, so it blooms) — visible from any distance, in every
+  // view mode. Fully blown fragments skip the water shading below: the spikes multiply overdraw, and shading them all
+  // pushed "Break it" frames past 40 ms. (Cells on the edge of the blow-up blend at the end of the shader.)
+  let blown = smoothstep(2.0, 6.0, s.a);
+  if (blown >= 0.999) {
+    let cellId = floor(in.grid);
+    let flicker = step(0.5, fract(F.time * 7.0 + hash12(cellId) * 3.0));
+    let glitch = mix(vec3f(2.8, 0.15, 1.4), vec3f(3.2, 1.6, 0.2), flicker * hash12(cellId + vec2f(7.0, 3.0)));
+    return vec4f(mix(glitch * shore, in.haze.rgb * shore, in.haze.a), shore);
+  }
+
   // ── Normal: macro η slope + advected ripples (roughness grows with distance instead of aliasing) ─────
   let macroSlope = nrm.ba * F.exag;
   let turbulence = smoothstep(0.2, 3.0, speed);
@@ -361,9 +373,7 @@ fn fsWater(in: WOut) -> @location(0) vec4f {
     }
   }
 
-  // Numerical blow-up (stability demo): the prep pass marks non-finite cells with foam = 8. Paint them as hot,
-  // flickering magenta "garbage" (HDR, so it blooms) — visible from any distance, in every view mode.
-  let blown = smoothstep(2.0, 6.0, s.a);
+  // Edge of the blow-up (see above).
   if (blown > 0.0) {
     let cellId = floor(in.grid);
     let flicker = step(0.5, fract(F.time * 7.0 + hash12(cellId) * 3.0));

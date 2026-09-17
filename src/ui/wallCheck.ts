@@ -112,8 +112,18 @@ const NEED_BINS = 48;
  *
  * With `nx`, only a wall's crest cells are judged (barrier at least as high as its four neighbours'): a wall stroke
  * tapers to the ground over its outer cell, and that sloping rim stands in the water beside even a wall that holds.
+ * With `nx` and `bounds` (a grid rectangle, x1/y1 exclusive, known to hold every wall cell; null = no walls at all) only
+ * that rectangle is visited: the same result, without walking a million empty cells several times a second while a
+ * levee goes up.
  */
-export function scanWalls(ground: Float32Array, barrier: Float32Array, depth: Float32Array | null, level: number | null, nx?: number): WallScan {
+export function scanWalls(
+  ground: Float32Array,
+  barrier: Float32Array,
+  depth: Float32Array | null,
+  level: number | null,
+  nx?: number,
+  bounds?: { x0: number; y0: number; x1: number; y1: number } | null,
+): WallScan {
   let cells = 0;
   let overtopped = 0;
   let belowLevel = 0;
@@ -122,25 +132,44 @@ export function scanWalls(ground: Float32Array, barrier: Float32Array, depth: Fl
   const n = Math.min(ground.length, barrier.length);
   const useDepth = depth && depth.length >= n ? depth : null;
   const w = nx && nx > 0 && n % nx === 0 ? nx : 0;
-  for (let k = 0; k < n; k++) {
-    const b = barrier[k];
-    if (!(b > WALL_CELL_MIN)) continue;
-    sig = (sig + b * ((k % 997) + 1)) % 1e9;
-    if (w) {
-      const i = k % w;
-      const top = b + CREST_TOLERANCE;
-      if ((i > 0 && barrier[k - 1] > top) || (i < w - 1 && barrier[k + 1] > top) || (k >= w && barrier[k - w] > top) || (k + w < n && barrier[k + w] > top)) {
-        continue;
-      }
+  // Rows [y0, y1) × columns [x0, x1) to visit: the whole field unless bounds narrow it (bounds need nx).
+  let x0 = 0;
+  let x1 = w || n;
+  let y0 = 0;
+  let y1 = w ? n / w : 1;
+  if (w && bounds !== undefined) {
+    if (!bounds) {
+      y1 = 0;
+    } else {
+      x0 = Math.max(0, Math.floor(bounds.x0));
+      x1 = Math.min(w, Math.ceil(bounds.x1));
+      y0 = Math.max(0, Math.floor(bounds.y0));
+      y1 = Math.min(n / w, Math.ceil(bounds.y1));
     }
-    cells++;
-    if (useDepth && useDepth[k] > OVERTOP_DEPTH) overtopped++;
-    if (level !== null) {
-      const g = ground[k];
-      if (g + b < level) {
-        belowLevel++;
-        const need = level + WALL_FREEBOARD - g;
-        bins[Math.min(NEED_BINS - 1, Math.max(0, Math.ceil(need / NEED_BIN_M) - 1))]++;
+  }
+  const stride = w || n;
+  for (let row = y0; row < y1; row++) {
+    const kEnd = row * stride + x1;
+    for (let k = row * stride + x0; k < kEnd; k++) {
+      const b = barrier[k];
+      if (!(b > WALL_CELL_MIN)) continue;
+      sig = (sig + b * ((k % 997) + 1)) % 1e9;
+      if (w) {
+        const i = k % w;
+        const top = b + CREST_TOLERANCE;
+        if ((i > 0 && barrier[k - 1] > top) || (i < w - 1 && barrier[k + 1] > top) || (k >= w && barrier[k - w] > top) || (k + w < n && barrier[k + w] > top)) {
+          continue;
+        }
+      }
+      cells++;
+      if (useDepth && useDepth[k] > OVERTOP_DEPTH) overtopped++;
+      if (level !== null) {
+        const g = ground[k];
+        if (g + b < level) {
+          belowLevel++;
+          const need = level + WALL_FREEBOARD - g;
+          bins[Math.min(NEED_BINS - 1, Math.max(0, Math.ceil(need / NEED_BIN_M) - 1))]++;
+        }
       }
     }
   }

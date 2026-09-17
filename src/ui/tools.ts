@@ -320,6 +320,15 @@ export function createToolController(canvas: HTMLCanvasElement, deps: ToolContro
     bridge.wallDrawn.emit();
   }
 
+  /** Let the solver allocate its brush scratch textures before the first stroke rather than during it. */
+  function prepareBrushes() {
+    try {
+      (deps.getSolver() as (FloodSolver & { prepareBrushes?: () => void }) | null)?.prepareBrushes?.();
+    } catch {
+      /* solver gone */
+    }
+  }
+
   function armWallScan(solver: FloodSolver) {
     wallScan.armed = true;
     // Soon, but at most a few times a second: the one-click levee raises walls on every frame for ~2 s, and each scan
@@ -485,7 +494,9 @@ export function createToolController(canvas: HTMLCanvasElement, deps: ToolContro
     const ctrl = s.scenario?.stage ?? null;
     const level = stageSurface(ctrl, s.stageOffset);
     const depth = snap && snap.nx === solver.nx && snap.ny === solver.ny ? snap.depth : null;
-    const scan = scanWalls(ground, barrier, depth, level, solver.nx);
+    // Solvers that track where walls were raised (GpuFloodSolver.wallBounds) let the scan skip the empty grid.
+    const bounds = (solver as FloodSolver & { wallBounds?: { x0: number; y0: number; x1: number; y1: number } | null }).wallBounds;
+    const scan = scanWalls(ground, barrier, depth, level, solver.nx, bounds);
     if (scan.cells === 0) {
       wallScan.armed = false;
       bridge.setWallStatus(null);
@@ -733,6 +744,7 @@ export function createToolController(canvas: HTMLCanvasElement, deps: ToolContro
       if (s.tool === 'wall') {
         wallScan.armed = true;
         wallScan.nextAt = 0;
+        prepareBrushes();
       }
       cancelGesture();
       applyCameraMode(s.tool);

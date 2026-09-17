@@ -60,7 +60,7 @@ import {
   WET_DEPTH,
   type SolverOptions,
 } from './constants';
-import { footprintRadius, footprintWeight, packForcing, type PackedForcing } from './forcing';
+import { footprintRadius, packForcing, sourceFootprint, type Footprint, type PackedForcing } from './forcing';
 import { brushWGSL, BRUSH_UNIFORM_BYTES } from './shaders/brush';
 import { ACC_PER_CELL, FORCING_UNIFORM_BYTES, SIM_UNIFORM_BYTES } from './shaders/common';
 import { continuityWGSL } from './shaders/continuity';
@@ -74,6 +74,8 @@ const WG = 16;
 const PROBE_IDLE_MS = 500;
 /** Upper bound on the readback lag the rain CFL estimate assumes, simulated s (hollows fill and spill; see rainDepthAhead). */
 const RAIN_LAG_MAX_S = 1200;
+/** reset() keeps its initial state array between resets up to this grid size (16 MB at 1024²; larger grids rebuild it). */
+const RESET_CACHE_MAX_CELLS = 1 << 20;
 const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
 
 interface StagingSet {
@@ -157,6 +159,8 @@ export class GpuFloodSolver implements FloodSolver {
     /** Indices of cells with a finite base, and their base (m). */
     cells: Int32Array;
     levels: Float32Array;
+    /** max(base − bed) and max(base − bed − depth) over the cells, for the depth array / terrain / fill they were taken at. */
+    rise: { depth: Float32Array | null; terrain: number; initial: number; overBed: number; overWater: number };
   } | null = null;
   private readonly gx: number;
   private readonly gy: number;
@@ -184,6 +188,22 @@ export class GpuFloodSolver implements FloodSolver {
   private warnedDropped = false;
 
   private initialDepth: Float32Array;
+  /**
+   * reset()'s initial state (h0, 0, 0, bed − z0) kept on the GPU, so a reset is one texture copy: the one-click levee
+   * resets the flood mid-demo, and rebuilding and uploading 4·N floats took ~10 ms of that frame. Rebuilt after
+   * setInitialWater and terrain uploads; wall and terrain brushes patch their rectangle. Grids above
+   * RESET_CACHE_MAX_CELLS rebuild it on every reset instead of holding the extra texture.
+   */
+  private resetTex: GPUTexture | null = null;
+  private resetTexValid = false;
+  /** Deepest initial water (m), computed with the reset state. */
+  private resetHMax = 0;
+  /** Bumped when initialDepth changes in place (setInitialWater). */
+  private initialVersion = 0;
+  /** Wall brushes' extent since the last terrain reset (see wallBounds). */
+  private wallRect: { x0: number; y0: number; x1: number; y1: number } | null = null;
+  /** Stage/inflow footprints by position and radius (the stage ramp re-packs the forcing every few centimetres). */
+  private readonly footprintCache = new Map<string, Footprint>();
   private dryAtReset: Uint8Array;
   private initialVolume = 0;
   /** Largest stored volume seen since reset (normalizes SimStats.massError), m³. */
@@ -571,7 +591,18 @@ export class GpuFloodSolver implements FloodSolver {
     if (op.kind === 'water' && op.amount === 0) return;
     const terrainChanged = applyBrushCPU(op, rect, this.ground, this.barrier, this.nx);
     if (terrainChanged) {
-      this.forcingDirty = true; // stage depth bound depends on the bed
+      // The packed forcing reads the bed only under stage sources (their depth bound): a wall elsewhere (the one-click
+      // levee raises ~1 000 pieces over 2 s) must not re-pack every footprint each frame.
+      if (this.rectTouchesStage(rect)) this.forcingDirty = true;
+      this.patchResetState(rect);
+      if (op.kind === 'wall') {
+        const w = this.wallRect;
+        const x1 = rect.x0 + rect.w;
+        const y1 = rect.y0 + rect.h;
+        this.wallRect = w
+          ? { x0: Math.min(w.x0, rect.x0), y0: Math.min(w.y0, rect.y0), x1: Math.max(w.x1, x1), y1: Math.max(w.y1, y1) }
+          : { x0: rect.x0, y0: rect.y0, x1, y1 };
+      }
       this.terrainVersionN++;
     }
 
@@ -605,6 +636,23 @@ export class GpuFloodSolver implements FloodSolver {
   }
 
   /**
+   * Allocate the brush pass's scratch textures now (they are created on the first brush otherwise, in the middle of a
+   * wall being raised). Hosts call it when a wall is about to be built.
+   */
+  prepareBrushes(): void {
+    if (!this.destroyed) this.ensureBrushResources();
+  }
+
+  /**
+   * Upload `base` for raiseWaterSurface ahead of time (it is uploaded once per array object anyway), so the first raise
+   * of a scene costs no more than the later ones. Hosts call it while a scene loads.
+   */
+  prepareRaiseSurface(base: Float32Array): void {
+    if (this.destroyed || !base || base.length !== this.N) return;
+    this.ensureRaiseResources(base);
+  }
+
+  /**
    * Raise the water surface in place (rivers rising to a new stage): for every cell with a finite `base`,
    * h = max(h, base + offset − (ground + barrier)). NaN leaves a cell alone. Discharge is kept; the added water is
    * booked as inflow (volumeIn and massError stay exact); stateTexture is re-exported, so it shows even while paused.
@@ -620,16 +668,23 @@ export class GpuFloodSolver implements FloodSolver {
     const { device } = this;
     // CFL: the deepest water the raise can create, and the speed of the bores it releases where it lifts the surface
     // above the latest readback (the same dam-break estimate as a stage raise, see forcingSpeedEstimate).
+    // Both maxima are offset + a per-cell maximum that only changes with the terrain and the water readback: kept
+    // between calls (the stage ramp raises the rivers every few centimetres).
     const depth = this.snapshot?.depth ?? this.initialDepth;
-    let hMax = 0;
-    let dhMax = 0;
-    for (let k = 0; k < res.cells.length; k++) {
-      const c = res.cells[k];
-      const d = res.levels[k] + offset - (this.ground[c] + this.barrier[c]);
-      if (d > hMax) hMax = d;
-      const dh = d - depth[c];
-      if (dh > dhMax) dhMax = dh;
+    const rise = res.rise;
+    if (rise.depth !== depth || rise.terrain !== this.terrainVersionN || rise.initial !== this.initialVersion) {
+      let overBed = -Infinity;
+      let overWater = -Infinity;
+      for (let k = 0; k < res.cells.length; k++) {
+        const c = res.cells[k];
+        const d = res.levels[k] - (this.ground[c] + this.barrier[c]);
+        if (d > overBed) overBed = d;
+        if (d - depth[c] > overWater) overWater = d - depth[c];
+      }
+      Object.assign(rise, { depth, terrain: this.terrainVersionN, initial: this.initialVersion, overBed, overWater });
     }
+    const hMax = Math.max(0, rise.overBed + offset);
+    const dhMax = Math.max(0, rise.overWater + offset);
     if (!(hMax > 0)) return;
     const u = new ArrayBuffer(RAISE_UNIFORM_BYTES);
     new Int32Array(u, 0, 2).set([this.nx, this.ny]);
@@ -699,19 +754,36 @@ export class GpuFloodSolver implements FloodSolver {
     if (opts?.resetTerrain) {
       this.ground.set(this.originalGround);
       this.barrier.fill(0);
+      this.wallRect = null;
       this.uploadTerrain();
       this.forcingDirty = true;
     }
     const { nx, ny, N } = this;
-    const data = new Float32Array(N * 4);
-    let hMax = 0;
-    for (let c = 0; c < N; c++) {
-      const h = this.initialDepth[c];
-      data[4 * c] = h;
-      data[4 * c + 3] = Math.fround(this.ground[c] + this.barrier[c]) - this.z0;
-      if (h > hMax) hMax = h;
+    const cached = N <= RESET_CACHE_MAX_CELLS;
+    if (!cached || !this.resetTexValid) {
+      const data = new Float32Array(N * 4);
+      let hMax = 0;
+      for (let c = 0; c < N; c++) {
+        const h = this.initialDepth[c];
+        data[4 * c] = h;
+        data[4 * c + 3] = Math.fround(this.ground[c] + this.barrier[c]) - this.z0;
+        if (h > hMax) hMax = h;
+      }
+      this.resetHMax = hMax;
+      if (cached) {
+        this.resetTex ??= this.device.createTexture({
+          label: 'sim.resetState',
+          size: { width: nx, height: ny },
+          format: 'rgba32float',
+          usage: GPUTextureUsage.COPY_SRC | GPUTextureUsage.COPY_DST,
+        });
+        this.device.queue.writeTexture({ texture: this.resetTex }, data, { bytesPerRow: nx * 16 }, { width: nx, height: ny });
+        this.resetTexValid = true;
+      } else {
+        this.device.queue.writeTexture({ texture: this.stateTex[this.cur] }, data, { bytesPerRow: nx * 16 }, { width: nx, height: ny });
+      }
     }
-    this.device.queue.writeTexture({ texture: this.stateTex[this.cur] }, data, { bytesPerRow: nx * 16 }, { width: nx, height: ny });
+    const hMax = this.resetHMax;
 
     this.generation++;
     this.simTime = 0;
@@ -736,6 +808,7 @@ export class GpuFloodSolver implements FloodSolver {
     this.uBoostTime = 0;
 
     const enc = this.device.createCommandEncoder({ label: 'sim.reset' });
+    if (cached && this.resetTex) enc.copyTextureToTexture({ texture: this.resetTex }, { texture: this.stateTex[this.cur] }, { width: nx, height: ny });
     enc.clearBuffer(this.accBuf);
     this.writeSimUniform(0);
     this.encodeExport(enc);
@@ -759,6 +832,8 @@ export class GpuFloodSolver implements FloodSolver {
       vol += this.initialDepth[c];
     }
     this.initialVolume = vol * this.cellArea;
+    this.resetTexValid = false;
+    this.initialVersion++;
     this.uploadDryMask();
     this.reset();
   }
@@ -784,6 +859,7 @@ export class GpuFloodSolver implements FloodSolver {
     for (const t of this.brushRes?.tex ?? []) t.destroy();
     this.raiseRes?.tex.destroy();
     this.raiseRes?.buf.destroy();
+    this.resetTex?.destroy();
     for (const b of [this.accBuf, this.simBuf, this.forcingBuf, this.brushBuf, this.depthBuf, this.blocksBuf, this.dryMaskBuf]) {
       b.destroy();
     }
@@ -1166,7 +1242,7 @@ export class GpuFloodSolver implements FloodSolver {
    *    Δh from the latest snapshot's depth (the initial water right after a reset).
    */
   private forcingSpeedEstimate(): number {
-    const { nx, ny, cellSize, ground, barrier } = this;
+    const { cellSize, ground, barrier } = this;
     const depth = this.snapshot?.depth ?? this.initialDepth;
     let u = 0;
     for (const s of this.sources.slice(0, MAX_SOURCES)) {
@@ -1177,17 +1253,11 @@ export class GpuFloodSolver implements FloodSolver {
         continue;
       }
       if (!Number.isFinite(s.level)) continue;
-      const i0 = Math.max(0, Math.floor(s.gx - R - 1));
-      const i1 = Math.min(nx - 1, Math.ceil(s.gx + R + 1));
-      const j0 = Math.max(0, Math.floor(s.gy - R - 1));
-      const j1 = Math.min(ny - 1, Math.ceil(s.gy + R + 1));
+      const cells = this.footprintOf(s).cells;
       let dh = 0;
-      for (let j = j0; j <= j1; j++) {
-        for (let i = i0; i <= i1; i++) {
-          if (footprintWeight(Math.hypot(i + 0.5 - s.gx, j + 0.5 - s.gy), R) <= 0) continue;
-          const c = j * nx + i;
-          dh = Math.max(dh, s.level - (ground[c] + barrier[c] + depth[c]));
-        }
+      for (let k = 0; k < cells.length; k++) {
+        const c = cells[k];
+        dh = Math.max(dh, s.level - (ground[c] + barrier[c] + depth[c]));
       }
       if (dh > 0) u = Math.max(u, 2 * Math.sqrt(GRAVITY * dh));
     }
@@ -1196,12 +1266,64 @@ export class GpuFloodSolver implements FloodSolver {
 
   private packForcingNow(): PackedForcing {
     const { ground, barrier } = this;
-    return packForcing(this.sources, this.storms, this.nx, this.ny, this.cellSize, this.z0, (c) => ground[c] + barrier[c]);
+    return packForcing(this.sources, this.storms, this.nx, this.ny, this.cellSize, this.z0, (c) => ground[c] + barrier[c], this.footprintOf);
+  }
+
+  /** Whether a grid rectangle overlaps any stage source's footprint (the only part of the forcing that reads the bed). */
+  private rectTouchesStage(rect: { x0: number; y0: number; w: number; h: number }): boolean {
+    for (const s of this.sources) {
+      if (s.type !== 'stage') continue;
+      const R = footprintRadius(s.radius) + 1;
+      if (rect.x0 <= s.gx + R && rect.x0 + rect.w >= s.gx - R && rect.y0 <= s.gy + R && rect.y0 + rect.h >= s.gy - R) return true;
+    }
+    return false;
+  }
+
+  /** Keep reset()'s GPU copy of the initial state current over a brushed rectangle (its bed changed). */
+  private patchResetState(rect: { x0: number; y0: number; w: number; h: number }): void {
+    if (!this.resetTexValid || !this.resetTex) return;
+    const { nx, ground, barrier, z0, initialDepth } = this;
+    const data = new Float32Array(rect.w * rect.h * 4);
+    for (let j = 0; j < rect.h; j++) {
+      for (let i = 0; i < rect.w; i++) {
+        const c = (rect.y0 + j) * nx + rect.x0 + i;
+        const o = 4 * (j * rect.w + i);
+        data[o] = initialDepth[c];
+        data[o + 3] = Math.fround(ground[c] + barrier[c]) - z0;
+      }
+    }
+    this.device.queue.writeTexture(
+      { texture: this.resetTex, origin: { x: rect.x0, y: rect.y0 } },
+      data,
+      { bytesPerRow: rect.w * 16 },
+      { width: rect.w, height: rect.h },
+    );
+  }
+
+  /** A source's footprint cells and weights (cached: sources keep their place while the stage ramp moves their level). */
+  private footprintOf = (s: WaterSource): Footprint => {
+    const key = `${s.gx}|${s.gy}|${s.radius}`;
+    let fp = this.footprintCache.get(key);
+    if (!fp) {
+      if (this.footprintCache.size >= 64) this.footprintCache.clear();
+      fp = sourceFootprint(s.gx, s.gy, s.radius, this.nx, this.ny);
+      this.footprintCache.set(key, fp);
+    }
+    return fp;
+  };
+
+  /**
+   * Grid rectangle (x1, y1 exclusive) holding every cell a wall brush has raised since the last terrain reset, or null
+   * when none has: whole-grid wall scans (the UI's wall checks) only need to look inside it. Erasing does not shrink it.
+   */
+  get wallBounds(): { x0: number; y0: number; x1: number; y1: number } | null {
+    return this.wallRect ? { ...this.wallRect } : null;
   }
 
   private uploadTerrain(): void {
     const { nx, ny, device } = this;
     this.terrainVersionN++;
+    this.resetTexValid = false;
     const bed = new Float32Array(this.N);
     for (let c = 0; c < this.N; c++) bed[c] = this.ground[c] + this.barrier[c];
     const layout = { bytesPerRow: nx * 4 };
@@ -1236,7 +1358,7 @@ export class GpuFloodSolver implements FloodSolver {
           ],
         }),
       );
-      res = { base, tex, buf, bg, cells: new Int32Array(0), levels: new Float32Array(0) };
+      res = { base, tex, buf, bg, cells: new Int32Array(0), levels: new Float32Array(0), rise: { depth: null, terrain: -1, initial: -1, overBed: 0, overWater: 0 } };
     }
     const rel = new Float32Array(N);
     let count = 0;
@@ -1258,7 +1380,7 @@ export class GpuFloodSolver implements FloodSolver {
       levels[k++] = v;
     }
     device.queue.writeTexture({ texture: res.tex }, rel, { bytesPerRow: nx * 4 }, { width: nx, height: ny });
-    this.raiseRes = { ...res, base, cells, levels };
+    this.raiseRes = { ...res, base, cells, levels, rise: { depth: null, terrain: -1, initial: -1, overBed: 0, overWater: 0 } };
     return this.raiseRes;
   }
 

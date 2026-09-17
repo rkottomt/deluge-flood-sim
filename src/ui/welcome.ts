@@ -12,7 +12,7 @@
  * to keep the map clear) and goes away for good only when closed.
  */
 import type { AppState, CameraPose, DemoLevee, StageControl, Store } from '../contracts';
-import { h, setText, toggleClass, setAttr, type UIContext } from './dom';
+import { afterNextFrame, h, setText, toggleClass, setAttr, type UIContext } from './dom';
 import { icon, type IconName } from './icons';
 import { selectTool } from './toolDefs';
 import { clamp, M_PER_FT, offsetForFt, stageFt, stageRangeFt } from './scales';
@@ -289,10 +289,6 @@ export function createWelcome(ctx: UIContext): HTMLElement {
     const stale = () => store.get().terrainName !== terrainName || store.get().sim.stabilityMode !== 'robust';
     try {
       const flooded = s0.stageOffsetApplied > 0.3 || (s0.stats?.floodedArea ?? 0) > 50_000;
-      if (flooded || s0.stageOffset > 0.05) {
-        store.set({ stageOffset: 0 });
-        if (flooded) ctx.actions.resetWater();
-      }
       const crest = dramaticStage(ctrl);
       const km = leveeLength(levee, solver.cellSize) / 1000;
       postNotice(store, {
@@ -313,7 +309,18 @@ export function createWelcome(ctx: UIContext): HTMLElement {
           /* renderer gone */
         }
       }
-      await wait(1100);
+      // The notice and the flight show in this frame; the water resets in the next one (one long frame otherwise).
+      await afterNextFrame();
+      if (stale()) return;
+      if (flooded || s0.stageOffset > 0.05) {
+        store.set({ stageOffset: 0 });
+        if (flooded) ctx.actions.resetWater();
+      }
+      await afterNextFrame();
+      if (stale()) return;
+      // The wall brush's scratch textures, allocated now rather than under the first wall piece.
+      (solver as { prepareBrushes?: () => void }).prepareBrushes?.();
+      await wait(1000);
       if (stale()) return;
       const radius = Math.max(1.2, 15 / solver.cellSize);
       const segments = planLevee(levee, solver.getGroundCPU(), solver.nx, solver.ny, radius);
@@ -571,6 +578,9 @@ export async function planEvacuation(ctx: Pick<UIContext, 'store'>): Promise<voi
     return;
   }
   const ctrl = s.scenario?.stage ?? null;
+  // Show the tool switch first; picking a start and routing it land in the next frames (one ~30 ms click otherwise).
+  await afterNextFrame();
+  if (store.get().tool !== 'evac' || bridgeFor(store).scene?.getSolver() !== solver) return;
   let ground: Float32Array;
   try {
     ground = solver.getGroundCPU();
@@ -595,6 +605,9 @@ export async function planEvacuation(ctx: Pick<UIContext, 'store'>): Promise<voi
     postNotice(store, { kind: 'info', key: 'try-evac', title: 'Click a home on the map', message: 'The route to the nearest dry shelter appears at once and re-plans as roads flood.' });
     return;
   }
+  await afterNextFrame();
+  // The user may have clicked a start of their own (or left the tool) meanwhile.
+  if (store.get().tool !== 'evac' || store.get().evacStart !== s.evacStart) return;
   for (const c of cands) {
     const start = { gx: c.gx, gy: c.gy };
     const before = store.get().route;
