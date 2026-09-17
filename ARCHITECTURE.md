@@ -257,7 +257,36 @@ and a frame ceiling detector notices browser 30 fps caps (Chrome Energy Saver, m
 starves. The renderer's adaptive quality gets a *sim pressure* hint: while the solver is GPU-limited it holds the
 default level (it neither climbs above it nor keeps a better level claimed while the sim kept up), and while hands-off
 with the budget down to ≤ 3 substeps (a hot fanless laptop) it steps down, at most to 1 render pixel per CSS pixel, and
-recovers 20 s after the starvation ends. GPU
+recovers 20 s after the starvation ends.
+
+### 8.1 Performance budget (measured)
+
+Production build in headless Chromium on the Apple M4 GPU (the demo machine class), Pittsburgh raised to the 1936 crest
+(46 ft) with 50 mm/hr rain, 1200× requested, hands-off (`artifacts/perf/bench.mjs`):
+
+| | before | after |
+| --- | --- | --- |
+| 1600×1000: fps / p95 frame time / achieved speed | 56–58 fps / 27–34 ms / 60–69× | 60 fps / 18.7 ms / 68–73× |
+| 1470×956 @ DPR 2 (renders 1882×1224) | 56 fps / 31 ms / 43–57× | 60 fps / 18.9 ms / 57–64× |
+| 30 fps browser cap (Energy Saver) | 29.5 fps / 70× (quality dropped a level) | 29.5 fps / 93× (quality kept) |
+| Johnstown, inflows ×3, 1200× | 57 fps / 31 ms / 41× | 60 fps / 18.4 ms / 43–50× |
+| 10 minutes sustained (1600×1000) | — | 60 fps, p95 18.6–18.8 ms, 66–70× every minute |
+| crest button → half of downtown under ≥ 30 cm | 3.8–4.6 s | 4.0–4.8 s (same: the old budget got there by overfilling the GPU queue) |
+
+Where one heavy frame's GPU time goes (flood at 600 s, batched submit → onSubmittedWorkDone, 1600×1000): the renderer
+5.2 ms (was 6.3: vertex work of the terrain and water meshes is ~half of it, fragments the rest; bloom, sky and the
+tonemap pass together < 1 ms — the ~4 ms "post" timestamp query reading includes other GPU work queued in between), prep
+2.3 ms per refresh (was 2.7) plus the 0.6 ms export, both every other frame (the export used to run every frame), and
+1.6–2.0 ms per substep (momentum ~45 %, continuity ~55 %; in the continuity pass the per-cell ledger write and the
+source loops together cost about half of it — baking the forcing into a texture is the next step). A fixed 5 substeps
+per frame is the most this machine runs at a clean 60 fps.
+
+**MacBook Air M4 (fanless).** Same GPU class, so a cool Air matches the table. Under sustained load it throttles; with
+the GPU emulated ~35 % slower (extra compute each frame) the budget drops to 1–1.5 substeps within a second, frames stay
+at 58–60 fps (p95 19–24 ms), sim speed falls to ~15–20× and quality steps down to 1 render pixel per CSS pixel; within
+3 s of the load going away the budget is back to 6 substeps. Expectation (estimated, not measured on an Air): a cool
+Air runs the crest flood like the table (~70× at 60 fps, ~90× under Chrome's 30 fps battery cap); as it heats up sim
+speed degrades toward ~15–20× while the frame rate holds at 60 fps. Plug it in and keep it cool before judging. GPU
 device loss shows a recovery card and reloads once. `window.__deluge` exposes the debug API used by `scripts/e2e.mjs`.
 
 ## 9. Validation

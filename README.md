@@ -36,7 +36,8 @@ URL options: `?preset=pittsburgh|johnstown|ellicott|sandbox`, or any US area wit
 
 Keys: `1`–`0` tools, `Space` pause, `R` reset water, `?` help. **On a laptop,** plug in: the app adapts solver
 substeps and render resolution to measured frame time and GPU latency, and detects browser 30 fps caps on battery, but
-60 fps needs mains power.
+60 fps needs mains power. On an Apple M4 the 1936 crest flood with extreme rain runs at 60 fps (p95 frame 19 ms) and
+~70× real time at 1600×1000 (numbers and the MacBook Air expectation: [ARCHITECTURE.md §8.1](ARCHITECTURE.md#81-performance-budget-measured)).
 
 ## Why this is hard
 
