@@ -477,7 +477,7 @@ export function createLocationPicker(ctx: UIContext): Modal {
         interactive: false,
         keyboard: false,
         // L.divIcon's `html` is an innerHTML sink: this string must stay a constant (FINDINGS SEC-08).
-      icon: L.divIcon({ className: 'dl-picker-center', html: '<span></span>', iconSize: [18, 18], iconAnchor: [9, 9] }),
+        icon: L.divIcon({ className: 'dl-picker-center', html: '<span></span>', iconSize: [18, 18], iconAnchor: [9, 9] }),
       }).addTo(map);
     } else marker.setLatLng(ll);
     if (fly) {

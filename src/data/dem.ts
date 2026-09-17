@@ -46,8 +46,14 @@ export async function decodeTiffF32(buf: ArrayBuffer, nx: number, ny: number): P
   const h = image.getHeight();
   if (w !== nx || h !== ny) throw new Error(`DEM TIFF is ${w}×${h}, expected ${nx}×${ny}`);
   // 1 = no compression; an absent tag means the same (TIFF default). Anything else would inflate an attacker-chosen
-  // amount of data from a few hundred kilobytes, so refuse it rather than decode it.
-  const compression = Number((image.fileDirectory as { Compression?: number }).Compression ?? 1);
+  // amount of data from a few hundred kilobytes, so refuse it rather than decode it (FINDINGS.json SEC-03).
+  //
+  // `image.fileDirectory` is geotiff's ImageFileDirectory, NOT a plain object: reading `.Compression` off it is always
+  // undefined, which would silently turn this check into a no-op. `getValue()` is the accessor geotiff itself uses
+  // (geotiffimage.js: `this.fileDirectory.getValue('Compression') || 1`), and it throws only for deferred array tags —
+  // Compression is a single SHORT and is always actualized. tests/data/hostileUpstream.ts pins this on a real
+  // LZW-tagged TIFF, so a library upgrade that moves the accessor fails the suite instead of the demo.
+  const compression = Number(image.fileDirectory.getValue('Compression') ?? 1);
   if (compression !== 1) throw new Error(`DEM TIFF uses compression ${compression}; only uncompressed DEMs are accepted`);
   const rasters = await image.readRasters({ samples: [0] });
   const band = (rasters as unknown as ArrayLike<number>[])[0];

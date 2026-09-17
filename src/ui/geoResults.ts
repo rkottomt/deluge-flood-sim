@@ -36,6 +36,17 @@ export function isLatLon(lat: number, lon: number): boolean {
   return Number.isFinite(lat) && Number.isFinite(lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180;
 }
 
+/**
+ * One coordinate from an untrusted field. Nominatim sends `"40.4406"`, but plain `Number()` would quietly turn `''`,
+ * `null`, `[]` and `false` into **0** — a missing coordinate would select the Gulf of Guinea instead of being
+ * rejected, which is worse than a visible failure. Only a real number or a non-blank numeric string counts.
+ */
+function coord(v: unknown): number {
+  if (typeof v === 'number') return v;
+  if (typeof v === 'string' && v.trim() !== '') return Number(v);
+  return Number.NaN;
+}
+
 /** Validated, cleaned and capped choices from whatever the geocoder answered. */
 export function geoChoices(list: unknown, max = MAX_GEO_RESULTS): GeoChoice[] {
   if (!Array.isArray(list)) return [];
@@ -45,8 +56,8 @@ export function geoChoices(list: unknown, max = MAX_GEO_RESULTS): GeoChoice[] {
     if (!r || typeof r !== 'object') continue;
     const { display_name: displayName, lat: rawLat, lon: rawLon } = r as GeoResult;
     if (typeof displayName !== 'string') continue;
-    const lat = Number(rawLat);
-    const lon = Number(rawLon);
+    const lat = coord(rawLat);
+    const lon = coord(rawLon);
     if (!isLatLon(lat, lon)) continue;
     const parts = displayName.split(', ').map((p) => cleanPlaceLabel(p));
     const first = parts[0] || cleanPlaceLabel(displayName);

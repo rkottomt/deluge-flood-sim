@@ -82,6 +82,21 @@ export function placeNameFromNominatim(j: NominatimReverse | null | undefined): 
   return cleanPlaceLabel(nm || str(raw.name) || str(raw.display_name).split(', ').slice(0, 2).join(', '));
 }
 
+/**
+ * `name` with the coordinates it describes appended: "Riverside (40.440, -80.000)".
+ *
+ * Provenance for a name the app did not choose itself — a `?name=` from a shared link, which passed `linkPlaceLabel`
+ * and therefore *looks* like a place but was written by whoever made the link. Showing the position next to it means
+ * the label can only ever read as someone's caption for a spot on the map, never as the app naming the place
+ * (FINDINGS.json SEC-01). Same digits as `SceneManager.label`, so the two agree.
+ */
+export function withCoordinates(name: string, lat: number, lon: number): string {
+  const clean = cleanPlaceLabel(name);
+  const ll = Number.isFinite(lat) && Number.isFinite(lon) ? `${lat.toFixed(3)}, ${lon.toFixed(3)}` : '';
+  if (!clean) return ll;
+  return ll ? `${clean} (${ll})` : clean;
+}
+
 /** "Area near 29.950° N, 90.070° W". */
 export function coordinateName(lat: number, lon: number): string {
   const ns = lat >= 0 ? 'N' : 'S';

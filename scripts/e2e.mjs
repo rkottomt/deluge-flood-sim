@@ -279,8 +279,13 @@ async function runFlow(flow, ctx) {
   await releaseStalled();
   r.seconds = (Date.now() - t0) / 1000;
   const appErrors = await delugeErrors(flow.resetsPage ? 0 : errBase);
-  r.errors = [...consoleErrors, ...appErrors.filter((e) => !consoleErrors.some((c) => c.includes(e)))];
-  check(r, 'no console / page / WebGPU errors', r.errors.length === 0, `${r.errors.length} errors`);
+  const all = [...consoleErrors, ...appErrors.filter((e) => !consoleErrors.some((c) => c.includes(e)))];
+  // A flow that breaks something on purpose (flow 15 destroys the GPU device) declares the errors that proves it
+  // worked; they are reported but do not fail it. Everything else still does.
+  const expected = flow.expectedErrors ? all.filter((e) => flow.expectedErrors.test(e)) : [];
+  r.errors = all.filter((e) => !expected.includes(e));
+  if (expected.length) r.metrics.expectedErrors = expected.slice(0, 10);
+  check(r, 'no console / page / WebGPU errors', r.errors.length === 0, `${r.errors.length} errors${expected.length ? ` (+${expected.length} expected)` : ''}`);
   if (!flow.network && !flow.stallNetwork) {
     const hosts = [...new Set(externalRequests.map((u) => new URL(u).host))];
     r.metrics.externalRequests = externalRequests.slice(0, 20);

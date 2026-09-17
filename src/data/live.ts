@@ -13,7 +13,7 @@ import { fetchImagery, IMAGERY_ATTRIBUTION } from './imagery';
 import { detectLiveWater, finishLiveTerrain, type LiveTerrainResult } from './liveTerrain';
 import type { LiveWorkerRequest, LiveWorkerResponse } from './liveWorker';
 import { browserOffline, ELEVATION_UNREACHABLE_MESSAGE, probeReachable, recentlyUnreachable } from './net';
-import { cleanPlaceLabel, coordinateName, isCoordinateName, reverseGeocodeName } from './placeName';
+import { cleanPlaceLabel, coordinateName, isCoordinateName, reverseGeocodeName, withCoordinates } from './placeName';
 import { fetchRoadNetwork } from './roads';
 
 export { buildLiveScenario, pickHighShelters } from './liveTerrain';
@@ -192,7 +192,10 @@ export async function loadLiveArea(req: LiveAreaRequest, onProgress?: ProgressFn
       const [img, rd, nm] = await all;
       ctrl.signal.throwIfAborted();
       [imagery, roads] = [img, rd];
-      name = cleanPlaceLabel(nm) || given || coordinateName(lat, lon);
+      // A geocoded name is the app's own answer and stands alone. Falling back to the link's name means showing a
+      // string an attacker wrote, so it always carries the coordinates it claims to describe (SEC-01 provenance).
+      const fallback = given ? (nameFromLink ? withCoordinates(given, lat, lon) : given) : '';
+      name = cleanPlaceLabel(nm) || fallback || coordinateName(lat, lon);
       onProgress?.('Carving rivers and building scenario…', 0.93);
       await tick();
       conditioned = await abortable(conditioner.finish(roads?.network ?? null, name, dem.source), ctrl.signal);

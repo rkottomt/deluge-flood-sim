@@ -53,6 +53,16 @@ export function listPresets(): PresetInfo[] {
   return PRESETS.map((p) => ({ ...p }));
 }
 
+/**
+ * Is `id` one of the presets above? The single source of truth for validating a `?preset=` link value, so an unknown
+ * one can be replaced by the default and never echoed back into the UI (a preset id reaches loading messages, error
+ * toasts and the scenario picker, and `?preset=EVACUATE NOW: call 555-0100` must not become any of those).
+ * FINDINGS.json SEC-01. Type-guarded because the caller's value comes from a URL.
+ */
+export function isPresetId(id: unknown): id is string {
+  return typeof id === 'string' && PRESETS.some((p) => p.id === id);
+}
+
 /** Decode elevation.f32 bytes (little-endian Float32). */
 export function decodeElevation(buf: ArrayBuffer, nx: number, ny: number): Float32Array {
   if (buf.byteLength !== nx * ny * 4) {

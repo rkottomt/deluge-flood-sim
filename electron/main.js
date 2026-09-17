@@ -220,23 +220,44 @@ function buildMenu(getWindow) {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
-/* ------------------------------------------------------------------------ optional headless smoke report */
+/* --------------------------------------------------------------------- verification-only smoke report (§V) */
 
 /**
- * Verification hook. When DELUGE_SMOKE_OUT names a directory, the app writes a screenshot plus a JSON
- * report of the GPU it got and every console message the renderer produced, then quits. It grants the
- * renderer nothing, opens no port and changes no security setting; it only lets §V evidence be collected
- * from a *packaged* build, which Playwright cannot drive (it launches Electron with --inspect, which the
- * R11 fuses and the R12 check both refuse — by design).
+ * The name `@electron/packager` gives the verification build (`npm run app:verify`). That build runs the same
+ * pipeline as the release one — same asar, same fuses, same security configuration — and differs only in this
+ * name and in which `dist/` it carries.
+ *
+ * It exists because a packaged, fused Deluge cannot be driven from outside: Playwright's `_electron.launch`
+ * starts Electron with `--inspect=0` / `--remote-debugging-pipe`, and the R11 fuses plus the R12 guard refuse
+ * both, by design. So the packaged app reports on itself instead: with DELUGE_SMOKE_OUT set it writes a
+ * screenshot, the GPU it got, every console message and (optionally) the result of one on-disk script, then
+ * quits. It opens no port, grants the renderer nothing and changes no security setting.
+ *
+ * The shipped `Deluge.app` is not named this, so for it the hook does not exist at runtime: every DELUGE_SMOKE_*
+ * variable is ignored unless the app is unpackaged or *is* the verification build.
  */
+const VERIFY_APP_NAME = 'Deluge Verify';
+
 function installSmokeReport(win, consoleLog) {
   const outDir = process.env.DELUGE_SMOKE_OUT;
   if (!outDir) return;
+  if (app.isPackaged && app.getName() !== VERIFY_APP_NAME) {
+    console.warn('[deluge] DELUGE_SMOKE_OUT ignored: not a verification build');
+    return;
+  }
   const waitMs = Number(process.env.DELUGE_SMOKE_WAIT_MS || 25000);
   setTimeout(async () => {
-    const report = { waitedMs: waitMs, url: win.webContents.getURL(), console: consoleLog, gpu: null, error: null };
+    const report = { app: app.getName(), packaged: app.isPackaged, waitedMs: waitMs, url: win.webContents.getURL(), console: consoleLog, gpu: null, script: null, error: null };
     try {
-      report.gpu = await app.getGPUInfo('complete');
+      const gpu = await app.getGPUInfo('complete');
+      // The full blob is megabytes of driver detail; §V-2 only needs the adapter identity.
+      report.gpu = { vendor: gpu?.gpuDevice?.[0]?.vendorId ?? null, device: gpu?.gpuDevice?.[0]?.deviceId ?? null, description: gpu?.machineModelName ?? null, raw: gpu?.auxAttributes ?? null };
+      const scriptPath = process.env.DELUGE_SMOKE_SCRIPT;
+      if (scriptPath) {
+        // A fixed file on disk, never renderer input and never interpolated (R12). Verification builds only.
+        const source = await readFile(scriptPath, 'utf8');
+        report.script = await win.webContents.executeJavaScript(source, true);
+      }
       const image = await win.webContents.capturePage();
       const { writeFile, mkdir } = await import('node:fs/promises');
       await mkdir(outDir, { recursive: true });
@@ -244,6 +265,12 @@ function installSmokeReport(win, consoleLog) {
       await writeFile(path.join(outDir, 'smoke.json'), JSON.stringify(report, null, 2));
       console.log('[deluge] smoke report written to', outDir);
     } catch (err) {
+      report.error = String(err?.stack || err);
+      try {
+        const { writeFile, mkdir } = await import('node:fs/promises');
+        await mkdir(outDir, { recursive: true });
+        await writeFile(path.join(outDir, 'smoke.json'), JSON.stringify(report, null, 2));
+      } catch {}
       console.error('[deluge] smoke report failed', err);
     }
     app.exit(0);
@@ -330,12 +357,13 @@ function createWindow(ses) {
 
   win.once('ready-to-show', () => win.show());
 
-  // Keep the venue screen awake for as long as the window exists.
+  // Keep the venue screen awake for as long as a window exists. One blocker, never stacked.
+  if (blockerId === null || !powerSaveBlocker.isStarted(blockerId)) blockerId = powerSaveBlocker.start('prevent-display-sleep');
   win.on('closed', () => {
+    if (BrowserWindow.getAllWindows().some((w) => !w.isDestroyed())) return;
     if (blockerId !== null && powerSaveBlocker.isStarted(blockerId)) powerSaveBlocker.stop(blockerId);
     blockerId = null;
   });
-  blockerId = powerSaveBlocker.start('prevent-display-sleep');
 
   buildMenu(() => (win.isDestroyed() ? null : win));
   installSmokeReport(win, consoleLog);
@@ -345,14 +373,15 @@ function createWindow(ses) {
   return win;
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   // R14: a dedicated session. Every protocol, permission and network rule below applies to *this* session,
   // which is also the one the window uses; defaultSession is left alone.
   const ses = session.fromPartition('persist:deluge');
 
   // A previous visitor's state never carries over. The HTTP cache is kept on purpose — it only holds
   // public map data and it makes repeated live loads bearable on venue wifi.
-  ses.clearStorageData({ storages: ['localstorage', 'indexdb', 'serviceworkers', 'cachestorage'] }).catch((e) => console.warn('[deluge] clearStorageData', e));
+  // Awaited: the window must not start writing storage while the wipe is still running.
+  await ses.clearStorageData({ storages: ['localstorage', 'indexdb', 'serviceworkers', 'cachestorage'] }).catch((e) => console.warn('[deluge] clearStorageData', e));
 
   // R4/R5
   ses.protocol.handle('app', serveApp);

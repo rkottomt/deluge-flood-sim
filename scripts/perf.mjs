@@ -66,37 +66,48 @@ const SECONDS = Number(argv.seconds ?? (QUICK ? 8 : 15));
 const SUSTAIN_S = Number(argv.sustain ?? (QUICK ? 0 : 60));
 
 // ── thresholds ──────────────────────────────────────────────────────────────────────────────────
-// Recorded on the demo machine (MacBook Air M4, 16 GB, macOS 15) on 2026-09-17 with
-// `node scripts/perf.mjs --calibrate`, on battery. Targets keep ~25-40% headroom over the
-// measured values so normal GPU-sharing noise does not trip them; floors are "the demo is broken".
-const num = (envKey, fallback) => {
-  const v = process.env[envKey];
-  return v !== undefined && v !== '' && Number.isFinite(Number(v)) ? Number(v) : fallback;
-};
+// Calibrated on the demo machine (MacBook Air M4, 16 GB, macOS 15) on 2026-09-17 with
+// `node scripts/perf.mjs --calibrate --port=5603` — 11 cases, on battery, Low Power Mode off. The worst case
+// measured across all of them was: 60.0 fps mean, 52.6 fps p95-low, 16.7 ms p50, 19.0 ms p95, 23.1 ms p99,
+// zero frames over 34 ms, 4.1 ms CPU p95, 43.0 ms GPU p90, 55.9 ms input p95, 0.55 s TTI (15.8 s for the live
+// area, which is a download). Targets keep ~25-60% headroom beyond those so normal GPU-sharing noise cannot
+// trip them; floors are "the demo is visibly broken", not "the laptop is busy".
 const THRESHOLDS = {
   /** Mean rendered frames per second over the measurement window. */
-  fpsMean: { dir: 'min', target: num('DELUGE_PERF_MIN_FPS', 55), floor: 30, unit: 'fps' },
+  fpsMean: { dir: 'min', env: 'DELUGE_PERF_MIN_FPS', target: 55, floor: 30, unit: 'fps' },
   /** The fps you get 95% of the time (1000 / p95 frame interval). */
-  fpsP95Low: { dir: 'min', target: num('DELUGE_PERF_MIN_FPS_P95', 45), floor: 20, unit: 'fps' },
-  p50FrameMs: { dir: 'max', target: num('DELUGE_PERF_MAX_P50_MS', 18.5), floor: 34, unit: 'ms' },
-  p95FrameMs: { dir: 'max', target: num('DELUGE_PERF_MAX_P95_MS', 22), floor: 50, unit: 'ms' },
-  p99FrameMs: { dir: 'max', target: num('DELUGE_PERF_MAX_P99_MS', 34), floor: 80, unit: 'ms' },
+  fpsP95Low: { dir: 'min', env: 'DELUGE_PERF_MIN_FPS_P95', target: 45, floor: 20, unit: 'fps' },
+  p50FrameMs: { dir: 'max', env: 'DELUGE_PERF_MAX_P50_MS', target: 18.5, floor: 34, unit: 'ms' },
+  p95FrameMs: { dir: 'max', env: 'DELUGE_PERF_MAX_P95_MS', target: 24, floor: 50, unit: 'ms' },
+  p99FrameMs: { dir: 'max', env: 'DELUGE_PERF_MAX_P99_MS', target: 34, floor: 80, unit: 'ms' },
   /** Fraction of frame intervals slower than 34 ms (a dropped frame at 60 Hz) and 50 ms (visible hitch). */
-  slow34Frac: { dir: 'max', target: num('DELUGE_PERF_MAX_SLOW_FRAC', 0.03), floor: 0.25, unit: '' },
-  slow50Frac: { dir: 'max', target: num('DELUGE_PERF_MAX_HITCH_FRAC', 0.01), floor: 0.1, unit: '' },
-  /** Simulated seconds advanced per wall-clock second, as a fraction of what the scenario asked for. */
-  simSpeedFrac: { dir: 'min', target: num('DELUGE_PERF_MIN_SIM_SPEED_FRAC', 0.5), floor: 0.05, unit: 'x' },
+  slow34Frac: { dir: 'max', env: 'DELUGE_PERF_MAX_SLOW_FRAC', target: 0.03, floor: 0.25, unit: '' },
+  slow50Frac: { dir: 'max', env: 'DELUGE_PERF_MAX_HITCH_FRAC', target: 0.01, floor: 0.1, unit: '' },
+  /** Simulated seconds advanced per wall second, as a fraction of what the scenario asked for (per-scenario target). */
+  simSpeedFrac: { dir: 'min', env: 'DELUGE_PERF_MIN_SIM_SPEED_FRAC', target: 0.9, floor: 0.25, unit: 'x' },
+  /** Absolute simulated seconds per wall second. Only asserted for the scenarios that force a high time scale. */
+  simSpeed: { dir: 'min', env: 'DELUGE_PERF_MIN_SIM_SPEED', target: 55, floor: 20, unit: 'x' },
   /** Main-thread time inside the app's own frame callback. */
-  cpuFrameP95Ms: { dir: 'max', target: num('DELUGE_PERF_MAX_CPU_P95_MS', 12), floor: 30, unit: 'ms' },
+  cpuFrameP95Ms: { dir: 'max', env: 'DELUGE_PERF_MAX_CPU_P95_MS', target: 12, floor: 30, unit: 'ms' },
   /** Time from queue submit to onSubmittedWorkDone — how far the GPU runs behind the main thread. */
-  gpuLatP90Ms: { dir: 'max', target: num('DELUGE_PERF_MAX_GPU_LAT_MS', 45), floor: 120, unit: 'ms' },
+  gpuLatP90Ms: { dir: 'max', env: 'DELUGE_PERF_MAX_GPU_LAT_MS', target: 70, floor: 140, unit: 'ms' },
   /** Real pointer drag to the first frame that shows the new camera. */
-  inputLatP95Ms: { dir: 'max', target: num('DELUGE_PERF_MAX_INPUT_LATENCY_MS', 70), floor: 200, unit: 'ms' },
-  /** Navigation start to __deluge.ready (first frame with terrain and water). */
-  ttiS: { dir: 'max', target: num('DELUGE_PERF_MAX_TTI_S', 9), floor: 25, unit: 's' },
-  /** Sustain run only: how far fps and sim speed may fall from the first minute-chunk to the last. */
-  driftPct: { dir: 'max', target: num('DELUGE_PERF_MAX_DRIFT_PCT', 12), floor: 40, unit: '%' },
+  inputLatP95Ms: { dir: 'max', env: 'DELUGE_PERF_MAX_INPUT_LATENCY_MS', target: 85, floor: 200, unit: 'ms' },
+  /** Navigation start to __deluge.ready (first frame with terrain and water). Overridden for the live scenario. */
+  ttiS: { dir: 'max', env: 'DELUGE_PERF_MAX_TTI_S', target: 9, floor: 25, unit: 's' },
+  /** Sustain run only: how far fps and sim speed may fall from the first chunk to the last. */
+  driftPct: { dir: 'max', env: 'DELUGE_PERF_MAX_DRIFT_PCT', target: 12, floor: 40, unit: '%' },
 };
+
+// An explicitly set env var wins over both the default above and any per-scenario override below, so a single
+// `DELUGE_PERF_MIN_FPS=50 npm run test:perf` really does apply to every scenario.
+for (const t of Object.values(THRESHOLDS)) {
+  const v = process.env[t.env];
+  if (v !== undefined && v !== '' && Number.isFinite(Number(v))) {
+    t.target = Number(v);
+    t.envLocked = true;
+  }
+}
 
 /** Per-scenario expectations: which metrics apply, and the requested sim speed to compare against. */
 const SCENARIOS = {
@@ -104,6 +115,8 @@ const SCENARIOS = {
     label: 'idle Pittsburgh',
     preset: 'pittsburgh',
     quick: true,
+    // Nothing forces the clock, so the scenario must hit its requested 60x exactly.
+    thresholds: { simSpeedFrac: { target: 0.9, floor: 0.5 } },
     async setup(page) {
       return page.evaluate(() => ({ requested: window.__deluge.getState().sim.timeScale }));
     },
@@ -111,6 +124,7 @@ const SCENARIOS = {
   crest: {
     label: 'crest raise (1936, 46 ft)',
     preset: 'pittsburgh',
+    thresholds: { simSpeedFrac: { target: 0.9, floor: 0.5 } },
     async setup(page) {
       return page.evaluate(() => {
         const d = window.__deluge;
@@ -125,6 +139,9 @@ const SCENARIOS = {
     preset: 'pittsburgh',
     quick: true,
     sustain: true,
+    // 300x on a 1024² grid is GPU-bound by design: the substep budget throttles to protect the frame rate, so the
+    // guarantee is "still fast, and still much faster than real time", not "hits 300x". Measured 162x / 0.54 today.
+    thresholds: { simSpeedFrac: { target: 0.40, floor: 0.15 }, simSpeed: { target: 110, floor: 40 } },
     async setup(page) {
       return page.evaluate(() => {
         const d = window.__deluge;
@@ -139,6 +156,8 @@ const SCENARIOS = {
   johnstown: {
     label: 'Johnstown inflow',
     preset: 'johnstown',
+    // Tripled inflows at 300x: the heaviest forcing in the suite. Measured 120x / 0.40 today.
+    thresholds: { simSpeedFrac: { target: 0.30, floor: 0.12 }, simSpeed: { target: 85, floor: 30 } },
     async setup(page) {
       return page.evaluate(() => {
         const d = window.__deluge;
@@ -153,6 +172,7 @@ const SCENARIOS = {
   levee: {
     label: 'levee build (real pointer drag)',
     preset: 'pittsburgh',
+    thresholds: { simSpeedFrac: { target: 0.9, floor: 0.5 } },
     async setup(page, ctx) {
       await page.evaluate(() => {
         const d = window.__deluge;
@@ -182,6 +202,9 @@ const SCENARIOS = {
     // A live area is requested through the URL so the measurement includes its download + build.
     url: '?live=40.4406,-79.9959,3&res=512',
     needsNetwork: true,
+    // TTI here includes a DEM + imagery download from USGS/Esri, so it is bounded by the network, not the GPU.
+    // Measured 15.8 s today on home wifi. The other metrics are measured after the terrain is up and apply as usual.
+    thresholds: { ttiS: { target: 26, floor: 60 }, simSpeedFrac: { target: 0.9, floor: 0.5 } },
     async setup(page) {
       return page.evaluate(() => ({
         preset: window.__deluge.getState().presetId,
@@ -246,38 +269,70 @@ async function machineState() {
 // ── build + serve ───────────────────────────────────────────────────────────────────────────────
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * Is anything listening on `port`? Both stacks are probed: `vite preview --host localhost` binds only [::1] on
+ * macOS, so an IPv4-only probe reports a healthy server as down and the suite times out waiting for it.
+ */
 async function portOpen(port) {
-  return new Promise((resolve) => {
-    const s = net.connect({ port, host: '127.0.0.1' });
-    s.on('connect', () => (s.destroy(), resolve(true)));
-    s.on('error', () => resolve(false));
-    setTimeout(() => (s.destroy(), resolve(false)), 1000);
-  });
+  const probe = (host) =>
+    new Promise((resolve) => {
+      const s = net.connect({ port, host });
+      const done = (v) => (s.destroy(), resolve(v));
+      s.on('connect', () => done(true));
+      s.on('error', () => done(false));
+      setTimeout(() => done(false), 1000);
+    });
+  return (await Promise.all([probe('127.0.0.1'), probe('::1')])).some(Boolean);
 }
 
 async function buildAndServe(distDir, port, logFile) {
   fs.mkdirSync(path.dirname(logFile), { recursive: true });
   const log = fs.createWriteStream(logFile);
   process.stdout.write(`[perf] building production bundle → ${path.relative(ROOT, distDir)} … `);
-  const build = spawn('npx', ['vite', 'build', '--outDir', distDir], { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'] });
+  // Production build in every respect that costs frames (minified, tree-shaken, real assets) but with the
+  // automation surface compiled in: SEC-07 strips window.__deluge from a released bundle, and this suite
+  // measures through it. scripts/e2e.mjs does the same. The released build is what test:security checks.
+  const build = spawn('npx', ['vite', 'build', '--outDir', distDir], {
+    cwd: ROOT,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...process.env, DELUGE_DEBUG_API: '1' },
+  });
   build.stdout.pipe(log, { end: false });
   build.stderr.pipe(log, { end: false });
   const [code] = await once(build, 'exit');
   if (code !== 0) throw new Error(`vite build failed (exit ${code}); see ${logFile}`);
   console.log('ok');
   if (await portOpen(port)) throw new Error(`port ${port} is already in use — pass --port=<free port>`);
+  // `detached` puts the server in its own process group: `npx` forks the real vite process, so killing the npx
+  // pid alone leaves a preview server holding the port for the next run. killTree() kills the group.
   const server = spawn('npx', ['vite', 'preview', '--outDir', distDir, '--port', String(port), '--strictPort'], {
     cwd: ROOT,
     stdio: ['ignore', 'pipe', 'pipe'],
+    detached: true,
   });
   server.stdout.pipe(log, { end: false });
   server.stderr.pipe(log, { end: false });
-  for (let i = 0; i < 100; i++) {
+  for (let i = 0; i < 150; i++) {
     if (await portOpen(port)) return { server, url: `http://localhost:${port}/` };
+    if (server.exitCode !== null) throw new Error(`vite preview exited (${server.exitCode}); see ${logFile}`);
     await sleep(100);
   }
-  server.kill('SIGKILL');
+  killTree(server);
   throw new Error(`vite preview never came up on ${port}; see ${logFile}`);
+}
+
+/** Kill a detached child and everything it spawned. */
+function killTree(child) {
+  if (!child || child.exitCode !== null) return;
+  try {
+    process.kill(-child.pid, 'SIGKILL');
+  } catch {
+    try {
+      child.kill('SIGKILL');
+    } catch {
+      /* already gone */
+    }
+  }
 }
 
 async function networkReachable() {
@@ -601,11 +656,15 @@ async function runCase(browser, baseUrl, scenarioId, viewportId, opts) {
 // ── threshold evaluation ────────────────────────────────────────────────────────────────────────
 function evaluate(row) {
   const checks = [];
+  // A scenario may move a target/floor for a metric whose honest expectation differs from the suite default
+  // (a 300x run is throttled by design; a live area's TTI is a download). An env var still wins over both.
+  const over = SCENARIOS[row.scenario]?.thresholds ?? {};
   const add = (metric, value, opts = {}) => {
     const t = THRESHOLDS[metric];
     if (!t || value === null || value === undefined || !Number.isFinite(value)) return;
-    const target = opts.target ?? t.target;
-    const floor = opts.floor ?? t.floor;
+    const o = t.envLocked ? {} : (over[metric] ?? {});
+    const target = opts.target ?? o.target ?? t.target;
+    const floor = opts.floor ?? o.floor ?? t.floor;
     const okTarget = t.dir === 'min' ? value >= target : value <= target;
     const okFloor = t.dir === 'min' ? value >= floor : value <= floor;
     checks.push({
@@ -632,6 +691,8 @@ function evaluate(row) {
   // The idle scenario runs at the default 60x with no forcing; a scenario that asks for 300x on a 1024² grid
   // is GPU-bound by design, so it is judged on the fraction of the request it achieves.
   if (row.simSpeedFrac !== null) add('simSpeedFrac', row.simSpeedFrac);
+  // Absolute sim speed is only meaningful where the scenario asked for more than real time on purpose.
+  if (over.simSpeed) add('simSpeed', row.simSpeed);
   if (row.sustain) {
     add('driftPct', Math.abs(row.sustain.fpsDriftPct), { name: 'fpsDriftPct' });
     add('driftPct', Math.abs(row.sustain.simSpeedDriftPct), { name: 'simSpeedDriftPct' });
@@ -832,6 +893,6 @@ try {
   console.error(`\nFAIL: ${e.message}`);
   process.exitCode = 1;
 } finally {
-  if (server) server.kill('SIGKILL');
+  killTree(server);
   if (!KEEP_DIST && !EXTERNAL_URL && fs.existsSync(distDir)) fs.rmSync(distDir, { recursive: true, force: true });
 }

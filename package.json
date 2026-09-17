@@ -2,6 +2,7 @@
   "name": "deluge",
   "private": true,
   "version": "0.1.0",
+  "main": "electron/main.js",
   "type": "module",
   "engines": {
     "node": "^20.19.0 || >=22.12.0"
@@ -15,7 +16,16 @@
     "test:unit": "node --import tsx --test --test-concurrency=1 tests/data/*.test.ts tests/routing/*.test.ts tests/app/*.test.ts tests/ui/*.test.ts tests/render/picking.test.ts tests/render/quality.test.ts tests/render/tonemap.test.ts tests/render/wallField.test.ts",
     "demo": "vite build && vite preview --port 4173 --strictPort",
     "e2e": "node scripts/e2e.mjs",
-    "bench": "node scripts/bench.mjs"
+    "bench": "node scripts/bench.mjs",
+    "test:perf": "node scripts/perf.mjs",
+    "test:visual": "node scripts/visual.mjs",
+    "test:security": "node scripts/security-test.mjs",
+    "test:suites": "node scripts/perf.mjs --quick && node scripts/visual.mjs --quick && node scripts/security-test.mjs --quick",
+    "test:all": "npm run typecheck && npm test && node scripts/security-test.mjs && node scripts/visual.mjs && node scripts/perf.mjs",
+    "app:dev": "vite build && electron electron/main.js",
+    "app:build": "node --import tsx electron/check-endpoints.mjs && tsc --noEmit && vite build && node electron/package.mjs",
+    "app:verify": "node electron/package.mjs --name='Deluge Verify' --out=artifacts/electron",
+    "app:check": "node electron/verify-renderer.mjs && node electron/verify-packaged.mjs"
   },
   "devDependencies": {
     "@electron/fuses": "2.1.3",
