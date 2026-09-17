@@ -340,7 +340,7 @@ export class OrbitController implements CameraController {
     x.gx = clamp(x.gx, -0.25 * e.nx, 1.25 * e.nx);
     x.gy = clamp(x.gy, -0.25 * e.ny, 1.25 * e.ny);
     const size = Math.max(e.nx, e.ny) * e.cellSize;
-    p.distance = clamp(p.distance, Math.max(e.cellSize * 1.5, 12), size * 5);
+    p.distance = clamp(p.distance, minCameraDistance(e.cellSize), size * 5);
     p.pitch = clamp(p.pitch, this.minPitchFor(p), MAX_PITCH);
     for (let iter = 0; iter < 3; iter++) {
       const eye = this.eyeFor(p);
@@ -565,7 +565,7 @@ export class OrbitController implements CameraController {
     const e = this.env;
     const size = Math.max(e.nx, e.ny) * e.cellSize;
     const g = this.goal;
-    const minD = Math.max(e.cellSize * 1.5, 12);
+    const minD = minCameraDistance(e.cellSize);
     const newD = clamp(g.distance * factor, minD, size * 5);
     const s = newD / g.distance;
     if (Math.abs(s - 1) < 1e-6) return;
@@ -577,4 +577,12 @@ export class OrbitController implements CameraController {
     }
     g.distance = newD;
   }
+}
+
+/**
+ * Closest the orbit camera may get, m. Imagery is 1.2–2 m per texel (baked presets, 4096²) and terrain has one vertex
+ * per cell, so closer than ~90 m only magnifies texels and facets; coarse grids stop proportionally farther away.
+ */
+export function minCameraDistance(cellSize: number): number {
+  return Math.max(cellSize * 6, 90);
 }

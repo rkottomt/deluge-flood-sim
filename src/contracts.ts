@@ -3,6 +3,7 @@
  *
  * THIS FILE IS THE INTEGRATION CONTRACT. Every module (sim, render, data, routing, ui, app)
  * codes against these types. Do not change a signature here without updating every consumer.
+ * Optional members marked "extension" are implemented by the shipped modules and feature-detected by callers.
  *
  * ─── Grid & coordinate conventions (READ THIS) ────────────────────────────────────────────
  *  • The domain is a regular grid of nx × ny square cells, cellSize meters on a side.
@@ -243,8 +244,9 @@ export interface SimStats {
   /** Cumulative volume removed by open boundaries + infiltration + stage sources + brush, m³. */
   volumeOut: number;
   /**
-   * Relative mass-balance error: |volume - (initialVolume + volumeIn - volumeOut)| / max(1, initialVolume + volumeIn).
-   * Demonstrates conservation. Should stay ≲ 1e-3.
+   * Relative mass-balance error: |volume - (initialVolume + volumeIn - volumeOut)| / max(1, initialVolume, peak volume
+   * since reset). (Normalized by the most water ever held, not by the ever-growing inflow volume: stage boundaries
+   * can exchange many times the domain's storage.) Demonstrates conservation. Should stay ≲ 1e-3.
    */
   massError: number;
   /** Largest Courant number observed in the last stats window. */
@@ -311,6 +313,15 @@ export interface FloodSolver {
   /** CPU mirrors (kept in sync with GPU edits) for picking and routing. Row-major, nx*ny, meters. */
   getGroundCPU(): Float32Array;
   getBarrierCPU(): Float32Array;
+
+  /**
+   * Extension (GpuFloodSolver): raise the water surface in place, e.g. rivers rising to a new stage. For every cell with
+   * a finite `base` (nx·ny water-surface elevations, m): h = max(h, base + offset − (ground + barrier)); NaN leaves the
+   * cell alone. Discharge is kept, the added water is booked in volumeIn (massError stays exact), the CFL estimate
+   * accounts for the new depth, and stateTexture is re-exported even while paused. `base` is uploaded once per
+   * distinct array object (treat it as immutable); each call then costs a uniform write and one full-grid pass.
+   */
+  raiseWaterSurface?(base: Float32Array, offset?: number): void;
 
   destroy(): void;
 }
@@ -383,7 +394,12 @@ export interface PickResult {
 }
 
 export interface FloodRenderer {
-  /** Bind a terrain + solver. Call again whenever a new terrain is loaded. */
+  /**
+   * Bind a terrain + solver. Call again whenever a new terrain is loaded. Also captures the "normally wet" mask
+   * (rivers and lakes before the flood, used by the depth / max-depth hazard maps) from solver.stateTexture, so call
+   * it right after solver.setInitialWater (as src/app/scene.ts does). If the initial water is replaced later, call
+   * the extension captureNormalWater() on DelugeRendererAPI.
+   */
   setScene(terrain: TerrainData, solver: FloodSolver): void;
   /** Camera state (mutable). The renderer owns an OrbitController attached to the canvas. */
   readonly camera: CameraController;
@@ -513,18 +529,21 @@ export interface DelugeDebugAPI {
 }
 
 // ────────────────────────────────────────────────────────────────────────────────────────────
-// Module factories (each module's index.ts must export exactly these)
+// Module factories (each module's index.ts exports at least these)
 // ────────────────────────────────────────────────────────────────────────────────────────────
 //
 //  src/sim/index.ts:
 //    export function createSolver(device: GPUDevice, terrain: SolverTerrainInput,
 //                                 params?: Partial<SimParams>, options?: Partial<SolverOptions>): Promise<FloodSolver>;
-//    (options = numerical tunables, see src/sim/constants.ts; the concrete GpuFloodSolver also exposes a
-//     settable `gpuBudgetMs` — GPU compute ms per frame measured with timestamp queries.)
+//    (options = numerical tunables, see src/sim/constants.ts, e.g. `wallAdvection` (default 0.1): the fraction of
+//     convective acceleration kept on faces next to dry or blocked faces. `gpuBudgetMs`: GPU compute ms per frame
+//     measured with timestamp queries; Infinity = off, for hosts that pace the solver themselves such as the app's
+//     governor. The concrete GpuFloodSolver also exposes it as a settable property, and raiseWaterSurface.)
 //  src/render/index.ts:
 //    export function createRenderer(device: GPUDevice, canvas: HTMLCanvasElement,
 //                                   format: GPUTextureFormat, options?: RendererOptions): Promise<FloodRenderer>;
-//    (options.quality 'auto'|'high'|'balanced'|'low'; the concrete DelugeRendererAPI adds setQuality() + stats.)
+//    (options.quality 'auto'|'high'|'balanced'|'low'; the concrete DelugeRendererAPI adds setQuality(), stats and
+//     captureNormalWater() — re-capture the normally-wet mask after replacing the initial water.)
 //  src/routing/index.ts:
 //    export function createRouter(): EvacuationRouter;
 //  src/data/index.ts:
@@ -537,8 +556,8 @@ export interface DelugeDebugAPI {
 //  src/ui/index.ts:
 //    export function mountUI(root: HTMLElement, store: Store, actions: AppActions): void;
 //    export function createToolController(canvas: HTMLCanvasElement, deps: ToolControllerDeps): ToolController;
-//  src/gpu.ts (already written): export function createDelugeDevice(gpu: GPU): Promise<DelugeGPU>;
-//  src/app/store.ts (already written): export function createStore(initial: AppState): Store;
+//  src/gpu.ts: export function createDelugeDevice(gpu: GPU): Promise<DelugeGPU>;
+//  src/app/store.ts: export function createStore(initial: AppState): Store;
 
 export type SolverTerrainInput = Pick<TerrainData, 'nx' | 'ny' | 'cellSize' | 'elevation'>;
 

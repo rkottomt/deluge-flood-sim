@@ -5,8 +5,8 @@
  *   node --import tsx tests/sim/bench.ts 1024       # one size
  *
  * Reports substeps/second of the full per-substep pipeline (momentum + continuity passes), the cost of the
- * per-frame export pass, the readback (map + CPU stats) cost, and what that means against DESIGN §3.4:
- * 1024² ≥ 4 substeps/frame at 30 fps (120 substeps/s + render), 512² ≥ 16 substeps/frame at 60 fps (960/s).
+ * per-frame export pass, the readback (map + CPU stats) cost, and what that means against the performance target on an
+ * Apple M4: 1024² ≥ 4 substeps/frame at 30 fps (120 substeps/s + render), 512² ≥ 16 substeps/frame at 60 fps (960/s).
  * Throughput is wall-clock from submit to queue.onSubmittedWorkDone over large batches (driver scheduling and any
  * other GPU users included: conservative); "GPU" is execution time per substep from timestamp queries.
  */

@@ -28,7 +28,7 @@ import { checkWall, scanWalls, stageSurface, WALL_MAX } from './wallCheck';
 import { formatStageFt } from './format';
 import { stageFt } from './scales';
 
-/** Max inflow + stage sources and storm cells the solver supports (DESIGN §3.2). */
+/** Max inflow + stage sources and storm cells the solver supports (MAX_SOURCES / MAX_STORMS in src/sim/constants.ts). */
 export const MAX_SOURCES = 16;
 export const MAX_STORMS = 8;
 /** How often walls are checked against the water (overtopping notices), ms. */

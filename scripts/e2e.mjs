@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Deluge end-to-end judge flows (DESIGN.md §9) in headless Chromium on the real GPU.
+ * Deluge end-to-end judge flows in headless Chromium on the real GPU.
  *
  *   node scripts/e2e.mjs                    in-process Vite dev server on :5190 (or the next free port), all flows
  *   node scripts/e2e.mjs --prod             production build + `vite preview` (what `npm run demo` serves)

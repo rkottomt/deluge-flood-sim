@@ -1,5 +1,5 @@
 /**
- * Deluge WebGPU renderer (DESIGN.md §5).
+ * Deluge WebGPU renderer (ARCHITECTURE.md §6).
  *
  * Frame outline:
  *   compute  prep: solver bed/barrier/state → derived vertex + filterable surface textures

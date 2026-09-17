@@ -6,7 +6,11 @@
  *                                                     semi-implicit friction, θ smoothing, velocity cap)
  *   Pass B  continuity    state[p] + flux ──▶ state[1−p]  (+ accounting buffer)
  *                                                    (positivity limiter, ∂h/∂t = −∇·q, rain, sources,
- *                                                     infiltration, stage relaxation, open boundaries)
+ *                                                     infiltration, stage levels with no momentum inside a
+ *                                                     stage disc, open boundaries closed next to inflows)
+ * ── On demand ──────────────────────────────────────────────────────────────────────────────────────────
+ *   Brush   walls / erase / water / dig over a rectangle (CPU mirrors of ground + walls kept in sync)
+ *   Raise   raiseWaterSurface: h = max(h, base + offset − bed) in place (river crests), booked as inflow
  * ── Per frame ──────────────────────────────────────────────────────────────────────────────────────────
  *   Export  state ──▶ stateTexture (h, u, v, maxDepth)   for the renderer
  *   Readback (every ~300 ms, never blocking): a reduction pass (shaders/stats.ts) writes depth + per-16×16-block

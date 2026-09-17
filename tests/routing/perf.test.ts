@@ -1,6 +1,6 @@
 /// <reference types="node" />
 /**
- * Performance targets (DESIGN.md §6): 50k edges — setNetwork < 150 ms, updateFlood on a 1024² depth grid
+ * Performance targets: 50k edges — setNetwork < 150 ms, updateFlood on a 1024² depth grid
  * < 5 ms, route < 10 ms. Real wall-clock timings are printed so regressions are visible in the test log; the
  * assertions use main-thread CPU time, best of several interleaved passes per workload item and rescaled by the
  * machine's current slowdown (see timing.ts), so they hold when the tests share the machine with GPU tests and

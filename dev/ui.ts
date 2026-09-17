@@ -144,7 +144,7 @@ const terrainImage = (() => {
 // ─── Fake scenario / presets ────────────────────────────────────────────────────────────────────
 const scenario: ScenarioPreset = {
   description:
-    "On March 17–18, 1936, snowmelt and heavy rain sent the Allegheny and Monongahela surging into the Ohio. At the Point the river crested at 46 feet — 21 feet above flood stage — putting downtown Pittsburgh under as much as 15 feet of water. Raise the river to the 1936 crest and watch the Golden Triangle go under street by street; then try to save it with a levee.",
+    "On March 17–18, 1936, snowmelt and heavy rain sent the Allegheny and Monongahela surging into the Ohio. At the Point the river crested at 46 feet — 24 feet above flood stage — putting downtown Pittsburgh under as much as 15 feet of water. Raise the river to the 1936 crest and watch the Golden Triangle go under street by street; then try to save it with a levee.",
   sources: [
     { id: 'alle', type: 'stage', gx: 1010, gy: 300, radius: 12, level: NORMAL_POOL, label: 'Allegheny River' },
     { id: 'mon', type: 'stage', gx: 1010, gy: 720, radius: 12, level: NORMAL_POOL, label: 'Monongahela River' },
@@ -160,7 +160,7 @@ const scenario: ScenarioPreset = {
     label: 'Ohio River at Pittsburgh (Point gauge)',
     gaugeDatum: 211.6,
     normalLevel: NORMAL_POOL,
-    floodStageFt: 25,
+    floodStageFt: 22,
     marks: [
       { label: '1972 Agnes', ft: 35.8 },
       { label: '1936 crest', ft: 46 },
@@ -180,7 +180,7 @@ const presets: PresetInfo[] = [
 const initial: AppState = {
   presetId: 'pittsburgh',
   terrainName: 'Pittsburgh — Three Rivers',
-  attribution: 'Elevation: USGS 3DEP · Imagery © Esri, Maxar, Earthstar Geographics · Roads: US Census TIGER/Line',
+  attribution: 'Elevation: USGS 3DEP · Imagery © Esri, Vantor, Earthstar Geographics, and the GIS User Community · Roads: US Census TIGER/Line',
   loading: null,
   error: null,
   paused: false,

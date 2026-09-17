@@ -4476,3 +4476,10 @@
     transition-duration: 0.001ms !important;
   }
 }
+
+/* Achieved sim speed on the selected speed button when the GPU can't keep up ("300× → 44×"). */
+.dl-seg-achieved {
+  font-weight: 500;
+  opacity: 0.75;
+  font-variant-numeric: tabular-nums;
+}

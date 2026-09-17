@@ -1,5 +1,5 @@
 /**
- * Routing module — flood-aware evacuation routing over the road network (DESIGN.md §6).
+ * Routing module — flood-aware evacuation routing over the road network (ARCHITECTURE.md §7).
  *
  *   const router = createRouter();
  *   router.setNetwork(terrain.roads, terrain.cellSize);

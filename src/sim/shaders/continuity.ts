@@ -11,6 +11,9 @@
  * sharing a face apply the identical limited flux, so mass is conserved exactly (up to Float32 rounding).
  * Computing k of a neighbour needs that neighbour's four faces, hence the 13-texel flux stencil below.
  *
+ * Stage sources set the depth to max(0, level − z) and zero the stored discharge of faces fully inside their disc (a
+ * reservoir at rest; see the stage loop). Open-boundary outflow is closed on edge cells near inflow sources (bfluxC).
+ *
  * Mass accounting: every external change is measured as the actual Float32 difference it made to h
  * (h_after − h_before) and added to acc[2c] (in) or acc[2c+1] (out). The CPU copies + zeroes this buffer in
  * the same command encoder as the depth readback and sums it in Float64, so SimStats.massError is real.

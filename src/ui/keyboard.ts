@@ -1,5 +1,5 @@
 /**
- * Global keyboard shortcuts (DESIGN §7). Installed by mountUI because several need AppActions.
+ * Global keyboard shortcuts. Installed by mountUI because several need AppActions.
  *   1…0 tools · Space play/pause · R reset water · F frame all · T top-down · H or ? help
  *   Esc closes the top-most modal (the tool controller separately cancels an in-progress wall)
  *   [ and ] shrink / grow the brush

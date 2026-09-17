@@ -59,6 +59,8 @@ export class SceneManager {
   private inFlight: SceneRequest | null = null;
   /** Aborts the downloads of the newest load (a newer load or cancel() fires it). */
   private abort: AbortController | null = null;
+  /** The newest load is still downloading (the scene on screen is intact): cancel() may stop it. */
+  private cancellable = false;
 
   constructor(private readonly deps: SceneManagerDeps) {}
 
@@ -90,7 +92,9 @@ export class SceneManager {
    * was cancelled.
    */
   cancel(): boolean {
-    if (!this.inFlight) return false;
+    // Once the terrain has arrived the old scene is torn down: cancelling then would leave nothing on screen.
+    if (!this.inFlight || !this.cancellable) return false;
+    this.cancellable = false;
     this.token++;
     this.inFlight = null;
     this.abort?.abort(new SupersededLoadError('Load cancelled'));
@@ -106,6 +110,7 @@ export class SceneManager {
     this.abort?.abort(new SupersededLoadError());
     const abort = new AbortController();
     this.abort = abort;
+    this.cancellable = request.kind === 'live';
     const { store, device, renderer, router } = this.deps;
     const label = SceneManager.label(request);
     const isCurrent = () => token === this.token;
@@ -125,6 +130,7 @@ export class SceneManager {
       const terrain =
         request.kind === 'preset' ? await loadPreset(request.id, progress) : await loadLiveArea(request.req, progress, abort.signal);
       if (!isCurrent()) throw new SupersededLoadError();
+      this.cancellable = false;
       validateTerrain(terrain);
 
       // 2. Tear down the old scene before allocating the new solver (large grids are GPU-memory heavy).
@@ -168,6 +174,7 @@ export class SceneManager {
       if (isCurrent()) {
         this.inFlight = null;
         this.abort = null;
+        this.cancellable = false;
       }
     }
   }

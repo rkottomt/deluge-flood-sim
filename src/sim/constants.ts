@@ -63,7 +63,7 @@ export interface SolverOptions {
   /** Robust mode Froude cap on open-boundary outflow; 1 = critical flow over a free edge (see bflux in shaders/common.ts). */
   boundaryFroudeMax: number;
   /**
-   * Relaxation time constant for stage sources, s (0 = set the level directly, DESIGN §3.2 "or direct set").
+   * Relaxation time constant for stage sources, s (0 = set the level directly; ARCHITECTURE.md §3.4).
    * Stage sources are boundary conditions (their discs cover a river's edge crossing, see edgeStageDisc in
    * src/data/hydro.ts): with relaxation the open boundary drains the footprint faster than it refills — at
    * Pittsburgh's 1936 crest τ = 10 s left the Point ~6 m below the stage after 105 sim-minutes.

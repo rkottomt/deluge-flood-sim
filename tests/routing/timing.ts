@@ -2,7 +2,7 @@
 /**
  * Load-robust timing for the routing performance checks.
  *
- * The spec targets (DESIGN.md §6) are for the demo machine, an Apple M4, but the tests run on a shared machine:
+ * The spec targets (tests/routing/perf.test.ts) are for the demo machine, an Apple M4, but the tests run on a shared machine:
  * parallel test files, GPU tests, other processes. Three kinds of noise, three counter-measures:
  *
  *  1. Preemption. The router is synchronous and single-threaded, so its work is the main thread's CPU time

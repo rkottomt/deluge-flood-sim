@@ -214,7 +214,7 @@ export function createHowItWorks(ctx: UIContext): Modal {
         'CFL-adaptive timestep',
         `${dt}${op('=')}${v('C')}${frac(dx, `${sqrt('2')}${paren(`${sqrt(`${g}${sub(v('h'), 'max')}`)}${op('+')}${sub(abs(v('u')), 'max')}`)}`)}`,
         'a wave must never jump more than one cell in a single step.',
-        'Deep, fast water needs smaller steps. The √2 is the 2-D part: the fastest grid-scale wave runs diagonally. The plain scheme is stable while this Courant number C stays below 1; the θ-smoothing Deluge adds lowers that to √θ ≈ 0.89, so Deluge targets 0.7 and never exceeds 0.85. Depth and speed come back from the GPU a few times per second and Δt is re-chosen automatically — the frame then runs as many substeps as it needs.',
+        'Deep, fast water needs smaller steps. The √2 is the 2-D part: the fastest grid-scale wave runs diagonally. The plain scheme is stable while this Courant number C stays below 1; the θ-smoothing Deluge adds (it damps only divergent grid-scale modes) lowers that to √θ ≈ 0.89, so Deluge targets 0.7 and never exceeds 0.85. Depth and speed come back from the GPU a few times per second and Δt is re-chosen automatically — the frame then runs as many substeps as it needs.',
       ),
       ingredient(
         '2',
@@ -350,7 +350,7 @@ export function createHowItWorks(ctx: UIContext): Modal {
       'div',
       { class: 'dl-data' },
       dataRow('layers', 'USGS 3D Elevation Program (3DEP)', 'Bare-earth elevation — 1 m lidar where available, ~10 m (1/3 arc-second) elsewhere. Rivers are hydro-flattened, so Deluge burns in a channel before filling them.'),
-      dataRow('globe', 'Esri World Imagery', 'Aerial photography draped over the terrain (Esri, Maxar, Earthstar Geographics).'),
+      dataRow('globe', 'USDA NAIP · Esri World Imagery', 'Aerial photography draped over the terrain: USDA NAIP via USGS The National Map for the built-in scenarios (public domain), Esri World Imagery for live areas (Esri, Vantor, Earthstar Geographics, and the GIS User Community).'),
       dataRow('route', 'US Census Bureau TIGER/Line roads', 'Road network for flood-aware evacuation routing; roads with ≥ 30 cm of water are treated as impassable.'),
       dataRow('gauge', 'NOAA National Weather Service', 'Official flood stages and historic crests for river gauges, marked on the river-stage slider.'),
       dataRow('search', 'OpenStreetMap Nominatim', 'Place search in the location picker (© OpenStreetMap contributors).'),

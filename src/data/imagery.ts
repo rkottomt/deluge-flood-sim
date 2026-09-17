@@ -8,7 +8,7 @@ import type { MercatorBBox } from './geo';
 import { fetchBytes } from './net';
 
 export const ESRI_IMAGERY_EXPORT = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/export';
-export const IMAGERY_ATTRIBUTION = 'Imagery © Esri, Maxar, Earthstar Geographics';
+export const IMAGERY_ATTRIBUTION = 'Imagery © Esri, Vantor, Earthstar Geographics, and the GIS User Community';
 /**
  * USDA NAIP orthoimagery (≈ 0.6 m, US only, public domain) from The National Map. Esri's World Imagery item states the
  * layer "is not intended to be used to export tiles for offline" use outside ArcGIS apps, so this is the source to

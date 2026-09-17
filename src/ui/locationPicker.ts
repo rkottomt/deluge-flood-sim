@@ -468,7 +468,7 @@ export function createLocationPicker(ctx: UIContext): Modal {
   function initMap() {
     if (map) return;
     map = L.map(mapEl, { center: [39.5, -97.5], zoom: 4, minZoom: 3, maxZoom: 18, worldCopyJump: true, zoomControl: true, attributionControl: true });
-    const imagery = L.tileLayer(IMAGERY_URL, { maxZoom: 18, maxNativeZoom: 19, attribution: 'Imagery © Esri, Maxar, Earthstar Geographics' }).addTo(map);
+    const imagery = L.tileLayer(IMAGERY_URL, { maxZoom: 18, maxNativeZoom: 19, attribution: 'Imagery © Esri, Vantor, Earthstar Geographics, and the GIS User Community' }).addTo(map);
     // A black map with no explanation reads as a bug: after a few failed tiles and none loaded, say why.
     let tileErrors = 0;
     imagery.on('tileerror', () => {

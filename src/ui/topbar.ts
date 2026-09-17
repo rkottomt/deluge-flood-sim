@@ -194,6 +194,25 @@ export function createTopBar(ctx: UIContext, opts: { onTogglePanel(): void; isPa
     },
   );
 
+  // When the GPU can't keep up, the highlighted speed says what it really runs at: "300× → 44×".
+  bind(
+    (s) => {
+      const si = s.stepInfo;
+      const want = s.sim.timeScale;
+      const real = si?.throttled && !s.paused && achieved !== null && achieved < 0.9 * want ? formatSpeedup(achieved) : '';
+      return `${want}|${real}`;
+    },
+    (key) => {
+      const [want, real] = key.split('|');
+      for (const sp of SPEEDS) {
+        const b = speed.buttons.get(sp.value);
+        if (!b) continue;
+        const shows = String(sp.value) === want && real !== '';
+        b.replaceChildren(sp.label, ...(shows ? [h('span', { class: 'dl-seg-achieved' }, ` → ${real}`)] : []));
+        b.dataset.tip = shows ? `${sp.tip} — your GPU is reaching ${real} right now` : sp.tip ?? '';
+      }
+    },
+  );
   bind(
     (s) => `${fmtNum(s.fps, 0)}`,
     (v) => setText(fps, v),

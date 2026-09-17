@@ -47,7 +47,7 @@ export function tToRain(t: number): number {
 }
 
 /**
- * Labeled reference ticks for the rain slider (DESIGN §7). The track ends at 300 mm/hr, about the world record for
+ * Labeled reference ticks for the rain slider. The track ends at 300 mm/hr, about the world record for
  * a single hour (305 mm, Holt, Missouri, 1947), so the last tick says so.
  */
 export const RAIN_TICKS: Array<{ value: number; label: string }> = [
