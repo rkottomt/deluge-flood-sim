@@ -9,7 +9,7 @@ import { channelBaseSurface, CrestFill, raisedInitialDepth } from '../../src/app
 import { createInitialState } from '../../src/app/defaults';
 import { ErrorReporter } from '../../src/app/errors';
 import { createStore } from '../../src/app/store';
-import { AUTO_RELOAD_GUARD_MS, claimAutoReload } from '../../src/app/unsupported';
+import { AUTO_RELOAD_GUARD_MS, AUTO_RELOAD_MAX, AUTO_RELOAD_WINDOW_MS, claimAutoReload } from '../../src/app/unsupported';
 
 /*
  * 8×4 test valley (cell size 10 m). Row-major, j = 0 is the top row.
@@ -227,10 +227,35 @@ test('crest: the stability demo and loading states are left alone', () => {
 test('device lost: the page reloads itself at most once per guard window', () => {
   const mem = new Map<string, string>();
   const storage = { getItem: (k: string) => mem.get(k) ?? null, setItem: (k: string, v: string) => void mem.set(k, v) };
-  assert.equal(claimAutoReload(storage, 1_000_000), true);
-  assert.equal(claimAutoReload(storage, 1_000_000 + 5_000), false, 'lost again right after the reload → wait for the user');
-  assert.equal(claimAutoReload(storage, 1_000_000 + AUTO_RELOAD_GUARD_MS + 1), true);
-  assert.equal(claimAutoReload(null, 0), false, 'no storage → no auto reload (a loop could not be detected)');
+  assert.equal(claimAutoReload(storage, 1_000_000), 'reload');
+  assert.equal(claimAutoReload(storage, 1_000_000 + 5_000), 'manual', 'lost again right after the reload → wait for the user');
+  assert.equal(claimAutoReload(null, 0), 'manual', 'no storage → no auto reload (a loop could not be detected)');
   const throwing = { getItem: () => { throw new Error('denied'); }, setItem: () => {} };
-  assert.equal(claimAutoReload(throwing, 0), false);
+  assert.equal(claimAutoReload(throwing, 0), 'manual');
+  // Older builds stored a single timestamp.
+  const old = new Map<string, string>([['deluge:gpu-lost-reload-at', '1000000']]);
+  const oldStorage = { getItem: (k: string) => old.get(k) ?? null, setItem: (k: string, v: string) => void old.set(k, v) };
+  assert.equal(claimAutoReload(oldStorage, 1_030_000), 'manual', 'a legacy timestamp still guards');
+});
+
+test('device lost: losses more than a minute apart cannot loop (at most 2 automatic reloads per 10 minutes)', () => {
+  const t0 = 5_000_000;
+  const step = AUTO_RELOAD_GUARD_MS + 1_000; // each loss 61 s after the previous reload (the t10 loop)
+  const run = (lighterAvailable: boolean) => {
+    const mem = new Map<string, string>();
+    const storage = { getItem: (k: string) => mem.get(k) ?? null, setItem: (k: string, v: string) => void mem.set(k, v) };
+    return [0, 1, 2, 3].map((k) => claimAutoReload(storage, t0 + k * step, lighterAvailable));
+  };
+  // The scene on screen is already the offline default (or as light as it): reloading it again repeats the loss.
+  assert.deepEqual(run(false), ['reload', 'manual', 'manual', 'manual']);
+  // A live area / large grid: the second automatic reload switches to the offline default preset, then the user decides.
+  assert.deepEqual(run(true), ['reload', 'lighter', 'manual', 'manual']);
+  // The window slides: a loss long after the last automatic reloads is a new, one-off event again.
+  const mem = new Map<string, string>();
+  const storage = { getItem: (k: string) => mem.get(k) ?? null, setItem: (k: string, v: string) => void mem.set(k, v) };
+  assert.equal(claimAutoReload(storage, t0, true), 'reload');
+  assert.equal(claimAutoReload(storage, t0 + step, true), 'lighter');
+  assert.equal(claimAutoReload(storage, t0 + 2 * step, true), 'manual');
+  assert.equal(claimAutoReload(storage, t0 + step + AUTO_RELOAD_WINDOW_MS, true), 'reload');
+  assert.equal(AUTO_RELOAD_MAX, 2);
 });

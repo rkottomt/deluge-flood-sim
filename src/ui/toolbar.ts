@@ -5,7 +5,7 @@
 import type { AppState, ToolId } from '../contracts';
 import { h, setText, toggleClass, setAttr, type UIContext } from './dom';
 import { bridgeFor, type HoverInfo } from './bridge';
-import { checkWall, stageSurface } from './wallCheck';
+import { checkWall, stageSurface, wallPreviewText, wallVerdict } from './wallCheck';
 import { MAX_SOURCES, MAX_STORMS } from './tools';
 import { icon, type IconName } from './icons';
 import { slider, kbd } from './controls';
@@ -108,52 +108,64 @@ export function createToolbar(ctx: UIContext): { toolbar: HTMLElement; options: 
   });
   bind((s) => s.wallHeight, (v) => wallHeight.set(v));
 
-  // Live "will it hold?" check under the cursor: the wall's top vs the river stage / the water already here.
+  // "Will it hold?" The card's verdict is about the walls already on the map — the same scan as the overtopping
+  // notices, so the two never disagree — and the cursor check is phrased as a preview of a wall not built yet.
   const checkIcon = h('span', { class: 'dl-wall-check-icon' });
   const checkText = h('span', { class: 'dl-wall-check-text' });
   const checkFix = h('button', { type: 'button', class: 'dl-btn dl-btn-subtle dl-btn-xs dl-wall-fix', hidden: true });
   const wallCheck = h('div', { class: 'dl-wall-check', 'aria-live': 'polite' }, checkIcon, checkText, checkFix);
+  const previewDot = h('i', { class: 'dl-wall-preview-dot', 'aria-hidden': 'true' });
+  const previewText = h('span');
+  const previewFix = h('button', { type: 'button', class: 'dl-link dl-wall-preview-fix', hidden: true });
+  const wallPreview = h('div', { class: 'dl-wall-preview' }, previewDot, h('span', { class: 'dl-wall-preview-text' }, previewText, previewFix));
   const wallTip = h('p', { class: 'dl-opt-note' }, 'Tie both ends into high ground — water runs around open ends.');
   let suggested = 0;
+  let previewSuggested = 0;
   checkFix.addEventListener('click', () => suggested > 0 && store.set({ wallHeight: suggested }));
+  previewFix.addEventListener('click', () => previewSuggested > 0 && store.set({ wallHeight: previewSuggested }));
   let checkIconKind = '';
   const setCheckIcon = (kind: string) => {
     if (kind === checkIconKind) return;
     checkIconKind = kind;
-    checkIcon.replaceChildren(icon(kind === 'ok' ? 'check' : kind === 'low' ? 'warning' : 'gauge', 14));
+    checkIcon.replaceChildren(icon(kind === 'ok' ? 'check' : kind === 'low' ? 'warning' : kind === 'wall' ? 'wall' : 'gauge', 14));
   };
   const renderWallCheck = (hov: HoverInfo | null, s: AppState) => {
     const level = stageSurface(s.scenario?.stage, s.stageOffset);
     const res = hov
       ? checkWall({ ground: hov.ground, barrier: hov.barrier, depth: hov.depth, wallHeight: s.wallHeight, stageLevel: level })
       : null;
-    checkFix.hidden = true;
-    if (!res) {
-      wallCheck.dataset.state = 'idle';
-      setCheckIcon('idle');
-      setText(
-        checkText,
-        level !== null ? `River set to ${level.toFixed(1)} m — hover the map to check this height` : 'Hover water or a riverbank to check this height',
-      );
+    const preview = wallPreviewText(res, s.wallHeight, level);
+    const previewState = res ? (res.ok ? 'ok' : 'low') : 'idle';
+    const previewFixHeight = res && !res.ok && !res.tooLow ? res.suggested : 0;
+    const verdict = wallVerdict(bridge.wallStatus, s.wallHeight);
+
+    // The preview line under the verdict (only while walls exist; otherwise the preview is the card's main line).
+    wallPreview.hidden = !verdict;
+    wallTip.hidden = !!verdict;
+    if (verdict) {
+      wallCheck.dataset.state = verdict.state === 'wait' ? 'idle' : verdict.state;
+      setCheckIcon(verdict.state === 'wait' ? 'wall' : verdict.state);
+      setText(checkText, verdict.text);
+      suggested = verdict.fix ?? 0;
+      checkFix.hidden = !verdict.fix;
+      if (verdict.fix) setText(checkFix, `Use ${formatMeters(verdict.fix, 1)} walls`);
+      wallPreview.dataset.state = previewState;
+      setText(previewText, preview);
+      previewSuggested = previewFixHeight;
+      previewFix.hidden = !previewFixHeight;
+      if (previewFixHeight) setText(previewFix, `Use ${formatMeters(previewFixHeight, 1)}`);
       return;
     }
-    const what = res.source === 'river' ? 'the river' : 'the water here';
-    const m = Math.abs(res.margin);
-    wallCheck.dataset.state = res.ok ? 'ok' : 'low';
-    setCheckIcon(res.ok ? 'ok' : 'low');
-    if (res.ok) {
-      setText(checkText, `Holds: top ${res.top.toFixed(1)} m is ${m.toFixed(1)} m above ${what} (${res.surface.toFixed(1)} m)`);
-    } else if (res.tooLow) {
-      setText(checkText, `Overtopped: ground ${res.ground.toFixed(1)} m is too far below ${what} (${res.surface.toFixed(1)} m) for any wall — build on higher ground`);
-    } else {
-      setText(checkText, `Overtopped: top ${res.top.toFixed(1)} m is ${m.toFixed(1)} m below ${what} (${res.surface.toFixed(1)} m)`);
-      suggested = res.suggested;
-      setText(checkFix, `Use ${formatMeters(res.suggested, 1)}`);
-      checkFix.hidden = false;
-    }
+    wallCheck.dataset.state = previewState;
+    setCheckIcon(previewState);
+    setText(checkText, preview);
+    suggested = previewFixHeight;
+    checkFix.hidden = !previewFixHeight;
+    if (previewFixHeight) setText(checkFix, `Use ${formatMeters(previewFixHeight, 1)}`);
   };
   const bridge = bridgeFor(store);
   ctx.own(bridge.hoverChanged.on((hov) => store.get().tool === 'wall' && renderWallCheck(hov, store.get())));
+  ctx.own(bridge.wallStatusChanged.on(() => store.get().tool === 'wall' && renderWallCheck(bridge.hover, store.get())));
   bind(
     (s) => `${s.tool}|${s.wallHeight}|${s.stageOffset}|${s.scenario === null}`,
     (_k, s) => s.tool === 'wall' && renderWallCheck(bridge.hover, s),
@@ -229,7 +241,7 @@ export function createToolbar(ctx: UIContext): { toolbar: HTMLElement; options: 
 
       controls.replaceChildren();
       toggleClass(options, 'dl-compact', tool === 'orbit');
-      if (tool === 'wall') controls.append(wallHeight.el, wallCheck);
+      if (tool === 'wall') controls.append(wallHeight.el, wallCheck, wallPreview);
       if (tool === 'inflow') controls.append(discharge.el);
       if (tool === 'storm') controls.append(storm.el);
       brush?.destroy();

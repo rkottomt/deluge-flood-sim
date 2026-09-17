@@ -37,6 +37,7 @@ import { selectTool } from './toolDefs';
 import { blockedAdvice, routeDetail } from './routeText';
 import { MAX_SOURCES, MAX_STORMS } from './tools';
 import { startBreakDemo, stopBreakDemo } from './stabilityDemo';
+import { formatStage, hasGauge, stageSub, weatherBadge } from './stageText';
 
 export interface Panel {
   el: HTMLElement;
@@ -241,19 +242,18 @@ export function createPanel(ctx: UIContext): Panel {
       rain.setSubClass(rainCategory(v).severity);
     },
   );
-  // Section badge: global rain, or the strongest storm cell when it is heavier (a storm is not "Dry").
+  // Section badge: the raised river and the rain (or the strongest storm cell when it is heavier). It sits right
+  // above the stage slider, so a river at the 1936 crest must not read "Dry".
   bind(
     (s) => {
       const storm = s.storms.reduce((m, st) => Math.max(m, st.intensity), 0);
-      return `${s.sim.rainRate}|${storm}`;
+      return weatherBadge({ rainRate: s.sim.rainRate, stormPeak: storm, stage: s.scenario?.stage ?? null, stageOffsetApplied: s.stageOffsetApplied });
     },
-    () => {
-      const s = ctx.store.get();
-      const storm = s.storms.reduce((m, st) => Math.max(m, st.intensity), 0);
-      const v = Math.max(s.sim.rainRate, storm);
-      setText(rainBadge, v <= 0 ? 'Dry' : storm > s.sim.rainRate ? `Storm ${formatRain(storm)}` : formatRain(v));
-      rainBadge.dataset.sev = rainCategory(v).severity;
+    (badge) => {
+      setText(rainBadge, badge.text);
+      rainBadge.dataset.sev = badge.severity;
     },
+    (a, b) => a.text === b.text && a.severity === b.severity,
   );
 
   // Stage control: rebuilt only when the scenario changes.
@@ -281,15 +281,18 @@ export function createPanel(ctx: UIContext): Panel {
     for (const m of ctrl.marks ?? []) marks.push({ value: m.ft, label: m.label, kind: 'danger' });
     const inRange = marks.filter((m) => m.value >= range.min - 0.01 && m.value <= range.max + 0.01);
 
+    // Live areas have no gauge: the control is a rise above the water surface detected at load, not a gauge reading.
+    const gauge = hasGauge(ctrl);
     stageSlider = slider({
-      label: 'River stage',
+      label: gauge ? 'River stage' : 'Raise water',
       toPos,
       fromPos: (t) => Math.round((range.min + clamp(t, 0, 1) * span) * 10) / 10,
-      format: formatStageFt,
+      format: (ft) => formatStage(ctrl, ft),
+      sub: gauge ? undefined : (ft) => stageSub(ctrl, ft),
       marks: inRange,
       ticks: inRange.map((m) => ({ value: m.value, label: `${fmtNum(m.value, m.value % 1 ? 1 : 0)}` })),
       onInput: (ft) => store.set({ stageOffset: clamp(offsetForFt(ctrl, ft), 0, ctrl.maxOffset) }),
-      tip: 'Water level at the river gauge, in feet above gauge datum',
+      tip: gauge ? 'Water level at the river gauge, in feet above gauge datum' : 'How far to raise every river and lake above the level detected at load',
       keyStep: 0.01,
       className: 'dl-stage-slider',
     });
@@ -305,13 +308,13 @@ export function createPanel(ctx: UIContext): Panel {
         {
           type: 'button',
           class: `dl-jump dl-jump-${kind}`,
-          'data-tip': `Set the river to ${formatStageFt(ft)}`,
+          'data-tip': gauge ? `Set the river to ${formatStageFt(ft)}` : `Set the water to ${formatStage(ctrl, ft)}`,
           'data-tip-side': 'top',
           onclick: () => store.set({ stageOffset: clamp(offsetForFt(ctrl, ft), 0, ctrl.maxOffset) }),
         },
         h('span', { class: 'dl-jump-dot' }),
         h('span', { class: 'dl-jump-label' }, text),
-        h('span', { class: 'dl-jump-ft' }, `${fmtNum(ft, ft % 1 ? 1 : 0)} ft`),
+        h('span', { class: 'dl-jump-ft' }, gauge ? `${fmtNum(ft, ft % 1 ? 1 : 0)} ft` : formatStage(ctrl, ft)),
       );
       jumpButtons.push({ b, ft });
       jumps.append(b);
@@ -338,7 +341,7 @@ export function createPanel(ctx: UIContext): Panel {
     stageRamp.hidden = !moving;
     if (moving) {
       const verb = s.stageOffsetApplied < s.stageOffset ? 'Rising' : 'Falling';
-      setText(stageRamp, `${verb} to ${formatStageFt(ft)} · now ${formatStageFt(nowFt)}${s.paused ? ' — paused' : ''}`);
+      setText(stageRamp, `${verb} to ${formatStage(stageCtrl, ft)} · now ${formatStage(stageCtrl, nowFt)}${s.paused ? ' — paused' : ''}`);
       stageRamp.dataset.dir = s.stageOffsetApplied < s.stageOffset ? 'up' : 'down';
     }
     for (const j of jumpButtons) toggleClass(j.b, 'dl-on', Math.abs(j.ft - ft) < 0.15);

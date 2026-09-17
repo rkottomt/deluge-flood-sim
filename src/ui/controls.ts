@@ -363,6 +363,12 @@ export function installTooltips(root: HTMLElement): () => void {
   root.append(tip);
   let target: HTMLElement | null = null;
   let timer = 0;
+  /**
+   * The [data-tip] element last pressed. Its tooltip stays hidden until the pointer has left it: a click often
+   * relabels the control or moves the layout (the Try-it strip folds its heading), and Chrome then fires a fresh
+   * pointerover on the same element, which would bring the tip back over whatever the click just opened.
+   */
+  let pressed: HTMLElement | null = null;
 
   const show = (el: HTMLElement) => {
     const label = el.dataset.tip;
@@ -413,14 +419,19 @@ export function installTooltips(root: HTMLElement): () => void {
     const el = findTarget(e);
     if (el === target) return;
     hide();
-    if (!el || !el.dataset.tip) return;
+    if (!el || !el.dataset.tip || el === pressed) return;
     target = el;
     timer = window.setTimeout(() => target === el && el.isConnected && show(el), 380);
   };
   const onOut = (e: PointerEvent) => {
-    if (!target) return;
     const to = e.relatedTarget instanceof Element ? e.relatedTarget.closest('[data-tip]') : null;
+    if (pressed && to !== pressed) pressed = null;
+    if (!target) return;
     if (to !== target) hide();
+  };
+  const onDown = (e: PointerEvent) => {
+    pressed = findTarget(e);
+    hide();
   };
   const onFocus = (e: FocusEvent) => {
     const el = findTarget(e);
@@ -433,14 +444,14 @@ export function installTooltips(root: HTMLElement): () => void {
   root.addEventListener('pointerout', onOut);
   root.addEventListener('focusin', onFocus);
   root.addEventListener('focusout', hide);
-  root.addEventListener('pointerdown', hide);
+  root.addEventListener('pointerdown', onDown);
   window.addEventListener('scroll', hide, true);
   return () => {
     root.removeEventListener('pointerover', onOver);
     root.removeEventListener('pointerout', onOut);
     root.removeEventListener('focusin', onFocus);
     root.removeEventListener('focusout', hide);
-    root.removeEventListener('pointerdown', hide);
+    root.removeEventListener('pointerdown', onDown);
     window.removeEventListener('scroll', hide, true);
     tip.remove();
   };

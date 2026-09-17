@@ -43,7 +43,6 @@ struct ROut {
   @location(3) @interpolate(flat) kind: u32,
   @location(4) @interpolate(flat) color: vec4f,
   @location(5) coreFrac: f32,
-  @location(6) @interpolate(flat) halfWidth: f32,   // metres, after the screen-space minimum
 }
 
 @vertex
@@ -59,13 +58,17 @@ fn vsRibbon(v: RIn) -> ROut {
   var color = vec4f(1.0);
   var coreFrac = 1.0;
   var halfW = v.attr.z;
+  let t = normalize(vec2f(v.tangent.x, v.tangent.y) + vec2f(1e-9, 0.0));
+  let miter = length(v.tangent);
+  let perp = vec2f(-t.y, t.x);
   if (kind == 0u) {
     var st = 0u;
     if (O.hasStatus > 0.5) { st = roadStatus[id]; }
     // Importance from the class width (local 3.5 m … highway 11 m): minor roads thin out with distance so the
     // overview stays readable.
     let importance = smoothstep(3.0, 11.0, v.attr.z);
-    let d0 = length(gridToWorld(v.center, s.r) - F.camPos);
+    let toCenter = gridToWorld(v.center, s.r) - F.camPos;
+    let d0 = length(toCenter);
     // Without imagery the ribbons are the only sign of the town, so they stay visible over the whole domain.
     let far = mix(vec2f(1.0, 2.6), vec2f(0.35, 1.1), F.opts.x) * F.domainSize;
     let fade = mix(1.0 - smoothstep(far.x, far.y, d0), 1.0, importance);
@@ -73,15 +76,24 @@ fn vsRibbon(v: RIn) -> ROut {
     else if (st == 1u) { color = vec4f(1.0, 0.55, 0.05, 0.9 * mix(fade, 1.0, 0.5)); minHalfPx = 1.2; }
     else {
       // Flooded (impassable) roads lie under the flood itself, which already says "flooded": draw them as thin
-      // dashed submerged lines that do not hide the water, minor streets fading with distance. While an evacuation
-      // is being planned they are what blocks the route, so they come up a notch. In the hazard maps they turn a
-      // neutral dark grey so they never read as one of the red speed bands.
+      // dashed centre lines that do not hide the water, minor streets fading with distance. A real-width ribbon
+      // (a highway is 22 m wide) turns into rows of translucent tiles up close, so the line is capped at a couple of
+      // pixels and at a third of the road's width, and it fades further as the camera comes close, where the water
+      // over the street is plain to see. While an evacuation is being planned they are what blocks the route, so
+      // they come up a notch and stay at full strength. In the hazard maps they turn a neutral dark grey so they
+      // never read as one of the red speed bands.
       let emph = O.evacActive;
       let hazardMap = O.waterMode > 0.5;
       let rgb = select(vec3f(0.95, 0.16, 0.10), vec3f(0.10, 0.10, 0.12), hazardMap);
-      let a = mix(0.42, 0.72, emph) * mix(fade * mix(0.55, 1.0, importance), 1.0, emph * importance);
+      let near = mix(mix(0.45, 1.0, smoothstep(350.0, 1500.0, d0)), 1.0, emph);
+      let a = mix(0.5, 0.8, emph) * mix(fade * mix(0.55, 1.0, importance), 1.0, emph * importance) * near;
       color = vec4f(rgb, a);
-      minHalfPx = mix(0.55, 0.95, importance) * mix(1.0, 1.3, emph);
+      // Pixel limits measured across the line on screen: a street seen at a grazing angle across the view is
+      // foreshortened by the sine of the view elevation, and a fixed ground width would thin it to nothing.
+      let across = dot(vec3f(perp.x, 0.0, perp.y), toCenter / max(d0, 1e-3));
+      let pxM = d0 * F.elev.w / max(sqrt(max(1.0 - across * across, 0.0)), 0.3);
+      minHalfPx = 0.0;
+      halfW = clamp(0.3 * v.attr.z, mix(0.8, 1.0, importance) * mix(1.0, 1.25, emph) * pxM, mix(1.3, 1.7, emph) * pxM);
       coreFrac = 0.0; // flag for the fragment shader: dashed
     }
   } else if (kind == 1u) {
@@ -97,9 +109,6 @@ fn vsRibbon(v: RIn) -> ROut {
   let centerW = gridToWorld(v.center, top) + vec3f(0.0, lift, 0.0);
   let dist = length(centerW - F.camPos);
   halfW = max(halfW, dist * F.elev.w * minHalfPx);
-  let t = normalize(vec2f(v.tangent.x, v.tangent.y) + vec2f(1e-9, 0.0));
-  let miter = length(v.tangent);
-  let perp = vec2f(-t.y, t.x);
   let offGrid = perp * v.attr.x * halfW * miter / F.cellSize;
   let g = v.center + offGrid;
   let s2 = vtxBilinear(g);
@@ -113,8 +122,13 @@ fn vsRibbon(v: RIn) -> ROut {
   o.kind = kind;
   o.color = color;
   o.coreFrac = coreFrac;
-  o.halfWidth = halfW;
   return o;
+}
+
+/** Anti-aliased dash (on for 62 % of each unit period) at dash coordinate x with screen-space width fw. */
+fn dashPattern(x: f32, fw: f32) -> f32 {
+  let f = fract(x);
+  return smoothstep(0.0, fw, f) * (1.0 - smoothstep(0.62, 0.62 + fw, f));
 }
 
 @fragment
@@ -122,16 +136,19 @@ fn fsRibbon(in: ROut) -> @location(0) vec4f {
   let a = abs(in.side);
   let aw = fwidth(in.side);
   let haze = hazeAmount(in.world);
-  // Dash coordinate for flooded roads: ~11 px period, but never shorter than a few road widths (up close a wide
-  // road would otherwise look hatched). Derivatives in uniform control flow.
-  let dashCoord = in.along / max(max(distance(in.world, F.camPos) * F.elev.w, 1e-3) * 11.0, in.halfWidth * 5.0);
-  let dashFw = max(fwidth(dashCoord), 1e-4);
+  // Dashes for flooded roads: ~12 px period on screen, snapped to power-of-two lengths on the ground and cross-faded
+  // between neighbouring octaves, so the dashes stay put on the road while the camera orbits or zooms instead of
+  // crawling along it. Derivatives in uniform control flow.
+  let dashLog = log2(max(distance(in.world, F.camPos) * F.elev.w * 12.0, 1e-3));
+  let dashOct = floor(dashLog);
+  let dashMix = dashLog - dashOct;
+  let dashLen = pow(2.0, dashOct);
+  let dashFw = max(fwidth(in.along) / dashLen, 1e-4);
   if (in.kind == 0u) {
     if (in.coreFrac < 0.5) {
-      // Flooded road: dashes ~7 px long every ~11 px, no casing.
+      // Flooded road: dashes ~7–15 px long every ~12–24 px, no casing.
       let body = 1.0 - smoothstep(1.0 - aw * 1.5, 1.0, a);
-      let f = fract(dashCoord);
-      let dash = smoothstep(0.0, dashFw, f) * (1.0 - smoothstep(0.62, 0.62 + dashFw, f));
+      let dash = mix(dashPattern(in.along / dashLen, dashFw), dashPattern(in.along / (2.0 * dashLen), dashFw * 0.5), dashMix);
       let alpha = in.color.a * body * mix(dash, 0.6, smoothstep(0.3, 0.6, dashFw)) * (1.0 - haze * 0.7);
       return vec4f(in.color.rgb * alpha, alpha);
     }

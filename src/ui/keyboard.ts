@@ -1,12 +1,21 @@
 /**
  * Global keyboard shortcuts. Installed by mountUI because several need AppActions.
- *   1…0 tools · Space play/pause · R reset water · F frame all · T top-down · H or ? help
+ *   1…0 tools · Space play/pause · R reset water · F frame all · T top-down · V next water view · H or ? help
  *   Esc closes the top-most modal (the tool controller separately cancels an in-progress wall)
  *   [ and ] shrink / grow the brush
  */
-import type { AppState } from '../contracts';
+import type { AppState, WaterViewMode } from '../contracts';
 import { isTypingTarget, type UIContext } from './dom';
 import { selectTool, scaleBrush, toolForKey } from './toolDefs';
+
+/** Water views in the order V cycles through them (the View section's segmented control order). */
+export const VIEW_CYCLE: WaterViewMode[] = ['realistic', 'depth', 'maxDepth', 'velocity'];
+
+export function nextViewMode(mode: WaterViewMode, backwards = false): WaterViewMode {
+  const k = VIEW_CYCLE.indexOf(mode);
+  const n = VIEW_CYCLE.length;
+  return VIEW_CYCLE[((k < 0 ? 0 : k) + (backwards ? n - 1 : 1)) % n];
+}
 
 export function installKeyboard(ctx: UIContext): () => void {
   const { store, actions } = ctx;
@@ -74,6 +83,12 @@ export function installKeyboard(ctx: UIContext): () => void {
       case 'T':
         e.preventDefault();
         actions.cameraTopDown();
+        return;
+      case 'v':
+      case 'V':
+        // Realistic → Depth → Max depth → Speed (Shift+V goes back).
+        e.preventDefault();
+        ctx.setRender({ waterMode: nextViewMode(s.render.waterMode, e.shiftKey) });
         return;
       case '[':
         e.preventDefault();

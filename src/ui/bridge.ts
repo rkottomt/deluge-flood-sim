@@ -5,10 +5,11 @@
  * It is keyed by the Store both receive, so it needs no contract change. It carries
  *  • hover: the ground under the cursor (for live "will this wall hold?" checks in the options card),
  *  • notices: neutral / warning / success toasts that are NOT errors (limits, guidance, overtopped walls),
- *  • scene access: terrain + solver getters (for one-click suggestions such as an evacuation start),
- *  • wall events: a wall was drawn by the user.
+ *  • scene access: terrain, solver and camera getters (for one-click suggestions such as an evacuation start),
+ *  • walls: a wall was drawn by the user, and the latest check of the drawn walls against the water.
  */
-import type { FloodSolver, Store, TerrainData } from '../contracts';
+import type { CameraController, FloodSolver, Store, TerrainData } from '../contracts';
+import type { WallStatus } from './wallCheck';
 
 /** Terrain under the cursor while a tool that cares about it is active. */
 export interface HoverInfo {
@@ -39,6 +40,8 @@ export interface Notice {
 export interface SceneAccess {
   getTerrain(): TerrainData | null;
   getSolver(): FloodSolver | null;
+  /** The renderer's camera (null before the renderer exists). */
+  getCamera?(): CameraController | null;
 }
 
 type Listener<T> = (v: T) => void;
@@ -68,6 +71,9 @@ export class UIBridge {
   scene: SceneAccess | null = null;
   readonly hoverChanged = new Channel<HoverInfo | null>();
   readonly wallDrawn = new Channel<void>();
+  /** Latest scan of the walls on the map (null = no walls). Same data as the overtopping notices. */
+  wallStatus: WallStatus | null = null;
+  readonly wallStatusChanged = new Channel<WallStatus | null>();
   private readonly notices = new Channel<Notice>();
   /** Notices posted before the UI mounted are delivered when it subscribes. */
   private pending: Notice[] = [];
@@ -77,6 +83,18 @@ export class UIBridge {
     if (a === h || (a && h && a.gx === h.gx && a.gy === h.gy && a.ground === h.ground && a.barrier === h.barrier && a.depth === h.depth)) return;
     this.hover = h;
     this.hoverChanged.emit(h);
+  }
+
+  setWallStatus(w: WallStatus | null): void {
+    const a = this.wallStatus;
+    if (
+      a === w ||
+      (a && w && a.cells === w.cells && a.overtopped === w.overtopped && a.belowLevel === w.belowLevel && a.neededHeight === w.neededHeight && a.settled === w.settled && a.stageFt === w.stageFt)
+    ) {
+      return;
+    }
+    this.wallStatus = w;
+    this.wallStatusChanged.emit(w);
   }
 
   notify(n: Notice): void {

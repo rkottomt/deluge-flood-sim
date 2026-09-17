@@ -13,6 +13,8 @@ export const WALL_MIN = 0.5;
 export const WALL_MAX = 10;
 /** Depth on top of a wall cell that counts as overtopping, m. */
 export const OVERTOP_DEPTH = 0.1;
+/** Wall cells that must be overtopped (or below the river) before the card and the notices call a wall too low. */
+export const WALL_ALARM_CELLS = 3;
 /** Barrier height below which a cell is not considered part of a wall, m. */
 const WALL_CELL_MIN = 0.2;
 
@@ -145,4 +147,72 @@ export function describeSurface(ctrl: StageControl | null | undefined, offset: n
   const s = stageSurface(ctrl, offset);
   if (s === null || !ctrl) return '';
   return `${s.toFixed(1)} m · ${stageFt(ctrl, offset).toFixed(0)} ft`;
+}
+
+/**
+ * The drawn walls against the water, from the latest scan (tools.ts publishes it on the UI bridge). The options
+ * card and the overtopping notices both describe THIS, so they can't disagree; the cursor check is only a preview
+ * of a wall not yet built.
+ */
+export interface WallStatus {
+  /** Wall cells on the map. */
+  cells: number;
+  /** Wall cells with water on top; 0 until the water around a new wall has settled. */
+  overtopped: number;
+  /** Wall cells whose top is below the river stage (0 without a stage control). */
+  belowLevel: number;
+  /** Wall height (with freeboard) that would lift most of the too-low wall clear of the river, m (0 = none needed). */
+  neededHeight: number;
+  /** False right after a wall was drawn or the water was reset (water standing on it is not overtopping yet). */
+  settled: boolean;
+  /** River stage in ft when the scenario has a stage control. */
+  stageFt: number | null;
+}
+
+export interface WallVerdict {
+  state: 'ok' | 'low' | 'wait';
+  text: string;
+  /** Suggested wall height for a one-click fix, m (null = none). */
+  fix: number | null;
+}
+
+/** Share of the wall, %, as the notices phrase it (at least 1 %). */
+export function wallShare(part: number, cells: number): number {
+  return cells > 0 ? Math.max(1, Math.round((part / cells) * 100)) : 0;
+}
+
+/** Height to suggest after a too-low verdict, rounded up to 0.5 m and clamped to the tool's range (null when not higher). */
+export function suggestedWallHeight(status: Pick<WallStatus, 'belowLevel' | 'neededHeight'>, wallHeight: number): number | null {
+  if (!(status.belowLevel > 0) || !(status.neededHeight > 0)) return null;
+  const need = Math.min(WALL_MAX, Math.ceil(status.neededHeight * 2) / 2);
+  return need > wallHeight ? need : null;
+}
+
+/** Verdict on the walls already built (null when there are none). Overtopping (what is happening) wins over the stage. */
+export function wallVerdict(status: WallStatus | null, wallHeight: number): WallVerdict | null {
+  if (!status || status.cells <= 0) return null;
+  const fix = suggestedWallHeight(status, wallHeight);
+  if (status.settled && status.overtopped >= WALL_ALARM_CELLS) {
+    return { state: 'low', text: `Your wall is overtopped: about ${wallShare(status.overtopped, status.cells)}% of it is under water`, fix };
+  }
+  if (status.belowLevel >= WALL_ALARM_CELLS) {
+    const at = status.stageFt !== null ? ` at ${Math.round(status.stageFt)} ft` : '';
+    return { state: 'low', text: `Your wall is too low: ${wallShare(status.belowLevel, status.cells)}% of it is below the river${at}`, fix };
+  }
+  if (!status.settled) return { state: 'wait', text: 'Your wall is up — watching the water around it…', fix: null };
+  return { state: 'ok', text: 'Your wall is holding: no water over the top', fix: null };
+}
+
+/** Hypothetical wording for the cursor check: a wall of the chosen height, not yet built, at the cursor. */
+export function wallPreviewText(check: WallCheck | null, wallHeight: number, stageLevel: number | null): string {
+  const h = `${wallHeight.toFixed(1)} m`;
+  if (!check) {
+    return stageLevel !== null ? `River at ${stageLevel.toFixed(1)} m — hover the map to test a ${h} wall` : `Hover water or a riverbank to test a ${h} wall`;
+  }
+  const what = check.source === 'river' ? 'the river' : 'the water here';
+  const m = Math.abs(check.margin).toFixed(1);
+  const surface = `${check.surface.toFixed(1)} m`;
+  if (check.ok) return `A ${h} wall here would stand ${m} m above ${what} (${surface})`;
+  if (check.tooLow) return `Here even a ${WALL_MAX} m wall would be under ${what} (${surface}) — build on higher ground`;
+  return `A ${h} wall here would be ${m} m under ${what} (${surface})`;
 }

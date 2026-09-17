@@ -21,7 +21,7 @@ import {
   DASH,
 } from './format';
 import { waterHazard } from './scales';
-import { displaySpeed, isDiverged } from './stats';
+import { displaySpeed, isDiverged, RainGauge, speedShortfall } from './stats';
 import type { AppState } from '../contracts';
 
 export function createHud(ctx: UIContext, achievedSpeed: () => number | null): HTMLElement {
@@ -45,12 +45,31 @@ export function createHud(ctx: UIContext, achievedSpeed: () => number | null): H
     toggleClass(st.value, 'dl-long', text.length > longAt);
   };
 
-  const area = stat('Flooded land', 'Area newly under ≥ 30 cm of water since reset', true);
+  const area = stat('Flooded land', 'Land that was dry at reset and is now under ≥ 30 cm of water', true);
   const volume = stat('Water volume', 'Total water stored on the map', true);
   const depth = stat('Max depth', 'Deepest water anywhere on the map');
   const speed = stat('Max speed', 'Fastest flow anywhere on the map');
-  const mass = stat('Mass error', 'Relative mass-balance error: |V − (V₀ + in − out)| / (V₀ + in). Proves no water is created or destroyed.');
+  const mass = stat(
+    'Mass error',
+    'Mass-balance error: |V − (V₀ + in − out)| ÷ the most water held since reset. Every rain, river, boundary and brush change is booked per cell on the GPU and summed in Float64 — no water is created or destroyed.',
+  );
   const simSpeed = stat('Sim speed', 'Simulated seconds per real second actually achieved');
+
+  // Rain fallen since reset: under heavy rain the flooded area lags (runoff has to collect first), but this moves.
+  const rain = new RainGauge();
+  let rainMm = 0;
+  let rainScene = '';
+  bind(
+    (s) => s.stats,
+    (st, s) => {
+      if (s.terrainName !== rainScene) {
+        rainScene = s.terrainName;
+        rain.reset();
+      }
+      if (st) rain.push(st.simTime, s.sim.rainRate);
+      rainMm = rain.mm;
+    },
+  );
 
   // Once the stability demo has blown the solution up, the numbers are meaningless (−3e39 m³ of water, 1e36
   // Olympic pools…). Say so plainly instead of printing them.
@@ -60,7 +79,15 @@ export function createHud(ctx: UIContext, achievedSpeed: () => number | null): H
     for (const st of [area, volume, depth, speed]) st.el.dataset.sev = d ? 'danger' : 'calm';
   });
   bind((s) => (diverged(s) ? 'Diverged' : formatKm2(s.stats?.floodedArea)), (v) => setValue(area, v, 10));
-  bind((s) => (diverged(s) ? 'numbers no longer physical' : s.stats ? formatAcres(s.stats.floodedArea) : ''), (v) => setText(area.sub, v));
+  bind(
+    (s) => {
+      if (diverged(s)) return 'numbers no longer physical';
+      if (!s.stats) return '';
+      const acres = formatAcres(s.stats.floodedArea);
+      return rainMm >= 1 ? `${acres} · ${fmtNum(rainMm, 0)} mm rain` : acres;
+    },
+    (v) => setText(area.sub, v),
+  );
   bind((s) => (diverged(s) ? 'Diverged' : formatVolume(s.stats?.volume)), (v) => setValue(volume, v, 10));
   bind((s) => (diverged(s) ? 'water created from nothing' : s.stats ? formatPools(s.stats.volume) : ''), (v) => setText(volume.sub, v));
   bind((s) => (diverged(s) ? '∞' : formatMeters(s.stats?.maxDepth)), (v) => setValue(depth, v, 7));
@@ -99,13 +126,26 @@ export function createHud(ctx: UIContext, achievedSpeed: () => number | null): H
     },
     (v) => setValue(simSpeed, v, 7),
   );
+  // Fast-forward beyond what the GPU can do is normal and shown neutrally ("GPU max"); amber only for a real shortfall.
+  const shortfall = (s: AppState) => (s.paused ? 'none' : speedShortfall(!!s.stepInfo?.throttled, achievedSpeed(), s.sim.timeScale));
   bind(
-    (s) => (s.stepInfo?.throttled && !s.paused ? 'GPU-limited' : `of ${fmtNum(s.sim.timeScale, 0)}×`),
+    (s) => {
+      const f = shortfall(s);
+      return f === 'short' ? 'GPU-limited' : f === 'max' ? 'GPU max' : `of ${fmtNum(s.sim.timeScale, 0)}×`;
+    },
     (v) => setText(simSpeed.sub, v),
   );
   bind(
-    (s) => !!s.stepInfo?.throttled && !s.paused,
-    (t) => (simSpeed.el.dataset.sev = t ? 'warn' : 'calm'),
+    (s) => shortfall(s),
+    (f) => {
+      simSpeed.el.dataset.sev = f === 'short' ? 'warn' : 'calm';
+      simSpeed.el.dataset.tip =
+        f === 'max'
+          ? 'Simulated seconds per real second actually achieved — the GPU is running flat out; the requested speed is higher'
+          : f === 'short'
+            ? 'Simulated seconds per real second actually achieved — well below the requested speed (GPU busy, throttled or on battery)'
+            : 'Simulated seconds per real second actually achieved';
+    },
   );
 
   // Diagnostics strip.
@@ -116,7 +156,10 @@ export function createHud(ctx: UIContext, achievedSpeed: () => number | null): H
   };
   const dDt = diag('Δt', 'Adaptive timestep per substep (CFL-limited)');
   const dSub = diag('substeps', 'Solver substeps this frame');
-  const dCo = diag('Courant', 'Largest 2-D Courant number seen. The robust scheme is stable below √θ ≈ 0.89 (θ-smoothing) and targets 0.7');
+  const dCo = diag(
+    'Courant',
+    'Largest 2-D Courant number seen. Δt aims for 0.7 against a padded wave-speed estimate (the readback is a few hundred ms old), so it usually reads ≈ 0.55; the robust scheme is stable below √θ ≈ 0.89',
+  );
   const dFps = diag('fps', 'Rendered frames per second');
   bind((s) => formatDt(s.stepInfo?.dt), (v) => setText(dDt.v, v));
   bind((s) => (s.stepInfo ? String(s.stepInfo.substeps) : DASH), (v) => setText(dSub.v, v));

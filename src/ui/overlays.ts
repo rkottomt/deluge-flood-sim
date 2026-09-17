@@ -104,7 +104,7 @@ export function createNotices(ctx: UIContext, extra: { top?: HTMLElement[]; bott
     h(
       'span',
       { class: 'dl-naive-text' },
-      h('span', { class: 'dl-naive-line' }, h('b', null, 'Stability demo'), ' — naive explicit solver at Courant 1.8', h('span', { class: 'dl-naive-slow' }), '.'),
+      h('span', { class: 'dl-naive-line' }, h('b', null, 'Stability demo'), ' — naive explicit solver at Courant 1.8, one small splash mid-view', h('span', { class: 'dl-naive-slow' }), '.'),
       h('span', { class: 'dl-naive-legend' }, h('i', { class: 'dl-naive-swatch', 'aria-hidden': 'true' }), 'Magenta speckle = cells whose depth became infinite or NaN'),
     ),
     h(
@@ -118,7 +118,7 @@ export function createNotices(ctx: UIContext, extra: { top?: HTMLElement[]; bott
   bind((s) => s.sim.stabilityMode === 'naive', (on) => toggleClass(banner, 'dl-show', on));
   bind(
     (s) => s.sim.timeScale === BREAK_TIME_SCALE,
-    (slow) => setText(slowText, slow ? `, slowed to ${BREAK_TIME_SCALE}× so you can watch it start` : ''),
+    (slow) => setText(slowText, slow ? `, slowed to ${BREAK_TIME_SCALE}× to watch it start` : ''),
   );
 
   // Error toast (real failures only; limits and guidance use the notice toast below).

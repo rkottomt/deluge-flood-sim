@@ -136,20 +136,48 @@ test('stage ramp: the applied stage follows the slider at a bounded rate, arrive
   }
   assert.equal(fast.applied, 9.13);
   assert.ok(Math.abs(tf - t) <= 17, `chunked arrival ${tf} vs ${t}`);
-  // Lowered mid-rise: it brakes (a little past the reversal point) and settles on the new target.
+  // Lowered mid-rise (at full rate): the river never rises another centimetre under a "Falling to …" readout; it
+  // turns around and settles on the new target.
   const rev = new StageRamp();
   rev.setTarget(9);
   for (let k = 0; k < 100; k++) rev.advance(1);
   const at = rev.applied;
+  assert.ok(at > 2.5 && at < 6, `mid-rise at ${at}`);
   rev.setTarget(2);
-  let peak = at;
+  let last = at;
   for (let k = 0; k < 400 && rev.moving; k++) {
     rev.advance(1);
-    peak = Math.max(peak, rev.applied);
+    assert.ok(rev.applied <= last + 1e-12, `falling monotonically after the slider was lowered (${last} → ${rev.applied})`);
     assert.ok(rev.applied >= 2 - 1e-12, 'no undershoot');
+    last = rev.applied;
   }
   assert.equal(rev.applied, 2);
-  assert.ok(peak - at < 0.5, `keeps rising only ${(peak - at).toFixed(2)} m after the slider was lowered`);
+  // The same with small frames and a wiggling slider (the t6 drag): every change of side turns the ramp at once.
+  const wig = new StageRamp();
+  wig.setTarget(8);
+  for (let k = 0; k < 400; k++) wig.advance(0.25);
+  const targets = [7, 1.5, 7.5, 2.333];
+  for (const target of targets) {
+    const from = wig.applied;
+    wig.setTarget(target);
+    let prevX = from;
+    for (let k = 0; k < 40; k++) {
+      wig.advance(0.25);
+      const towards = Math.sign(target - from);
+      assert.ok((wig.applied - prevX) * towards >= -1e-12, `heads for ${target} from ${from.toFixed(3)} without coasting away`);
+      prevX = wig.applied;
+    }
+  }
+  for (let k = 0; k < 2000 && wig.moving; k++) wig.advance(0.25);
+  assert.equal(wig.applied, 2.333);
+  // Raised further mid-rise: the rate is kept (no stop), and it still arrives exactly.
+  const on = new StageRamp();
+  on.setTarget(4);
+  for (let k = 0; k < 60; k++) on.advance(1);
+  const x0 = on.applied;
+  on.setTarget(9);
+  on.advance(1);
+  assert.ok(on.applied - x0 > 0.5 * STAGE_RATE_MAX, `keeps its rate when the target moves on (${(on.applied - x0).toFixed(4)} m/s)`);
   // Water reset replays the rise; a jump applies at once.
   rev.restartFrom(0);
   assert.ok(rev.moving);

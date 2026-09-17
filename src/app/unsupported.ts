@@ -21,6 +21,8 @@ interface FatalScreenOptions {
   details?: string;
   /** Label of the reload button (default "Try again"). */
   buttonLabel?: string;
+  /** A second, quieter button next to it. */
+  secondary?: { label: string; run(): void };
 }
 
 function showScreen(opts: FatalScreenOptions): HTMLElement {
@@ -56,6 +58,8 @@ function showScreen(opts: FatalScreenOptions): HTMLElement {
       #${SCREEN_ID} button { margin-top: 22px; padding: 10px 18px; border-radius: 10px; border: 1px solid rgba(143, 211, 255, 0.4);
         background: rgba(60, 150, 230, 0.25); color: #eaf6ff; font: inherit; font-weight: 600; cursor: pointer; }
       #${SCREEN_ID} button:hover { background: rgba(60, 150, 230, 0.4); }
+      #${SCREEN_ID} button.secondary { margin-left: 10px; background: transparent; border-color: rgba(143, 211, 255, 0.22); color: #b7c4d8; }
+      #${SCREEN_ID} button.secondary:hover { background: rgba(60, 150, 230, 0.15); color: #eaf6ff; }
     </style>
     <div class="card">
       <div class="brand">${LOGO_SVG}<span>Deluge</span></div>
@@ -76,6 +80,15 @@ function showScreen(opts: FatalScreenOptions): HTMLElement {
   const button = root.querySelector('button')!;
   button.textContent = opts.buttonLabel ?? 'Try again';
   button.addEventListener('click', () => window.location.reload());
+  if (opts.secondary) {
+    const { label, run } = opts.secondary;
+    const extra = document.createElement('button');
+    extra.type = 'button';
+    extra.className = 'secondary';
+    extra.textContent = label;
+    extra.addEventListener('click', run);
+    button.after(extra);
+  }
   document.body.appendChild(root);
   return root;
 }
@@ -116,26 +129,60 @@ export function showFatalError(error: string): void {
   });
 }
 
-/** sessionStorage key: when the page last reloaded itself after losing the GPU device (ms since epoch). */
+/** sessionStorage key: when the page reloaded itself after losing the GPU device (JSON array of ms since epoch). */
 const AUTO_RELOAD_KEY = 'deluge:gpu-lost-reload-at';
-/** A second device loss this soon after an automatic reload waits for the user (no reload loops). */
+/** A device loss this soon after an automatic reload waits for the user (no reload loops). */
 export const AUTO_RELOAD_GUARD_MS = 60_000;
+/** At most AUTO_RELOAD_MAX automatic reloads per this window, however far apart the losses are. */
+export const AUTO_RELOAD_WINDOW_MS = 10 * 60_000;
+export const AUTO_RELOAD_MAX = 2;
 /** Countdown before the automatic reload, so the message can be read. */
 export const AUTO_RELOAD_DELAY_MS = 3000;
 
 /**
- * May the page reload itself now? True at most once per AUTO_RELOAD_GUARD_MS (per tab); records the claim.
- * Without usable storage it never auto-reloads (a loop could not be detected).
+ * What to do after a device loss:
+ *  - 'reload': reload the scene that was on screen;
+ *  - 'lighter': reload into the offline default scenario instead (the lost scene was a live area or a large grid);
+ *  - 'manual': show the card and wait for the user.
  */
-export function claimAutoReload(storage: Pick<Storage, 'getItem' | 'setItem'> | null, now: number): boolean {
-  if (!storage) return false;
+export type AutoReloadPlan = 'reload' | 'lighter' | 'manual';
+
+/**
+ * Decide (and record) the automatic recovery from a device loss, per tab:
+ *  - a loss within AUTO_RELOAD_GUARD_MS of the last automatic reload waits for the user;
+ *  - at most AUTO_RELOAD_MAX automatic reloads per AUTO_RELOAD_WINDOW_MS. The first reloads the same scene (sleep/wake
+ *    and driver resets are one-offs). The second means that scene keeps losing the GPU a few minutes in: it switches
+ *    to the offline default scenario if `lighterAvailable` (the lost scene was a live area or a large grid), and
+ *    otherwise waits for the user (reloading the same scene again would only repeat it);
+ *  - without usable storage it never reloads by itself (a loop could not be detected).
+ */
+export function claimAutoReload(
+  storage: Pick<Storage, 'getItem' | 'setItem'> | null,
+  now: number,
+  lighterAvailable = false,
+): AutoReloadPlan {
+  if (!storage) return 'manual';
   try {
-    const last = Number(storage.getItem(AUTO_RELOAD_KEY));
-    if (Number.isFinite(last) && last > 0 && now - last >= 0 && now - last < AUTO_RELOAD_GUARD_MS) return false;
-    storage.setItem(AUTO_RELOAD_KEY, String(now));
-    return true;
+    const recent = readReloads(storage.getItem(AUTO_RELOAD_KEY)).filter((t) => now - t >= 0 && now - t < AUTO_RELOAD_WINDOW_MS);
+    if (recent.some((t) => now - t < AUTO_RELOAD_GUARD_MS) || recent.length >= AUTO_RELOAD_MAX) return 'manual';
+    const plan: AutoReloadPlan = recent.length === 0 ? 'reload' : lighterAvailable ? 'lighter' : 'manual';
+    if (plan === 'manual') return plan;
+    storage.setItem(AUTO_RELOAD_KEY, JSON.stringify([...recent, now]));
+    return plan;
   } catch {
-    return false;
+    return 'manual';
+  }
+}
+
+/** Stored reload times: a JSON array of numbers (or a single number, as older builds wrote). */
+function readReloads(raw: string | null): number[] {
+  if (!raw) return [];
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    const list = Array.isArray(parsed) ? parsed : [parsed];
+    return list.filter((t): t is number => typeof t === 'number' && Number.isFinite(t) && t > 0);
+  } catch {
+    return [];
   }
 }
 
@@ -147,26 +194,56 @@ function sessionStore(): Storage | null {
   }
 }
 
+/** The offline scene a repeatedly lost live area / large grid restarts with (see claimAutoReload). */
+export interface LighterScene {
+  /** Human name, e.g. "Pittsburgh — Three Rivers". */
+  label: string;
+  /** Point the address bar at it (called before the reload). */
+  select(): void;
+}
+
 /**
  * The GPU device was lost at runtime (GPU-process crash or reset: sleep/wake, a driver hiccup, the browser's GPU
  * watchdog, running out of GPU memory). Every GPU resource is gone, so the only honest state is a full-screen
- * card: the page reloads itself once after a short countdown (a baked preset is back in about a second), and a
- * repeated loss waits for the user instead of looping.
+ * card: the page reloads itself after a short countdown (a baked preset is back in about a second), a scene that
+ * keeps losing the GPU restarts as the offline default scenario (when it was not that already), and anything more
+ * waits for the user instead of looping.
  */
-export function showDeviceLost(details: string): void {
-  const auto = claimAutoReload(sessionStore(), Date.now());
-  const root = showScreen({
-    title: 'Lost connection to the GPU',
-    lead: auto
+export function showDeviceLost(details: string, lighter: LighterScene | null = null): void {
+  const storage = sessionStore();
+  const plan = claimAutoReload(storage, Date.now(), !!lighter);
+  if (plan === 'lighter') lighter?.select();
+  const lead =
+    plan === 'reload'
       ? 'The graphics driver reset, which can happen after sleep/wake, a driver hiccup or when GPU memory runs out. ' +
         'The simulation lived on the GPU, so Deluge restarts to bring it back.'
-      : 'The graphics driver reset again right after restarting. Close other GPU-heavy tabs or apps, then reload. ' +
-        'If it keeps happening, restart the browser.',
-    bodyHtml: auto ? '<p class="countdown" aria-live="polite"></p>' : '',
+      : plan === 'lighter'
+        ? 'The graphics driver reset again after restarting, so this area may need more GPU memory than is free. ' +
+          `Deluge restarts with the offline ${lighter?.label ?? 'default'} scenario instead.`
+        : storage
+          ? 'The graphics driver reset again after restarting. Close other GPU-heavy tabs or apps, then reload. ' +
+            'If it keeps happening, restart the browser.'
+          : 'The graphics driver reset, which can happen after sleep/wake, a driver hiccup or when GPU memory runs out. ' +
+            'The simulation lived on the GPU: reload to bring it back.';
+  const root = showScreen({
+    title: 'Lost connection to the GPU',
+    lead,
+    bodyHtml: plan === 'manual' ? '' : '<p class="countdown" aria-live="polite"></p>',
     details,
-    buttonLabel: auto ? 'Reload now' : 'Reload',
+    buttonLabel: plan === 'manual' ? 'Reload' : 'Reload now',
+    // Waiting for the user on a live area or large grid: offer the offline scenario as the way out.
+    secondary:
+      plan === 'manual' && lighter
+        ? {
+            label: `Open ${lighter.label} (offline)`,
+            run: () => {
+              lighter.select();
+              window.location.reload();
+            },
+          }
+        : undefined,
   });
-  if (!auto) return;
+  if (plan === 'manual') return;
   const countdown = root.querySelector<HTMLElement>('.countdown')!;
   const deadline = performance.now() + AUTO_RELOAD_DELAY_MS;
   const tick = () => {

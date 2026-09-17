@@ -72,3 +72,53 @@ export function isDiverged(stats: SimStats | null | undefined): boolean {
   if (Number.isNaN(massError) || massError === Infinity) return true;
   return volume < 0 || maxDepth > 1e4 || maxSpeed > 1e3 || massError > 0.5;
 }
+
+/** Requested speeds from here up are fast-forward requests ("as fast as the GPU allows"): the quick actions, 300×, 1200×. */
+export const FAST_FORWARD_SPEED = 300;
+/** Below this achieved speed the GPU is really struggling, whatever was asked for. */
+export const SLOW_SPEED_FLOOR = 20;
+
+/**
+ * How to present the achieved speed.
+ *  • 'none'  — meeting the request (or nothing measured yet).
+ *  • 'max'   — the GPU is flat out below the request, which is normal for fast-forward (a 1024² grid runs ~45–70× on an
+ *              M4): shown neutrally, as the GPU's maximum.
+ *  • 'short' — a real shortfall: below SLOW_SPEED_FLOOR, or under a quarter of a moderate speed the user picked.
+ *              Shown as a warning.
+ */
+export function speedShortfall(throttled: boolean, achieved: number | null, requested: number): 'none' | 'max' | 'short' {
+  if (!throttled || achieved === null || !Number.isFinite(achieved) || !(requested > 0)) return 'none';
+  if (achieved >= 0.9 * requested) return 'none';
+  if (achieved < SLOW_SPEED_FLOOR || (requested < FAST_FORWARD_SPEED && achieved < 0.25 * requested)) return 'short';
+  return 'max';
+}
+
+/**
+ * Rain fallen since the last water reset, mm: global rain integrated over simulated time from the stats readbacks
+ * (storm cells are local and not counted). The rate between two readbacks is taken as the current one; rain rarely
+ * changes between readbacks a fraction of a second apart.
+ */
+export class RainGauge {
+  private lastSim = NaN;
+  private total = 0;
+
+  reset(): void {
+    this.lastSim = NaN;
+    this.total = 0;
+  }
+
+  /** Record a readback: simulated time (s) and the global rain rate (mm/hr) in effect. */
+  push(simTime: number, rainRate: number): void {
+    if (!Number.isFinite(simTime)) return;
+    if (Number.isFinite(this.lastSim)) {
+      const dt = simTime - this.lastSim;
+      if (dt < -1e-6) this.total = 0; // water reset: the clock went back
+      else if (rainRate > 0 && Number.isFinite(rainRate)) this.total += (rainRate * dt) / 3600;
+    }
+    this.lastSim = simTime;
+  }
+
+  get mm(): number {
+    return this.total;
+  }
+}

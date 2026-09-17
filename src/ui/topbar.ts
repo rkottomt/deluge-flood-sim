@@ -2,18 +2,19 @@
  * Top bar: brand + scenario name (left), transport — play/pause, sim clock, speed, reset (center),
  * perf readout + How it works / help / panel toggle (right).
  */
+import type { AppState } from '../contracts';
 import { h, setText, toggleClass, setAttr, type UIContext } from './dom';
 import { icon, iconMarkup, logoMark } from './icons';
 import { segmented } from './controls';
 import { formatClock, fmtNum, formatSpeedup } from './format';
-import { SpeedEstimator } from './stats';
+import { SpeedEstimator, speedShortfall } from './stats';
 
 export const SPEEDS: Array<{ value: number; label: string; tip: string }> = [
   { value: 1, label: '1×', tip: 'Real time' },
   { value: 10, label: '10×', tip: '10 simulated seconds per second' },
   { value: 60, label: '60×', tip: '1 simulated minute per second' },
-  { value: 300, label: '300×', tip: '5 simulated minutes per second' },
-  { value: 1200, label: '1200×', tip: '20 simulated minutes per second' },
+  { value: 300, label: '300×', tip: 'Fast-forward: up to 5 simulated minutes per second, as fast as your GPU allows' },
+  { value: 1200, label: '1200×', tip: 'Fast-forward: up to 20 simulated minutes per second, as fast as your GPU allows' },
 ];
 
 export interface TopBar {
@@ -194,22 +195,27 @@ export function createTopBar(ctx: UIContext, opts: { onTogglePanel(): void; isPa
     },
   );
 
-  // When the GPU can't keep up, the highlighted speed says what it really runs at: "300× → 44×".
+  // When the GPU can't keep up, the highlighted speed says what it really runs at: "300× → 44×". At fast-forward
+  // speeds that is simply the GPU's maximum (neutral); only a real shortfall is shown as a warning.
+  const shortfall = (s: AppState) => (s.paused ? 'none' : speedShortfall(!!s.stepInfo?.throttled, achieved, s.sim.timeScale));
   bind(
     (s) => {
-      const si = s.stepInfo;
-      const want = s.sim.timeScale;
-      const real = si?.throttled && !s.paused && achieved !== null && achieved < 0.9 * want ? formatSpeedup(achieved) : '';
-      return `${want}|${real}`;
+      const f = shortfall(s);
+      const real = f !== 'none' && achieved !== null ? formatSpeedup(achieved) : '';
+      return `${s.sim.timeScale}|${real}|${f}`;
     },
     (key) => {
-      const [want, real] = key.split('|');
+      const [want, real, f] = key.split('|');
       for (const sp of SPEEDS) {
         const b = speed.buttons.get(sp.value);
         if (!b) continue;
         const shows = String(sp.value) === want && real !== '';
-        b.replaceChildren(sp.label, ...(shows ? [h('span', { class: 'dl-seg-achieved' }, ` → ${real}`)] : []));
-        b.dataset.tip = shows ? `${sp.tip} — your GPU is reaching ${real} right now` : sp.tip ?? '';
+        b.replaceChildren(sp.label, ...(shows ? [h('span', { class: `dl-seg-achieved${f === 'short' ? ' dl-warn-text' : ''}` }, ` → ${real}`)] : []));
+        b.dataset.tip = shows
+          ? f === 'short'
+            ? `${sp.tip} — your GPU is only reaching ${real} right now`
+            : `${sp.tip} — ${real} is this GPU's maximum on this map`
+          : sp.tip ?? '';
       }
     },
   );
@@ -227,12 +233,15 @@ export function createTopBar(ctx: UIContext, opts: { onTogglePanel(): void; isPa
     (v) => setText(sub, v),
   );
   bind(
-    (s) => !!s.stepInfo?.throttled && !s.paused,
-    (throttled) => {
-      toggleClass(perf, 'dl-throttled', throttled);
-      perf.dataset.tip = throttled
-        ? 'GPU is at its substep budget — running slower than the requested speed'
-        : 'Frames per second · solver substeps per frame';
+    (s) => shortfall(s),
+    (f) => {
+      toggleClass(perf, 'dl-throttled', f === 'short');
+      perf.dataset.tip =
+        f === 'short'
+          ? 'GPU is at its substep budget — running well below the requested speed'
+          : f === 'max'
+            ? 'Frames per second · solver substeps per frame · the speed the GPU reaches flat out'
+            : 'Frames per second · solver substeps per frame';
     },
   );
   bind(

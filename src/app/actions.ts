@@ -37,7 +37,13 @@ export function createActions(app: App): AppActions {
     },
 
     cancelLoad() {
-      if (app.scenes?.cancel()) app.requestRender();
+      const scenes = app.scenes;
+      const cancelled = scenes?.loadingRequest ?? null;
+      if (!scenes?.cancel()) return;
+      app.requestRender();
+      // Nothing left on screen (e.g. a ?live= link cancelled at startup): fall back to the offline default preset.
+      // Synchronously, so the cancelled load's rejection already finds the fallback in flight.
+      app.onLoadCancelled(cancelled);
     },
 
     listPresets(): PresetInfo[] {

@@ -9,7 +9,7 @@
  * The strip stays available while the user explores (after the first click its heading folds away to keep the
  * map clear) and goes away for good only when closed.
  */
-import type { AppState, StageControl, Store } from '../contracts';
+import type { AppState, CameraPose, StageControl, Store } from '../contracts';
 import { h, setText, toggleClass, setAttr, type UIContext } from './dom';
 import { icon, type IconName } from './icons';
 import { selectTool } from './toolDefs';
@@ -18,8 +18,12 @@ import { fmtNum } from './format';
 import { bridgeFor, postNotice } from './bridge';
 import { suggestEvacStarts } from './evacSuggest';
 import { startBreakDemo, stopBreakDemo } from './stabilityDemo';
+import { raiseStepText } from './stageText';
 
-/** Sim speed used by the quick actions, so a flood visibly develops within seconds. */
+/**
+ * Sim speed used by the quick actions, so a flood visibly develops within seconds. Most GPUs can't reach it on a
+ * 1024² grid (an M4 manages ~45–70×): it means "as fast as this GPU allows", and the HUD shows what it reaches.
+ */
 export const QUICK_TIME_SCALE = 300;
 /** "Hurricane rain" rate, mm/hr (Hurricane Harvey's peak hourly rates). */
 export const HURRICANE_RAIN = 100;
@@ -30,6 +34,19 @@ export function dramaticStage(ctrl: StageControl): { ft: number; label: string }
   const marks = (ctrl.marks ?? []).filter((m) => m.ft <= range.max + 0.01 && m.ft >= range.min).sort((a, b) => b.ft - a.ft);
   if (marks.length) return { ft: marks[0].ft, label: marks[0].label };
   return { ft: range.max, label: `${fmtNum(range.max, 0)} ft` };
+}
+
+/**
+ * A closer look at the scenario's own framing for "Play the flood": flash floods start as thin threads along the
+ * creeks, invisible from the wide establishing shot.
+ */
+export function closeUpPose(pose: CameraPose): CameraPose {
+  return {
+    target: { ...pose.target },
+    distance: pose.distance * 0.5,
+    yaw: pose.yaw,
+    pitch: Math.min(1.2, pose.pitch + 0.08),
+  };
 }
 
 /** Stage offset (m) of the dramatic crest. */
@@ -55,6 +72,8 @@ export function createWelcome(ctx: UIContext): HTMLElement {
   let dismissed = false;
   let used = false;
   let wallDrawn = false;
+  /** "Play the flood" was clicked in this scene (a fast speed carried over from elsewhere doesn't count). */
+  let played = false;
 
   const quickSpeed = (s: AppState) => ({ ...s.sim, timeScale: Math.max(s.sim.timeScale, QUICK_TIME_SCALE) });
 
@@ -65,19 +84,24 @@ export function createWelcome(ctx: UIContext): HTMLElement {
       label: (s) => {
         const ctrl = s.scenario?.stage;
         if (!ctrl) return 'Play the flood';
-        return isRaised(s, ctrl) ? 'Back to normal' : `Raise to ${dramaticStage(ctrl).label}`;
+        return isRaised(s, ctrl) ? 'Back to normal' : raiseStepText(ctrl, dramaticStage(ctrl)).label;
       },
       tip: (s) => {
         const ctrl = s.scenario?.stage;
-        if (!ctrl) return 'Run the scenario at 300× — five simulated minutes every second';
-        return isRaised(s, ctrl) ? 'Lower the rivers to their normal pool' : `Raise the rivers to the ${dramaticStage(ctrl).label} crest (${fmtNum(dramaticStage(ctrl).ft, 1)} ft) and run at 300×`;
+        if (!ctrl) return 'Fast-forward the scenario (up to 300×, as fast as your GPU allows) and zoom in on it';
+        return isRaised(s, ctrl) ? 'Lower the water to its normal level' : raiseStepText(ctrl, dramaticStage(ctrl)).tip;
       },
-      done: (s) => (s.scenario?.stage ? isRaised(s, s.scenario.stage) : !s.paused && s.sim.timeScale >= QUICK_TIME_SCALE),
+      done: (s) => (s.scenario?.stage ? isRaised(s, s.scenario.stage) : played && !s.paused && s.sim.timeScale >= QUICK_TIME_SCALE),
       active: (s) => !!s.scenario?.stage && isRaised(s, s.scenario.stage),
       run: () => {
         const s = store.get();
         const ctrl = s.scenario?.stage ?? null;
-        if (!ctrl) return store.set({ paused: false, sim: quickSpeed(s) });
+        if (!ctrl) {
+          played = true;
+          store.set({ paused: false, sim: quickSpeed(s) });
+          playTheFlood(ctx);
+          return;
+        }
         if (isRaised(s, ctrl)) return store.set({ stageOffset: 0 });
         store.set({ paused: false, sim: quickSpeed(s), stageOffset: dramaticOffset(ctrl) });
       },
@@ -115,13 +139,23 @@ export function createWelcome(ctx: UIContext): HTMLElement {
       id: 'rain',
       icon: 'rain',
       label: (s) => (s.sim.rainRate >= HURRICANE_RAIN ? 'Stop rain' : 'Hurricane rain'),
-      tip: (s) => (s.sim.rainRate >= HURRICANE_RAIN ? 'Turn the rain off' : `${HURRICANE_RAIN} mm/hr over the whole map (Harvey’s peak rates), at 300×`),
+      tip: (s) =>
+        s.sim.rainRate >= HURRICANE_RAIN ? 'Turn the rain off' : `${HURRICANE_RAIN} mm/hr over the whole map (Harvey’s peak rates), fast-forwarded`,
       done: (s) => s.sim.rainRate >= HURRICANE_RAIN,
       active: (s) => s.sim.rainRate >= HURRICANE_RAIN,
       run: () => {
         const s = store.get();
         if (s.sim.rainRate >= HURRICANE_RAIN) return ctx.setSim({ rainRate: 0 });
         store.set({ paused: false, sim: { ...quickSpeed(s), rainRate: HURRICANE_RAIN } });
+        postNotice(store, {
+          kind: 'info',
+          key: 'try-rain',
+          title: `${HURRICANE_RAIN} mm of rain an hour, everywhere`,
+          message: s.render.showRoads
+            ? 'Watch the streets: runoff collects in them and roads turn yellow (wet), then red (flooded). The HUD counts the rain fallen.'
+            : 'Runoff collects in streets and hollows long before the rivers rise. The HUD counts the rain fallen.',
+          durationMs: 9000,
+        });
       },
     },
     {
@@ -189,6 +223,17 @@ export function createWelcome(ctx: UIContext): HTMLElement {
     h('div', { class: 'dl-try-body' }, row, close),
   );
 
+  // The heading folds away after the first click, but only once the pointer has left the strip: folding it under a
+  // resting cursor would move every button up by its height right after the click.
+  let pointerInside = false;
+  el.addEventListener('pointerenter', () => {
+    pointerInside = true;
+  });
+  el.addEventListener('pointerleave', () => {
+    pointerInside = false;
+    sync(store.get());
+  });
+
   function dismiss() {
     if (dismissed) return;
     dismissed = true;
@@ -198,7 +243,8 @@ export function createWelcome(ctx: UIContext): HTMLElement {
   function sync(s: AppState) {
     const show = !dismissed && !!s.terrainName && !s.loading;
     toggleClass(el, 'dl-show', show);
-    toggleClass(el, 'dl-compact', used);
+    if (used && !pointerInside) toggleClass(el, 'dl-compact', true);
+    if (!used) toggleClass(el, 'dl-compact', false);
     el.inert = !show;
     if (!show) return;
     const firstOpen = buttons.find((x) => !x.step.done(s));
@@ -228,9 +274,42 @@ export function createWelcome(ctx: UIContext): HTMLElement {
     (s) => s.terrainName,
     () => {
       wallDrawn = false;
+      played = false;
     },
   );
   return el;
+}
+
+/**
+ * "Play the flood" on a scenario without a river-stage control (a storm or inflows drive it): zoom in on the
+ * scenario's framing, where the flood runs, and offer the depth map — brown water over wooded imagery is hard to
+ * read in the first simulated minutes. The view mode is only offered, never switched without asking.
+ */
+function playTheFlood(ctx: UIContext): void {
+  const { store } = ctx;
+  const s = store.get();
+  const pose = s.scenario?.camera;
+  const camera = bridgeFor(store).scene?.getCamera?.() ?? null;
+  if (pose && camera) {
+    try {
+      camera.flyTo(closeUpPose(pose), 1.6);
+    } catch {
+      /* renderer gone */
+    }
+  }
+  const rainy = s.sim.rainRate > 0 || s.storms.length > 0;
+  postNotice(store, {
+    kind: 'info',
+    key: 'try-flood',
+    title: 'Fast-forwarding the flood',
+    message:
+      (rainy
+        ? 'Storm rain runs off the hills into the creeks and down through town — the first minutes are thin threads along the streams.'
+        : 'Peak flows pour in where the rivers enter the map and spill out of the channels.') +
+      (s.render.waterMode === 'realistic' ? ' The depth map shows every flooded street by how deep it is.' : ''),
+    action: s.render.waterMode === 'realistic' ? { label: 'Show depth map', run: () => ctx.setRender({ waterMode: 'depth' }) } : undefined,
+    durationMs: 12000,
+  });
 }
 
 function isRaised(s: AppState, ctrl: StageControl): boolean {

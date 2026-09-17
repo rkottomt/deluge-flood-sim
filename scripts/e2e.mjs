@@ -10,7 +10,8 @@
  *   node scripts/e2e.mjs --live             also run the live-area flow (needs internet: USGS, Esri, TIGERweb)
  *
  * Offline guarantee: every request to a non-local host is blocked (the demo venue's wifi is unreliable) and
- * reported; the baked-preset flows must not need any. Only the opt-in live flow may use the network.
+ * reported; the baked-preset flows must not need any. Only the opt-in live flow may use the network. The startup-cancel
+ * flow holds external requests unanswered instead (stalled venue wifi), so it needs no network either.
  *
  * Screenshots → artifacts/e2e/NN-name.png, machine-readable report → artifacts/e2e/report.json.
  * Prints a PASS/FAIL table with measured numbers and exits non-zero if any flow fails.
@@ -146,6 +147,14 @@ const httpFailures = [];
 /** Requests to non-local hosts during the current flow (blocked unless the flow allows the network). */
 let externalRequests = [];
 let allowNetwork = false;
+/** Hold external requests unanswered instead of failing them (a flow simulating stalled wifi); released after the flow. */
+let stallNetwork = false;
+let stalledRoutes = [];
+async function releaseStalled() {
+  const routes = stalledRoutes;
+  stalledRoutes = [];
+  await Promise.all(routes.map((route) => route.abort('internetdisconnected').catch(() => {})));
+}
 
 async function main() {
   const baseUrl = process.env.E2E_URL ?? (await startVite());
@@ -163,6 +172,7 @@ async function main() {
     const url = route.request().url();
     externalRequests.push(url);
     if (allowNetwork) return route.continue();
+    if (stallNetwork) return void stalledRoutes.push(route);
     return route.abort('internetdisconnected');
   });
   page = await context.newPage();
@@ -245,6 +255,7 @@ async function runFlow(flow, ctx) {
   consoleErrors = [];
   externalRequests = [];
   allowNetwork = !!flow.network;
+  stallNetwork = !!flow.stallNetwork;
   const t0 = Date.now();
   let threw = false;
   const errBase = await delugeErrorCount();
@@ -255,11 +266,13 @@ async function runFlow(flow, ctx) {
     r.notes.push(`exception: ${e.message}`);
     console.log(`  ✗ exception: ${e.message}`);
   }
+  stallNetwork = false;
+  await releaseStalled();
   r.seconds = (Date.now() - t0) / 1000;
   const appErrors = await delugeErrors(flow.resetsPage ? 0 : errBase);
   r.errors = [...consoleErrors, ...appErrors.filter((e) => !consoleErrors.some((c) => c.includes(e)))];
   check(r, 'no console / page / WebGPU errors', r.errors.length === 0, `${r.errors.length} errors`);
-  if (!flow.network) {
+  if (!flow.network && !flow.stallNetwork) {
     const hosts = [...new Set(externalRequests.map((u) => new URL(u).host))];
     r.metrics.externalRequests = externalRequests.slice(0, 20);
     check(r, 'works offline (no external requests)', externalRequests.length === 0, externalRequests.length ? `${externalRequests.length} blocked: ${hosts.join(', ')}` : '0 requests');
@@ -1052,6 +1065,52 @@ const FLOWS = [
       await sleep(2000);
       await shot('11-live-area');
       r.metrics = { loadSeconds: loadS, requests: externalRequests.length };
+    },
+  },
+  {
+    id: 12,
+    name: 'Cancel a ?live= link while it loads → offline scenario',
+    timeoutMs: 180_000,
+    resetsPage: true,
+    stallNetwork: true,
+    async run(r, ctx) {
+      // A reload after picking a live area, on venue wifi that stalls: the USGS / Esri / TIGER requests never answer.
+      const live = new URL(ctx.baseUrl);
+      live.search = '?live=40.25980,-76.88700,6&name=Harrisburg,+Pennsylvania';
+      await page.goto(live.href, { waitUntil: 'domcontentloaded' });
+      const cancel = page.locator('.dl-loading-cancel');
+      await cancel.waitFor({ state: 'visible', timeout: 90_000 });
+      const before = await D(() => window.__deluge.getState().loading);
+      check(r, 'live download stalls with Cancel offered', !!before?.cancellable && externalRequests.length > 0, `“${before?.message}”, ${externalRequests.length} requests held`);
+      const t0 = Date.now();
+      await cancel.click();
+      const shown = await page
+        .waitForFunction(() => window.__deluge.getState().presetId && !window.__deluge.getState().loading, null, { timeout: 30_000 })
+        .then(() => true, () => false);
+      const loadS = (Date.now() - t0) / 1000;
+      const after = await D(async () => {
+        const d = window.__deluge;
+        const ready = await Promise.race([d.ready.then(() => 'ready', (e) => `rejected: ${e.message}`), new Promise((res) => setTimeout(() => res('pending'), 10_000))]);
+        const s = d.getState();
+        const notice = [...document.querySelectorAll('button')].find((b) => /^Retry Harrisburg/.test(b.textContent ?? ''));
+        return { ready, presetId: s.presetId, name: s.terrainName, search: location.search, retry: notice?.textContent ?? null };
+      });
+      check(r, 'Cancel shows the offline default scenario (not a black screen)', shown && after.presetId === 'pittsburgh' && after.ready === 'ready', `${after.name || '(nothing)'} in ${loadS.toFixed(1)} s, ready ${after.ready}`);
+      check(r, 'notice offers a retry of the live area', !!after.retry, after.retry ?? 'no retry button');
+      check(r, 'address bar points at the preset (a reload does not download again)', after.search === '?preset=pittsburgh', after.search);
+      await shot('12-startup-cancel');
+      await releaseStalled();
+      const held = externalRequests.length;
+      await page.goto(page.url(), { waitUntil: 'domcontentloaded' });
+      await waitReady(90_000);
+      const reloaded = (await state(['presetId'])).presetId;
+      check(r, 'reload opens the preset without any network request', reloaded === 'pittsburgh' && externalRequests.length === held, `${reloaded}, ${externalRequests.length - held} new external requests`);
+      r.metrics = { cancelToSceneSeconds: loadS, heldRequests: held };
+      // Leave the page on the preset the later flows expect.
+      if (page.url() !== ctx.appUrl) {
+        await page.goto(ctx.appUrl, { waitUntil: 'domcontentloaded' });
+        await waitReady(90_000);
+      }
     },
   },
 ];

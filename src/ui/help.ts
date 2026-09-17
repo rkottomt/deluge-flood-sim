@@ -36,12 +36,12 @@ export function createHelp(ctx: UIContext): Modal {
   );
 
   const steps: Array<[string, Array<string | HTMLElement>]> = [
-    ['Speed up time', ['The simulation is already running. ', h('b', null, '300×'), ' in the top bar plays it fast; when the GPU can’t keep up, the button shows the speed it really reaches (e.g. 300× → 44×). ', kbd('Space'), ' pauses.']],
+    ['Speed up time', ['The simulation is already running. ', h('b', null, '300×'), ' in the top bar fast-forwards as far as your GPU allows; the button shows the speed it really reaches (e.g. 300× → 44×). ', kbd('Space'), ' pauses.']],
     ['Raise the river', ['In ', h('b', null, 'Weather & rivers'), ', click the highest historic-crest chip (or crank the rain). The river rises along its whole length over a few simulated minutes and the flood spreads from every bank — watch the low-lying districts go under, street by street.']],
     ['Build a levee', ['Press ', kbd('2'), ' and drag a wall across a low gap where the water gets in, tying both ends into high ground. The tool card checks the height against the flood (red = overtopped); water finds its way around open ends.']],
     ['Get people out', ['Press ', kbd('8'), ' and click a house (or use ', h('b', null, 'Evacuate'), ' in the Try-it strip). The route to the nearest dry shelter re-plans as roads flood — or turns red.']],
-    ['See the hazard', ['In ', h('b', null, 'View'), ', switch to ', h('b', null, 'Depth'), ' or ', h('b', null, 'Speed'), '. Press ', kbd('0'), ' and hover to probe any spot.']],
-    ['Break the math', ['Open ', h('b', null, 'How it works'), ' and hit ', h('b', null, 'Break it'), ' to see why a stable GPU solver is hard.']],
+    ['See the hazard', ['Press ', kbd('V'), ' to step through ', h('b', null, 'Depth'), ', ', h('b', null, 'Max depth'), ' and ', h('b', null, 'Speed'), ' maps (or scroll the side panel to ', h('b', null, 'View'), '). Press ', kbd('0'), ' and hover to probe any spot.']],
+    ['Break the math', ['Hit ', h('b', null, 'Break it'), ' in the Try-it strip (or in ', h('b', null, 'How it works'), ') to see why a stable GPU solver is hard.']],
   ];
 
   const tour = h(
@@ -65,7 +65,7 @@ export function createHelp(ctx: UIContext): Modal {
       },
     },
     icon('play', 14),
-    h('span', null, 'Start at 300×'),
+    h('span', null, 'Fast-forward'),
   );
 
   modal = createModal({
@@ -93,6 +93,7 @@ export function createHelp(ctx: UIContext): Modal {
             shortcutRow(['R'], 'Reset water'),
             shortcutRow(['F'], 'Frame the whole map'),
             shortcutRow(['T'], 'Top-down view'),
+            shortcutRow(['V'], 'Next water view: realistic, depth, max depth, speed'),
             shortcutRow(['[', ']'], 'Smaller / larger brush'),
             shortcutRow(['Shift'], 'Drain, raise ground, or continue a wall'),
             shortcutRow(['Esc'], 'Cancel a wall · close dialogs'),

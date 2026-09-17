@@ -24,7 +24,7 @@ import type {
 import { gridToGeo } from '../data/geo';
 import { TOOL_BY_ID } from './toolDefs';
 import { bridgeFor, type HoverInfo } from './bridge';
-import { checkWall, scanWalls, stageSurface, WALL_MAX } from './wallCheck';
+import { checkWall, scanWalls, stageSurface, suggestedWallHeight, wallShare, WALL_ALARM_CELLS } from './wallCheck';
 import { formatStageFt } from './format';
 import { stageFt } from './scales';
 
@@ -155,7 +155,17 @@ export function createToolController(canvas: HTMLCanvasElement, deps: ToolContro
   let transientDirty = true;
   const activePointers = new Set<number>();
   const bridge = bridgeFor(store);
-  const scene = { getTerrain: () => deps.getTerrain(), getSolver: () => deps.getSolver() };
+  const scene = {
+    getTerrain: () => deps.getTerrain(),
+    getSolver: () => deps.getSolver(),
+    getCamera: () => {
+      try {
+        return renderer.camera ?? null;
+      } catch {
+        return null;
+      }
+    },
+  };
   bridge.scene = scene;
   /** Latest wall check at the cursor (drives the ring colour); null when not applicable. */
   let wallLow = false;
@@ -444,6 +454,7 @@ export function createToolController(canvas: HTMLCanvasElement, deps: ToolContro
     const scan = scanWalls(ground, barrier, depth, level);
     if (scan.cells === 0) {
       wallScan.armed = false;
+      bridge.setWallStatus(null);
       return;
     }
     // Water reset → the same walls may be overtopped again later.
@@ -454,24 +465,34 @@ export function createToolController(canvas: HTMLCanvasElement, deps: ToolContro
     if (snap) wallScan.lastSim = snap.simTime;
 
     const settled = !!snap && snap.simTime >= wallScan.settleUntil;
+    // Depths from a blown-up solver (stability demo) say nothing about the wall.
+    const physical = s.sim.stabilityMode === 'robust';
+    // The options card shows this same scan, so the card and the notices below always agree.
+    bridge.setWallStatus({
+      cells: scan.cells,
+      overtopped: settled && physical ? scan.overtopped : 0,
+      belowLevel: scan.belowLevel,
+      neededHeight: scan.neededHeight,
+      settled: settled && physical,
+      stageFt: ctrl ? stageFt(ctrl, s.stageOffset) : null,
+    });
+    const need = suggestedWallHeight(scan, s.wallHeight);
+    // With the wall card open the card already carries the details: keep the notice to one line over the map.
+    const brief = s.tool === 'wall';
     // One notice per scan; overtopping (what is happening) wins over the stage warning (what will happen).
     let posted = false;
-    if (settled && scan.overtopped >= 3 && scan.signature !== wallScan.overtopSig && s.sim.stabilityMode === 'robust') {
+    if (settled && physical && scan.overtopped >= WALL_ALARM_CELLS && scan.signature !== wallScan.overtopSig) {
       posted = true;
       wallScan.overtopSig = scan.signature;
-      const need = Math.min(WALL_MAX, Math.ceil(scan.neededHeight * 2) / 2);
-      const share = Math.max(1, Math.round((scan.overtopped / scan.cells) * 100));
       bridge.notify({
         kind: 'warn',
         key: 'wall-overtopped',
         title: 'Water is pouring over your wall',
-        message:
-          `About ${share}% of the wall is under water. A wall only holds while its top stays above the flood — ` +
-          `and water also runs around open ends, so tie both ends into high ground.`,
-        action:
-          level !== null && scan.belowLevel > 0 && need > s.wallHeight
-            ? { label: `Use ${need.toFixed(1)} m walls`, run: () => store.set({ wallHeight: need }) }
-            : undefined,
+        message: brief
+          ? `About ${wallShare(scan.overtopped, scan.cells)}% of the wall is under water.`
+          : `About ${wallShare(scan.overtopped, scan.cells)}% of the wall is under water. A wall only holds while its top stays above the flood — ` +
+            `and water also runs around open ends, so tie both ends into high ground.`,
+        action: level !== null && need !== null ? { label: `Use ${need.toFixed(1)} m walls`, run: () => store.set({ wallHeight: need }) } : undefined,
         durationMs: 10000,
       });
     }
@@ -479,16 +500,16 @@ export function createToolController(canvas: HTMLCanvasElement, deps: ToolContro
     if (wallScan.stageDirty && t - wallScan.stageChangedAt >= STAGE_SETTLE_MS && ctrl && level !== null) {
       wallScan.stageDirty = false;
       const sig = scan.signature * 31 + Math.round(level * 10);
-      if (!posted && scan.belowLevel >= 3 && sig !== wallScan.stageSig) {
+      if (!posted && scan.belowLevel >= WALL_ALARM_CELLS && sig !== wallScan.stageSig) {
         wallScan.stageSig = sig;
-        const need = Math.min(WALL_MAX, Math.ceil(scan.neededHeight * 2) / 2);
-        const share = Math.max(1, Math.round((scan.belowLevel / scan.cells) * 100));
         bridge.notify({
           kind: 'warn',
           key: 'wall-below-stage',
           title: `Your wall is lower than the river at ${formatStageFt(stageFt(ctrl, s.stageOffset))}`,
-          message: `The river will stand at ${level.toFixed(1)} m; the top of ${share}% of your wall is lower, so expect it to be overtopped.`,
-          action: need > s.wallHeight ? { label: `Use ${need.toFixed(1)} m walls`, run: () => store.set({ wallHeight: need }) } : undefined,
+          message: brief
+            ? `${wallShare(scan.belowLevel, scan.cells)}% of it will be overtopped.`
+            : `The river will stand at ${level.toFixed(1)} m; the top of ${wallShare(scan.belowLevel, scan.cells)}% of your wall is lower, so expect it to be overtopped.`,
+          action: need !== null ? { label: `Use ${need.toFixed(1)} m walls`, run: () => store.set({ wallHeight: need }) } : undefined,
           durationMs: 9000,
         });
       }
@@ -673,6 +694,11 @@ export function createToolController(canvas: HTMLCanvasElement, deps: ToolContro
   applyCameraMode(state().tool);
   const unsubscribe = store.subscribe((s, prev) => {
     if (s.tool !== prev.tool) {
+      // The wall card reports on the walls already built: check them now rather than at the next wall edit.
+      if (s.tool === 'wall') {
+        wallScan.armed = true;
+        wallScan.nextAt = 0;
+      }
       cancelGesture();
       applyCameraMode(s.tool);
       if (prev.tool === 'probe' && s.probe) store.set({ probe: null });
@@ -705,6 +731,7 @@ export function createToolController(canvas: HTMLCanvasElement, deps: ToolContro
       wallScan.overtopSig = NaN;
       wallScan.stageSig = NaN;
       wallScan.lastSim = 0;
+      bridge.setWallStatus(null);
     }
 
     // Hover pick for the cursor ring / probe / held brushes: at most once per frame, and only when something
@@ -849,6 +876,7 @@ export function createToolController(canvas: HTMLCanvasElement, deps: ToolContro
     cancelGesture();
     if (bridge.scene === scene) bridge.scene = null;
     bridge.setHover(null);
+    bridge.setWallStatus(null);
     canvas.removeEventListener('pointerdown', onPointerDown);
     canvas.removeEventListener('pointermove', onPointerMove);
     canvas.removeEventListener('pointerup', onPointerUp);

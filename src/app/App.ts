@@ -22,7 +22,7 @@ import { SimSync } from './simSync';
 import { StageLevels } from './stage';
 import { StageRamp } from './stageRamp';
 import { createStore } from './store';
-import { showDeviceLost, WebGPUUnavailableError } from './unsupported';
+import { showDeviceLost, WebGPUUnavailableError, type LighterScene } from './unsupported';
 import { postNotice } from '../ui/bridge';
 import { parseStartupRequest, writeSceneToUrl, type SceneRequest } from './url';
 
@@ -215,6 +215,9 @@ export class App {
     this.store.subscribe((s, prev) => {
       if (s.stageOffset === prev.stageOffset) return;
       this.stageRamp.setTarget(s.stageOffset);
+      // The UI's "Rising/Falling to … · now …" line pairs the new target with the applied stage: publish it now rather
+      // than up to one HUD interval late, so "now" never ticks up after the label has turned to "Falling".
+      this.publishStage(performance.now());
       // Paused: nothing advances the ramp, but the UI shows where the river is heading.
       this.requestRender();
     });
@@ -286,14 +289,45 @@ export class App {
       void this.loadScene(request).then((outcome) => {
         if (gaveUp) return; // resolved by the fallback
         stop();
+        // Cancelled (the loading card's Cancel) with nothing else on screen or on its way: actions.cancelLoad has
+        // normally started the fallback already; this covers any other path, so the screen never stays black.
+        if (outcome === 'superseded' && !scenes.scene && !scenes.loadingRequest && !this.gpuLost) {
+          void this.fallBackFromLive(request, `Loading ${label} was cancelled.`, { cancelled: true }).then(resolve);
+          return;
+        }
         resolve(outcome);
       });
     });
   }
 
-  /** Show the offline default preset in place of a live area that cannot load right now; offer a retry. */
-  private async fallBackFromLive(request: SceneRequest & { kind: 'live' }, reason: string): Promise<LoadOutcome> {
-    const outcome = await this.loadFallbackScene(null, null);
+  /**
+   * A load was cancelled (actions.cancelLoad). The scene on screen normally stays, but a load cancelled with nothing
+   * on screen (a ?live= link at startup, or a picker load after a failed one) would leave a black "No terrain loaded"
+   * view: show the offline default preset instead, and offer to retry a live area.
+   */
+  onLoadCancelled(cancelled: SceneRequest | null): void {
+    const scenes = this.scenes;
+    if (!scenes || scenes.scene || scenes.loadingRequest || this.gpuLost) return;
+    if (cancelled?.kind === 'live') {
+      void this.fallBackFromLive(cancelled, `Loading ${SceneManager.label(cancelled)} was cancelled.`, { cancelled: true });
+    } else {
+      void this.loadScene({ kind: 'preset', id: APP_CONFIG.defaultPreset });
+    }
+  }
+
+  /**
+   * Show the offline default preset in place of a live area that cannot load right now; offer a retry. After a stall
+   * or with no network the address bar keeps the live link (a reload retries it); after the user cancelled, it points
+   * at the preset shown, so a reload does not start the download they just stopped.
+   */
+  private async fallBackFromLive(
+    request: SceneRequest & { kind: 'live' },
+    reason: string,
+    opts: { cancelled?: boolean } = {},
+  ): Promise<LoadOutcome> {
+    const outcome = opts.cancelled
+      ? await this.loadScene({ kind: 'preset', id: APP_CONFIG.defaultPreset })
+      : await this.loadFallbackScene(null, null);
     const shown = this.scenes?.scene;
     if (shown && shown.request !== request) {
       postNotice(this.store, {
@@ -516,8 +550,9 @@ export class App {
   /**
    * The GPU device is gone (GPU-process crash or reset). Every texture, buffer and pipeline died with it, so the
    * frame loop stops (it would only spin no-op frames, burning battery, behind a frozen or blank canvas that still
-   * looks live) and a full-screen card takes over, reloading the page once. The address bar is pointed at the
-   * scene on screen first, so the reload brings back exactly that (not, say, a live area that needs the network).
+   * looks live) and a full-screen card takes over, reloading the page (see claimAutoReload for the limits). The address
+   * bar is pointed at the scene on screen first, so the reload brings back exactly that (not, say, a live area that
+   * needs the network). A live area or a large grid that keeps losing the GPU restarts as the offline default preset.
    */
   private onDeviceLost(info: GPUDeviceLostInfo): void {
     if (this.gpuLost || this.unloading) return;
@@ -526,10 +561,19 @@ export class App {
     this.runner.cancelAll('the GPU device was lost');
     const details = `GPU device lost (${info.reason ?? 'unknown'}): ${info.message || 'no details'}`;
     this.failReady(new Error(details));
-    const shown = this.scenes?.scene?.request;
-    if (shown) writeSceneToUrl(shown);
+    const scene = this.scenes?.scene ?? null;
+    if (scene) writeSceneToUrl(scene.request);
     console.error(`[deluge] ${details} — frame loop stopped`);
-    showDeviceLost(details);
+    // A live area (it also needs the network after a reload) or a grid larger than the presets can be swapped for the
+    // offline default preset if it keeps losing the GPU. Lost mid-load with nothing on screen: judge the request.
+    const request = scene?.request ?? this.scenes?.loadingRequest ?? null;
+    const isDefault = request?.kind === 'preset' && request.id === APP_CONFIG.defaultPreset;
+    const heavy = !isDefault && (request?.kind === 'live' || (!!scene && scene.terrain.nx * scene.terrain.ny > HEAVY_GRID_CELLS));
+    const fallback: SceneRequest = { kind: 'preset', id: APP_CONFIG.defaultPreset };
+    const lighter: LighterScene | null = heavy
+      ? { label: SceneManager.label(fallback).split(' — ')[0], select: () => writeSceneToUrl(fallback) }
+      : null;
+    showDeviceLost(details, lighter);
   }
 
   private onSceneReady(scene: Scene): void {
@@ -605,6 +649,9 @@ export class App {
     });
   }
 }
+
+/** Grids larger than the baked presets (1024²): a repeated device loss restarts with the default preset instead. */
+const HEAVY_GRID_CELLS = 1024 * 1024;
 
 /** The solver's stage follows the ramp in steps of this many meters (or when the ramp arrives). */
 const STAGE_PUSH_STEP_M = 0.05;

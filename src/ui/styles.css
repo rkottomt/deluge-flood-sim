@@ -939,19 +939,20 @@
   --fill-a: color-mix(in srgb, var(--tool-color) 70%, #1f6fe0);
   --fill-b: var(--tool-color);
 }
+/* Usage hints: one quiet dotted line that wraps between hints (chips took three rows on the wall card). */
 .dl-opt-hints {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--dl-text-2);
 }
 .dl-hint {
-  font-size: 11px;
   font-weight: 550;
-  color: var(--dl-text-2);
-  padding: 2px 7px;
-  border-radius: 6px;
-  background: rgba(255, 255, 255, 0.055);
   white-space: nowrap;
+}
+.dl-hint + .dl-hint::before {
+  content: '·';
+  margin: 0 6px;
+  color: var(--dl-text-3);
 }
 
 /* Navigate: one quiet line of hints (it is on screen by default, over the map). */
@@ -974,18 +975,7 @@
   border-radius: 7px;
 }
 .dl-options.dl-compact .dl-opt-hints {
-  flex-wrap: nowrap;
-  gap: 0;
-}
-.dl-options.dl-compact .dl-hint {
-  padding: 0;
-  background: none;
-  font-size: 11.5px;
-}
-.dl-options.dl-compact .dl-hint + .dl-hint::before {
-  content: '·';
-  margin: 0 6px;
-  color: var(--dl-text-3);
+  white-space: nowrap;
 }
 .dl-btn-xs {
   height: 22px;
@@ -1031,6 +1021,36 @@
 }
 .dl-wall-check[data-state='low'] .dl-wall-check-icon {
   color: #ff7277;
+}
+/* Cursor preview under the verdict on the walls already built: a hypothetical, so quieter than the verdict. */
+.dl-wall-preview {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: start;
+  gap: 7px;
+  margin-top: -4px;
+  padding: 0 8px;
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--dl-text-2);
+}
+.dl-wall-preview-dot {
+  width: 7px;
+  height: 7px;
+  margin: 5px 3px 0 3px;
+  border-radius: 50%;
+  background: var(--dl-text-3);
+}
+.dl-wall-preview[data-state='ok'] .dl-wall-preview-dot {
+  background: var(--dl-ok);
+}
+.dl-wall-preview[data-state='low'] .dl-wall-preview-dot {
+  background: #ff7277;
+}
+.dl-wall-preview-fix {
+  margin-left: 6px;
+  font-size: 11.5px;
+  font-weight: 650;
 }
 .dl-opt-note {
   font-size: 11.5px;
@@ -4270,6 +4290,10 @@
   }
   .dl-hud {
     left: calc(var(--dl-gap) * 2 + var(--dl-tool-w));
+  }
+  /* The HUD moved right of the tool rail: the bottom column (Break-it banner, route chip) starts after it. */
+  .dl-notices-bottom {
+    left: calc(var(--dl-gap) * 3 + var(--dl-tool-w) + 392px);
   }
   .dl-sec-head {
     padding-top: 11px;

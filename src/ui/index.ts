@@ -7,7 +7,7 @@
  * changed, so the ~5 Hz stats stream never rebuilds panels, steals focus or interrupts slider drags.
  */
 import './styles.css';
-import type { AppActions, AppState, Store } from '../contracts';
+import { DEFAULT_SIM_PARAMS, type AppActions, type AppState, type Store } from '../contracts';
 import { Binder, h, type UIContext } from './dom';
 import { installTooltips } from './controls';
 import { createTopBar } from './topbar';
@@ -22,6 +22,7 @@ import { installKeyboard } from './keyboard';
 import { createWelcome } from './welcome';
 import { createRouteChip } from './routeChip';
 import { installBreakDemoRestore } from './stabilityDemo';
+import { selectTool } from './toolDefs';
 
 export { createToolController } from './tools';
 /** Non-error notices (neutral toast) — e.g. for startup URL warnings. Safe to call before mountUI. */
@@ -79,6 +80,7 @@ export function mountUI(root: HTMLElement, store: Store, actions: AppActions): v
   const picker = createLocationPicker(ctx);
 
   installBreakDemoRestore(ctx);
+  installSceneReset(ctx);
 
   const layer = h('div', { class: 'dl-layer' }, topbar.el, toolbar, options, hud, panel.el, notices.top, notices.bottom, probe.el);
   root.append(layer, loading, help.el, how.el, picker.el);
@@ -109,6 +111,29 @@ export function mountUI(root: HTMLElement, store: Store, actions: AppActions): v
 
   // Automation / dev hook (not part of the contract).
   (root as HTMLElement & { __delugeUI?: unknown }).__delugeUI = { picker, help, how, panel };
+}
+
+/**
+ * A newly loaded scene starts like a fresh page: the Navigate tool (a first click on an unfamiliar map should orbit,
+ * not set an evacuation start) and the default speed (the Try-it strip starts over too, and "Play the flood" should
+ * not look done because 300× carried over). The first scene of the session keeps whatever the app set up.
+ */
+function installSceneReset(ctx: UIContext): void {
+  const { store, bind } = ctx;
+  let previous = store.get().terrainName;
+  bind(
+    (s) => s.terrainName,
+    (name) => {
+      const had = previous;
+      previous = name;
+      if (!had || !name || had === name) return;
+      selectTool(store, 'orbit');
+      const sim = store.get().sim;
+      if (sim.timeScale !== DEFAULT_SIM_PARAMS.timeScale && sim.stabilityMode === 'robust') {
+        store.set({ sim: { ...sim, timeScale: DEFAULT_SIM_PARAMS.timeScale } });
+      }
+    },
+  );
 }
 
 /** Frame-rate thresholds for the low-effects glass (see styles.css `.dl-lowfx`). */

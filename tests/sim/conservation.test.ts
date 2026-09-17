@@ -129,3 +129,44 @@ test('SimStats.massError is normalized by the most water held, not by the ever-g
   assert.deepEqual(gpuErrors(), []);
   solver.destroy();
 });
+
+test('rain on a deep river fed by a stage source: massError stays < 1e-4 over 3 sim-hours (rounding is booked)', async () => {
+  // Pittsburgh with the river raised to the 1936 crest and hurricane rain drifted linearly (≈2.8e-4 per sim-hour): on a
+  // 20 m deep cell one Float32 ULP is 1.9e-6 m while a substep's rain or flux divergence is ~1e-8 m, so the update of h
+  // rounds with the same sign substep after substep. Shader compilers reassociate float math ((h + d) − h → d), so the
+  // booking must use increments snapped to the ULP grid of h (continuity.ts snapInc), not a measured difference.
+  const nx = 64;
+  const ny = 48;
+  const dx = 20;
+  const elevation = new Float32Array(nx * ny);
+  const depth = new Float32Array(nx * ny);
+  for (let j = 0; j < ny; j++) {
+    for (let i = 0; i < nx; i++) {
+      const c = j * nx + i;
+      const bed = 100 - 2e-4 * i * dx;
+      const inChannel = j >= 8 && j < 40;
+      // A 20 m deep channel between rain-fed floodplains that drain into it.
+      elevation[c] = inChannel ? bed - 20 : bed + 1 + 0.02 * Math.min(j - 8, 39 - j) * -dx;
+      if (inChannel) depth[c] = 20;
+    }
+  }
+  const solver = await makeSolver({ nx, ny, cellSize: dx, elevation, depth, params: { boundary: 'open', rainRate: 100, manningN: 0.03 } });
+  solver.setSources([{ id: 'crest', type: 'stage', gx: 0, gy: ny / 2, radius: 14, level: 100 + 2 }]);
+  let snap = await solver.readbackNow();
+  let worst = 0;
+  const hours: string[] = [];
+  while (snap.simTime < 3 * 3600) {
+    snap = await stepAndSnapshot(solver, 2000, { chunk: 200 });
+    worst = Math.max(worst, snap.stats.massError);
+    hours.push(`${(snap.simTime / 3600).toFixed(2)} h ${snap.stats.massError.toExponential(1)}`);
+  }
+  const s = snap.stats;
+  console.log(
+    `  deep river + rain: t=${(s.simTime / 3600).toFixed(2)} h  V=${s.volume.toExponential(4)}  in=${s.volumeIn.toExponential(3)}  ` +
+      `out=${s.volumeOut.toExponential(3)}  worst massError=${worst.toExponential(2)}\n    ${hours.join(' | ')}`,
+  );
+  assert.ok(s.volumeIn > s.volume && s.volumeOut > 0, 'the river should carry water through the domain');
+  assert.ok(worst < 1e-4, `massError ${worst}`);
+  assert.deepEqual(gpuErrors(), []);
+  solver.destroy();
+});
