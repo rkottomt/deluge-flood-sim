@@ -89,6 +89,22 @@ export class SubstepGovernor {
     this.throttledInWindow = false;
   }
 
+  /**
+   * The frames are about to get heavier all at once (rain starting draws thousands of streaks and ripples the water;
+   * a water reset or a solver switch re-uploads and re-derives everything): take `factor` off the cap now, rather than
+   * letting a queue already running near its latency target back up into 35–45 ms frames before the next window can
+   * react. The cap then grows back as usual, not past its old value before the backoff.
+   */
+  brace(now: number, factor: number): void {
+    const c = this.config;
+    if (this.cap <= c.minCap) return;
+    this.ceiling = Math.min(this.ceiling, this.cap);
+    this.cap = Math.max(c.minCap, stepFloor(this.cap * factor));
+    this.holdUntil = Math.max(this.holdUntil, now + MIN_BACKOFF_MS);
+    this.settleUntil = now + 2 * c.windowMs;
+    this.latencyHistory = [];
+  }
+
   /** A GPU latency sample (ms from a frame's submit until the queue finished it). */
   noteLatency(ms: number): void {
     if (ms >= 0 && ms < 2000 && this.frames > this.config.warmupFrames) this.latencies.push(ms);
@@ -162,6 +178,9 @@ export class SubstepGovernor {
     return this.cap !== before;
   }
 }
+
+/** Share of the substep cap kept when bracing for heavier frames. */
+export const BRACE_FACTOR = 0.6;
 
 /** Evaluation windows whose latency samples are pooled (3 × 300 ms). */
 const LATENCY_WINDOWS = 3;
@@ -249,6 +268,13 @@ export class WorkBudget {
 
   restart(): void {
     for (const g of Object.values(this.governors)) g.restart();
+  }
+
+  /** Every mode's governor braces for heavier frames (see SubstepGovernor.brace); returns true if the cap changed. */
+  brace(now: number, factor = BRACE_FACTOR): boolean {
+    const before = this.cap;
+    for (const g of Object.values(this.governors)) g.brace(now, factor);
+    return this.cap !== before;
   }
 
   /** Apply a learned external frame-rate ceiling (ms per frame, 0 = none) to every mode. */

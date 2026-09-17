@@ -149,6 +149,7 @@ export class App {
       getStageOffset: () => this.stageRamp.applied,
       onWaterReset: () => {
         this.driver.onSolverReset();
+        this.braceBudget();
         this.requestRender();
       },
     });
@@ -249,6 +250,10 @@ export class App {
     this.installActivityTracking();
     this.store.subscribe((s, prev) => {
       if (s.sim.stabilityMode !== prev.sim.stabilityMode) this.stabilityDemo = s.sim.stabilityMode === 'naive';
+      // Heavier frames ahead (rain starting: streaks, ripples, a wet map; a solver switch resets the water): make room
+      // on the GPU before the queue backs up.
+      const rainStarts = (s.sim.rainRate > 0.2 && !(prev.sim.rainRate > 0.2)) || s.storms.length > prev.storms.length;
+      if (rainStarts || s.sim.stabilityMode !== prev.sim.stabilityMode) this.braceBudget();
     });
     this.loop.start();
   }
@@ -556,6 +561,12 @@ export class App {
     const limited = this.throttleEma > 0.5;
     const starved = limited && mode === 'watching' && this.budget.cap <= APP_CONFIG.starvedSubsteps;
     this.setSimPressure(starved ? 2 : limited ? 1 : 0);
+  }
+
+  /** Cut the substep cap ahead of a known jump in GPU work (see SubstepGovernor.brace). */
+  braceBudget(): void {
+    if (!this.adaptiveBudgetOn) return;
+    if (this.budget.brace(performance.now())) this.sim.setOverride('governor', { maxSubstepsPerFrame: this.budget.cap });
   }
 
   /**

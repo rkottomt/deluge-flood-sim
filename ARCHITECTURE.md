@@ -277,7 +277,9 @@ Monongahela and Ohio cross the domain edge.
   has a 90 s overall deadline (the error then says the service can't be reached). Dead venue wifi often leaves requests
   hanging instead of failing: while no elevation has arrived, the loader checks every 9 s that the data hosts answer at
   all (a 3 s no-cors probe; a slow export still answers it) and gives up with the offline message when they do not
-  (~12–15 s instead of 90 s). Imagery, roads and the reverse-geocoded place name get 25 s once the elevation is ready
+  (~12–15 s instead of 90 s). When the browser reports no network the load fails at once, and when the page's own probe
+  just found the hosts unreachable (the picker's "You're offline" → *Offline — try anyway*) the first check runs right
+  away; such failures are logged as warnings, not errors. Imagery, roads and the reverse-geocoded place name get 25 s once the elevation is ready
   (Esri renders a 2048² export for 5–12 s before sending a byte); after that the area loads without them. Cancelling a
   load with nothing on screen (a `?live=` link at startup) shows the offline default preset, points the address bar at
   it, and offers a retry. A live area with no river crossing its edge has no stage control; there *Play the flood*
@@ -311,7 +313,9 @@ is blocked.
 The store is the single source of truth; `SimSync` pushes parameter changes into the solver. A work budget
 (`governor.ts`) caps substeps per frame (in half-substep steps) from measured frame time and GPU queue latency (median
 over ~1 s), with different targets while the user interacts (28 ms), watches (34 ms: about two frames of queue, the
-most that stays free of dropped frames) or automation runs; a render pacer drops to a heartbeat when nothing changes;
+most that stays free of dropped frames) or automation runs, and cuts the cap by 40 % ahead of known jumps in GPU work
+(rain starting, a water reset, a solver switch) instead of waiting for the queue to back up; a render pacer drops to a
+heartbeat when nothing changes;
 and a frame ceiling detector notices browser 30 fps caps (Chrome Energy Saver, macOS Low Power Mode) so neither budget
 starves. The renderer's adaptive quality gets a *sim pressure* hint: while the solver is GPU-limited it holds the
 default level (it neither climbs above it nor keeps a better level claimed while the sim kept up), and while hands-off
