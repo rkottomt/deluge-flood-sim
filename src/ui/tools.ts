@@ -21,12 +21,24 @@ import type {
   ToolId,
   WaterSource,
 } from '../contracts';
-import { gridToGeoLocal } from './geo';
+import { gridToGeo } from '../data/geo';
 import { TOOL_BY_ID } from './toolDefs';
+import { bridgeFor, type HoverInfo } from './bridge';
+import { checkWall, scanWalls, stageSurface, WALL_MAX } from './wallCheck';
+import { formatStageFt } from './format';
+import { stageFt } from './scales';
 
 /** Max inflow + stage sources and storm cells the solver supports (DESIGN §3.2). */
 export const MAX_SOURCES = 16;
 export const MAX_STORMS = 8;
+/** How often walls are checked against the water (overtopping notices), ms. */
+const WALL_SCAN_MS = 1500;
+/** A stage change is judged against existing walls once the slider has been still this long, ms. */
+const STAGE_SETTLE_MS = 700;
+/** Cursor ring colours. */
+const RING_REMOVE: [number, number, number] = [1.0, 0.36, 0.38];
+const RING_LIMIT: [number, number, number] = [0.58, 0.62, 0.7];
+const RING_WALL_LOW: [number, number, number] = [1.0, 0.3, 0.32];
 /** Click-to-remove distance as a fraction of the domain's larger side. */
 export const REMOVE_FRACTION = 0.03;
 /** Pour / pump rate at the brush center, meters of depth per real second. */
@@ -140,6 +152,11 @@ export function createToolController(canvas: HTMLCanvasElement, deps: ToolContro
   let transient: Transient = { wallPreview: null, cursor: null };
   let transientDirty = true;
   const activePointers = new Set<number>();
+  const bridge = bridgeFor(store);
+  const scene = { getTerrain: () => deps.getTerrain(), getSolver: () => deps.getSolver() };
+  bridge.scene = scene;
+  /** Latest wall check at the cursor (drives the ring colour); null when not applicable. */
+  let wallLow = false;
 
   // ─── helpers ──────────────────────────────────────────────────────────────────────────────────
   const state = (): AppState => store.get();
@@ -260,6 +277,9 @@ export function createToolController(canvas: HTMLCanvasElement, deps: ToolContro
       }
     }
     lastWallEnd = { gx: simple[simple.length - 2], gy: simple[simple.length - 1] };
+    wallScan.armed = true;
+    wallScan.nextAt = 0;
+    bridge.wallDrawn.emit();
   }
 
   function extendWall(pts: number[], hit: PickResult, cellSize: number) {
@@ -283,7 +303,12 @@ export function createToolController(canvas: HTMLCanvasElement, deps: ToolContro
         if (i >= 0) {
           store.set({ sources: s.sources.filter((_, k) => k !== i) });
         } else if (s.sources.length >= MAX_SOURCES) {
-          store.set({ error: `The solver supports up to ${MAX_SOURCES} water sources. Remove one first.` });
+          bridge.notify({
+            kind: 'info',
+            key: 'limit-sources',
+            title: `Source limit reached (${MAX_SOURCES}/${MAX_SOURCES})`,
+            message: 'The GPU solver takes up to 16 water sources, river boundaries included. Click an existing inflow to remove it, then place a new one.',
+          });
         } else {
           const src: WaterSource = {
             id: newId('inflow'),
@@ -303,7 +328,12 @@ export function createToolController(canvas: HTMLCanvasElement, deps: ToolContro
         if (i >= 0) {
           store.set({ storms: s.storms.filter((_, k) => k !== i) });
         } else if (s.storms.length >= MAX_STORMS) {
-          store.set({ error: `The solver supports up to ${MAX_STORMS} storm cells. Remove one first.` });
+          bridge.notify({
+            kind: 'info',
+            key: 'limit-storms',
+            title: `Storm limit reached (${MAX_STORMS}/${MAX_STORMS})`,
+            message: 'The GPU solver takes up to 8 storm cells. Click an existing storm to remove it, or raise the global rainfall in Weather & rivers.',
+          });
         } else {
           const storm: StormCell = {
             id: newId('storm'),
@@ -329,6 +359,125 @@ export function createToolController(canvas: HTMLCanvasElement, deps: ToolContro
       case 'evac':
         store.set({ evacStart: { gx: hit.gx, gy: hit.gy } });
         break;
+    }
+  }
+
+  /** True when the active click tool can't place anything more (a click would only show the limit notice). */
+  function atLimit(tool: ToolId): boolean {
+    const s = state();
+    if (tool === 'inflow') return s.sources.length >= MAX_SOURCES;
+    if (tool === 'storm') return s.storms.length >= MAX_STORMS;
+    return false;
+  }
+
+  // ─── ground under the cursor & wall checks ────────────────────────────────────────────────────
+  function hoverInfo(hit: PickResult | null): HoverInfo | null {
+    const solver = deps.getSolver();
+    const g = gridInfo();
+    if (!hit || !g) return null;
+    const i = Math.min(g.nx - 1, Math.max(0, Math.floor(hit.gx)));
+    const j = Math.min(g.ny - 1, Math.max(0, Math.floor(hit.gy)));
+    let ground = hit.elevation;
+    let barrier = 0;
+    try {
+      const k = j * g.nx + i;
+      const gr = solver?.getGroundCPU();
+      const ba = solver?.getBarrierCPU();
+      if (gr && k < gr.length) ground = gr[k];
+      if (ba && k < ba.length) barrier = ba[k];
+    } catch {
+      /* mirrors unavailable: fall back to the picked surface */
+    }
+    return { gx: hit.gx, gy: hit.gy, ground, barrier, depth: Number.isFinite(hit.depth) ? hit.depth : 0 };
+  }
+
+  function publishHover() {
+    const tool = state().tool;
+    const info = tool === 'wall' && pointer.inside ? hoverInfo(hover) : null;
+    bridge.setHover(info);
+    const s = state();
+    const check = info
+      ? checkWall({
+          ground: info.ground,
+          barrier: info.barrier,
+          depth: info.depth,
+          wallHeight: s.wallHeight,
+          stageLevel: stageSurface(s.scenario?.stage, s.stageOffset),
+        })
+      : null;
+    const low = !!check && !check.ok;
+    if (low !== wallLow) {
+      wallLow = low;
+      transientDirty = true;
+    }
+  }
+
+  /**
+   * Walls vs water, every WALL_SCAN_MS: tell the user when water pours over a wall they built, and — right after
+   * they raise the river — when the new level is higher than their walls. Each message fires once per wall layout.
+   */
+  const wallScan = { nextAt: 0, armed: false, overtopSig: NaN, stageSig: NaN, lastSim: 0, stageChangedAt: 0, stageDirty: false };
+  function checkWalls(t: number) {
+    if (!wallScan.armed || t < wallScan.nextAt) return;
+    wallScan.nextAt = t + WALL_SCAN_MS;
+    const solver = deps.getSolver();
+    if (!solver) return;
+    let ground: Float32Array, barrier: Float32Array;
+    try {
+      ground = solver.getGroundCPU();
+      barrier = solver.getBarrierCPU();
+    } catch {
+      return;
+    }
+    const s = state();
+    const snap = solver.getSnapshot?.() ?? null;
+    const ctrl = s.scenario?.stage ?? null;
+    const level = stageSurface(ctrl, s.stageOffset);
+    const depth = snap && snap.nx === solver.nx && snap.ny === solver.ny ? snap.depth : null;
+    const scan = scanWalls(ground, barrier, depth, level);
+    if (scan.cells === 0) {
+      wallScan.armed = false;
+      return;
+    }
+    // Water reset → the same walls may be overtopped again later.
+    if (snap && snap.simTime < wallScan.lastSim - 1) wallScan.overtopSig = NaN;
+    if (snap) wallScan.lastSim = snap.simTime;
+
+    if (scan.overtopped >= 3 && scan.signature !== wallScan.overtopSig && s.sim.stabilityMode === 'robust') {
+      wallScan.overtopSig = scan.signature;
+      const need = Math.min(WALL_MAX, Math.ceil(scan.neededHeight * 2) / 2);
+      const share = Math.max(1, Math.round((scan.overtopped / scan.cells) * 100));
+      bridge.notify({
+        kind: 'warn',
+        key: 'wall-overtopped',
+        title: 'Water is pouring over your wall',
+        message:
+          `About ${share}% of the wall is under water. A wall only holds while its top stays above the flood — ` +
+          `and water also runs around open ends, so tie both ends into high ground.`,
+        action:
+          level !== null && scan.belowLevel > 0 && need > s.wallHeight
+            ? { label: `Use ${need.toFixed(1)} m walls`, run: () => store.set({ wallHeight: need }) }
+            : undefined,
+        durationMs: 10000,
+      });
+    }
+
+    if (wallScan.stageDirty && t - wallScan.stageChangedAt >= STAGE_SETTLE_MS && ctrl && level !== null) {
+      wallScan.stageDirty = false;
+      const sig = scan.signature * 31 + Math.round(level * 10);
+      if (scan.belowLevel >= 3 && sig !== wallScan.stageSig) {
+        wallScan.stageSig = sig;
+        const need = Math.min(WALL_MAX, Math.ceil(scan.neededHeight * 2) / 2);
+        const share = Math.max(1, Math.round((scan.belowLevel / scan.cells) * 100));
+        bridge.notify({
+          kind: 'warn',
+          key: 'wall-below-stage',
+          title: `Your wall is lower than the river at ${formatStageFt(stageFt(ctrl, s.stageOffset))}`,
+          message: `The river will stand at ${level.toFixed(1)} m; the top of ${share}% of your wall is lower, so expect it to be overtopped.`,
+          action: need > s.wallHeight ? { label: `Use ${need.toFixed(1)} m walls`, run: () => store.set({ wallHeight: need }) } : undefined,
+          durationMs: 9000,
+        });
+      }
     }
   }
 
@@ -515,8 +664,15 @@ export function createToolController(canvas: HTMLCanvasElement, deps: ToolContro
       if (prev.tool === 'probe' && s.probe) store.set({ probe: null });
       probeShown = false;
       pointer.moved = true;
+      publishHover();
     }
     if (s.brushRadius !== prev.brushRadius || s.wallHeight !== prev.wallHeight) transientDirty = true;
+    if (s.wallHeight !== prev.wallHeight || s.stageOffset !== prev.stageOffset || s.scenario !== prev.scenario) publishHover();
+    if (s.stageOffset > prev.stageOffset) {
+      wallScan.stageDirty = true;
+      wallScan.stageChangedAt = now();
+      wallScan.armed = true;
+    }
   });
 
   // ─── per frame ────────────────────────────────────────────────────────────────────────────────
@@ -531,6 +687,10 @@ export function createToolController(canvas: HTMLCanvasElement, deps: ToolContro
       lastTerrain = terrain;
       lastWallEnd = null;
       cancelGesture();
+      wallScan.armed = false;
+      wallScan.overtopSig = NaN;
+      wallScan.stageSig = NaN;
+      wallScan.lastSim = 0;
     }
 
     // Hover pick for the cursor ring / probe / held brushes: at most once per frame, and only when something
@@ -557,6 +717,8 @@ export function createToolController(canvas: HTMLCanvasElement, deps: ToolContro
       hover = null;
       transientDirty = true;
     }
+    if (tool === 'wall' || bridge.hover) publishHover();
+    checkWalls(t);
 
     // Held brushes.
     if (gesture.kind === 'hold' && hover && dt > 0) {
@@ -576,7 +738,7 @@ export function createToolController(canvas: HTMLCanvasElement, deps: ToolContro
     if (tool === 'probe') {
       if (hover && t - lastProbeAt >= 1000 / PROBE_HZ) {
         lastProbeAt = t;
-        const geo = terrain ? gridToGeoLocal(terrain, hover.gx, hover.gy) : { lat: NaN, lon: NaN };
+        const geo = terrain ? gridToGeo(terrain, hover.gx, hover.gy) : { lat: NaN, lon: NaN };
         store.set({
           probe: {
             gx: hover.gx,
@@ -617,6 +779,8 @@ export function createToolController(canvas: HTMLCanvasElement, deps: ToolContro
       switch (s.tool) {
         case 'wall':
           radius = wallRadiusCells(s, g.cellSize);
+          // Red while a wall drawn here would be lower than the water it has to hold back.
+          if (wallLow) color = RING_WALL_LOW;
           break;
         case 'inflow':
           radius = brushCells(s, g.cellSize, 1.5);
@@ -637,8 +801,11 @@ export function createToolController(canvas: HTMLCanvasElement, deps: ToolContro
           radius = Math.max(2, 0.01 * Math.max(g.nx, g.ny));
       }
       if (wouldRemove(s.tool, hover)) {
-        color = [1.0, 0.36, 0.38];
+        color = RING_REMOVE;
         radius = Math.max(radius, removeDistance(g) * 0.5);
+      } else if (atLimit(s.tool)) {
+        // Nothing more can be placed: a muted ring says a click here won't add anything.
+        color = RING_LIMIT;
       }
       cursor = { gx: hover.gx, gy: hover.gy, radius, color };
     }
@@ -666,6 +833,8 @@ export function createToolController(canvas: HTMLCanvasElement, deps: ToolContro
 
   function destroy() {
     cancelGesture();
+    if (bridge.scene === scene) bridge.scene = null;
+    bridge.setHover(null);
     canvas.removeEventListener('pointerdown', onPointerDown);
     canvas.removeEventListener('pointermove', onPointerMove);
     canvas.removeEventListener('pointerup', onPointerUp);

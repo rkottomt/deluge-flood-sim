@@ -2,6 +2,10 @@
  * Location picker: Leaflet map (Esri World Imagery + reference labels), Nominatim search, quick picks,
  * a ground-true square footprint preview, size & resolution selectors, and Load → actions.loadLiveArea.
  * Leaflet is only initialised the first time the dialog opens.
+ *
+ * Live areas need the network (USGS 3DEP, Esri, Census TIGER). The picker checks connectivity when it opens and
+ * after a failed load, says so plainly when offline and offers the built-in (offline) scenarios instead. A failed
+ * load keeps the dialog open with the selection, the reason and a Retry button.
  */
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
@@ -10,13 +14,13 @@ import { h, setText, toggleClass, type UIContext } from './dom';
 import { icon } from './icons';
 import { segmented } from './controls';
 import { createModal, type Modal } from './modal';
-import { squareFootprint, isLikelyUSCoverage } from './geo';
+import { squareDomain, isLikelyUS } from '../data/geo';
 import { formatLatLon, fmtNum } from './format';
+import { looksLikeNetworkError, probeConnectivity } from './connectivity';
 
 const IMAGERY_URL = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
 const LABELS_URL = 'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}';
 const NOMINATIM = 'https://nominatim.openstreetmap.org';
-
 export const QUICK_PICKS: Array<{ name: string; lat: number; lon: number; note: string; tip: string }> = [
   { name: 'New Orleans', lat: 29.9511, lon: -90.0715, note: 'Below sea level', tip: 'Much of the city sits below sea level between the Mississippi and Lake Pontchartrain' },
   { name: 'Houston', lat: 29.7604, lon: -95.3698, note: 'Harvey, 2017', tip: 'Flat bayou city — Hurricane Harvey dropped over 40 inches of rain in 2017' },
@@ -53,7 +57,14 @@ export function createLocationPicker(ctx: UIContext): Modal {
   // ── Map ──
   const mapEl = h('div', { class: 'dl-picker-map' });
   const mapHint = h('div', { class: 'dl-picker-hint' }, icon('location', 16), h('span', null, 'Click anywhere in the US to center your area'));
-  const mapWrap = h('div', { class: 'dl-picker-map-wrap' }, mapEl, mapHint);
+  const mapOffline = h(
+    'div',
+    { class: 'dl-picker-map-offline', hidden: true },
+    icon('globe', 28),
+    h('b', null, 'Map tiles can’t load'),
+    h('span', null, 'No connection to the imagery server. You can still pick a quick-pick city — but loading a live area needs internet.'),
+  );
+  const mapWrap = h('div', { class: 'dl-picker-map-wrap' }, mapEl, mapHint, mapOffline);
 
   // ── Search ──
   const searchInput = h('input', {
@@ -198,8 +209,59 @@ export function createLocationPicker(ctx: UIContext): Modal {
 
   const loadFill = h('span', { class: 'dl-load-fill' });
   const loadText = h('span', { class: 'dl-load-text' }, 'Load this area');
-  const loadBtn = h('button', { type: 'button', class: 'dl-btn dl-btn-primary dl-load-btn' }, loadFill, icon('arrowRight', 16), loadText);
-  const loadError = h('div', { class: 'dl-load-error', hidden: true });
+  const loadPct = h('span', { class: 'dl-load-pct' });
+  const loadBtn = h('button', { type: 'button', class: 'dl-btn dl-btn-primary dl-load-btn' }, loadFill, icon('arrowRight', 16), loadText, loadPct);
+  const loadStatus = h('div', { class: 'dl-load-status', hidden: true });
+  const loadErrorText = h('span', { class: 'dl-load-error-text' });
+  const retryBtn = h('button', { type: 'button', class: 'dl-btn dl-btn-subtle dl-btn-sm dl-load-retry', onclick: () => loadBtn.click() }, icon('reset', 14), h('span', null, 'Retry'));
+  const loadError = h('div', { class: 'dl-load-error', role: 'alert', hidden: true }, icon('warning', 15), h('div', { class: 'dl-load-error-body' }, loadErrorText, retryBtn));
+
+  // Offline: say so up front and offer the built-in scenarios, which need no network.
+  let online: boolean | null = null;
+  let probing: Promise<boolean> | null = null;
+  const offlinePresets = h('div', { class: 'dl-offline-presets' });
+  const offlineBanner = h(
+    'div',
+    { class: 'dl-offline', role: 'status', hidden: true },
+    h('div', { class: 'dl-offline-head' }, icon('warning', 15), h('b', null, 'You’re offline')),
+    h('p', null, 'Live areas download elevation, imagery and roads, so they need internet. The built-in scenarios work offline:'),
+    offlinePresets,
+  );
+  const renderOfflinePresets = () => {
+    offlinePresets.replaceChildren(
+      ...actions.listPresets().map((p) =>
+        h(
+          'button',
+          {
+            type: 'button',
+            class: 'dl-offline-preset',
+            'data-tip': p.subtitle,
+            'data-tip-side': 'top',
+            onclick: () => {
+              if (store.get().loading) return;
+              ctx.setPanel('locationPicker', false);
+              actions.loadPreset(p.id).catch(() => {
+                /* loadScene reports failures itself */
+              });
+            },
+          },
+          h('span', null, p.name),
+          icon('chevronRight', 14),
+        ),
+      ),
+    );
+  };
+  function checkConnectivity(): Promise<boolean> {
+    probing ??= probeConnectivity().then((ok) => {
+      online = ok;
+      probing = null;
+      if (!ok && !offlinePresets.childElementCount) renderOfflinePresets();
+      offlineBanner.hidden = ok;
+      syncLoad();
+      return ok;
+    });
+    return probing;
+  }
 
   loadBtn.addEventListener('click', async () => {
     if (!center || loadingHere || store.get().loading) return;
@@ -212,17 +274,42 @@ export function createLocationPicker(ctx: UIContext): Modal {
       resolution,
       name: placeName || `${center.lat.toFixed(3)}, ${center.lon.toFixed(3)}`,
     };
+    // The app reports a failed load as an error toast and (today) resolves anyway; watch for that report so the
+    // failure is handled here, in context, instead of closing the dialog as if it had worked.
+    let reported: string | null = null;
+    const off = store.subscribe((st, prev) => {
+      if (st.error && st.error !== prev.error && /^Could not load\b/.test(st.error)) reported = st.error;
+    });
+    let outcome: unknown;
+    let thrown: unknown = null;
     try {
-      await actions.loadLiveArea(req);
-      loadingHere = false;
-      syncLoad();
-      ctx.setPanel('locationPicker', false);
+      outcome = await actions.loadLiveArea(req);
     } catch (err) {
-      loadingHere = false;
-      syncLoad();
-      loadError.hidden = false;
-      setText(loadError, `Couldn’t load this area: ${err instanceof Error ? err.message : String(err)}`);
+      thrown = err ?? new Error('Unknown error');
+    } finally {
+      off();
     }
+    loadingHere = false;
+    const failed = thrown !== null || outcome === 'failed' || reported !== null;
+    if (!failed) {
+      syncLoad();
+      if (outcome === undefined || outcome === 'ok') ctx.setPanel('locationPicker', false);
+      return;
+    }
+    // Keep the dialog (and the selection) and explain; the inline message replaces the generic toast.
+    if (reported !== null && store.get().error === reported) store.set({ error: null });
+    const raw = thrown instanceof Error ? thrown.message : thrown !== null ? String(thrown) : (reported ?? 'The area could not be loaded.');
+    const reason = String(raw).replace(/^Could not load .*?:\s*/, '');
+    const isOnline = await checkConnectivity();
+    if (!isOnline) {
+      setText(loadErrorText, 'Couldn’t reach the elevation, imagery and road services — this computer appears to be offline. Pick a built-in scenario above, or retry once you’re connected.');
+    } else if (looksLikeNetworkError(reason)) {
+      setText(loadErrorText, `A data service didn’t respond (${reason}). It may be busy — try again, or pick a smaller area.`);
+    } else {
+      setText(loadErrorText, `Couldn’t load this area: ${reason}`);
+    }
+    loadError.hidden = false;
+    syncLoad();
   });
 
   function syncLoad() {
@@ -232,7 +319,15 @@ export function createLocationPicker(ctx: UIContext): Modal {
     loadBtn.disabled = !center || (!!s.loading && !loadingHere);
     const p = s.loading ? Math.max(0, Math.min(1, s.loading.progress)) : 0;
     loadFill.style.setProperty('--p', String(busy ? p : 0));
-    setText(loadText, loadingHere ? (s.loading ? `${s.loading.message || 'Loading'} · ${Math.round(p * 100)}%` : 'Starting…') : center ? 'Load this area' : 'Pick a location first');
+    setText(
+      loadText,
+      loadingHere ? (s.loading ? 'Loading this area…' : 'Starting…') : !center ? 'Pick a location first' : online === false ? 'Offline — try anyway' : 'Load this area',
+    );
+    setText(loadPct, busy ? `${Math.round(p * 100)}%` : '');
+    // The step being fetched goes on its own line so the percentage is never cut off.
+    loadStatus.hidden = !busy;
+    setText(loadStatus, busy ? s.loading?.message || 'Loading…' : '');
+    loadStatus.title = loadStatus.textContent ?? '';
     for (const el of [searchInput, searchBtn] as Array<HTMLInputElement | HTMLButtonElement>) el.disabled = loadingHere;
   }
   bind((s) => (s.loading ? `${s.loading.message}|${s.loading.progress.toFixed(3)}` : ''), () => syncLoad());
@@ -259,8 +354,10 @@ export function createLocationPicker(ctx: UIContext): Modal {
     summary,
     coverageWarn,
     usNote,
+    offlineBanner,
     loadError,
     loadBtn,
+    loadStatus,
   );
 
   // ── Behaviour ──
@@ -286,7 +383,7 @@ export function createLocationPicker(ctx: UIContext): Modal {
       setText(sumCoords, formatLatLon(center.lat, center.lon, 4));
       setText(sumGrid, `${km} × ${km} km · ${resolution} × ${resolution} cells · ${fmtNum(cell, cell < 10 ? 1 : 0)} m`);
     }
-    coverageWarn.hidden = !center || isLikelyUSCoverage(center.lat, center.lon);
+    coverageWarn.hidden = !center || isLikelyUS(center.lat, center.lon);
     for (const b of quick.querySelectorAll<HTMLButtonElement>('.dl-quick-btn')) {
       const p = QUICK_PICKS.find((q) => q.name === b.dataset.pick);
       toggleClass(b, 'dl-on', !!p && !!center && p.lat === center.lat && p.lon === center.lon);
@@ -331,7 +428,7 @@ export function createLocationPicker(ctx: UIContext): Modal {
 
   function updateFootprint(fly: boolean) {
     if (!map || !center) return;
-    const b = squareFootprint(center.lat, center.lon, size);
+    const b = squareDomain({ lat: center.lat, lon: center.lon }, size).bounds;
     const bounds = L.latLngBounds([b.south, b.west], [b.north, b.east]);
     if (!rect) {
       rect = L.rectangle(bounds, { color: '#4fb4ff', weight: 2, opacity: 1, fillColor: '#4fb4ff', fillOpacity: 0.14, interactive: false, className: 'dl-picker-rect' }).addTo(map);
@@ -354,7 +451,16 @@ export function createLocationPicker(ctx: UIContext): Modal {
   function initMap() {
     if (map) return;
     map = L.map(mapEl, { center: [39.5, -97.5], zoom: 4, minZoom: 3, maxZoom: 18, worldCopyJump: true, zoomControl: true, attributionControl: true });
-    L.tileLayer(IMAGERY_URL, { maxZoom: 18, maxNativeZoom: 19, attribution: 'Imagery © Esri, Maxar, Earthstar Geographics' }).addTo(map);
+    const imagery = L.tileLayer(IMAGERY_URL, { maxZoom: 18, maxNativeZoom: 19, attribution: 'Imagery © Esri, Maxar, Earthstar Geographics' }).addTo(map);
+    // A black map with no explanation reads as a bug: after a few failed tiles and none loaded, say why.
+    let tileErrors = 0;
+    imagery.on('tileerror', () => {
+      if (++tileErrors >= 4) mapOffline.hidden = false;
+    });
+    imagery.on('tileload', () => {
+      tileErrors = 0;
+      mapOffline.hidden = true;
+    });
     L.tileLayer(LABELS_URL, { maxZoom: 18, maxNativeZoom: 19, opacity: 0.9, pane: 'overlayPane' }).addTo(map);
     map.attributionControl.setPrefix('');
     map.on('click', (e: L.LeafletMouseEvent) => {
@@ -375,6 +481,7 @@ export function createLocationPicker(ctx: UIContext): Modal {
   });
 
   modal.onOpen(() => {
+    void checkConnectivity();
     initMap();
     // The dialog animates in with a transform; re-measure once it settles.
     requestAnimationFrame(() => map?.invalidateSize());

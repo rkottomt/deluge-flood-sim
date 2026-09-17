@@ -7,7 +7,6 @@ import { icon, type IconName } from './icons';
 import { slider, segmented, toggleSwitch, button, confirmButton, kbd, type SliderMark } from './controls';
 import {
   formatRain,
-  formatInchesPerHour,
   formatStageFt,
   formatDischarge,
   formatDistance,
@@ -20,6 +19,7 @@ import {
   tToRain,
   RAIN_TICKS,
   rainCategory,
+  rainSubLabel,
   stageFt,
   offsetForFt,
   stageRangeFt,
@@ -34,6 +34,8 @@ import {
 import { legendBands, legendTitle } from './legend';
 import { selectTool } from './toolDefs';
 import { blockedAdvice, routeDetail } from './routeText';
+import { MAX_SOURCES, MAX_STORMS } from './tools';
+import { startBreakDemo, stopBreakDemo } from './stabilityDemo';
 
 export interface Panel {
   el: HTMLElement;
@@ -41,6 +43,8 @@ export interface Panel {
   setOpen(open: boolean): void;
   toggle(): void;
   onChange(fn: () => void): void;
+  /** Open the panel, expand a section and scroll it into view. */
+  reveal(sectionId: string): void;
 }
 
 function section(
@@ -223,7 +227,7 @@ export function createPanel(ctx: UIContext): Panel {
     toPos: rainToT,
     fromPos: tToRain,
     format: formatRain,
-    sub: (v) => rainCategory(v).label + (v > 0 ? ` · ${formatInchesPerHour(v)}` : ''),
+    sub: rainSubLabel,
     ticks: RAIN_TICKS,
     onInput: (v) => ctx.setSim({ rainRate: v }),
     tip: 'Uniform rain over the whole map (log scale)',
@@ -383,7 +387,10 @@ export function createPanel(ctx: UIContext): Panel {
         );
       });
       const n = sources.length + storms.length;
-      setText(sourcesCount, String(n));
+      // Limits are per kind (the solver takes 16 sources, river boundaries included, and 8 storm cells).
+      setText(sourcesCount, storms.length ? `${sources.length}/${MAX_SOURCES} · ${storms.length}/${MAX_STORMS} storms` : `${sources.length}/${MAX_SOURCES}`);
+      sourcesCount.dataset.tip = `${sources.length} of ${MAX_SOURCES} water sources (river boundaries included) · ${storms.length} of ${MAX_STORMS} storm cells`;
+      sourcesCount.dataset.tipSide = 'left';
       sourcesEmpty.hidden = n > 0;
       sourcesList.hidden = n === 0;
     },
@@ -627,7 +634,7 @@ export function createPanel(ctx: UIContext): Panel {
   });
   bind((s) => s.sim.maxSubstepsPerFrame, (v) => substeps.set(v));
 
-  const breakIt = toggleSwitch('Stability demo (naive solver)', (on) => actions.setStabilityDemo(on), {
+  const breakIt = toggleSwitch('Stability demo (naive solver)', (on) => (on ? startBreakDemo(ctx) : stopBreakDemo(ctx)), {
     icon: 'bolt',
     tip: 'Switch to a textbook explicit scheme and watch it blow up',
   });
@@ -699,6 +706,13 @@ export function createPanel(ctx: UIContext): Panel {
     },
     onChange(fn) {
       listeners.add(fn);
+    },
+    reveal(sectionId: string) {
+      api.setOpen(true);
+      const sec = scroller.querySelector<HTMLElement>(`[data-section="${sectionId}"]`);
+      if (!sec) return;
+      if (!sec.classList.contains('dl-open')) sec.querySelector<HTMLButtonElement>('.dl-sec-head')?.click();
+      requestAnimationFrame(() => sec.scrollIntoView({ behavior: 'smooth', block: 'start' }));
     },
   };
   narrow.addEventListener('change', (e) => api.setOpen(!e.matches));

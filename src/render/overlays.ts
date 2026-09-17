@@ -531,15 +531,15 @@ export function buildMarkers(
     }
   });
 
-  const relief = Math.max(scene.maxElev - scene.minElev, 1);
   storms.forEach((s, i) => {
     const R = Math.max(1, s.radius) * scene.cellSize * 0.85;
     const bottom = scene.minElev - 5;
-    const cloud = scene.maxElev + relief * 0.35 + scene.domainSize * 0.05;
+    const cloud = stormCloudElevation(scene);
     const k = Math.min(1, Math.max(0.15, s.intensity / 80));
     const lo: Anchor = { gx: s.gx, gy: s.gy, elev: bottom, mode: AnchorMode.Absolute };
     const hi: Anchor = { gx: s.gx, gy: s.gy, elev: cloud, mode: AnchorMode.Absolute };
-    const col: MarkerStyle = { scaleMode: ScaleMode.Meters, kind: MarkerKind.StormColumn, size: 1, phase: i * 0.3, color: [0.55, 0.62, 0.75, 0.1 + 0.2 * k] };
+    // size = cloud-base elevation (m): the shaft shader fades into the cloud above.
+    const col: MarkerStyle = { scaleMode: ScaleMode.Meters, kind: MarkerKind.StormColumn, size: cloud, phase: i * 0.3, color: [0.55, 0.62, 0.75, 0.1 + 0.2 * k] };
     blended.lathe([
       { r: R, y: 0, anchor: lo, n: [1, 0] },
       { r: R, y: 0, anchor: hi, n: [1, 0] },
@@ -557,6 +557,12 @@ export function buildMarkers(
   });
 
   return { opaque, blended };
+}
+
+/** Elevation (m, unexaggerated) of the storm-cell cloud decks: well above the highest terrain. */
+export function stormCloudElevation(scene: Pick<MarkerScene, 'minElev' | 'maxElev' | 'domainSize'>): number {
+  const relief = Math.max(scene.maxElev - scene.minElev, 1);
+  return scene.maxElev + relief * 0.35 + scene.domainSize * 0.05;
 }
 
 /** Translucent extruded ghost along the in-progress wall polyline. */

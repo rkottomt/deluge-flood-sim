@@ -2,7 +2,7 @@
 import { COMMON_WGSL, FRAME_WGSL, VTX_SAMPLE_WGSL } from './common';
 
 /** Byte size of the overlay uniform block. */
-export const OVERLAY_UNIFORM_SIZE = 48;
+export const OVERLAY_UNIFORM_SIZE = 64;
 
 const OVERLAY_HEADER = /* wgsl */ `
 ${FRAME_WGSL}
@@ -13,6 +13,10 @@ struct Overlay {
   routeState: f32,     // 0 none, 1 ok, 2 blocked
   roadAlpha: f32,
   hasStatus: f32,
+  waterMode: f32,      // 0 realistic, 1 depth, 2 max depth, 3 speed
+  evacActive: f32,     // 1 while an evacuation start is set: cut roads matter, draw them more prominently
+  pad0: f32,
+  pad1: f32,
 }
 @group(0) @binding(0) var<uniform> F: Frame;
 @group(0) @binding(1) var vtxTex: texture_2d<f32>;
@@ -57,16 +61,28 @@ fn vsRibbon(v: RIn) -> ROut {
   if (kind == 0u) {
     var st = 0u;
     if (O.hasStatus > 0.5) { st = roadStatus[id]; }
-    // Importance from the class width (local 3.5 m … highway 11 m): minor dry roads thin out with distance so the
-    // overview stays readable, while wet/flooded roads always stand out.
+    // Importance from the class width (local 3.5 m … highway 11 m): minor roads thin out with distance so the
+    // overview stays readable.
     let importance = smoothstep(3.0, 11.0, v.attr.z);
     let d0 = length(gridToWorld(v.center, s.r) - F.camPos);
     // Without imagery the ribbons are the only sign of the town, so they stay visible over the whole domain.
     let far = mix(vec2f(1.0, 2.6), vec2f(0.35, 1.1), F.opts.x) * F.domainSize;
     let fade = mix(1.0 - smoothstep(far.x, far.y, d0), 1.0, importance);
     if (st == 0u) { color = vec4f(0.93, 0.92, 0.88, O.roadAlpha * fade); minHalfPx = mix(0.7, 1.1, importance); }
-    else if (st == 1u) { color = vec4f(1.0, 0.55, 0.05, 0.95); minHalfPx = 1.4; }
-    else { color = vec4f(1.0, 0.07, 0.05, 0.9); minHalfPx = 1.7; }
+    else if (st == 1u) { color = vec4f(1.0, 0.55, 0.05, 0.9 * mix(fade, 1.0, 0.5)); minHalfPx = 1.2; }
+    else {
+      // Flooded (impassable) roads lie under the flood itself, which already says "flooded": draw them as thin
+      // dashed submerged lines that do not hide the water, minor streets fading with distance. While an evacuation
+      // is being planned they are what blocks the route, so they come up a notch. In the hazard maps they turn a
+      // neutral dark grey so they never read as one of the red speed bands.
+      let emph = O.evacActive;
+      let hazardMap = O.waterMode > 0.5;
+      let rgb = select(vec3f(0.95, 0.16, 0.10), vec3f(0.10, 0.10, 0.12), hazardMap);
+      let a = mix(0.42, 0.72, emph) * mix(fade * mix(0.55, 1.0, importance), 1.0, emph * importance);
+      color = vec4f(rgb, a);
+      minHalfPx = mix(0.55, 0.95, importance) * mix(1.0, 1.3, emph);
+      coreFrac = 0.0; // flag for the fragment shader: dashed
+    }
   } else if (kind == 1u) {
     lift = 1.2;
     minHalfPx = 9.0;
@@ -104,7 +120,18 @@ fn fsRibbon(in: ROut) -> @location(0) vec4f {
   let a = abs(in.side);
   let aw = fwidth(in.side);
   let haze = hazeAmount(in.world);
+  // Screen-space dash coordinate for flooded roads (~11 px period); derivatives in uniform control flow.
+  let dashCoord = in.along / (max(distance(in.world, F.camPos) * F.elev.w, 1e-3) * 11.0);
+  let dashFw = max(fwidth(dashCoord), 1e-4);
   if (in.kind == 0u) {
+    if (in.coreFrac < 0.5) {
+      // Flooded road: dashes ~7 px long every ~11 px, no casing.
+      let body = 1.0 - smoothstep(1.0 - aw * 1.5, 1.0, a);
+      let f = fract(dashCoord);
+      let dash = smoothstep(0.0, dashFw, f) * (1.0 - smoothstep(0.62, 0.62 + dashFw, f));
+      let alpha = in.color.a * body * mix(dash, 0.6, smoothstep(0.3, 0.6, dashFw)) * (1.0 - haze * 0.7);
+      return vec4f(in.color.rgb * alpha, alpha);
+    }
     // Road: bright core with a dark casing for contrast over imagery (the casing fades when the ribbon is only a
     // couple of pixels wide, where it would just darken the line).
     let body = 1.0 - smoothstep(1.0 - aw * 1.5, 1.0, a);
@@ -223,7 +250,9 @@ fn fsMarker(in: MOut, @builtin(front_facing) front: bool) -> @location(0) vec4f 
       return vec4f(rgb, 0.0);
     }
     case 2u: {
-      // Storm rain curtain: soft falling streaks that average out to a translucent veil when they get sub-pixel.
+      // Storm rain shaft: soft falling streaks that average out to a translucent veil when they get sub-pixel. The
+      // veil is densest through the middle of the shaft and thins toward its silhouette (optical depth through a
+      // cylinder), fades into the cloud base above and thins near the ground, so it reads as rain, not a glass tube.
       let colId = floor(ringU);
       let fu = fract(ringU);
       let speed = 0.8 + hash11(colId) * 0.7;
@@ -233,13 +262,18 @@ fn fsMarker(in: MOut, @builtin(front_facing) front: bool) -> @location(0) vec4f 
       let detail = 1.0 - smoothstep(0.25, 0.8, ringFw);
       let streak = mix(0.35, fall * across, detail);
       let facing = abs(dot(n, V));
-      let edge = pow(1.0 - facing, 1.5) * 0.6 + 0.4;
+      let chord = mix(0.12, 1.0, pow(facing, 0.8));
+      // params.z carries the cloud-base elevation (m); the shaft starts a little below the lowest terrain.
+      let bottom = F.elev.x - 5.0;
+      let hFrac = clamp((in.world.y / F.exag - bottom) / max(in.size - bottom, 1.0), 0.0, 1.0);
+      let vertical = smoothstep(0.0, 0.25, hFrac) * 0.55 + 0.45 * (1.0 - smoothstep(0.55, 1.0, hFrac));
+      let wisps = 0.7 + 0.6 * vnoise(vec2f(atan2(in.local.z, in.local.x) * 3.0, in.world.y / 400.0 - F.time * 0.05));
       // Camera inside the curtain: every wall fragment lies between the eye and the flooded ground the user came
       // to look at, so the curtain thins to a light veil (it still marks the storm from outside).
       let axis = in.world - in.local;
       let camR = length((F.camPos - axis).xz) / max(length(in.local.xz), 1.0);
       let inside = 1.0 - smoothstep(0.85, 1.15, camR);
-      let a = in.color.a * (0.45 + 0.8 * streak) * edge * mix(1.0, 0.3, inside);
+      let a = in.color.a * (0.45 + 0.8 * streak) * chord * vertical * wisps * mix(1.0, 0.3, inside);
       let rgb = in.color.rgb * (0.75 + 0.5 * streak) * (skyAmbient(vec3f(0.0, 1.0, 0.0)) * 0.9 + 0.1);
       return vec4f(rgb * a, a);
     }
@@ -251,7 +285,7 @@ fn fsMarker(in: MOut, @builtin(front_facing) front: bool) -> @location(0) vec4f 
              + vnoise(in.local.xz / max(in.size, 1.0) * 9.0 - vec2f(t * 1.7, t)) * 0.4;
       let edge = 1.0 - smoothstep(0.45, 1.0, rr + (nz - 0.5) * 0.35);
       // The deck is a marker, not a ceiling: seen from above (camera over the deck and within/near its footprint,
-      // or looking steeply down on it) it thins to a veil so the storm's flooding underneath stays readable.
+      // or looking steeply down on it) it all but disappears so the storm's flooding underneath stays readable.
       // From the side / below it keeps its full body.
       let center = in.world - in.local;
       let rel = F.camPos - center;
@@ -259,7 +293,7 @@ fn fsMarker(in: MOut, @builtin(front_facing) front: bool) -> @location(0) vec4f 
       let over = 1.0 - smoothstep(0.9, 1.8, length(rel.xz) / max(in.size, 1.0));
       let steep = smoothstep(0.3, 0.85, V.y);
       let seeThrough = above * max(over, steep);
-      let a = in.color.a * edge * (0.65 + 0.35 * nz) * mix(1.0, 0.14, seeThrough);
+      let a = in.color.a * edge * (0.65 + 0.35 * nz) * mix(1.0, 0.03, seeThrough);
       let top = max(n.y, 0.0);
       let lum = luminance(F.skyHorizon);
       let rgb = in.color.rgb * lum * (0.55 + 0.9 * top + 0.35 * nz) + F.sunColor * top * 0.04 * (1.0 - F.opts.w);

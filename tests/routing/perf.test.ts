@@ -2,8 +2,9 @@
 /**
  * Performance targets (DESIGN.md §6): 50k edges — setNetwork < 150 ms, updateFlood on a 1024² depth grid
  * < 5 ms, route < 10 ms. Real wall-clock timings are printed so regressions are visible in the test log; the
- * assertions use main-thread CPU time, best of several interleaved passes per workload item (see timing.ts),
- * so they hold when the tests share the machine with GPU tests and other processes.
+ * assertions use main-thread CPU time, best of several interleaved passes per workload item and rescaled by the
+ * machine's current slowdown (see timing.ts), so they hold when the tests share the machine with GPU tests and
+ * other processes.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -116,16 +117,17 @@ test('performance at 50k edges (grid city)', () => {
 
   assert.ok(counts[0] > 0 && counts[1] > 0 && counts[2] > 0, 'test field produces all three statuses');
   assert.ok(states.ok > 20 && states.blocked > 5, 'mix of ok and blocked routes');
-  const buildCpu = builds.cpu[0];
-  assert.ok(buildCpu < 150, `setNetwork ${buildCpu.toFixed(1)} ms cpu < 150 ms`);
-  // The cold, JIT-unwarmed first call is only sanity-bounded.
+  // Normalized CPU times (timing.ts): what the call costs on the demo machine's performance core.
+  const build = builds.norm[0];
+  assert.ok(build < 150, `setNetwork ${build.toFixed(1)} ms < 150 ms`);
+  // The cold, JIT-unwarmed first call is only sanity-bounded (single sample: CPU time, no normalization).
   assert.ok(cold.cpu < 400, `cold setNetwork ${cold.cpu.toFixed(1)} ms cpu < 400 ms`);
-  const updateCpu = Math.max(...updates.cpu);
-  assert.ok(updateCpu < 5, `updateFlood ${updateCpu.toFixed(2)} ms cpu < 5 ms (slowest of the 3 fields)`);
-  const routeP95 = quantile(routes.cpu, 0.95);
-  assert.ok(routeP95 < 10, `route p95 ${routeP95.toFixed(2)} ms cpu < 10 ms`);
-  const longestCpu = Math.max(...longest.cpu);
-  assert.ok(longestCpu < 10, `corner-to-corner route ${longestCpu.toFixed(2)} ms cpu < 10 ms`);
+  const update = Math.max(...updates.norm);
+  assert.ok(update < 5, `updateFlood ${update.toFixed(2)} ms < 5 ms (slowest of the 3 fields)`);
+  const routeP95 = quantile(routes.norm, 0.95);
+  assert.ok(routeP95 < 10, `route p95 ${routeP95.toFixed(2)} ms < 10 ms`);
+  const corner = Math.max(...longest.norm);
+  assert.ok(corner < 10, `corner-to-corner route ${corner.toFixed(2)} ms < 10 ms`);
 });
 
 test('performance at 50k long edges (≈2M cell samples stress case)', () => {
@@ -143,10 +145,10 @@ test('performance at 50k long edges (≈2M cell samples stress case)', () => {
       `(cpu ${build.cpu.toFixed(1)}), updateFlood ${summarize(updates, PASSES)}`,
   );
   assert.ok(build.cpu < 400, `setNetwork (stress) ${build.cpu.toFixed(1)} ms cpu`);
-  // Stress case well beyond the spec workload (4–5× the samples, ≈6 ms on an idle M4 performance core); generous
-  // bound, since a fully loaded machine can keep the test on an efficiency core for the whole run (≈2× slower).
-  const updateCpu = Math.max(...updates.cpu);
-  assert.ok(updateCpu < 20, `updateFlood (stress) ${updateCpu.toFixed(2)} ms cpu`);
+  // Stress case well beyond the spec workload (4–5× the samples, ≈6 ms on a full-speed M4 performance core): an
+  // order-of-magnitude guard with a generous bound, since slowdowns beyond timing.ts's cap are not compensated.
+  const update = Math.max(...updates.norm);
+  assert.ok(update < 20, `updateFlood (stress) ${update.toFixed(2)} ms`);
 });
 
 function xy(p: { gx: number; gy: number }): [number, number] {

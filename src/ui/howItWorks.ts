@@ -1,12 +1,16 @@
 /**
  * "How it works" — the judge explainer. Plain language first, then the shallow-water equations typeset
- * in HTML/CSS, the four stability ingredients, the per-substep GPU pipeline diagram, data sources, and
- * the "Break it" stability-demo toggle.
+ * in HTML/CSS, the four stability ingredients, the per-substep GPU pipeline diagram (two compute passes, as
+ * dispatched by src/sim/Solver.ts), data sources, and the "Break it" stability-demo toggle.
+ *
+ * Keep the text in sync with src/sim: the scheme (shaders/momentum.ts — local inertial + upwind advection,
+ * θ-smoothing, semi-implicit friction), the Courant limit (constants.ts robustCflMax, √θ) and the passes.
  */
 import { h, fragment, setText, toggleClass, type UIContext } from './dom';
 import { icon, iconMarkup } from './icons';
 import { createModal, type Modal } from './modal';
 import { fmtNum, siParts } from './format';
+import { BREAK_TIME_SCALE, startBreakDemo, stopBreakDemo } from './stabilityDemo';
 
 // ─── Tiny math typesetting helpers (static, trusted markup) ─────────────────────────────────────
 const v = (s: string) => `<i class="m-v">${s}</i>`;
@@ -42,9 +46,11 @@ const hf = sub(v('h'), v('f'));
 const dt = `${rm('Δ')}${v('t')}`;
 const dx = `${rm('Δ')}${v('x')}`;
 const eta = v('η');
+/** Time level of the new flux (not n: that is Manning's roughness). */
+const qNew = sup(v('q'), rm('new'));
 
 export function createHowItWorks(ctx: UIContext): Modal {
-  const { store, actions, bind } = ctx;
+  const { store, bind } = ctx;
 
   // ── Section nav ──
   const sections: Array<[string, string]> = [
@@ -140,8 +146,8 @@ export function createHowItWorks(ctx: UIContext): Modal {
     'm-annotated',
   );
   const schemeEq = eq(
-    `${sup(v('q'), `${v('n')}+1`)}${op('=')}${frac(
-      `${v('q̃')}${op('−')}${g}${hf}${dt}${frac(`${sub(eta, 'R')}${op('−')}${sub(eta, 'L')}`, dx, 'm-small')}`,
+    `${qNew}${op('=')}${frac(
+      `${v('q̃')}${op('−')}${dt}${v('A')}${op('−')}${g}${hf}${dt}${frac(`${sub(eta, 'R')}${op('−')}${sub(eta, 'L')}`, dx, 'm-small')}`,
       `1${op('+')}${frac(`${g}${dt}${sup(n, '2')}${abs(v('q'))}`, supsub(v('h'), '7/3', v('f')), 'm-small')}`,
       'm-big-frac',
     )}`,
@@ -159,7 +165,9 @@ export function createHowItWorks(ctx: UIContext): Modal {
         [g, 'gravity, 9.81 m/s²'],
         [n, 'Manning roughness'],
         [`${v('R')}, ${v('I')}, ${v('S')}`, 'rain, infiltration, sources'],
-        [v('q̃'), 'lightly smoothed previous flux (θ-weighting)'],
+        [v('q̃'), 'lightly smoothed previous flux (θ-weighting, θ = 0.8)'],
+        [v('A'), 'convective acceleration ∂(qu)/∂x + ∂(qv)/∂y, first-order upwind'],
+        [`${hf}`, 'flow depth at the cell face'],
       ] as Array<[string, string]>
     ).flatMap(([sym, text]) => [fragment(`<dt>${sym}</dt>`), h('dd', null, text)]),
   );
@@ -173,9 +181,11 @@ export function createHowItWorks(ctx: UIContext): Modal {
     h(
       'p',
       null,
-      'Deluge uses the ',
+      'Deluge starts from the ',
       h('b', null, 'local-inertial'),
-      ' form of these equations — the same approximation behind production flood-inundation models (LISFLOOD-FP class; Bates et al. 2010, de Almeida et al. 2012). On a staggered grid, the flux across each cell face is updated as:',
+      ' scheme behind production flood-inundation models (LISFLOOD-FP class; Bates et al. 2010, de Almeida et al. 2012) and keeps the ',
+      h('b', null, 'convective acceleration'),
+      ' term A that the pure local-inertial model drops — without it a dam-break front advances at only about half its true speed. On a staggered grid, the flux across each cell face is updated as:',
     ),
     h('div', { class: 'dl-eq-block dl-eq-hero' }, schemeEq),
     glossary,
@@ -204,12 +214,12 @@ export function createHowItWorks(ctx: UIContext): Modal {
         'CFL-adaptive timestep',
         `${dt}${op('=')}${v('C')}${frac(dx, `${sqrt('2')}${paren(`${sqrt(`${g}${sub(v('h'), 'max')}`)}${op('+')}${sub(abs(v('u')), 'max')}`)}`)}`,
         'a wave must never jump more than one cell in a single step.',
-        'Deep, fast water needs smaller steps. The √2 is the 2-D part: the fastest grid-scale wave runs diagonally, so the scheme is stable only while this Courant number C stays below 1 (Deluge uses 0.7). Depth and speed come back from the GPU a few times per second and Δt is re-chosen automatically — the frame then runs as many substeps as it needs.',
+        'Deep, fast water needs smaller steps. The √2 is the 2-D part: the fastest grid-scale wave runs diagonally. The plain scheme is stable while this Courant number C stays below 1; the θ-smoothing Deluge adds lowers that to √θ ≈ 0.89, so Deluge targets 0.7 and never exceeds 0.85. Depth and speed come back from the GPU a few times per second and Δt is re-chosen automatically — the frame then runs as many substeps as it needs.',
       ),
       ingredient(
         '2',
         'Semi-implicit friction',
-        `${sup(v('q'), `${v('n')}+1`)}${op('=')}${frac(sup(v('q'), '∗'), `1${op('+')}${frac(`${g}${dt}${sup(n, '2')}${abs(v('q'))}`, supsub(v('h'), '7/3', v('f')), 'm-small')}`)}`,
+        `${qNew}${op('=')}${frac(sup(v('q'), '∗'), `1${op('+')}${frac(`${g}${dt}${sup(n, '2')}${abs(v('q'))}`, supsub(v('h'), '7/3', v('f')), 'm-small')}`)}`,
         h('span', { html: `in thin films friction is enormously stiff (∝&thinsp;<i>h</i><sup>−7/3</sup>).` }),
         'An explicit friction update overshoots, reverses the flow and blows up. Dividing the frictionless update q* by a factor ≥ 1 means friction can only ever slow water down — stable for any timestep.',
       ),
@@ -232,7 +242,7 @@ export function createHowItWorks(ctx: UIContext): Modal {
 
   // ── 4. Pipeline diagram ──
   const pipelineSvg = fragment<SVGSVGElement>(`
-  <svg class="dl-pipeline" viewBox="0 0 880 330" role="img" aria-label="GPU passes per substep: momentum flux, flux limiter, continuity, sources and rain, repeated N times per frame; then export to the renderer and an asynchronous readback to the CPU for stats and routing.">
+  <svg class="dl-pipeline" viewBox="0 0 880 330" role="img" aria-label="Two GPU compute passes per substep: pass A updates the momentum flux on every cell face; pass B limits the fluxes, updates depth, adds rain, storms and rivers, removes infiltration and books the mass ledger. Repeated N times per frame; then export to the renderer and an asynchronous readback to the CPU for stats and routing.">
     <defs>
       <marker id="dl-arrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
         <path d="M0 0 L10 5 L0 10 z" class="dl-pipe-arrowhead"/>
@@ -246,46 +256,43 @@ export function createHowItWorks(ctx: UIContext): Modal {
     <rect x="676" y="178" width="198" height="146" rx="16" class="dl-pipe-region dl-pipe-region-cpu"/>
     <text x="694" y="204" class="dl-pipe-region-label dl-pipe-cpu-label">CPU · main thread</text>
 
-    <path d="M570 92 V62 H112 V84" class="dl-pipe-loop" marker-end="url(#dl-arrow)"/>
-    <rect x="252" y="50" width="220" height="24" rx="12" class="dl-pipe-pill"/>
-    <text x="362" y="66.5" text-anchor="middle" class="dl-pipe-pill-text">repeat N× per frame · Δt from CFL</text>
+    <path d="M560 84 V62 H112 V80" class="dl-pipe-loop" marker-end="url(#dl-arrow)"/>
+    <rect x="226" y="50" width="220" height="24" rx="12" class="dl-pipe-pill"/>
+    <text x="336" y="66.5" text-anchor="middle" class="dl-pipe-pill-text">repeat N× per frame · Δt from CFL</text>
 
-    ${[
-      { x: 22, n: 1, t: 'Momentum', s1: `update ${svgSub('q', 'x')}, ${svgSub('q', 'y')} on`, s2: 'every cell face' },
-      { x: 182, n: 2, t: 'Limiter', s1: 'scale donor outflow', s2: 'so depth stays ≥ 0' },
-      { x: 342, n: 3, t: 'Continuity', s1: 'h ← h + inflow', s2: '− outflow' },
-      { x: 502, n: 4, t: 'Sources', s1: 'rain · storms · rivers', s2: 'infiltration · ledger' },
-    ]
-      .map(
-        (b) => `
-      <g class="dl-pipe-box">
-        <rect x="${b.x}" y="92" width="138" height="78" rx="12"/>
-        ${svgBadge(b.x + 17, 106, b.n)}
-        <text x="${b.x + 73}" y="121" text-anchor="middle" class="dl-pipe-title">${b.t}</text>
-        <text x="${b.x + 69}" y="140" text-anchor="middle" class="dl-pipe-sub">${b.s1}</text>
-        <text x="${b.x + 69}" y="156" text-anchor="middle" class="dl-pipe-sub">${b.s2}</text>
-      </g>`,
-      )
-      .join('')}
-    <path d="M160 131 H180" class="dl-pipe-flow" marker-end="url(#dl-arrow)"/>
-    <path d="M320 131 H340" class="dl-pipe-flow" marker-end="url(#dl-arrow)"/>
-    <path d="M480 131 H500" class="dl-pipe-flow" marker-end="url(#dl-arrow)"/>
+    <g class="dl-pipe-box">
+      <rect x="22" y="84" width="248" height="94" rx="12"/>
+      ${svgBadge(39, 98, 1)}
+      <text x="146" y="110" text-anchor="middle" class="dl-pipe-title">Pass A · Momentum</text>
+      <text x="146" y="130" text-anchor="middle" class="dl-pipe-sub">new ${svgSub('q', 'x')}, ${svgSub('q', 'y')} on every cell face:</text>
+      <text x="146" y="146" text-anchor="middle" class="dl-pipe-sub">surface slope · upwind advection</text>
+      <text x="146" y="162" text-anchor="middle" class="dl-pipe-sub">semi-implicit friction · θ-smoothing</text>
+    </g>
+    <path d="M270 131 H300" class="dl-pipe-flow" marker-end="url(#dl-arrow)"/>
+    <g class="dl-pipe-box">
+      <rect x="302" y="84" width="336" height="94" rx="12"/>
+      ${svgBadge(319, 98, 2)}
+      <text x="470" y="110" text-anchor="middle" class="dl-pipe-title">Pass B · Continuity</text>
+      <text x="470" y="130" text-anchor="middle" class="dl-pipe-sub">flux limiter (depth stays ≥ 0) · h ← h + in − out</text>
+      <text x="470" y="146" text-anchor="middle" class="dl-pipe-sub">rain · storms · river inflows &amp; stages · infiltration</text>
+      <text x="470" y="162" text-anchor="middle" class="dl-pipe-sub">mass ledger: every m³ in and out</text>
+    </g>
 
-    <path d="M571 170 V206 H112 V228" class="dl-pipe-flow" marker-end="url(#dl-arrow)"/>
-    <text x="340" y="199" text-anchor="middle" class="dl-pipe-note">once per frame</text>
+    <path d="M470 178 V206 H112 V228" class="dl-pipe-flow" marker-end="url(#dl-arrow)"/>
+    <text x="300" y="199" text-anchor="middle" class="dl-pipe-note">once per frame</text>
 
     <g class="dl-pipe-box dl-pipe-box-alt">
       <rect x="22" y="230" width="180" height="78" rx="12"/>
-      ${svgBadge(39, 244, 5)}
+      ${svgBadge(39, 244, 3)}
       <text x="112" y="258" text-anchor="middle" class="dl-pipe-title">Export</text>
       <text x="112" y="278" text-anchor="middle" class="dl-pipe-sub">h, u, v, max depth →</text>
       <text x="112" y="294" text-anchor="middle" class="dl-pipe-sub">terrain &amp; water renderer</text>
     </g>
     <path d="M202 269 H270" class="dl-pipe-flow" marker-end="url(#dl-arrow)"/>
-    <text x="236" y="259" text-anchor="middle" class="dl-pipe-note">~4 Hz</text>
+    <text x="236" y="259" text-anchor="middle" class="dl-pipe-note">~3 Hz</text>
     <g class="dl-pipe-box dl-pipe-box-alt">
       <rect x="272" y="230" width="210" height="78" rx="12"/>
-      ${svgBadge(289, 244, 6)}
+      ${svgBadge(289, 244, 4)}
       <text x="381" y="258" text-anchor="middle" class="dl-pipe-title">Async readback</text>
       <text x="377" y="278" text-anchor="middle" class="dl-pipe-sub">depth + mass ledger copied</text>
       <text x="377" y="294" text-anchor="middle" class="dl-pipe-sub">&amp; zeroed in one encoder</text>
@@ -322,11 +329,11 @@ export function createHowItWorks(ctx: UIContext): Modal {
   const pipeline = sec(
     'pipeline',
     '04 · On the GPU',
-    'Four compute passes per substep',
+    'Two compute passes per substep',
     h(
       'p',
       null,
-      'All state lives in GPU textures that ping-pong between passes. Every substep of a frame is encoded into a single command buffer, then the result is exported to the renderer and — a few times a second — read back asynchronously for statistics and routing. The CPU never waits for the GPU.',
+      'All state lives in GPU textures that ping-pong between the two passes: momentum writes the face fluxes, continuity turns them into new depths. Every substep of a frame is encoded into a single command buffer, then the result is exported to the renderer and — a few times a second — read back asynchronously for statistics and routing. The CPU never waits for the GPU.',
     ),
     h('div', { class: 'dl-pipe-wrap' }, pipelineSvg),
     pipeStats,
@@ -357,13 +364,14 @@ export function createHowItWorks(ctx: UIContext): Modal {
   let closeTimer = 0;
   breakBtn.addEventListener('click', () => {
     const naive = store.get().sim.stabilityMode === 'naive';
-    actions.setStabilityDemo(!naive);
-    if (!naive) {
-      // The point is to watch it happen: make sure the clock runs and get the dialog out of the way.
-      if (store.get().paused) store.set({ paused: false });
-      clearTimeout(closeTimer);
-      closeTimer = window.setTimeout(() => ctx.setPanel('howItWorks', false), 450);
+    if (naive) {
+      stopBreakDemo(ctx);
+      return;
     }
+    // The point is to watch it happen: start the (slowed) demo and get the dialog out of the way.
+    startBreakDemo(ctx);
+    clearTimeout(closeTimer);
+    closeTimer = window.setTimeout(() => ctx.setPanel('howItWorks', false), 450);
   });
   bind(
     (s) => s.sim.stabilityMode === 'naive',
@@ -385,19 +393,21 @@ export function createHowItWorks(ctx: UIContext): Modal {
       'p',
       null,
       'This switches to a textbook explicit scheme: ',
-      h('b', null, 'explicit friction, no flux limiter, no velocity cap'),
+      h('b', null, 'explicit friction, no flux limiter, no smoothing, no velocity cap'),
       ', and a Courant number of ',
       h('b', null, '1.8'),
-      ' — beyond the stability limit of 1.',
+      ' — beyond its stability limit of 1. The clock slows to ',
+      h('b', null, `${BREAK_TIME_SCALE}×`),
+      ' so you can follow it: each step is about 1.3 simulated seconds.',
     ),
     h(
       'ul',
       { class: 'dl-break-list' },
-      h('li', null, 'Within a few simulated seconds, checkerboard ripples appear in shallow water.'),
-      h('li', null, 'They grow into spikes of impossible depth and speed, then NaNs spread across the map.'),
-      h('li', null, 'The mass-balance error in the HUD explodes — water is being created from nothing.'),
+      h('li', null, 'For the first few steps nothing looks wrong — the error starts far too small to see.'),
+      h('li', null, 'It grows several-fold with every step, usually first where rivers enter the map and the water is deepest: the surface jitters cell by cell, then depths spike to thousands of meters.'),
+      h('li', null, 'Within about ten steps the numbers overflow. Those cells turn to magenta noise (depth ∞ / NaN) that races down the rivers, and the HUD reports the solution has diverged.'),
     ),
-    h('p', null, 'This dialog closes so you can watch. Switch back from the red banner at the top — the water resets and the robust solver recovers instantly.'),
+    h('p', null, 'This dialog closes so you can watch. Switch back from the red banner at the bottom — the water resets and the robust solver recovers instantly.'),
     h('div', { class: 'dl-break-actions' }, breakBtn, breakState),
   );
 

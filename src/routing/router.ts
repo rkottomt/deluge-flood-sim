@@ -26,18 +26,61 @@ import {
   CONNECTOR_SPEED,
   MAX_APPROACH_M,
   ROAD_FLOODED_DEPTH,
+  ROAD_WET_DEPTH,
   SHELTER_CANDIDATES,
   SNAP_RADIUS_M,
   START_CANDIDATES,
   STATUS_DRY,
   STATUS_FLOODED,
   STATUS_WET,
-  ROAD_WET_DEPTH,
   WET_SPEED_FACTOR,
 } from './constants';
 import { formatDistance, formatDuration } from './format';
 import { buildRoadGraph, type RoadGraph } from './graph';
 import { IndexedMinHeap } from './heap';
+
+/** Why there is no route ('none' / 'blocked' results). */
+export type RouteReason =
+  /** none: the area has no road data. */
+  | 'no-roads'
+  /** none: no start point chosen yet. */
+  | 'no-start'
+  /** none: no (valid) shelters. */
+  | 'no-shelters'
+  /** none: no road within SNAP_RADIUS_M of the start. */
+  | 'start-off-network'
+  /** none: no shelter within SNAP_RADIUS_M of a road. */
+  | 'shelters-off-network'
+  /** none: the start is in a river or lake (standing water at load) — a misplaced click. */
+  | 'start-in-water-body'
+  /** blocked: the start itself is under floodwater. */
+  | 'start-flooded'
+  /** blocked: every road near the start is flooded. */
+  | 'start-roads-flooded'
+  /** blocked: every shelter is under water. */
+  | 'shelters-flooded'
+  /** blocked: flooded roads cut every path to a shelter. */
+  | 'cut-off';
+
+/**
+ * A RouteResult plus the parts its `message` sentence is made of, so a UI can lay the route out and format
+ * the numbers itself instead of parsing the sentence. `message` stays the complete stand-alone status line
+ * (debug API, screen readers, the routing harness).
+ */
+export interface DelugeRouteResult extends RouteResult {
+  /** null for 'ok'; otherwise why there is no route. */
+  reason: RouteReason | null;
+  /** 'ok': the streets carrying most of the route, in travel order (at most two; [] if unnamed). [] otherwise. */
+  via: string[];
+  /** 'ok': metres of the route on wet roads (passable, slowed — "drive slowly"). 0 otherwise. */
+  wetMeters: number;
+  /**
+   * What to do, as a sentence that reads without a "No safe route" heading: for 'blocked', why and to shelter
+   * in place ("Every shelter is flooded. Shelter in place on higher floors."); for 'none', how to get a route
+   * (same as `message`); '' for 'ok'.
+   */
+  advice: string;
+}
 
 /** The router returned by createRouter(): the contract plus a few optional extras for the app/debugging. */
 export interface DelugeRouter extends EvacuationRouter {
@@ -62,6 +105,7 @@ export interface DelugeRouter extends EvacuationRouter {
   getRoadStatus(): RoadStatusArray | null;
   /** Graph size information for diagnostics. */
   getGraphInfo(): { nodes: number; edges: number; samples: number; activeSamples: number } | null;
+  route(start: { gx: number; gy: number } | null, shelters: Shelter[]): DelugeRouteResult;
 }
 
 export const NONE_NO_ROADS = 'No road data for this area — evacuation routing is unavailable.';
@@ -69,9 +113,10 @@ export const NONE_NO_START = 'Choose the Evac tool and click your starting point
 export const NONE_NO_SHELTERS = 'No shelters yet — add one with the Shelter tool, then click a start point with the Evac tool.';
 export const NONE_START_FAR = `No road within ${SNAP_RADIUS_M} m of the start point — click closer to a street with the Evac tool.`;
 export const NONE_SHELTERS_FAR = `No shelter is within ${SNAP_RADIUS_M} m of a road — place shelters next to a street.`;
-export const BLOCKED_MESSAGE = 'No safe route — all roads to shelters are flooded. Shelter in place on higher floors.';
-export const BLOCKED_START_ROADS = 'No safe route — every road near the start is flooded. Shelter in place on higher floors.';
-export const BLOCKED_SHELTERS_FLOODED = 'No safe route — every shelter is flooded. Shelter in place on higher floors.';
+const SHELTER_IN_PLACE = 'Shelter in place on higher floors.';
+export const ADVICE_CUT_OFF = `All roads to shelters are flooded. ${SHELTER_IN_PLACE}`;
+export const ADVICE_START_ROADS = `Every road near the start is flooded. ${SHELTER_IN_PLACE}`;
+export const ADVICE_SHELTERS_FLOODED = `Every shelter is flooded. ${SHELTER_IN_PLACE}`;
 
 const SHELTER_NONE = -1;
 
@@ -435,35 +480,35 @@ class Router implements DelugeRouter {
   // Routing
   // ────────────────────────────────────────────────────────────────────────────────────────
 
-  route(start: { gx: number; gy: number } | null, shelters: Shelter[]): RouteResult {
+  route(start: { gx: number; gy: number } | null, shelters: Shelter[]): DelugeRouteResult {
     const g = this.g;
-    if (!g || g.edgeCount === 0) return result('none', NONE_NO_ROADS);
-    if (!start || !Number.isFinite(start.gx) || !Number.isFinite(start.gy)) return result('none', NONE_NO_START);
+    if (!g || g.edgeCount === 0) return none('no-roads', NONE_NO_ROADS);
+    if (!start || !Number.isFinite(start.gx) || !Number.isFinite(start.gy)) return none('no-start', NONE_NO_START);
     if (!shelters) shelters = [];
     if (!shelters.every(isValidShelter)) shelters = shelters.filter(isValidShelter);
-    if (shelters.length === 0) return result('none', NONE_NO_SHELTERS);
+    if (shelters.length === 0) return none('no-shelters', NONE_NO_SHELTERS);
     this.ensureCandidateCapacity(START_CANDIDATES + shelters.length * SHELTER_CANDIDATES);
 
     // 1. The start itself under water: a misplaced click into a river, or a home that is flooded — don't
     //    send anyone driving into floodwater.
     const startDepth = this.depthAt(start.gx, start.gy);
     if (startDepth >= ROAD_FLOODED_DEPTH && this.isBaselineWater(start.gx, start.gy)) {
-      return result('none', `Start point is under ${startDepth.toFixed(1)} m of water (river or lake) — click on land with the Evac tool.`);
+      return none(
+        'start-in-water-body',
+        `Start point is under ${startDepth.toFixed(1)} m of water (river or lake) — click on land with the Evac tool.`,
+      );
     }
     if (startDepth >= ROAD_FLOODED_DEPTH) {
-      return this.blocked(
-        start,
-        shelters,
-        `Start point is under ${startDepth.toFixed(1)} m of water — don't drive into floodwater. Shelter in place on higher floors.`,
-      );
+      const advice = `Start point is under ${startDepth.toFixed(1)} m of water — don't drive into floodwater. ${SHELTER_IN_PLACE}`;
+      return this.blocked(start, shelters, 'start-flooded', advice);
     }
 
     // 2. Snap the start onto usable roads.
     this.candCount = 0;
     const nStart = this.addCandidates(start.gx, start.gy, START_CANDIDATES, SHELTER_NONE, false);
     if (nStart === 0) {
-      if (this.addCandidates(start.gx, start.gy, 1, SHELTER_NONE, true) === 0) return result('none', NONE_START_FAR);
-      return this.blocked(start, shelters, BLOCKED_START_ROADS);
+      if (this.addCandidates(start.gx, start.gy, 1, SHELTER_NONE, true) === 0) return none('start-off-network', NONE_START_FAR);
+      return this.blocked(start, shelters, 'start-roads-flooded', ADVICE_START_ROADS);
     }
 
     // 3. Snap every shelter that is itself above water.
@@ -475,19 +520,19 @@ class Router implements DelugeRouter {
       this.addCandidates(s.gx, s.gy, SHELTER_CANDIDATES, k, false);
     }
     if (this.candCount === nStart) {
-      if (!anyDryShelter) return this.blocked(start, shelters, BLOCKED_SHELTERS_FLOODED);
+      if (!anyDryShelter) return this.blocked(start, shelters, 'shelters-flooded', ADVICE_SHELTERS_FLOODED);
       let anyNearRoad = false;
       for (let k = 0; k < shelters.length && !anyNearRoad; k++) {
         const c0 = this.candCount;
         anyNearRoad = this.addCandidates(shelters[k].gx, shelters[k].gy, 1, k, true) > 0;
         this.candCount = c0;
       }
-      if (!anyNearRoad) return result('none', NONE_SHELTERS_FAR);
-      return this.blocked(start, shelters, BLOCKED_MESSAGE);
+      if (!anyNearRoad) return none('shelters-off-network', NONE_SHELTERS_FAR);
+      return this.blocked(start, shelters, 'cut-off', ADVICE_CUT_OFF);
     }
 
     // 4. Multi-source / multi-target Dijkstra over travel time.
-    if (!this.search(nStart, false)) return this.blocked(start, shelters, BLOCKED_MESSAGE);
+    if (!this.search(nStart, false)) return this.blocked(start, shelters, 'cut-off', ADVICE_CUT_OFF);
 
     const shelter = shelters[this.candShelter[this.bestTargetCand()]];
     const polyline = this.buildPath(start.gx, start.gy, shelters);
@@ -500,17 +545,20 @@ class Router implements DelugeRouter {
       if (e >= 0 && this.statusCur[e] === STATUS_WET) wetMeters += this.pieceMeters[p];
     }
 
+    if (wetMeters < 1) wetMeters = 0; // less than a metre of wet road isn't worth a warning
     const via = this.mainStreetNames();
-    let message = `${via ? `Via ${via} to` : 'Route to'} ${shelter.name} — ${formatDistance(meters)}, ${formatDuration(eta)}`;
-    if (wetMeters >= 1) message += ` (${formatDistance(wetMeters)} through shallow water — drive slowly)`;
-    return { state: 'ok', polyline, lengthMeters: meters, etaSeconds: eta, shelter, message };
+    let message = `${via.length ? `Via ${via.join(' → ')} to` : 'Route to'} ${shelter.name} — ${formatDistance(meters)}, ${formatDuration(eta)}`;
+    if (wetMeters > 0) message += ` (${formatDistance(wetMeters)} through shallow water — drive slowly)`;
+    return { state: 'ok', polyline, lengthMeters: meters, etaSeconds: eta, shelter, message, reason: null, via, wetMeters, advice: '' };
   }
 
   /**
    * A 'blocked' result. Its polyline is the route that *would* be taken if flooded roads were passable
    * (the one the flood has cut), so the renderer can draw it in red; null if even that doesn't exist.
+   * The message is "No safe route — <advice>", except when the advice is already about the start point.
    */
-  private blocked(start: { gx: number; gy: number }, shelters: Shelter[], message: string): RouteResult {
+  private blocked(start: { gx: number; gy: number }, shelters: Shelter[], reason: RouteReason, advice: string): DelugeRouteResult {
+    const message = reason === 'start-flooded' ? advice : `No safe route — ${advice[0].toLowerCase()}${advice.slice(1)}`;
     this.candCount = 0;
     const nStart = this.addCandidates(start.gx, start.gy, START_CANDIDATES, SHELTER_NONE, true);
     let polyline: Float32Array | null = null;
@@ -522,7 +570,7 @@ class Router implements DelugeRouter {
         polyline = this.buildPath(start.gx, start.gy, shelters);
       }
     }
-    return { state: 'blocked', polyline, lengthMeters: 0, etaSeconds: 0, shelter: null, message };
+    return { state: 'blocked', polyline, lengthMeters: 0, etaSeconds: 0, shelter: null, message, reason, via: [], wetMeters: 0, advice };
   }
 
   private ensureCandidateCapacity(n: number): void {
@@ -875,8 +923,8 @@ class Router implements DelugeRouter {
     this.pieceMeters[this.pieceCount++] = meters;
   }
 
-  /** Up to two street names with the most distance along the route, in travel order ("A → B"). */
-  private mainStreetNames(): string {
+  /** Up to two street names with the most distance along the route, in travel order. */
+  private mainStreetNames(): string[] {
     const g = this.g!;
     const names = this.nameList, meters = this.nameMeters, first = this.nameFirst;
     names.length = meters.length = first.length = 0;
@@ -894,13 +942,13 @@ class Router implements DelugeRouter {
       }
       meters[k] += this.pieceMeters[p];
     }
-    if (names.length === 0) return '';
+    if (names.length === 0) return [];
     let k1 = 0;
     for (let k = 1; k < names.length; k++) if (meters[k] > meters[k1]) k1 = k;
     let k2 = -1;
     for (let k = 0; k < names.length; k++) if (k !== k1 && (k2 < 0 || meters[k] > meters[k2])) k2 = k;
-    if (k2 < 0) return names[k1];
-    return first[k1] <= first[k2] ? `${names[k1]} → ${names[k2]}` : `${names[k2]} → ${names[k1]}`;
+    if (k2 < 0) return [names[k1]];
+    return first[k1] <= first[k2] ? [names[k1], names[k2]] : [names[k2], names[k1]];
   }
 }
 
@@ -908,8 +956,9 @@ function isValidShelter(s: Shelter | null | undefined): boolean {
   return !!s && Number.isFinite(s.gx) && Number.isFinite(s.gy);
 }
 
-function result(state: 'none' | 'blocked', message: string): RouteResult {
-  return { state, polyline: null, lengthMeters: 0, etaSeconds: 0, shelter: null, message };
+/** A 'none' result: its message says how to get a route, so it doubles as the advice. */
+function none(reason: RouteReason, message: string): DelugeRouteResult {
+  return { state: 'none', polyline: null, lengthMeters: 0, etaSeconds: 0, shelter: null, message, reason, via: [], wetMeters: 0, advice: message };
 }
 
 function clampInt(v: number, max: number): number {

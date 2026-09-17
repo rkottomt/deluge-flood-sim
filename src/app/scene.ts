@@ -21,6 +21,8 @@ export interface Scene {
   request: SceneRequest;
   terrain: TerrainData;
   solver: FloodSolver;
+  /** The scenario's initial water depth (rivers and lakes full), nx·ny meters. Do not mutate. */
+  initialWater: Float32Array;
 }
 
 /** Thrown by a load that was overtaken by a newer load request. Callers should ignore it silently. */
@@ -54,11 +56,17 @@ const DATA_PROGRESS_SHARE = 0.85;
 export class SceneManager {
   private token = 0;
   private current: Scene | null = null;
+  private inFlight: SceneRequest | null = null;
 
   constructor(private readonly deps: SceneManagerDeps) {}
 
   get scene(): Scene | null {
     return this.current;
+  }
+
+  /** The request of the newest load still in progress (null when idle; older, superseded loads don't count). */
+  get loadingRequest(): SceneRequest | null {
+    return this.inFlight;
   }
 
   /** Human label for a request (for loading messages and errors). */
@@ -76,6 +84,7 @@ export class SceneManager {
 
   async load(request: SceneRequest): Promise<Scene> {
     const token = ++this.token;
+    this.inFlight = request;
     const { store, device, renderer, router } = this.deps;
     const label = SceneManager.label(request);
     const isCurrent = () => token === this.token;
@@ -112,7 +121,7 @@ export class SceneManager {
       renderer.setScene(terrain, solver);
       bindRouter(router, terrain, initialWater);
 
-      const scene: Scene = { request, terrain, solver };
+      const scene: Scene = { request, terrain, solver, initialWater };
       this.current = scene;
       pending = null; // ownership transferred to the scene
 
@@ -125,7 +134,15 @@ export class SceneManager {
     } catch (err) {
       pending?.destroy();
       if (isCurrent()) store.set({ loading: null });
+      // A load that was overtaken and THEN failed (e.g. its download timed out) is still just superseded: its
+      // failure must not trigger error handling (a fallback load) on top of the newer request.
+      if (!isCurrent() && !(err instanceof SupersededLoadError)) {
+        console.info(`[deluge] superseded load of ${label} failed: ${err instanceof Error ? err.message : String(err)}`);
+        throw new SupersededLoadError();
+      }
       throw err;
+    } finally {
+      if (isCurrent()) this.inFlight = null;
     }
   }
 

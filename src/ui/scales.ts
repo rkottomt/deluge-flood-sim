@@ -46,12 +46,16 @@ export function tToRain(t: number): number {
   return niceRound(tToLog(u, RAIN_MIN, RAIN_MAX));
 }
 
-/** Labeled reference ticks for the rain slider (DESIGN §7). */
+/**
+ * Labeled reference ticks for the rain slider (DESIGN §7). The track ends at 300 mm/hr, about the world record for
+ * a single hour (305 mm, Holt, Missouri, 1947), so the last tick says so.
+ */
 export const RAIN_TICKS: Array<{ value: number; label: string }> = [
   { value: 2.5, label: 'Light' },
   { value: 10, label: 'Heavy' },
   { value: 50, label: 'Extreme' },
   { value: 100, label: 'Harvey' },
+  { value: 300, label: 'Record' },
 ];
 
 export type Severity = 'calm' | 'info' | 'warn' | 'danger';
@@ -62,7 +66,20 @@ export function rainCategory(mmhr: number): { label: string; severity: Severity 
   if (mmhr < 10) return { label: 'Moderate rain', severity: 'info' };
   if (mmhr < 50) return { label: 'Heavy rain', severity: 'warn' };
   if (mmhr < 100) return { label: 'Extreme rain', severity: 'danger' };
-  return { label: 'Harvey-class deluge', severity: 'danger' };
+  if (mmhr < 250) return { label: 'Harvey-class', severity: 'danger' };
+  return { label: 'Record-class', severity: 'danger' };
+}
+
+/**
+ * Short secondary readout for the rain slider: category plus inches per hour ("Harvey-class · 3.9 in/hr"). It has
+ * to fit next to the value in the panel's slider head, so inches get one decimal from 1 in/hr up.
+ */
+export function rainSubLabel(mmhr: number): string {
+  const cat = rainCategory(mmhr).label;
+  if (!(mmhr > 0) || !Number.isFinite(mmhr)) return cat;
+  const inches = mmhr / 25.4;
+  const txt = inches >= 1 ? inches.toFixed(1) : inches >= 0.1 ? inches.toFixed(2) : inches.toFixed(3);
+  return `${cat} · ${txt}\u00a0in/hr`;
 }
 
 // ─── Inflow discharge & storms ─────────────────────────────────────────────────────────────────

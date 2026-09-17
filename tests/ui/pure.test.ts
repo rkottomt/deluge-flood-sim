@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import * as f from '../../src/ui/format';
 import * as sc from '../../src/ui/scales';
-import * as geo from '../../src/ui/geo';
+import * as geo from '../../src/data/geo';
 import type { StageControl } from '../../src/contracts';
 
 const T = '\u00a0';
@@ -66,30 +66,37 @@ test('stage feet conversions', () => {
   assert.equal(sc.stageStatus(ctrl, 20).severity, 'calm');
 });
 
-test('square footprint is square on the ground', () => {
+/** Haversine distance in meters (independent check of the mercator math the picker relies on). */
+function haversine(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const D = Math.PI / 180;
+  const a = Math.sin(((lat2 - lat1) * D) / 2) ** 2 + Math.cos(lat1 * D) * Math.cos(lat2 * D) * Math.sin(((lon2 - lon1) * D) / 2) ** 2;
+  return 2 * 6378137 * Math.asin(Math.min(1, Math.sqrt(a)));
+}
+
+test('picker footprint (data squareDomain) is square on the ground and on the map', () => {
   for (const lat of [25.76, 40.44, 61.2]) {
-    const b = geo.squareFootprint(lat, -80, 8000);
-    const ew = geo.haversine(lat, b.west, lat, b.east);
-    const ns = geo.haversine(b.south, -80, b.north, -80);
+    const b = geo.squareDomain({ lat, lon: -80 }, 8000).bounds;
+    const ew = haversine(lat, b.west, lat, b.east);
+    const ns = haversine(b.south, -80, b.north, -80);
     assert.ok(Math.abs(ew - 8000) < 80, `ew ${ew} at ${lat}`);
     assert.ok(Math.abs(ns - 8000) < 80, `ns ${ns} at ${lat}`);
     // …and square in mercator (what the map shows).
-    const dx = geo.lonToMercX(b.east) - geo.lonToMercX(b.west);
-    const dy = geo.latToMercY(b.north) - geo.latToMercY(b.south);
-    assert.ok(Math.abs(dx - dy) < 1e-6 * dx);
+    const sw = geo.lonLatToMercator(b.west, b.south);
+    const ne = geo.lonLatToMercator(b.east, b.north);
+    assert.ok(Math.abs(ne.x - sw.x - (ne.y - sw.y)) < 1e-6 * (ne.x - sw.x));
   }
 });
 
-test('gridToGeoLocal maps corners and center', () => {
+test('probe lat/lon (data gridToGeo) maps corners and center; one US coverage check', () => {
   const t = { nx: 1024, ny: 1024, bounds: { west: -80.06, east: -79.96, north: 40.48, south: 40.40 } };
-  const nw = geo.gridToGeoLocal(t, 0, 0);
+  const nw = geo.gridToGeo(t, 0, 0);
   assert.ok(Math.abs(nw.lat - 40.48) < 1e-9 && Math.abs(nw.lon + 80.06) < 1e-9);
-  const se = geo.gridToGeoLocal(t, 1024, 1024);
+  const se = geo.gridToGeo(t, 1024, 1024);
   assert.ok(Math.abs(se.lat - 40.40) < 1e-9 && Math.abs(se.lon + 79.96) < 1e-9);
-  const c = geo.gridToGeoLocal(t, 512, 512);
+  const c = geo.gridToGeo(t, 512, 512);
   assert.ok(c.lat > 40.44 && c.lat < 40.4401, `mercator center lat ${c.lat}`);
-  assert.equal(geo.isLikelyUSCoverage(40.44, -80), true);
-  assert.equal(geo.isLikelyUSCoverage(48.85, 2.35), false);
+  assert.equal(geo.isLikelyUS(40.44, -80), true);
+  assert.equal(geo.isLikelyUS(48.85, 2.35), false);
 });
 
 test('runaway values stay compact (stability demo)', () => {

@@ -14,7 +14,7 @@
  },
  "attribution": "Elevation: USGS 3DEP · Imagery © Esri, Maxar, Earthstar Geographics · Roads: U.S. Census Bureau TIGER/Line",
  "scenario": {
-  "description": "Downtown Pittsburgh sits on the Point, where the Allegheny and Monongahela rivers meet to form the Ohio. Normal pool here is about 16.0 ft on the Point gauge; flood stage is 25 ft, about where the Parkway East \"bathtub\" goes under. On March 18, 1936 — the St. Patrick's Day flood — snowmelt and heavy rain drove the river to a record 46 ft and flooded most of the Golden Triangle. The remnants of Agnes crested at 35.8 ft in June 1972 and Hurricane Ivan at 31 ft in September 2004. Raise the river stage to replay those crests and watch the Strip District, the North Shore stadiums and downtown go under — then try a levee.",
+  "description": "Downtown Pittsburgh sits on the Point, where the Allegheny and Monongahela rivers meet to form the Ohio. Normal pool here is about 16.0 ft on the Point gauge; flood stage is 22 ft, and by 25 ft the Parkway \"bathtub\" through downtown is closed by flooding. On March 18, 1936 — the St. Patrick's Day flood — snowmelt and heavy rain drove the river to a record 46 ft and flooded most of the Golden Triangle. The remnants of Agnes crested at 35.8 ft in June 1972 and Hurricane Ivan at 31 ft in September 2004. Raise the river stage to replay those crests and watch the Strip District, the North Shore stadiums and downtown go under — then try a levee.",
   "sources": [
    {
     "id": "allegheny-stage",
@@ -77,7 +77,7 @@
    "label": "Ohio River at Pittsburgh (Point gauge, USGS 03085152)",
    "gaugeDatum": 211.409,
    "normalLevel": 216.3,
-   "floodStageFt": 25,
+   "floodStageFt": 22,
    "marks": [
     {
      "label": "2004 Ivan",
@@ -210,7 +210,7 @@
   "roads": "roads.json"
  },
  "bake": {
-  "bakedAt": "2026-09-17T01:20:45.978Z",
+  "bakedAt": "2026-09-17T03:14:57.223Z",
   "demSource": "usgs3dep",
   "demRepairedCells": 0,
   "center": {

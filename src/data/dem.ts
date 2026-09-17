@@ -398,8 +398,29 @@ export async function fetchTerrarium(
 }
 
 /**
- * Fetch the best available DEM for a mercator bbox: USGS 3DEP, falling back to Terrarium if 3DEP fails or
- * is mostly empty (outside coverage). No-data is always filled. `source` reports which service was used.
+ * True if a 3DEP raster is an empty plane of exact zeros. Outside its coverage (abroad, open ocean) the ImageServer
+ * answers with a valid raster of zeros rather than no-data. A real US area at sea level is never exactly 0
+ * everywhere — ocean returned as 0 always comes with some land (Marathon, FL: 54 % zeros) — so a raster with
+ * essentially no non-zero cell means no coverage.
+ */
+export function isEmptyZeroPlane(elev: Float32Array): boolean {
+  let zeros = 0;
+  let other = 0;
+  for (let k = 0; k < elev.length; k++) {
+    const v = elev[k];
+    if (v === 0) zeros++;
+    else if (!isNoData(v)) other++;
+  }
+  return zeros >= elev.length * 0.5 && other <= elev.length * 0.001;
+}
+
+/** Shown when no elevation source has land for the requested area. */
+export const NO_LAND_MESSAGE = 'This area is open water or outside elevation coverage — pick a place on land.';
+
+/**
+ * Fetch the best available DEM for a mercator bbox: USGS 3DEP, falling back to Terrarium if 3DEP fails, is mostly
+ * no-data, or is an empty zero plane (outside coverage). No-data is always filled. `source` reports which service
+ * was used. Throws NO_LAND_MESSAGE when the Terrarium fallback finds only open water (or nothing).
  */
 export async function fetchDEM(
   m: MercatorBBox,
@@ -410,27 +431,38 @@ export async function fetchDEM(
   signal?: AbortSignal,
 ): Promise<{ elevation: Float32Array; source: 'usgs3dep' | 'terrarium'; filled: number }> {
   let elevation: Float32Array | null = null;
-  let source: 'usgs3dep' | 'terrarium' = 'usgs3dep';
+  let filled = 0;
   try {
     elevation = await fetch3DEP(m, nx, ny, onProgress, signal);
     if (noDataFraction(elevation) > 0.5) {
       elevation = null;
-      onProgress?.('USGS 3DEP has no coverage here — using Terrarium tiles', 0);
+    } else {
+      // Clamp repair first: a small, entirely below-sea-level US box can come back as a 0 plane at some pixel sizes.
+      filled += await repairZeroClamp(elevation, m, nx, ny, cellSize, onProgress, signal);
+      if (isEmptyZeroPlane(elevation)) elevation = null;
     }
+    if (!elevation) onProgress?.('USGS 3DEP has no coverage here — using Terrarium tiles', 0);
   } catch (e) {
     if (signal?.aborted) throw e;
     console.warn('[data] USGS 3DEP failed, falling back to Terrarium tiles:', e);
     onProgress?.('USGS 3DEP unavailable — using Terrarium tiles', 0);
+    elevation = null;
   }
-  if (!elevation) {
-    source = 'terrarium';
-    elevation = await fetchTerrarium(m, nx, ny, cellSize, onProgress, signal);
-    if (noDataFraction(elevation) > 0.5) throw new Error('No elevation data available for this area');
+  if (elevation) {
+    filled += cleanDEM(elevation, nx, ny);
+    return { elevation, source: 'usgs3dep', filled };
   }
-  let filled = 0;
-  if (source === 'usgs3dep') {
-    filled += await repairZeroClamp(elevation, m, nx, ny, cellSize, onProgress, signal);
-  }
-  filled += cleanDEM(elevation, nx, ny);
-  return { elevation, source, filled };
+  filled = 0;
+  const terrarium = await fetchTerrarium(m, nx, ny, cellSize, onProgress, signal);
+  // Deep ocean lies below the no-data floor; shallow seas and lake beds are valid but hold no land to flood.
+  if (noDataFraction(terrarium) > 0.5 || landFraction(terrarium) < 0.01) throw new Error(NO_LAND_MESSAGE);
+  filled += cleanDEM(terrarium, nx, ny);
+  return { elevation: terrarium, source: 'terrarium', filled };
+}
+
+/** Fraction of cells that are valid and more than 0.5 m above sea level. */
+export function landFraction(elev: Float32Array): number {
+  let land = 0;
+  for (let k = 0; k < elev.length; k++) if (!isNoData(elev[k]) && elev[k] > 0.5) land++;
+  return land / elev.length;
 }

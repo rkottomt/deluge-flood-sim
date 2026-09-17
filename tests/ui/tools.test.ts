@@ -5,6 +5,7 @@ import { createToolController, simplifyPolyline, nextLabel, MAX_STORMS } from '.
 import { selectTool, scaleBrush, TOOL_BY_ID } from '../../src/ui/toolDefs';
 import type { BrushOp } from '../../src/contracts';
 import { baseState, FakeCanvas, pointer, fakeRenderer, fakeSolver, fakeTerrain } from './helpers';
+import { bridgeFor, type Notice } from '../../src/ui/bridge';
 
 function setup(tool: Parameters<typeof baseState>[0] = {}) {
   const store = createStore(baseState(tool));
@@ -99,6 +100,8 @@ test('inflow click places, clicking near it removes', () => {
 
 test('storm, shelter, evac placement and limits', () => {
   const { store, canvas, ctl } = setup({ tool: 'storm', brushRadius: 1000, stormIntensity: 80 });
+  const notices: Notice[] = [];
+  bridgeFor(store).onNotice((n) => notices.push(n));
   const click = (x: number, y: number) => {
     canvas.dispatchEvent(pointer('pointerdown', x, y));
     canvas.dispatchEvent(pointer('pointerup', x, y));
@@ -108,7 +111,14 @@ test('storm, shelter, evac placement and limits', () => {
   assert.equal(store.get().storms[0].intensity, 80);
   for (let k = 1; k < MAX_STORMS + 2; k++) click(100 + k * 90, 100 + (k % 2) * 300);
   assert.equal(store.get().storms.length, MAX_STORMS);
-  assert.ok(store.get().error, 'limit reported');
+  // A limit is information, not a failure: a neutral notice, never the red error toast.
+  assert.equal(store.get().error, null);
+  assert.ok(notices.some((n) => n.kind === 'info' && n.key === 'limit-storms' && /8\/8/.test(n.title)), 'limit notice posted');
+  // At the limit, hovering empty ground shows a muted ring (a click there would add nothing).
+  canvas.dispatchEvent(pointer('pointerenter', 950, 950));
+  canvas.dispatchEvent(pointer('pointermove', 950, 950));
+  ctl.update(1 / 60);
+  assert.deepEqual(ctl.getTransientOverlay().cursor?.color, [0.58, 0.62, 0.7]);
   store.set({ tool: 'shelter' });
   click(600, 600);
   click(900, 900);
@@ -211,5 +221,24 @@ test('hover picking is skipped while pointer and camera are still', () => {
   canvas.dispatchEvent(pointer('pointermove', 320, 305));
   ctl.update(1 / 60);
   assert.equal(picks, n + 1);
+  ctl.destroy();
+});
+
+test('wall tool publishes the ground under the cursor and turns the ring red when a wall would be overtopped', () => {
+  const stage = { label: 'Point', gaugeDatum: 211.4, normalLevel: 216.3, maxOffset: 12, marks: [{ label: '1936 record', ft: 46 }] };
+  const scenario = { description: '', sources: [], storms: [], shelters: [], rainRate: 0, stage, initialFill: [] };
+  const { store, canvas, ctl } = setup({ tool: 'wall', wallHeight: 2, scenario, stageOffset: 0 });
+  canvas.dispatchEvent(pointer('pointerenter', 300, 300));
+  canvas.dispatchEvent(pointer('pointermove', 300, 300));
+  ctl.update(1 / 60);
+  const hov = bridgeFor(store).hover;
+  assert.ok(hov, 'hover published');
+  assert.equal(hov!.ground, 123); // fake renderer: ground 123 m, no mirror
+  // Normal pool 216.3 m vs a 125 m wall top → far too low → red ring.
+  assert.deepEqual(ctl.getTransientOverlay().cursor?.color, [1.0, 0.3, 0.32]);
+  // Other tools clear the hover.
+  store.set({ tool: 'orbit' });
+  ctl.update(1 / 60);
+  assert.equal(bridgeFor(store).hover, null);
   ctl.destroy();
 });

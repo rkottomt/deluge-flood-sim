@@ -7,7 +7,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import zlib from 'node:zlib';
 import { writeArrayBuffer } from 'geotiff';
-import { cleanDEM, decodeTiffF32, fillNoData, isNoData, terrariumZoom, usgs3depUrl } from '../../src/data/dem';
+import { cleanDEM, decodeTiffF32, fetchDEM, fillNoData, isEmptyZeroPlane, isNoData, landFraction, NO_LAND_MESSAGE, terrariumZoom, usgs3depUrl } from '../../src/data/dem';
 import { squareDomain } from '../../src/data/geo';
 import { decodePNG } from '../../src/data/png';
 
@@ -173,4 +173,79 @@ test('request URLs and Terrarium zoom selection', () => {
   assert.ok(z >= 12 && z <= 15, `zoom ${z}`);
   const zSmall = terrariumZoom(merc, 7.8, 4);
   assert.ok(zSmall < z, 'tile budget lowers the zoom');
+});
+
+/** Float32 TIFF bytes the way the 3DEP ImageServer delivers them. */
+async function tiffOf(values: Float32Array, nx: number, ny: number): Promise<ArrayBuffer> {
+  return (await writeArrayBuffer(values as unknown as number[], {
+    width: nx,
+    height: ny,
+    BitsPerSample: [32],
+    SampleFormat: [3],
+    SamplesPerPixel: 1,
+    PhotometricInterpretation: 1,
+  } as Record<string, unknown>)) as ArrayBuffer;
+}
+
+/** Terrarium tile (256² RGB PNG) at a uniform elevation. */
+function terrariumTile(elevation: number): Buffer {
+  const rgb = new Uint8Array(256 * 256 * 3);
+  const v = elevation + 32768;
+  for (let o = 0; o < rgb.length; o += 3) {
+    rgb[o] = Math.floor(v / 256);
+    rgb[o + 1] = Math.floor(v) % 256;
+    rgb[o + 2] = Math.round((v - Math.floor(v)) * 256);
+  }
+  return makePNG(256, 256, rgb);
+}
+
+/** Run `fn` with global fetch answering 3DEP requests with `dep` and Terrarium tile requests with `tile`. */
+async function withStubbedServices<T>(dep: (nx: number, ny: number) => Float32Array, tileElevation: number, fn: () => Promise<T>): Promise<{ result: T; urls: string[] }> {
+  const real = globalThis.fetch;
+  const urls: string[] = [];
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    const url = String(input instanceof Request ? input.url : input);
+    urls.push(url);
+    if (url.includes('3DEPElevation')) {
+      const size = /size=(\d+),(\d+)/.exec(url)!;
+      const nx = Number(size[1]);
+      const ny = Number(size[2]);
+      return new Response(await tiffOf(dep(nx, ny), nx, ny), { headers: { 'content-type': 'image/tiff' } });
+    }
+    if (url.includes('terrarium')) return new Response(new Uint8Array(terrariumTile(tileElevation)), { headers: { 'content-type': 'image/png' } });
+    return new Response('not found', { status: 404 });
+  }) as typeof fetch;
+  try {
+    return { result: await fn(), urls };
+  } finally {
+    globalThis.fetch = real;
+  }
+}
+
+test('outside 3DEP coverage (an all-zero raster) falls back to Terrarium; open water gives a friendly error', async () => {
+  const london = new Float32Array(64 * 64);
+  assert.ok(isEmptyZeroPlane(london), 'exact zero plane');
+  // A US coastal box with ocean returned as 0 (Marathon, FL: 54 % zeros) is real data.
+  const keys = Float32Array.from({ length: 64 * 64 }, (_, k) => (k % 64 < 40 ? 0 : 0.8 + (k % 7) * 0.1));
+  assert.ok(!isEmptyZeroPlane(keys));
+  assert.ok(!isEmptyZeroPlane(Float32Array.from({ length: 4096 }, () => NaN)), 'no-data is not a zero plane');
+  assert.equal(landFraction(Float32Array.from([-3, 0.2, 0.6, 12])), 0.5);
+
+  const { merc } = squareDomain({ lat: 51.5074, lon: -0.1278 }, 2000);
+  const zeros = (nx: number, ny: number) => new Float32Array(nx * ny);
+  const land = await withStubbedServices(zeros, 11.5, () => fetchDEM(merc, 64, 64, 2000 / 64));
+  assert.equal(land.result.source, 'terrarium', 'zero plane → Terrarium');
+  assert.ok(land.result.elevation.every((v) => Math.abs(v - 11.5) < 0.01), 'Terrarium elevations used');
+  assert.ok(land.urls.some((u) => u.includes('terrarium')));
+
+  const sea = await withStubbedServices(zeros, -25, () => fetchDEM(merc, 64, 64, 2000 / 64).then(() => 'loaded', (e: Error) => e.message));
+  assert.equal(sea.result, NO_LAND_MESSAGE, 'shallow sea: no land to flood');
+  const ocean = await withStubbedServices(zeros, -4800, () => fetchDEM(merc, 64, 64, 2000 / 64).then(() => 'loaded', (e: Error) => e.message));
+  assert.equal(ocean.result, NO_LAND_MESSAGE, 'deep ocean (no-data): same message');
+
+  // Real 3DEP data is kept, including genuinely below-sea-level ground.
+  const nola = (nx: number, ny: number) => Float32Array.from({ length: nx * ny }, (_, k) => -2 + ((k % nx) / nx) * 6);
+  const us = await withStubbedServices(nola, 99, () => fetchDEM(merc, 64, 64, 2000 / 64));
+  assert.equal(us.result.source, 'usgs3dep');
+  assert.ok(!us.urls.some((u) => u.includes('terrarium')), 'no Terrarium requests');
 });

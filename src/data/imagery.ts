@@ -26,7 +26,8 @@ export async function fetchImageryBytes(
 ): Promise<Uint8Array> {
   onProgress?.('Requesting aerial imagery…', 0);
   const buf = await fetchBytes(esriImageryUrl(m, size, size), {
-    timeoutMs: 60000,
+    // The server renders the export before sending a byte; a 4096² export (the bake size) can take over a minute.
+    timeoutMs: size > 2048 ? 180000 : 60000,
     retries: 2,
     expectType: 'image/',
     signal,

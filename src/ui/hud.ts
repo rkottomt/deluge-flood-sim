@@ -21,6 +21,8 @@ import {
   DASH,
 } from './format';
 import { waterHazard } from './scales';
+import { displaySpeed, isDiverged } from './stats';
+import type { AppState } from '../contracts';
 
 export function createHud(ctx: UIContext, achievedSpeed: () => number | null): HTMLElement {
   const { bind, store } = ctx;
@@ -50,25 +52,34 @@ export function createHud(ctx: UIContext, achievedSpeed: () => number | null): H
   const mass = stat('Mass error', 'Relative mass-balance error: |V − (V₀ + in − out)| / (V₀ + in). Proves no water is created or destroyed.');
   const simSpeed = stat('Sim speed', 'Simulated seconds per real second actually achieved');
 
-  bind((s) => formatKm2(s.stats?.floodedArea), (v) => setValue(area, v, 10));
-  bind((s) => (s.stats ? formatAcres(s.stats.floodedArea) : ''), (v) => setText(area.sub, v));
-  bind((s) => formatVolume(s.stats?.volume), (v) => setValue(volume, v, 10));
-  bind((s) => (s.stats ? formatPools(s.stats.volume) : ''), (v) => setText(volume.sub, v));
-  bind((s) => formatMeters(s.stats?.maxDepth), (v) => setValue(depth, v, 7));
-  bind((s) => (s.stats ? formatFeet(s.stats.maxDepth) : ''), (v) => setText(depth.sub, v));
-  bind((s) => formatSpeed(s.stats?.maxSpeed), (v) => setValue(speed, v, 8));
+  // Once the stability demo has blown the solution up, the numbers are meaningless (−3e39 m³ of water, 1e36
+  // Olympic pools…). Say so plainly instead of printing them.
+  const diverged = (s: AppState) => isDiverged(s.stats);
+  bind(diverged, (d) => {
+    toggleClass(el, 'dl-diverged', d);
+    for (const st of [area, volume, depth, speed]) st.el.dataset.sev = d ? 'danger' : 'calm';
+  });
+  bind((s) => (diverged(s) ? 'Diverged' : formatKm2(s.stats?.floodedArea)), (v) => setValue(area, v, 10));
+  bind((s) => (diverged(s) ? 'numbers no longer physical' : s.stats ? formatAcres(s.stats.floodedArea) : ''), (v) => setText(area.sub, v));
+  bind((s) => (diverged(s) ? 'Diverged' : formatVolume(s.stats?.volume)), (v) => setValue(volume, v, 10));
+  bind((s) => (diverged(s) ? 'water created from nothing' : s.stats ? formatPools(s.stats.volume) : ''), (v) => setText(volume.sub, v));
+  bind((s) => (diverged(s) ? '∞' : formatMeters(s.stats?.maxDepth)), (v) => setValue(depth, v, 7));
+  bind((s) => (diverged(s) ? 'blew up' : s.stats ? formatFeet(s.stats.maxDepth) : ''), (v) => setText(depth.sub, v));
+  bind((s) => (diverged(s) ? '∞' : formatSpeed(s.stats?.maxSpeed)), (v) => setValue(speed, v, 8));
   bind(
     (s) => {
+      if (diverged(s)) return 'blew up';
       const v = s.stats?.maxSpeed;
       if (v === undefined || !Number.isFinite(v)) return '';
-      return v * 2.23694 >= 1e4 ? 'runaway' : `${fmtNum(v * 2.23694, 1)} mph`;
+      return `${fmtNum(v * 2.23694, 1)} mph`;
     },
     (v) => setText(speed.sub, v),
   );
-  bind((s) => formatPercent(s.stats?.massError), (v) => setValue(mass, v, 8));
+  bind((s) => (diverged(s) ? '∞' : formatPercent(s.stats?.massError)), (v) => setValue(mass, v, 8));
   bind(
     (s) => {
       const e = s.stats?.massError;
+      if (diverged(s)) return 'danger';
       if (e === undefined || e === null) return 'calm';
       if (!Number.isFinite(e) || e > 0.01) return 'danger';
       if (e > 0.001) return 'warn';
@@ -83,8 +94,8 @@ export function createHud(ctx: UIContext, achievedSpeed: () => number | null): H
     (s) => {
       if (s.paused) return 'paused';
       if (!s.stats) return DASH;
-      const a = achievedSpeed();
-      return formatSpeedup(a ?? s.sim.timeScale);
+      const shown = displaySpeed(achievedSpeed(), s.sim.timeScale);
+      return shown === null ? `${fmtNum(s.sim.timeScale, 0)}×` : formatSpeedup(shown);
     },
     (v) => setValue(simSpeed, v, 7),
   );
@@ -105,7 +116,7 @@ export function createHud(ctx: UIContext, achievedSpeed: () => number | null): H
   };
   const dDt = diag('Δt', 'Adaptive timestep per substep (CFL-limited)');
   const dSub = diag('substeps', 'Solver substeps this frame');
-  const dCo = diag('Courant', 'Largest Courant number seen — must stay below 1 for stability');
+  const dCo = diag('Courant', 'Largest 2-D Courant number seen. The robust scheme is stable below √θ ≈ 0.89 (θ-smoothing) and targets 0.7');
   const dFps = diag('fps', 'Rendered frames per second');
   bind((s) => formatDt(s.stepInfo?.dt), (v) => setText(dDt.v, v));
   bind((s) => (s.stepInfo ? String(s.stepInfo.substeps) : DASH), (v) => setText(dSub.v, v));
@@ -113,7 +124,10 @@ export function createHud(ctx: UIContext, achievedSpeed: () => number | null): H
   bind(
     (s) => {
       const c = s.stats?.courant;
-      return c === undefined ? 'calm' : !Number.isFinite(c) || c > 1 ? 'danger' : c > 0.9 ? 'warn' : 'calm';
+      if (c === undefined) return 'calm';
+      if (!Number.isFinite(c) || c > 1) return 'danger';
+      // Naive mode runs at 1.8 on purpose; robust mode's limit with θ-smoothing is √0.8 ≈ 0.89.
+      return c > 0.89 ? 'warn' : 'calm';
     },
     (sev) => (dCo.el.dataset.sev = sev),
   );

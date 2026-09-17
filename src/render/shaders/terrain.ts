@@ -1,5 +1,5 @@
 /** Terrain surface + diorama skirt shaders. */
-import { COMMON_WGSL, FRAME_WGSL, LOD_WGSL } from './common';
+import { COMMON_WGSL, FRAME_WGSL, LOD_WGSL, WALL_WGSL } from './common';
 
 export const TERRAIN_WGSL = /* wgsl */ `
 ${FRAME_WGSL}
@@ -12,8 +12,10 @@ ${FRAME_WGSL}
 @group(0) @binding(6) var linSamp: sampler;
 @group(0) @binding(7) var imgSamp: sampler;
 @group(0) @binding(8) var wetTex: texture_2d<f32>;
+@group(0) @binding(9) var wallTex: texture_2d<f32>;
 ${COMMON_WGSL}
 ${LOD_WGSL}
+${WALL_WGSL}
 
 struct VOut {
   @builtin(position) pos: vec4f,
@@ -114,36 +116,65 @@ fn fsTerrain(in: VOut) -> @location(0) vec4f {
   albedo *= mix(1.0, 0.58, wet);
 
   // ── Walls: sandbags (≤ 2.5 m) or concrete floodwall ──────────────────────────────────────
-  // Walls are at most a couple of cells wide, so they are rendered as a distinct material with exaggerated face
-  // lighting, a contact shadow at the foot and a bright crest, which keeps them legible from far away.
-  let barrier = misc.r;
-  let wallAmt = smoothstep(0.05, 0.3, barrier);
-  let foot = smoothstep(0.0, 0.04, barrier) * (1.0 - wallAmt);
-  var rim = 0.0;
+  // A levee is a couple of cells wide, a few pixels from the default camera. It is drawn from the wall distance
+  // field as a raised structure whose parts never get thinner than a pixel or so: a lit crest, the face turned to
+  // the sun and the shaded face, a dark casing and a drop shadow on the ground. Up close the same profile lines up
+  // with the real extruded wall geometry (crest = the wall cells, faces = the mesh ramps beside them).
   var nLight = n;
-  if (wallAmt > 0.001) {
-    let concrete = smoothstep(2.3, 2.8, barrier);
-    // Sandbag courses every ~0.3 m of height, staggered bags ~0.7 m long.
-    let rowF = in.elev / 0.3;
-    let row = floor(rowF);
-    let along = (in.world.x + in.world.z) / 0.7 + row * 0.5;
-    let rowEdge = abs(fract(rowF) - 0.5) * 2.0;
-    let bagEdge = abs(fract(along) - 0.5) * 2.0;
-    let detailFade = 1.0 - smoothstep(0.08, 0.3, wallCoordFw);
-    let bag = mix(1.0, (0.72 + 0.28 * (1.0 - pow(rowEdge, 6.0))) * (0.8 + 0.2 * (1.0 - pow(bagEdge, 8.0))), detailFade);
-    let jitter = 0.9 + 0.2 * hash12(vec2f(row, floor(along)));
-    let sandbag = vec3f(0.56, 0.44, 0.26) * bag * mix(1.0, jitter, detailFade);
-    // Concrete: light grey with panel joints every 5 m.
-    let joint = 1.0 - (1.0 - smoothstep(0.0, 0.04, abs(fract((in.world.x - in.world.z) / 5.0) - 0.5) * 2.0)) * 0.35 * detailFade;
-    let concreteCol = vec3f(0.66, 0.66, 0.63) * joint;
-    let wallCol = mix(sandbag, concreteCol, concrete);
-    albedo = mix(albedo, wallCol, wallAmt);
-    nLight = normalize(vec3f(-slopeVec.x * (1.0 + 2.5 * wallAmt), 1.0, -slopeVec.y * (1.0 + 2.5 * wallAmt)));
-    // Crest highlight where the flat top meets the faces.
-    let topness = smoothstep(0.55, 0.85, nLight.y) * (1.0 - smoothstep(0.93, 0.995, nLight.y));
-    rim = wallAmt * (topness + smoothstep(0.97, 1.0, nLight.y) * 0.5);
+  var wallBody = 0.0;
+  var casing = 0.0;
+  var shadow = 0.0;
+  var crestGlint = 0.0;
+  if (F.wall.x > 0.5) {
+    let wh = wallAt(uv);
+    if (wh.h > WALL_MIN_H && wh.d < (F.wall.y - 0.5) * F.cellSize) {
+      let pxM = max(distance(in.world, F.camPos) * F.elev.w, 1e-3);
+      let prof = wallProfile(pxM);
+      let aa = pxM * 0.6;
+      let crestAmt = 1.0 - smoothstep(prof.crest - aa, prof.crest + aa, wh.d);
+      wallBody = 1.0 - smoothstep(prof.face - aa, prof.face + aa, wh.d);
+      casing = (1.0 - smoothstep(prof.casing - aa, prof.casing + aa, wh.d)) * (1.0 - wallBody);
+      // Direction away from the wall centre line (the field's proximity falls off along it).
+      let e = 1.0 / F.grid;
+      let gx = textureSampleLevel(wallTex, linSamp, uv + vec2f(e.x, 0.0), 0.0).r - textureSampleLevel(wallTex, linSamp, uv - vec2f(e.x, 0.0), 0.0).r;
+      let gz = textureSampleLevel(wallTex, linSamp, uv + vec2f(0.0, e.y), 0.0).r - textureSampleLevel(wallTex, linSamp, uv - vec2f(0.0, e.y), 0.0).r;
+      let gl = length(vec2f(gx, gz));
+      let away = select(vec2f(0.0), -vec2f(gx, gz) / gl, gl > 1e-6);
+      let sunH = normalize(F.sunDir.xz + vec2f(1e-5, 0.0));
+      let facing = dot(away, sunH);
+      // Faces lean ~50° away from the centre line; the crest is flat.
+      let faceN = normalize(vec3f(away.x * 1.2, 1.0, away.y * 1.2));
+      nLight = normalize(mix(n, mix(faceN, vec3f(0.0, 1.0, 0.0), crestAmt), wallBody));
+
+      let concrete = smoothstep(2.3, 2.8, wh.h);
+      // Sandbag courses (~0.3 m) and staggered bags (~0.7 m) where they are resolvable.
+      let rowF = in.elev / 0.3;
+      let row = floor(rowF);
+      let along = (in.world.x + in.world.z) / 0.7 + row * 0.5;
+      let rowEdge = abs(fract(rowF) - 0.5) * 2.0;
+      let bagEdge = abs(fract(along) - 0.5) * 2.0;
+      let detailFade = 1.0 - smoothstep(0.08, 0.3, wallCoordFw);
+      let bag = mix(1.0, (0.74 + 0.26 * (1.0 - pow(rowEdge, 6.0))) * (0.82 + 0.18 * (1.0 - pow(bagEdge, 8.0))), detailFade);
+      let jitter = mix(1.0, 0.9 + 0.2 * hash12(vec2f(row, floor(along))), detailFade);
+      // Saturated burlap/sand tan so the levee stands apart from roofs, roads and trees; light concrete otherwise.
+      let sandbag = vec3f(0.60, 0.33, 0.085) * bag * jitter;
+      let joint = 1.0 - (1.0 - smoothstep(0.0, 0.04, abs(fract((in.world.x - in.world.z) / 5.0) - 0.5) * 2.0)) * 0.35 * detailFade;
+      let concreteCol = vec3f(0.60, 0.59, 0.55) * joint;
+      albedo = mix(albedo, mix(sandbag, concreteCol, concrete), wallBody);
+
+      // Drop shadow on the side away from the sun (length from the wall height, at least a couple of pixels),
+      // plus a soft contact shadow on both sides.
+      let tanEl = F.sunDir.y / max(length(F.sunDir.xz), 1e-3);
+      let shadowLen = max(2.2 * pxM, wh.h * F.exag / max(tanEl, 0.2));
+      let beyond = wh.d - prof.casing;
+      shadow = (1.0 - wallBody) * max(
+        (1.0 - smoothstep(0.0, shadowLen, beyond)) * smoothstep(-0.05, -0.45, facing) * 0.55,
+        (1.0 - smoothstep(0.0, 1.5 * pxM + 0.3 * F.cellSize, beyond)) * 0.3);
+      // Thin highlight along the sunlit crest edge.
+      crestGlint = wallBody * (1.0 - smoothstep(0.0, 0.9 * aa + 0.2 * F.cellSize, abs(wh.d - prof.crest))) * smoothstep(0.1, 0.6, facing);
+    }
   }
-  albedo *= 1.0 - 0.4 * foot;
+  albedo *= 1.0 - shadow;
 
   // ── Lighting ───────────────────────────────────────────────────────────────────────────
   let L = F.sunDir;
@@ -152,11 +183,12 @@ fn fsTerrain(in: VOut) -> @location(0) vec4f {
     // Aerial photos already contain shading: apply a softened hillshade relative to flat ground (walls are not in
     // the photo, so they get full lighting).
     let flatNdl = max(L.y, 0.2);
-    ndl = mix(mix(flatNdl, ndl, 0.62), ndl, wallAmt);
+    ndl = mix(mix(flatNdl, ndl, 0.62), ndl, wallBody);
   }
   let sunK = F.sunColor * (1.0 - F.opts.w * 0.75);
   var color = albedo * (sunK * ndl + skyAmbient(nLight) * 0.85);
-  color += vec3f(1.0, 0.95, 0.85) * rim * 0.4 * (0.4 + ndl);
+  color += vec3f(1.0, 0.95, 0.85) * crestGlint * 0.35 * (1.0 - F.opts.w * 0.6);
+  color = mix(color, vec3f(0.018, 0.014, 0.01), casing * 0.9);
 
   // ── Contours ───────────────────────────────────────────────────────────────────────────
   if (F.opts.y > 0.5 || !useImagery) {
@@ -189,8 +221,11 @@ fn fsSkirt(in: VOut) -> @location(0) vec4f {
   // Thin topsoil band.
   albedo = mix(vec3f(0.12, 0.13, 0.06), albedo, smoothstep(0.0, 1.5 * F.exag, depthBelow * F.exag));
   let ndl = max(dot(n, F.sunDir), 0.0);
-  var color = albedo * (F.sunColor * ndl * 0.8 + skyAmbient(n) * 0.7);
-  color *= mix(1.0, 0.45, t);
+  // Ambient floor: the north and west walls face away from the sun and would otherwise render black when an
+  // orbit looks at them from outside the diorama.
+  let light = max(F.sunColor * ndl * 0.8 + skyAmbient(n) * 0.7, vec3f(luminance(F.skyHorizon) * 1.1));
+  var color = albedo * light;
+  color *= mix(1.0, 0.55, t);
   color = mix(color, in.haze.rgb, in.haze.a);
   return vec4f(color, 1.0);
 }

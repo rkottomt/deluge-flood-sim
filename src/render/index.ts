@@ -20,7 +20,7 @@ import { OrbitController, type CameraEnvironment, type CameraMatrices } from './
 import { HeightField, meshStride } from './heightfield';
 import { frustumPlanes, LOD_INSTANCE_FLOATS, LOD_PATCH, LodTree } from './lod';
 import { bandsForMode, cssToLinear } from './legend';
-import { buildMarkers, buildRoadRibbons, buildWallGhost, circlePolyline, MarkerBuilder, RibbonBuilder, RibbonKind } from './overlays';
+import { buildMarkers, buildRoadRibbons, buildWallGhost, circlePolyline, MarkerBuilder, RibbonBuilder, RibbonKind, stormCloudElevation } from './overlays';
 import { cameraRay, pickTerrain } from './picking';
 import { createPipelines, DEPTH_FORMAT, HDR_FORMAT, MSAA, type Pipelines } from './pipelines';
 import { FRAME_UNIFORM_SIZE } from './shaders/common';
@@ -29,8 +29,11 @@ import { createImageryTexture, createRippleTexture, createSolidTexture } from '.
 import { clamp, smoothstep } from './math';
 import { AdaptiveQuality, QUALITY_PRESETS, targetSize, type QualityPreset, type RendererQuality } from './quality';
 import { GpuTimer } from './gpuTimer';
+import { WallField, WALL_FIELD_RADIUS, type Rect } from './wallField';
+import { BASE_EXPOSURE, hazardInput } from './tonemap';
+import { footprintRadius, stormWeight } from '../sim/forcing';
 
-export { DEPTH_BANDS, MAX_DEPTH_BANDS, VELOCITY_BANDS, bandsForMode } from './legend';
+export { DEPTH_BANDS, MAX_DEPTH_BANDS, NORMAL_WATER_LEGEND, VELOCITY_BANDS, bandsForMode } from './legend';
 export { OrbitController } from './camera';
 export type { RendererQuality } from './quality';
 
@@ -71,6 +74,12 @@ export interface DelugeRendererAPI extends FloodRenderer {
    * then treats frames at that ceiling as on target instead of stepping resolution down.
    */
   setFrameIntervalFloor(ms: number): void;
+  /**
+   * Re-capture the "normally wet" mask (rivers and lakes before any flood) from the solver's current water. setScene
+   * does this automatically — it is called right after solver.setInitialWater — so this is only needed if the
+   * initial water is replaced later. The hazard maps colour only land outside this mask.
+   */
+  captureNormalWater(): void;
   readonly stats: Readonly<RendererStats>;
 }
 
@@ -145,6 +154,12 @@ interface SceneGPU {
   roadStatus: GPUBuffer;
   roadStatusCopy: Uint8Array | null;
   contourInterval: number;
+  /** Wall distance field (CPU) and its rgba16float texture (distance, height, crest). */
+  wallField: WallField;
+  wallTex: GPUTexture;
+  /** rgba8unorm, r = 1 where the cell held water at the initial fill. */
+  normalWetTex: GPUTexture;
+  normalWetValid: boolean;
 }
 
 interface MeshBuffers {
@@ -235,6 +250,15 @@ class DelugeRenderer implements DelugeRendererAPI {
   private ribbonKey = '';
 
   private exaggeration = 1.5;
+  /** Grid rectangles of recently committed wall previews, re-scanned every frame for a short while. */
+  private hotRects: Array<Rect & { ttl: number }> = [];
+  private lastPreviewRect: Rect | null = null;
+  /** A terrain / wall edit was detected: rebuild the derived textures this frame. */
+  private forcePrep = false;
+  private editEpoch = 0;
+  /** Sky overcast (0..0.92) of the current frame (also drives exposure). */
+  private overcast = 0;
+  private hazardCache = new Map<string, number[]>();
   private lastFrameMs = 0;
   private frameCounter = 0;
   private destroyed = false;
@@ -387,6 +411,14 @@ class DelugeRenderer implements DelugeRendererAPI {
     const surfTex = tex('surf', nx, ny, 'rgba16float');
     const normTex = tex('norm', nx, ny, 'rgba16float');
     const miscTex = tex('misc', nx, ny, 'rgba16float');
+    // Zero texels read as "no wall within range" (proximity 0), so only edited rectangles are ever uploaded.
+    const wallTex = device.createTexture({ label: 'wall-field', size: [nx, ny], format: 'rgba16float', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
+    const normalWetTex = device.createTexture({
+      label: 'normal-water',
+      size: [nx, ny],
+      format: 'rgba8unorm',
+      usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
+    });
 
     let imageryTex = this.dummyImagery;
     let hasImagery = false;
@@ -409,6 +441,8 @@ class DelugeRenderer implements DelugeRendererAPI {
       { binding: 6, resource: this.linClamp },
       { binding: 7, resource: samp7 },
       { binding: 8, resource: wetTex.createView() },
+      { binding: 9, resource: wallTex.createView() },
+      { binding: 10, resource: normalWetTex.createView() },
     ];
     const terrainBG = device.createBindGroup({ label: 'terrain', layout: this.P.sceneBGL, entries: sceneEntries(imageryTex, this.aniso) });
     const waterBG = device.createBindGroup({ label: 'water', layout: this.P.sceneBGL, entries: sceneEntries(this.rippleTex, this.repeat) });
@@ -481,10 +515,79 @@ class DelugeRenderer implements DelugeRendererAPI {
       roadStatus,
       roadStatusCopy: null,
       contourInterval: niceStep(relief / 24),
+      wallField: new WallField(nx, ny, solver.getGroundCPU(), solver.getBarrierCPU()),
+      wallTex,
+      normalWetTex,
+      normalWetValid: false,
     };
     this.markerKey = '';
     this.ribbonKey = '';
+    this.hotRects = [];
+    this.lastPreviewRect = null;
+    this.scene.wallField.scanAll();
+    this.uploadWallField(this.scene);
+    this.captureNormalWater();
     this.camera.setEnvironment(this.cameraEnv());
+  }
+
+  captureNormalWater(): void {
+    const s = this.scene;
+    if (!s || this.destroyed) return;
+    const bg = this.device.createBindGroup({
+      label: 'normal-water',
+      layout: this.P.normalWater.getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: s.solver.stateTexture.createView() },
+        { binding: 1, resource: s.normalWetTex.createView() },
+      ],
+    });
+    const enc = this.device.createCommandEncoder({ label: 'normal-water' });
+    const cp = enc.beginComputePass({ label: 'normal-water' });
+    cp.setPipeline(this.P.normalWater);
+    cp.setBindGroup(0, bg);
+    cp.dispatchWorkgroups(Math.ceil(s.nx / 16), Math.ceil(s.ny / 16));
+    cp.end();
+    this.device.queue.submit([enc.finish()]);
+    s.normalWetValid = true;
+  }
+
+  /** Recompute the wall field where the barrier changed and upload the changed rectangle. */
+  private uploadWallField(s: SceneGPU): boolean {
+    const rect = s.wallField.update();
+    if (!rect) return false;
+    const w = rect.x1 - rect.x0;
+    const h = rect.y1 - rect.y0;
+    if (w <= 0 || h <= 0) return true;
+    const data = s.wallField.packHalf(rect, s.groundMin);
+    this.device.queue.writeTexture({ texture: s.wallTex, origin: { x: rect.x0, y: rect.y0 } }, data, { bytesPerRow: w * 8 }, { width: w, height: h });
+    return true;
+  }
+
+  /**
+   * Terrain / wall edits. The solver's exported state texture changes identity on every export, but two edits
+   * between frames flip it back (e.g. a two-segment wall drawn while paused), so edits are also detected from the
+   * CPU mirrors: under the brush cursor and where a wall preview was just committed every frame, everywhere else
+   * incrementally.
+   */
+  private watchEdits(s: SceneGPU): void {
+    const wf = s.wallField;
+    const o = this.overlays;
+    const cur = o?.cursor;
+    if (cur) {
+      const r = cur.radius + 3;
+      wf.scanRect(cur.gx - r, cur.gy - r, cur.gx + r, cur.gy + r);
+    }
+    for (const h of this.hotRects) {
+      wf.scanRect(h.x0, h.y0, h.x1, h.y1);
+      h.ttl--;
+    }
+    this.hotRects = this.hotRects.filter((h) => h.ttl > 0);
+    wf.scanSome(65_536);
+    const edited = wf.consumeEdits();
+    if (this.uploadWallField(s) || edited) {
+      this.forcePrep = true;
+      this.editEpoch++;
+    }
   }
 
   private disposeScene(): void {
@@ -495,6 +598,8 @@ class DelugeRenderer implements DelugeRendererAPI {
     s.surfTex.destroy();
     s.normTex.destroy();
     s.miscTex.destroy();
+    s.wallTex.destroy();
+    s.normalWetTex.destroy();
     if (s.hasImagery) s.imageryTex.destroy();
     s.roadVerts?.destroy();
     s.roadIndices?.destroy();
@@ -582,6 +687,21 @@ class DelugeRenderer implements DelugeRendererAPI {
 
     // Markers (pins, beacons, gauges, storms) + wall ghost.
     const wp = o?.wallPreview ?? null;
+    // Where a wall is being drawn: when the preview goes away the wall has just been committed there.
+    if (wp && wp.pts.length >= 2) {
+      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+      for (let i = 0; i + 1 < wp.pts.length; i += 2) {
+        x0 = Math.min(x0, wp.pts[i]);
+        x1 = Math.max(x1, wp.pts[i]);
+        y0 = Math.min(y0, wp.pts[i + 1]);
+        y1 = Math.max(y1, wp.pts[i + 1]);
+      }
+      const r = wp.radius + 3;
+      this.lastPreviewRect = { x0: x0 - r, y0: y0 - r, x1: x1 + r, y1: y1 + r };
+    } else if (this.lastPreviewRect) {
+      this.hotRects.push({ ...this.lastPreviewRect, ttl: 45 });
+      this.lastPreviewRect = null;
+    }
     const markerKey = JSON.stringify([
       o?.sources.map((x) => [x.type, x.gx, x.gy, x.type === 'stage' ? x.level : x.discharge]),
       o?.storms.map((x) => [x.gx, x.gy, x.radius, x.intensity]),
@@ -775,6 +895,7 @@ class DelugeRenderer implements DelugeRendererAPI {
       settings.showContours,
       settings.rainRate > 0.2,
       this.overlayVersion,
+      this.editEpoch,
       s ? this.textureId(s.solver.stateTexture) : 0,
       this.canvas.clientWidth,
       this.canvas.clientHeight,
@@ -833,6 +954,7 @@ class DelugeRenderer implements DelugeRendererAPI {
 
     const s = this.scene;
     if (s) {
+      this.watchEdits(s);
       s.lod.refreshSome();
       const [lo, hi] = s.lod.range;
       s.hf.minElev = lo;
@@ -865,8 +987,11 @@ class DelugeRenderer implements DelugeRendererAPI {
       // re-exports into a new texture after every step and brush edit; a periodic refresh covers solvers that
       // edit bed textures in place.
       const changed = state !== this.lastPrepState || useMax !== this.lastPrepUseMax;
-      const due = changed ? this.framesSincePrep >= preset.prepInterval || useMax !== this.lastPrepUseMax : this.framesSincePrep >= 30;
+      const due =
+        this.forcePrep ||
+        (changed ? this.framesSincePrep >= preset.prepInterval || useMax !== this.lastPrepUseMax : this.framesSincePrep >= 30);
       if (due && !this.debugSkip.has('prep')) {
+        this.forcePrep = false;
         this.framesSincePrep = 0;
         this.lastPrepState = state;
         this.lastPrepUseMax = useMax;
@@ -1005,9 +1130,8 @@ class DelugeRenderer implements DelugeRendererAPI {
       bloomPass(this.bloomA!, this.bloomBGs[2], false);
     }
 
-    const overcast = smoothstep(1, 60, settings.rainRate);
     const srgbOut = this.format.endsWith('-srgb') ? 0 : 1;
-    d.queue.writeBuffer(this.postBuf, 0, new Float32Array([0.7 * (1 + overcast * 0.35), srgbOut, 0.3, preset.bloom ? 1 : 0]));
+    d.queue.writeBuffer(this.postBuf, 0, new Float32Array([this.exposure(), srgbOut, 0.3, preset.bloom ? 1 : 0]));
     const tp = enc.beginRenderPass({
       label: 'tonemap',
       colorAttachments: [{ view: this.ctx.getCurrentTexture().createView(), loadOp: 'clear', storeOp: 'store', clearValue: [0, 0, 0, 1] }],
@@ -1047,8 +1171,8 @@ class DelugeRenderer implements DelugeRendererAPI {
     f[35] = Number.isFinite(settings.time) ? settings.time % 100000 : 0;
 
     const rain = Math.max(0, settings.rainRate || 0);
-    const stormBoost = (this.overlays?.storms.length ?? 0) > 0 ? 0.25 : 0;
-    const overcast = Math.min(0.92, smoothstep(0.5, 60, rain) * 0.92 + stormBoost * (1 - smoothstep(0.5, 60, rain)));
+    const overcast = this.computeOvercast(rain, m.eye[1]);
+    this.overcast = overcast;
     // Late-morning sun from the south-south-east, 40° high: consistent with the shadows baked into typical
     // (mid-morning) satellite imagery, so hillshading and photo shadows agree.
     const az = (155 * Math.PI) / 180;
@@ -1099,13 +1223,18 @@ class DelugeRenderer implements DelugeRendererAPI {
     f[74] = clamp(this.camera.pose.distance / 250, 3, 40);
     // Rain particles live in a camera-centred box that scales with zoom so rain reads at every distance.
     f[75] = clamp(this.camera.pose.distance * 0.1, 30, 1200);
+    f[76] = s?.wallField.anyWall ? 1 : 0;
+    f[77] = WALL_FIELD_RADIUS + 1;
+    f[78] = s?.groundMin ?? 0;
+    f[79] = s?.normalWetValid ? 1 : 0;
+    const hdr = this.hazardInputs(settings.waterMode, bands);
     for (let i = 0; i < 8; i++) {
-      const b = bands[Math.min(i, Math.max(0, bands.length - 1))];
-      const c = b ? cssToLinear(b.color) : [0, 0, 0];
-      f[76 + i * 4] = c[0];
-      f[77 + i * 4] = c[1];
-      f[78 + i * 4] = c[2];
-      f[79 + i * 4] = b && Number.isFinite(b.max) ? b.max : 1e9;
+      const k = Math.min(i, Math.max(0, bands.length - 1));
+      const b = bands[k];
+      f[80 + i * 4] = hdr[k * 3] ?? 0;
+      f[81 + i * 4] = hdr[k * 3 + 1] ?? 0;
+      f[82 + i * 4] = hdr[k * 3 + 2] ?? 0;
+      f[83 + i * 4] = b && Number.isFinite(b.max) ? b.max : 1e9;
     }
     this.device.queue.writeBuffer(this.frameBuf, 0, f);
 
@@ -1120,8 +1249,56 @@ class DelugeRenderer implements DelugeRendererAPI {
     ov[9] = o?.routeState === 'ok' ? 1 : blocked ? 2 : 0;
     ov[10] = settings.showImagery ? 0.7 : 0.85;
     ov[11] = s?.roadStatusCopy ? 1 : 0;
+    ov[12] = WATER_MODE_INDEX[settings.waterMode] ?? 0;
+    ov[13] = o?.evacStart ? 1 : 0;
     this.device.queue.writeBuffer(this.overlayBuf, 0, ov);
     return m;
+  }
+
+  /**
+   * Sky overcast from the rain the viewer is in. Global rain greys the whole sky. A storm cell over the camera target
+   * does too when the camera is under its cloud base; from an aerial view above the deck the cell is a local weather
+   * feature (its deck and rain shaft mark it) and only tints the sky a little, so the flooding under it stays readable.
+   */
+  private computeOvercast(rain: number, eyeY: number): number {
+    const s = this.scene;
+    const t = this.camera.pose.target;
+    let stormRain = 0;
+    for (const st of this.overlays?.storms ?? []) {
+      stormRain += Math.max(0, st.intensity) * stormWeight(Math.hypot(t.gx - st.gx, t.gy - st.gy), footprintRadius(st.radius));
+    }
+    // settings.rainRate already includes the storms (and is 0 while paused).
+    stormRain = Math.min(stormRain, rain);
+    const globalRain = rain - stormRain;
+    let under = 1;
+    if (s && stormRain > 0) {
+      const domainSize = Math.max(s.nx, s.ny) * s.terrain.cellSize;
+      const cloudY = stormCloudElevation({ minElev: s.groundMin, maxElev: s.groundMax, domainSize }) * this.exaggeration;
+      const margin = domainSize * 0.03;
+      under = 1 - smoothstep(cloudY - margin, cloudY + margin, eyeY);
+    }
+    const of = (r: number) => smoothstep(0.5, 60, r) * 0.92;
+    const stormOvercast = of(stormRain) * (0.3 + 0.7 * under);
+    return Math.min(0.92, 1 - (1 - of(globalRain)) * (1 - stormOvercast));
+  }
+
+  private exposure(): number {
+    return BASE_EXPOSURE * (1 + (this.overcast / 0.92) * 0.35);
+  }
+
+  /** HDR shader inputs (rgb per band) whose tone-mapped colours are the legend colours at this frame's exposure. */
+  private hazardInputs(mode: string, bands: ReadonlyArray<{ color: string }>): number[] {
+    if (bands.length === 0) return [];
+    const exposure = Math.round(this.exposure() * 200) / 200;
+    const key = `${mode}|${exposure}`;
+    let out = this.hazardCache.get(key);
+    if (!out) {
+      out = [];
+      for (const b of bands) out.push(...hazardInput(cssToLinear(b.color), exposure));
+      if (this.hazardCache.size > 64) this.hazardCache.clear();
+      this.hazardCache.set(key, out);
+    }
+    return out;
   }
 
   // ── Picking ──────────────────────────────────────────────────────────────────────────────

@@ -143,6 +143,8 @@ describe('robustness', () => {
     const r = router.route({ gx: sx, gy: sy }, [shelterAt('Far', city.pos(0, 0).gx, city.pos(0, 0).gy)]);
     assert.equal(r.state, 'blocked');
     assert.match(r.message, /every road near the start is flooded/);
+    assert.equal(r.reason, 'start-roads-flooded');
+    assert.equal(r.advice, 'Every road near the start is flooded. Shelter in place on higher floors.');
     assert.ok(r.polyline, 'cut route still provided for rendering');
   });
 });
@@ -151,11 +153,29 @@ describe('formatting', () => {
   test('distance, duration and street names', () => {
     assert.equal(formatDistance(3400), '3.4 km');
     assert.equal(formatDistance(850), '850 m');
-    assert.equal(formatDistance(12_300), '12 km');
-    assert.equal(formatDuration(20), '< 1 min');
+    assert.equal(formatDistance(3), '10 m');
+    assert.equal(formatDistance(996), '1.0 km', 'rounding up to a kilometre switches unit');
+    assert.equal(formatDistance(12_300), '12.3 km');
+    assert.equal(formatDistance(123_400), '123 km');
+    assert.equal(formatDistance(NaN), '—');
+    assert.equal(formatDuration(20), '20 s');
+    assert.equal(formatDuration(59.7), '1 min', 'rounding up to a minute switches unit');
     assert.equal(formatDuration(6 * 60 + 10), '6 min');
-    assert.equal(formatDuration(65 * 60), '1 h 05 min');
+    assert.equal(formatDuration(65 * 60), '1 h 5 min');
+    assert.equal(formatDuration(120 * 60), '2 h');
+    assert.equal(formatDuration(-1), '—');
     assert.equal(normalizeStreetName('  I- 376 '), 'I-376');
     assert.equal(normalizeStreetName('Fort  Pitt Blvd'), 'Fort Pitt Blvd');
+  });
+
+  test('the status sentence uses the same numbers as the evacuation card', async () => {
+    const ui = await import('../../src/ui/format');
+    const plain = (s: string) => s.replace(/[\u00a0\u2009\u202f]/g, ' ').replace(/(\d),(\d)/g, '$1$2');
+    for (const m of [10, 42, 850, 994, 1000, 3456, 12_345, 99_000, 250_000]) {
+      assert.equal(formatDistance(m), plain(ui.formatDistance(m)), `${m} m`);
+    }
+    for (const s of [0, 1, 45, 59, 60, 61, 89, 91, 360, 3599, 3600, 3900, 7200, 36_000]) {
+      assert.equal(formatDuration(s), plain(ui.formatDuration(s)), `${s} s`);
+    }
   });
 });

@@ -53,23 +53,31 @@ fn faceDepth(hL: f32, zL: f32, hR: f32, zR: f32) -> f32 {
 }
 
 // Free-outflow ("open") boundary flux (outward, ≥ 0) of the edge cell (i, j) with depth h; (di, dj) points INTO
-// the domain. Ghost cell: same depth, water surface lower by dx·S → face depth h, surface slope S, and we take
-// the steady normal-flow solution of the momentum equation q = h^{5/3}·√S / n (outflow only, never inflow).
+// the domain. The larger of two outflows (outflow only, never inflow):
 //
-// S = max(minSlope, min(bed slope, water-surface slope)), both measured toward the edge between the first and
-// second INNER cells (minSlope alone if either is dry). Each ingredient fixes a real failure seen on the
-// Pittsburgh DEM:
-//  • bed slope alone: where the domain edge cuts a sloping river BANK, the bank cells pour out like a waterfall
-//    (critical flow) and the pool rushes along the edge at 7 m/s;
-//  • surface slope alone: outflow draws the surface down near the edge, which steepens the slope, which raises
-//    the outflow… until whole rivers leave at critical speed;
-//  • the minimum of the two: a river pool leaves at its minSlope "energy slope" (flat channel bed pins it, flat
-//    pool surface pins the banks), hillside sheet flow leaves at its own slope (surface ∥ bed), and a single dry
-//    bump next to the edge can't fake a cliff.
-// S never depends on this cell's own depth: an outflow that DEcreased as the edge cell filled would be
-// anti-diffusive, i.e. unstable in an explicit scheme.
-// Robust mode also caps the outflow at Froude bFrMax (1 = critical flow, q = h·√(g·h)): water pouring over a
-// free edge (a weir brink) cannot leave faster than critical flow.
+// 1. NORMAL FLOW. Ghost cell: same depth, water surface lower by dx·S → face depth h, surface slope S, and the
+//    steady normal-flow solution of the momentum equation q = h^{5/3}·√S / n.
+//    S = max(minSlope, min(bed slope, water-surface slope)), both measured toward the edge between the first and
+//    second INNER cells (minSlope alone if either is dry). Each ingredient fixes a real failure seen on the
+//    Pittsburgh DEM:
+//     • bed slope alone: where the domain edge cuts a sloping river BANK, the bank cells pour out like a waterfall
+//       (critical flow) and the pool rushes along the edge at 7 m/s;
+//     • surface slope alone: outflow draws the surface down near the edge, which steepens the slope, which raises
+//       the outflow… until whole rivers leave at critical speed;
+//     • the minimum of the two: a river pool leaves at its minSlope "energy slope" (flat channel bed pins it, flat
+//       pool surface pins the banks), hillside sheet flow leaves at its own slope (surface ∥ bed), and a single dry
+//       bump next to the edge can't fake a cliff.
+//    S never depends on this cell's own depth: an outflow that DEcreased as the edge cell filled would be
+//    anti-diffusive, i.e. unstable in an explicit scheme. Robust mode caps this part at Froude bFrMax (1 = critical
+//    flow, q = h·√(g·h)): water pouring over a free edge (a weir brink) cannot leave faster than critical flow.
+//
+// 2. TRANSMISSIVE: the discharge arriving through the last interior face (previous step). On its own, normal flow
+//    needs the edge cell to pond until h^{5/3}·√S/n matches what arrives; once a river backs up its surface is flat,
+//    S drops to minSlope, and a river sloping to the edge ran ~2.5× its normal depth over its last ~2 km. With
+//    the max the edge cell simply passes on what reaches it, so a river leaves at the depth it arrives with. It
+//    never drains the edge cell below what normal flow would, so it adds no feedback, and it depends only on the
+//    neighbouring face, not on this cell's depth. Robust mode bounds it by the interior velocity/Froude cap
+//    (the face it copies obeyed that cap already; this re-applies it at the edge cell's own depth).
 fn bflux(h: f32, i: i32, j: i32, di: i32, dj: i32) -> f32 {
   if (sim.openBnd == 0 || !(h >= sim.hMin)) { return 0.0; }
   let a = st(i + di, j + dj);
@@ -80,10 +88,20 @@ fn bflux(h: f32, i: i32, j: i32, di: i32, dj: i32) -> f32 {
     let surfS = ((b.a - a.a) + (b.r - a.r)) / sim.dx;
     S = max(min(bedS, surfS), sim.minSlope);
   }
-  var q = pow(h, 5.0 / 3.0) * sqrt(S) * sim.invN;
+  var qNormal = pow(h, 5.0 / 3.0) * sqrt(S) * sim.invN;
+  // Outward discharge through the last interior face: stored as the east/south face flux of the inner neighbour
+  // for the east/south edges, and as this cell's own east/south face flux (sign flipped) for the west/north edges.
+  var qIn = 0.0;
+  if (di < 0) { qIn = a.g; }
+  if (dj < 0) { qIn = a.b; }
+  if (di > 0) { qIn = -st(i, j).g; }
+  if (dj > 0) { qIn = -st(i, j).b; }
+  qIn = max(qIn, 0.0);
   if (sim.robust != 0) {
-    q = min(q, h * min(sim.uMax, sim.bFrMax * sqrt(sim.g * h)));
+    let c = sqrt(sim.g * h);
+    qNormal = min(qNormal, h * min(sim.uMax, sim.bFrMax * c));
+    qIn = min(qIn, h * min(sim.uMax, sim.frMax * c));
   }
-  return q;
+  return max(qNormal, qIn);
 }
 `;

@@ -4,7 +4,7 @@
  */
 
 /** Byte size of the Frame uniform (must match FRAME_WGSL and writeFrameUniforms in index.ts). */
-export const FRAME_UNIFORM_SIZE = 432;
+export const FRAME_UNIFORM_SIZE = 448;
 
 export const FRAME_WGSL = /* wgsl */ `
 struct Frame {
@@ -33,7 +33,8 @@ struct Frame {
   domainSize: f32,
   flowVis: f32,       // on-screen exaggeration of flow advection (scales with camera distance)
   rainBox: f32,       // rain particle box size (m)
-  bands: array<vec4f, 8>, // rgb (linear) + upper threshold in .a
+  wall: vec4f,        // x: any walls (wallTex valid), y: wall field range (cells), z: wall crest elevation origin (m), w: normal-water mask valid
+  bands: array<vec4f, 8>, // rgb (HDR input that tone-maps to the legend colour) + upper threshold in .a
 }
 `;
 
@@ -232,5 +233,43 @@ fn vtxBilinear(g: vec2f) -> vec4f {
     return a + (b - a) * t.x + (c - a) * t.y;
   }
   return d + (c - d) * (1.0 - t.x) + (b - d) * (1.0 - t.y);
+}
+`;
+
+/**
+ * Walls from the wall distance field (see wallField.ts). Needs wallTex and linSamp bindings. Walls are drawn
+ * with a screen-space minimum width: crest, sloping faces and a dark casing never get thinner than a few pixels.
+ */
+export const WALL_WGSL = /* wgsl */ `
+const WALL_MIN_H: f32 = 0.04;
+
+struct WallHit {
+  d: f32,       // distance (m) from the nearest wall cell centre
+  h: f32,       // that wall's height (m)
+  crest: f32,   // its crest elevation (m)
+}
+
+fn wallAt(uv: vec2f) -> WallHit {
+  let w = textureSampleLevel(wallTex, linSamp, uv, 0.0);
+  var o: WallHit;
+  o.d = (1.0 - w.r) * F.wall.y * F.cellSize;
+  o.h = w.g;
+  o.crest = w.b + F.wall.z;
+  return o;
+}
+
+/** Profile edges (m from the wall centre line) at a fragment whose CSS pixel covers pxM metres. */
+struct WallProfile {
+  crest: f32,    // end of the flat crest
+  face: f32,     // end of the sloping faces
+  casing: f32,   // end of the dark outline
+}
+
+fn wallProfile(pxM: f32) -> WallProfile {
+  var o: WallProfile;
+  o.crest = max(0.5 * F.cellSize, 1.25 * pxM);
+  o.face = o.crest + max(0.8 * F.stride * F.cellSize, 1.0 * pxM);
+  o.casing = o.face + max(0.18 * F.cellSize, 0.85 * pxM);
+  return o;
 }
 `;

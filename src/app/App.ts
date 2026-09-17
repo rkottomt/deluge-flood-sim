@@ -4,6 +4,7 @@ import { createRenderer, type DelugeRendererAPI } from '../render';
 import { createRouter } from '../routing';
 import { createToolController, mountUI } from '../ui';
 import { createActions } from './actions';
+import { CrestFill } from './crest';
 import { createDebugApi, type DelugeDebug } from './debugApi';
 import { APP_CONFIG, createInitialState } from './defaults';
 import { FrameDriver } from './driver';
@@ -20,7 +21,8 @@ import { SceneManager, SupersededLoadError, type Scene } from './scene';
 import { SimSync } from './simSync';
 import { StageLevels } from './stage';
 import { createStore } from './store';
-import { WebGPUUnavailableError } from './unsupported';
+import { showDeviceLost, WebGPUUnavailableError } from './unsupported';
+import { postNotice } from '../ui/bridge';
 import { parseStartupRequest, writeSceneToUrl, type SceneRequest } from './url';
 
 export type LoadOutcome = 'ok' | 'failed' | 'superseded';
@@ -55,6 +57,8 @@ export class App {
   readonly router = createRouter();
   readonly evac: EvacController;
   readonly sim: SimSync;
+  /** Stage raises lift the water in the river channels at once (see crest.ts). */
+  readonly crest: CrestFill;
   readonly driver: FrameDriver;
   readonly loop: FrameLoop;
   readonly actions: AppActions;
@@ -79,6 +83,10 @@ export class App {
   private lastInputAt = -Infinity;
   private resizePending = true;
   private adaptiveBudgetOn = true;
+  /** The GPU device is gone (see onDeviceLost); nothing may touch the GPU any more. */
+  private gpuLost = false;
+  /** The page is being unloaded (a reload destroys the device on its way out: not a loss to report). */
+  private unloading = false;
 
   constructor(
     private readonly canvas: HTMLCanvasElement,
@@ -101,6 +109,15 @@ export class App {
       errors: this.errors,
       getSolver: () => this.scenes?.scene?.solver ?? null,
       onRouteInputsChanged: () => this.evac.recomputeRoute(),
+    });
+    this.crest = new CrestFill({
+      store: this.store,
+      errors: this.errors,
+      getScene: () => this.scenes?.scene ?? null,
+      onWaterReset: () => {
+        this.driver.onSolverReset();
+        this.requestRender();
+      },
     });
     this.driver = new FrameDriver(this);
     this.loop = new FrameLoop(
@@ -135,7 +152,8 @@ export class App {
       throw new WebGPUUnavailableError(errorMessage(err));
     }
     this.gpu = gpu;
-    this.errors.attachDevice(gpu.device);
+    window.addEventListener('pagehide', () => (this.unloading = true));
+    this.errors.attachDevice(gpu.device, (info) => this.onDeviceLost(info));
     store.set({ gpuInfo: gpu.description, loading: { message: 'Compiling GPU shaders…', progress: 0 } });
 
     // UI first so the loading overlay is up while shaders compile.
@@ -156,7 +174,14 @@ export class App {
       renderer,
       router: this.router,
       stage: this.stage,
-      onSceneCleared: () => this.evac.reset(),
+      // The old solver is destroyed right after this: that is when a stability demo on it ends. Exiting any earlier
+      // (at load start) would leave its NaN water on screen without the demo banner and its Restore button if the
+      // load then fails or is superseded; the new solver is created afterwards, so it starts robust.
+      onSceneCleared: () => {
+        this.exitStabilityDemoQuietly();
+        this.crest.onSceneChanged();
+        this.evac.reset();
+      },
       onSceneReady: (scene) => this.onSceneReady(scene),
     });
 
@@ -175,6 +200,9 @@ export class App {
     this.probe = new ProbeSampler(store, gpu.device);
     this.probe.install();
     this.sim.install();
+    this.store.subscribe((s, prev) => {
+      if (s.stageOffset !== prev.stageOffset) this.crest.onStageOffset(s.stageOffset);
+    });
     this.sim.setOverride('governor', { maxSubstepsPerFrame: this.budget.cap });
     this.installResizeHandling();
     this.installActivityTracking();
@@ -190,25 +218,93 @@ export class App {
       console.warn(`[deluge] ${w}`);
       this.errors.toast(w, true);
     }
-    const outcome = await this.loadScene(request);
+    const outcome = request.kind === 'live' ? await this.loadStartupLive(request) : await this.loadScene(request);
     if (outcome === 'failed' && !this.scenes?.scene) {
       this.failReady(new Error('No terrain could be loaded (preset and offline sandbox both failed)'));
     }
   }
 
   /**
+   * A ?live= link (typically a reload after picking an area) needs the network before anything can be shown, and
+   * venue wifi may be down or stall. Bound that wait: offline, or when the download makes no progress for a while
+   * or runs too long, show the offline default preset instead. That load supersedes the live one (whose late
+   * result is discarded). The address bar keeps the live link, and the notice offers a retry.
+   */
+  private loadStartupLive(request: SceneRequest & { kind: 'live' }): Promise<LoadOutcome> {
+    const scenes = this.scenes;
+    if (!scenes) return this.loadScene(request);
+    const label = SceneManager.label(request);
+    const offline = typeof navigator !== 'undefined' && navigator.onLine === false;
+    if (offline) return this.fallBackFromLive(request, `${label} needs the internet, and this computer is offline.`);
+
+    return new Promise<LoadOutcome>((resolve) => {
+      const t0 = performance.now();
+      let progressKey = '';
+      let progressAt = t0;
+      const unsubscribe = this.store.subscribe((s) => {
+        const key = s.loading ? `${s.loading.message}|${s.loading.progress}` : '';
+        if (key !== progressKey) {
+          progressKey = key;
+          progressAt = performance.now();
+        }
+      });
+      let gaveUp = false;
+      const stop = () => {
+        clearInterval(watchdog);
+        unsubscribe();
+      };
+      const watchdog = setInterval(() => {
+        // Only while the live request itself is loading (not the preset fallback loadScene may already be running).
+        if (scenes.loadingRequest !== request) return;
+        const now = performance.now();
+        const stalledS = (now - progressAt) / 1000;
+        const totalS = (now - t0) / 1000;
+        if (stalledS * 1000 < APP_CONFIG.startupLiveStallMs && totalS * 1000 < APP_CONFIG.startupLiveDeadlineMs) return;
+        gaveUp = true;
+        stop();
+        const why =
+          stalledS * 1000 >= APP_CONFIG.startupLiveStallMs
+            ? `the download of ${label} made no progress for ${stalledS.toFixed(0)} s`
+            : `${label} was still downloading after ${totalS.toFixed(0)} s`;
+        void this.fallBackFromLive(request, `The network looks slow or down: ${why}.`).then(resolve);
+      }, 500);
+      void this.loadScene(request).then((outcome) => {
+        if (gaveUp) return; // resolved by the fallback
+        stop();
+        resolve(outcome);
+      });
+    });
+  }
+
+  /** Show the offline default preset in place of a live area that cannot load right now; offer a retry. */
+  private async fallBackFromLive(request: SceneRequest & { kind: 'live' }, reason: string): Promise<LoadOutcome> {
+    const outcome = await this.loadFallbackScene(null, null);
+    const shown = this.scenes?.scene;
+    if (shown && shown.request !== request) {
+      postNotice(this.store, {
+        kind: 'warn',
+        key: 'startup-live-fallback',
+        title: `Showing ${shown.terrain.name} (offline) instead`,
+        message: `${reason} Baked scenarios work without a connection.`,
+        action: { label: `Retry ${SceneManager.label(request)}`, run: () => void this.actions.loadLiveArea(request.req) },
+        durationMs: 20000,
+      });
+    }
+    return outcome;
+  }
+
+  /**
    * Load a scene. On failure the error is reported and, if no scene is left to show (initial load, or the
-   * old scene was already torn down), the offline sandbox is loaded instead. With `rethrow` (debug API)
-   * the original error is re-thrown after the fallback.
+   * old scene was already torn down), a fallback scene is loaded (see loadFallbackScene). With `rethrow` (debug
+   * API) the original error is re-thrown after the fallback.
    */
   async loadScene(request: SceneRequest, opts: { rethrow?: boolean; fallback?: boolean } = {}): Promise<LoadOutcome> {
     const scenes = this.scenes;
-    if (!scenes) {
-      const err = new Error('App is not started (WebGPU unavailable?)');
+    if (!scenes || this.gpuLost) {
+      const err = new Error(this.gpuLost ? 'The GPU device was lost (reload the page)' : 'App is not started (WebGPU unavailable?)');
       if (opts.rethrow) throw err;
       return 'failed';
     }
-    this.exitStabilityDemoQuietly();
     try {
       await scenes.load(request);
       // An automatic fallback keeps the address bar on what the user asked for (reload retries it).
@@ -221,14 +317,27 @@ export class App {
       }
       const msg = `Could not load ${SceneManager.label(request)}: ${errorMessage(err)}`;
       this.errors.report('load', msg, err);
-      const isFallback = request.kind === 'preset' && request.id === APP_CONFIG.fallbackPreset;
-      if (!scenes.scene && !isFallback) {
-        this.errors.toast(`${msg} — loading the offline sandbox instead.`, true);
-        await this.loadScene({ kind: 'preset', id: APP_CONFIG.fallbackPreset }, { fallback: true });
-      }
+      if (!scenes.scene && !opts.fallback && !this.gpuLost) await this.loadFallbackScene(request, msg);
       if (opts.rethrow) throw err;
       return 'failed';
     }
+  }
+
+  /**
+   * Nothing is left on screen: load the baked default preset (offline, the real demo), and only if that fails too
+   * the synthetic sandbox (needs no assets at all). The request that just failed is skipped.
+   */
+  private async loadFallbackScene(failed: SceneRequest | null, reason: string | null): Promise<LoadOutcome> {
+    let outcome: LoadOutcome = 'failed';
+    for (const id of [APP_CONFIG.defaultPreset, APP_CONFIG.fallbackPreset]) {
+      if (failed?.kind === 'preset' && failed.id === id) continue;
+      const label = SceneManager.label({ kind: 'preset', id });
+      if (reason) this.errors.toast(`${reason} — loading “${label}” instead.`, true);
+      outcome = await this.loadScene({ kind: 'preset', id }, { fallback: true });
+      if (outcome !== 'failed' || this.gpuLost) return outcome;
+      reason = `Could not load “${label}” either`;
+    }
+    return outcome;
   }
 
   runFor(simSeconds: number): Promise<void> {
@@ -311,8 +420,28 @@ export class App {
     this.rejectReady(err);
   }
 
+  /**
+   * The GPU device is gone (GPU-process crash or reset). Every texture, buffer and pipeline died with it, so the
+   * frame loop stops (it would only spin no-op frames, burning battery, behind a frozen or blank canvas that still
+   * looks live) and a full-screen card takes over, reloading the page once. The address bar is pointed at the
+   * scene on screen first, so the reload brings back exactly that (not, say, a live area that needs the network).
+   */
+  private onDeviceLost(info: GPUDeviceLostInfo): void {
+    if (this.gpuLost || this.unloading) return;
+    this.gpuLost = true;
+    this.loop.stop();
+    this.runner.cancelAll('the GPU device was lost');
+    const details = `GPU device lost (${info.reason ?? 'unknown'}): ${info.message || 'no details'}`;
+    this.failReady(new Error(details));
+    const shown = this.scenes?.scene?.request;
+    if (shown) writeSceneToUrl(shown);
+    console.error(`[deluge] ${details} — frame loop stopped`);
+    showDeviceLost(details);
+  }
+
   private onSceneReady(scene: Scene): void {
     this.sim.pushAll();
+    this.crest.onSceneChanged();
     this.evac.reset();
     this.probe?.reset();
     this.budget.restart();
@@ -322,7 +451,7 @@ export class App {
     );
   }
 
-  /** A newly loaded scene always starts with the robust solver. */
+  /** The scene running the stability demo is being destroyed: the next solver always starts robust. */
   private exitStabilityDemoQuietly(): void {
     const sim = this.store.get().sim;
     if (sim.stabilityMode !== 'naive') return;

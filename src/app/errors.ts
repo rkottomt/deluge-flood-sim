@@ -18,6 +18,8 @@ export class ErrorReporter {
   private readonly counts = new Map<string, number>();
   private lastToast = 0;
   private store: Store | null = null;
+  /** No more toasts (set once a full-screen failure screen owns the message). */
+  private muted = false;
 
   /** Attach the store so errors become user-visible toasts. Earlier errors are toasted immediately. */
   attachStore(store: Store): void {
@@ -39,17 +41,27 @@ export class ErrorReporter {
     });
   }
 
-  attachDevice(device: GPUDevice): void {
+  /**
+   * Report WebGPU validation/OOM errors, and device loss. `onLost` takes over the user-facing side of a loss (the
+   * app shows a full-screen card); from then on errors are still recorded and logged but no longer toasted, since
+   * every GPU call fails in the aftermath and those toasts would only bury the real message.
+   */
+  attachDevice(device: GPUDevice, onLost?: (info: GPUDeviceLostInfo) => void): void {
     device.addEventListener('uncapturederror', (ev) => {
       const e = (ev as GPUUncapturedErrorEvent).error;
       this.report('webgpu', `${e.constructor?.name ?? 'GPUError'}: ${e.message}`);
     });
     void device.lost.then((info) => {
-      if (info.reason === 'destroyed') return; // we destroyed it ourselves
-      this.report(
-        'webgpu',
-        `GPU device lost (${info.reason ?? 'unknown'}): ${info.message || 'no details'}. Reload the page to continue.`,
-      );
+      // Every reason counts, including 'destroyed': the app never destroys its own device, so that one came from
+      // outside (e.g. the console) and leaves the page just as dead.
+      const text = `GPU device lost (${info.reason ?? 'unknown'}): ${info.message || 'no details'}`;
+      if (onLost) {
+        this.muted = true;
+        this.report('webgpu', text);
+        onLost(info);
+      } else {
+        this.report('webgpu', `${text}. Reload the page to continue.`);
+      }
     });
   }
 
@@ -81,7 +93,7 @@ export class ErrorReporter {
   /** Show a message in the UI toast (rate limited). Not recorded as an error. */
   toast(message: string, force = false): void {
     const store = this.store;
-    if (!store) return;
+    if (!store || this.muted) return;
     const now = performance.now();
     if (!force && now - this.lastToast < TOAST_INTERVAL_MS) return;
     this.lastToast = now;

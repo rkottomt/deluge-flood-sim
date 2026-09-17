@@ -46,14 +46,19 @@ const g = GRAVITY;
 
 /**
  * Free-outflow boundary flux magnitude (outward, ≥ 0) of edge cell (i, j); (di, dj) points into the domain.
- * Ghost cell: same depth, water surface lower by dx·S, S = max(boundaryMinSlope, min(bed slope, surface slope))
- * toward the edge between the first and second inner cells (boundaryMinSlope alone if either is dry).
- * Outflow is the steady normal-flow solution q = h^{5/3}·√S / n, capped at Froude boundaryFroudeMax in robust
- * mode. See bflux in shaders/common.ts for why the slope is measured this way.
+ * max(normal flow, transmissive):
+ *  • normal flow: ghost cell with the same depth and a surface lower by dx·S, S = max(boundaryMinSlope,
+ *    min(bed slope, surface slope)) toward the edge between the first and second inner cells (boundaryMinSlope
+ *    alone if either is dry): q = h^{5/3}·√S / n, capped at Froude boundaryFroudeMax in robust mode;
+ *  • transmissive: the outward discharge through the last interior face (old state), capped at the interior
+ *    velocity/Froude cap in robust mode.
+ * See bflux in shaders/common.ts for why.
  */
 export function boundaryFlux(
   h: ArrayLike<number>,
   z: ArrayLike<number>,
+  qx: ArrayLike<number>,
+  qy: ArrayLike<number>,
   nx: number,
   ny: number,
   i: number,
@@ -62,7 +67,8 @@ export function boundaryFlux(
   dj: number,
   p: SchemeStepParams,
 ): number {
-  const hc = h[j * nx + i];
+  const c = j * nx + i;
+  const hc = h[c];
   if (!p.open || !(hc >= p.hMin)) return 0;
   const at = (ii: number, jj: number) => Math.min(ny - 1, Math.max(0, jj)) * nx + Math.min(nx - 1, Math.max(0, ii));
   const a = at(i + di, j + dj);
@@ -73,9 +79,19 @@ export function boundaryFlux(
     const surfS = (z[b] - z[a] + (h[b] - h[a])) / p.dx;
     S = Math.max(Math.min(bedS, surfS), p.boundaryMinSlope);
   }
-  let q = (Math.pow(hc, 5 / 3) * Math.sqrt(S)) / Math.max(p.manningN, 0.01);
-  if (p.robust) q = Math.min(q, hc * Math.min(p.uMax, p.boundaryFroudeMax * Math.sqrt(g * hc)));
-  return q;
+  let qNormal = (Math.pow(hc, 5 / 3) * Math.sqrt(S)) / Math.max(p.manningN, 0.01);
+  let qIn = 0;
+  if (di < 0) qIn = qx[a];
+  if (dj < 0) qIn = qy[a];
+  if (di > 0) qIn = -qx[c];
+  if (dj > 0) qIn = -qy[c];
+  qIn = Math.max(qIn, 0);
+  if (p.robust) {
+    const cw = Math.sqrt(g * hc);
+    qNormal = Math.min(qNormal, hc * Math.min(p.uMax, p.boundaryFroudeMax * cw));
+    qIn = Math.min(qIn, hc * Math.min(p.uMax, p.froudeMax * cw));
+  }
+  return Math.max(qNormal, qIn);
 }
 
 /** Face flow depth hf = max(ηL, ηR) − max(zL, zR), arranged so bed differences cancel before depths add. */
@@ -84,24 +100,43 @@ export function faceDepth(hL: number, zL: number, hR: number, zR: number): numbe
   return Math.max(hL + (zL - zf), hR + (zR - zf));
 }
 
+/** Wet/dry ramp of a face depth: 0 below hMin, 1 above 2·hMin (a continuous hMin threshold; see shaders/momentum.ts). */
+export function wetRamp(hf: number, hMin: number): number {
+  return Math.min(1, Math.max(0, hf / hMin - 1));
+}
+
+/** minmod(a, b): the smaller-magnitude argument if both have the same sign, else 0. */
+export function minmod(a: number, b: number): number {
+  if (!(a * b > 0)) return 0;
+  return a > 0 ? Math.min(a, b) : Math.max(a, b);
+}
+
 /**
- * Momentum update for one face (see shaders/momentum.ts for the full explanation).
- *   hf: face depth; S: water-surface slope (ηR − ηL)/dx; qc: old flux; qUp/qDn with depths hfUp/hfDn: the
- *   neighbouring parallel faces (θ smoothing); qPerp: mean of the 4 surrounding perpendicular faces;
- *   adv: convective acceleration ∂(q·u)/∂x + ∂(q·v)/∂y at this face.
+ * Smoothing increment of one face: minmod(L, G) with L the depth-weighted 1-D Laplacian along the face normal
+ * (a dry/blocked or much deeper neighbour counts as equal to this face) and G = divJump = D_R − D_L, the jump in
+ * net cell outflow across the face (see shaders/momentum.ts).
  */
-export function momentum(
+export function smoothingIncrement(
   hf: number,
-  S: number,
   qc: number,
   qUp: number,
   hfUp: number,
   qDn: number,
   hfDn: number,
-  qPerp: number,
-  adv: number,
+  divJump: number,
   p: SchemeStepParams,
 ): number {
+  const w = (hfN: number) => wetRamp(hfN, p.hMin) * Math.min(1, (p.smoothingDepthRatio * hf) / Math.max(hfN, p.hMin));
+  return minmod(w(hfUp) * (qUp - qc) + w(hfDn) * (qDn - qc), divJump);
+}
+
+/**
+ * Momentum update for one face (see shaders/momentum.ts for the full explanation).
+ *   hf: face depth; S: water-surface slope (ηR − ηL)/dx; qc: old flux; dq: smoothing increment
+ *   (smoothingIncrement); qPerp: mean of the 4 surrounding perpendicular faces; adv: convective acceleration
+ *   ∂(q·u)/∂x + ∂(q·v)/∂y at this face.
+ */
+export function momentum(hf: number, S: number, qc: number, dq: number, qPerp: number, adv: number, p: SchemeStepParams): number {
   if (!(hf >= p.hMin)) return 0;
   const n2 = p.manningN * p.manningN;
   const qmag = Math.sqrt(qc * qc + qPerp * qPerp);
@@ -112,9 +147,7 @@ export function momentum(
     const cr = (Math.SQRT2 * (Math.sqrt(g * hf) + uf) * p.dt) / p.dx;
     const ratio = Math.min(1, p.courantGuard / Math.max(cr, 1e-6));
     const dtm = p.dt * ratio * ratio;
-    // θ smoothing with depth-ratio-limited neighbour weights.
-    const w = (hfN: number) => (hfN >= p.hMin ? Math.min(1, (p.smoothingDepthRatio * hf) / hfN) : 0);
-    const qt = p.theta * qc + 0.5 * (1 - p.theta) * (w(hfUp) * qUp + w(hfDn) * qDn);
+    const qt = qc + 0.5 * (1 - p.theta) * dq;
     const q = (qt - dtm * adv - g * hf * dtm * S) / (1 + (g * dtm * n2 * qmag) / hf73);
     const cap = hf * Math.min(p.uMax, p.froudeMax * Math.sqrt(g * hf));
     return Math.min(cap, Math.max(-cap, q));
@@ -165,17 +198,28 @@ export class CpuReferenceSolver {
     const N = nx * ny;
     const at = (i: number, j: number) => Math.min(ny - 1, Math.max(0, j)) * nx + Math.min(nx - 1, Math.max(0, i));
 
-    // Face depths & velocities of the OLD state (clamped neighbours at the domain edge, like textureLoad).
+    // Face depths of the OLD state (clamped neighbours at the domain edge, like textureLoad).
     const hfxOf = (i: number, j: number) => faceDepth(h[at(i, j)], z[at(i, j)], h[at(i + 1, j)], z[at(i + 1, j)]);
     const hfyOf = (i: number, j: number) => faceDepth(h[at(i, j)], z[at(i, j)], h[at(i, j + 1)], z[at(i, j + 1)]);
-    // Face velocity for the advection term: 0 on dry faces, bounded by uMax in robust mode.
+    const wet = (hf: number) => hf >= p.hMin;
+    // Advection weight: 1 if the 4 neighbouring parallel faces are wet, 0 if any is dry (wetRamp).
+    const advWeight = (a: number, b: number, c: number, d: number) => wetRamp(Math.min(a, b, c, d), p.hMin);
+    // Velocity of a WET face for the advection term, bounded by uMax in robust mode.
     const vel = (q: number, hf: number) => {
-      if (!(hf >= p.hMin)) return 0;
       const u = q / hf;
       return p.robust ? Math.min(p.uMax, Math.max(-p.uMax, u)) : u;
     };
-    const uxOf = (i: number, j: number) => vel(qx[at(i, j)], hfxOf(i, j));
-    const vyOf = (i: number, j: number) => vel(qy[at(i, j)], hfyOf(i, j));
+    // Net outflow of every cell (old fluxes; the west/north domain-edge fluxes from the boundary rule, the stored
+    // qx/qy of the last column/row are the east/south ones).
+    const div = new Float64Array(N);
+    for (let j = 0; j < ny; j++) {
+      for (let i = 0; i < nx; i++) {
+        const c = j * nx + i;
+        const qW = i > 0 ? qx[c - 1] : -boundaryFlux(h, z, qx, qy, nx, ny, i, j, 1, 0, p);
+        const qN = j > 0 ? qy[c - nx] : -boundaryFlux(h, z, qx, qy, nx, ny, i, j, 0, 1, p);
+        div[c] = qx[c] - qW + (qy[c] - qN);
+      }
+    }
 
     // ── Pass A: momentum on interior faces ──────────────────────────────────────────────────────────
     const fx = new Float64Array(N);
@@ -194,8 +238,12 @@ export class CpuReferenceSolver {
           const qPerp = 0.25 * (qy[c] + qy[e] + qyN + qyNE);
           const hfW = hfxOf(i - 1, j);
           const hfE = hfxOf(i + 1, j);
+          const hfS = hfxOf(i, j + 1);
+          const hfN = hfxOf(i, j - 1);
           let adv = 0;
-          if (p.advection && hf >= p.hMin) {
+          // Advection only where the whole stencil (the 4 neighbouring x-faces) is wet.
+          const wAdv = advWeight(hfW, hfE, hfS, hfN);
+          if (p.advection && wet(hf) && wAdv > 0) {
             const uW = vel(qW, hfW);
             const uC = vel(qx[c], hf);
             const uE = vel(qE, hfE);
@@ -207,11 +255,12 @@ export class CpuReferenceSolver {
             // y-flux of x-momentum q·v at the two adjacent corners.
             const vS = 0.5 * (qy[c] + qy[e]);
             const vN = 0.5 * (qyN + qyNE);
-            const gS = vS * (vS >= 0 ? uC : uxOf(i, j + 1));
-            const gN = vN * (vN >= 0 ? uxOf(i, j - 1) : uC);
-            adv = (mR - mL + (gS - gN)) / p.dx;
+            const gS = vS * (vS >= 0 ? uC : vel(qx[at(i, j + 1)], hfS));
+            const gN = vN * (vN >= 0 ? vel(qx[at(i, j - 1)], hfN) : uC);
+            adv = (wAdv * (mR - mL + (gS - gN))) / p.dx;
           }
-          fx[c] = momentum(hf, S, qx[c], qW, hfW, qE, hfE, qPerp, adv, p);
+          const dq = wet(hf) ? smoothingIncrement(hf, qx[c], qW, hfW, qE, hfE, div[e] - div[c], p) : 0;
+          fx[c] = momentum(hf, S, qx[c], dq, qPerp, adv, p);
         }
         if (j < ny - 1) {
           const s = c + nx;
@@ -224,8 +273,11 @@ export class CpuReferenceSolver {
           const qPerp = 0.25 * (qx[c] + qxW + qx[s] + qxSW);
           const hfN = hfyOf(i, j - 1);
           const hfS = hfyOf(i, j + 1);
+          const hfE = hfyOf(i + 1, j);
+          const hfW = hfyOf(i - 1, j);
           let adv = 0;
-          if (p.advection && hf >= p.hMin) {
+          const wAdv = advWeight(hfN, hfS, hfE, hfW);
+          if (p.advection && wet(hf) && wAdv > 0) {
             const vN = vel(qN, hfN);
             const vC = vel(qy[c], hf);
             const vS = vel(qS, hfS);
@@ -235,11 +287,12 @@ export class CpuReferenceSolver {
             const mD = qbD * (qbD >= 0 ? vC : vS);
             const uE = 0.5 * (qx[c] + qx[s]);
             const uW = 0.5 * (qxW + qxSW);
-            const gE = uE * (uE >= 0 ? vC : vyOf(i + 1, j));
-            const gW = uW * (uW >= 0 ? vyOf(i - 1, j) : vC);
-            adv = (mD - mU + (gE - gW)) / p.dx;
+            const gE = uE * (uE >= 0 ? vC : vel(qy[at(i + 1, j)], hfE));
+            const gW = uW * (uW >= 0 ? vel(qy[at(i - 1, j)], hfW) : vC);
+            adv = (wAdv * (mD - mU + (gE - gW))) / p.dx;
           }
-          fy[c] = momentum(hf, S, qy[c], qN, hfN, qS, hfS, qPerp, adv, p);
+          const dq = wet(hf) ? smoothingIncrement(hf, qy[c], qN, hfN, qS, hfS, div[s] - div[c], p) : 0;
+          fy[c] = momentum(hf, S, qy[c], dq, qPerp, adv, p);
         }
       }
     }
@@ -249,10 +302,10 @@ export class CpuReferenceSolver {
     // Face fluxes of an arbitrary cell (boundary faces from the open-boundary rule).
     const faces = (i: number, j: number): [number, number, number, number] => {
       const c = j * nx + i;
-      const qE = i === nx - 1 ? boundaryFlux(h, z, nx, ny, i, j, -1, 0, p) : fx[c];
-      const qW = i === 0 ? -boundaryFlux(h, z, nx, ny, i, j, 1, 0, p) : fx[c - 1];
-      const qS = j === ny - 1 ? boundaryFlux(h, z, nx, ny, i, j, 0, -1, p) : fy[c];
-      const qN = j === 0 ? -boundaryFlux(h, z, nx, ny, i, j, 0, 1, p) : fy[c - nx];
+      const qE = i === nx - 1 ? boundaryFlux(h, z, qx, qy, nx, ny, i, j, -1, 0, p) : fx[c];
+      const qW = i === 0 ? -boundaryFlux(h, z, qx, qy, nx, ny, i, j, 1, 0, p) : fx[c - 1];
+      const qS = j === ny - 1 ? boundaryFlux(h, z, qx, qy, nx, ny, i, j, 0, -1, p) : fy[c];
+      const qN = j === 0 ? -boundaryFlux(h, z, qx, qy, nx, ny, i, j, 0, 1, p) : fy[c - nx];
       return [qE, qW, qS, qN];
     };
     const kOf = (i: number, j: number) => {

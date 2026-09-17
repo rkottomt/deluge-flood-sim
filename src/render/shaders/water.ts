@@ -1,5 +1,5 @@
 /** Water surface shaders: photoreal floodwater and hazard colormaps. */
-import { COMMON_WGSL, FRAME_WGSL, LOD_WGSL, VTX_SAMPLE_WGSL } from './common';
+import { COMMON_WGSL, FRAME_WGSL, LOD_WGSL, VTX_SAMPLE_WGSL, WALL_WGSL } from './common';
 
 export const WATER_WGSL = /* wgsl */ `
 ${FRAME_WGSL}
@@ -12,9 +12,12 @@ ${FRAME_WGSL}
 @group(0) @binding(6) var linSamp: sampler;
 @group(0) @binding(7) var repSamp: sampler;
 @group(0) @binding(8) var wetTex: texture_2d<f32>;
+@group(0) @binding(9) var wallTex: texture_2d<f32>;
+@group(0) @binding(10) var normalWetTex: texture_2d<f32>;
 ${COMMON_WGSL}
 ${LOD_WGSL}
 ${VTX_SAMPLE_WGSL}
+${WALL_WGSL}
 
 struct WOut {
   @builtin(position) pos: vec4f,
@@ -170,6 +173,9 @@ fn fsWater(in: WOut) -> @location(0) vec4f {
   let s = textureSampleLevel(surfTex, linSamp, uv, 0.0);
   let nrm = textureSampleLevel(normTex, linSamp, uv, 0.0);
   let misc = textureSampleLevel(miscTex, linSamp, uv, 0.0);
+  // 1 where this is the normal river / lake (wet before any flood), 0 on land the flood has reached.
+  let normalWet = select(0.0, textureSampleLevel(normalWetTex, linSamp, uv, 0.0).r, F.wall.w > 0.5);
+  let floodLand = 1.0 - normalWet;
 
   let mode = i32(F.waterMode + 0.5);
   let flow = s.gb;
@@ -186,6 +192,9 @@ fn fsWater(in: WOut) -> @location(0) vec4f {
   let thick = select(fineV.g - fineV.r, in.thick, in.skirt > 0.5);
   // Derivatives in uniform control flow (before any discard).
   let thickFw = fwidth(thick);
+  let thickGrad = vec2f(dpdx(thick), dpdy(thick));
+  let uvDx = dpdx(uv);
+  let uvDy = dpdy(uv);
   let valueDepth = select(s.r, misc.g, mode == 2);
   let hazardValue = select(valueDepth, misc.b, mode == 3);
   let hazardFw = fwidth(hazardValue);
@@ -214,6 +223,14 @@ fn fsWater(in: WOut) -> @location(0) vec4f {
   let slickFar = textureSample(rippleTex, repSamp, in.world.xz / 233.0 + vec2f(0.31, 0.77)).a;
   if (thick <= 0.0 || in.thick <= -30.0) {
     discard;
+  }
+  // A wall whose crest is above this water: its crest, faces and casing are drawn by the terrain pass with a
+  // screen-space minimum width, so the water must not paint over them where they overhang the channel.
+  if (F.wall.x > 0.5 && in.skirt < 0.5) {
+    let wh = wallAt(uv);
+    if (wh.h > WALL_MIN_H && wh.d < wallProfile(max(pixelFoot, 1e-3)).casing && wh.crest > in.world.y / F.exag + 0.02) {
+      discard;
+    }
   }
 
   // Soft shoreline: fade over a few cm, widened by the pixel footprint to stay anti-aliased at any distance.
@@ -245,48 +262,86 @@ fn fsWater(in: WOut) -> @location(0) vec4f {
   // Glossiness drops with distance (unresolved ripples widen the lobe) so far water gets a broad sheen.
   let gloss = mix(60.0, 900.0, detailFade);
   let spec = F.sunColor * sunVis * pow(nh, gloss) * (gloss + 8.0) / 25.0 * fres * smoothstep(0.0, 0.08, F.sunDir.y);
+  let sky = skyReflection(R);
 
-  var rgb = vec3f(0.0);
-  var alpha = 0.0;
+  // ── Photoreal floodwater (also the base under the hazard colours) ─────────────────────────────────────
+  // Rivers: turbid water with a short absorption length; deep channels read darker and greener.
+  // Floodwater on land: sediment-laden and effectively opaque within a few decimetres, a lighter khaki-brown sheet
+  // that stands apart from roofs, asphalt and trees, with a pale wet line along its advancing edge.
+  let path = thick / max(nv, 0.2);
+  let T = exp(-mix(vec3f(2.0, 2.4, 3.1), vec3f(9.0, 9.5, 10.5), floodLand) * path);
+  let tAvg = dot(T, vec3f(0.3333));
+  let deep = smoothstep(0.8, 6.0, thick);
+  // Advected slicks / sediment plumes: low-frequency brightness variation that makes the current visible from afar.
+  // Two incommensurate scales so the tiling never lines up.
+  let slick = ((rM.w - 0.5) * 0.6 + (slickFar - 0.5) * 0.8 + (rA.w - 0.5) * 0.3 * detailFade) * 0.55;
+  let riverSed = mix(vec3f(0.115, 0.088, 0.054), vec3f(0.032, 0.040, 0.027), deep);
+  let floodSed = mix(vec3f(0.215, 0.170, 0.105), vec3f(0.150, 0.125, 0.082), smoothstep(0.5, 5.0, thick));
+  let sediment = mix(riverSed, floodSed, floodLand) * (1.0 + slick * mix(0.6, 1.0, turbulence));
+  let body = sediment * lightIn;
+  // Thin rain sheet-flow (a few cm over grass or pavement) is not visible from the air: fade it in with depth.
+  let film = mix(1.0, smoothstep(0.012, 0.06, thick), floodLand);
+  var rgb = (body * (1.0 - tAvg) * (1.0 - fres) + sky * fres + spec) * film;
+  var alpha = ((1.0 - tAvg) * (1.0 - fres) + fres) * film;
 
-  if (mode == 0) {
-    // ── Photoreal floodwater ─────────────────────────────────────────────────────────────
-    // Turbid water: short absorption length, sediment-laden inscatter. Deep channels read darker and greener.
-    let path = thick / max(nv, 0.2);
-    let T = exp(-vec3f(2.0, 2.4, 3.1) * path);
-    let tAvg = dot(T, vec3f(0.3333));
-    let deep = smoothstep(0.8, 6.0, thick);
-    // Large-scale advected slicks/streaks: brightness variation that shows the current from far away.
-    // Advected slicks / sediment plumes: low-frequency brightness variation that makes the current visible from afar.
-    // Two incommensurate scales so the tiling never lines up.
-    let slick = ((rM.w - 0.5) * 0.6 + (slickFar - 0.5) * 0.8 + (rA.w - 0.5) * 0.3 * detailFade) * 0.55;
-    let sediment = mix(vec3f(0.115, 0.088, 0.054), vec3f(0.032, 0.040, 0.027), deep) * (1.0 + slick * mix(0.6, 1.0, turbulence));
-    let body = sediment * lightIn;
-    let sky = skyReflection(R);
-    rgb = body * (1.0 - tAvg) * (1.0 - fres) + sky * fres + spec;
-    alpha = (1.0 - tAvg) * (1.0 - fres) + fres;
+  // Foam / whitewater: hydraulic jumps & fast flow (per cell, from prep) + moving shoreline fronts.
+  let foamNoise = rA.z * 0.55 + rB.z * 0.3 * fineFade + rM.z * 0.35;
+  let shoreFoam = (1.0 - smoothstep(0.0, 0.18, thick)) * (0.25 + 0.75 * smoothstep(0.2, 1.2, speed)) * 0.7;
+  let foamAmt = clamp(s.a * 0.8 + shoreFoam, 0.0, 0.9) * select(1.0, 0.0, in.skirt > 0.5);
+  let foamMask = smoothstep(1.1 - foamAmt, 1.3 - foamAmt * 0.7, foamNoise) * foamAmt;
+  let foamCol = vec3f(0.62, 0.59, 0.53) * (skyAmbient(n) + F.sunColor * max(dot(n, F.sunDir), 0.0) * sunVis);
+  rgb = mix(rgb, foamCol, foamMask * 0.75);
+  alpha = mix(alpha, 1.0, foamMask * 0.75);
 
-    // Foam / whitewater: hydraulic jumps & fast flow (per cell, from prep) + moving shoreline fronts.
-    let foamNoise = rA.z * 0.55 + rB.z * 0.3 * fineFade + rM.z * 0.35;
-    let shoreFoam = (1.0 - smoothstep(0.0, 0.18, thick)) * (0.25 + 0.75 * smoothstep(0.2, 1.2, speed)) * 0.7;
-    let foamAmt = clamp(s.a * 0.8 + shoreFoam, 0.0, 0.9) * select(1.0, 0.0, in.skirt > 0.5);
-    let foamMask = smoothstep(1.1 - foamAmt, 1.3 - foamAmt * 0.7, foamNoise) * foamAmt;
-    let foamCol = vec3f(0.62, 0.59, 0.53) * (skyAmbient(n) + F.sunColor * max(dot(n, F.sunDir), 0.0) * sunVis);
-    rgb = mix(rgb, foamCol, foamMask * 0.75);
-    alpha = mix(alpha, 1.0, foamMask * 0.75);
-  } else {
-    // ── Hazard colormap: discrete bands (anti-aliased edges), gently lit, semi-opaque ──────
+  // Wet edge of the flood: a crisp pale line ~1.5–3 px inside the waterline on land that was dry before, so the
+  // flood extent reads at any distance. Only where the water a few pixels inland is a real flood (≥ 5 cm), not
+  // rain sheet-flow, and never along the normal river banks.
+  let gl = length(thickGrad);
+  let pxFromShore = thick / max(gl, 1e-6);
+  let inward = select(vec2f(0.0), thickGrad / gl, gl > 1e-6);
+  let probeUv = uv + (uvDx * inward.x + uvDy * inward.y) * 5.0;
+  let hInside = textureSampleLevel(surfTex, linSamp, probeUv, 0.0).r;
+  let edge = smoothstep(0.6, 1.4, pxFromShore) * (1.0 - smoothstep(2.4, 3.6, pxFromShore))
+           * smoothstep(0.03, 0.08, hInside) * smoothstep(0.5, 0.9, floodLand) * select(1.0, 0.0, in.skirt > 0.5);
+  let edgeCol = vec3f(0.80, 0.77, 0.68) * lightIn * 0.62;
+  rgb = mix(rgb, edgeCol, edge * 0.85);
+  alpha = mix(alpha, 1.0, edge * 0.85);
+
+  if (mode != 0) {
+    // ── Hazard colormap: discrete bands (anti-aliased edges), gently lit, over the photoreal water ──────
+    // Band colours arrive as HDR inputs solved on the CPU so they tone-map to exactly the legend colours.
+    // Depth / max depth colour only land that was dry before the flood; the normal river stays plain water. The
+    // colours fade in between 2 and 10 cm so thin rain sheet-flow does not blanket hillsides. Speed colours all
+    // moving water, but the slowest band (ponding) is left as plain water so the fast cores stand out.
+    let hDepth = select(s.r, misc.g, mode == 2);
+    var weight = smoothstep(0.02, 0.10, hDepth);
+    if (mode == 3) {
+      let t0 = F.bands[0].a;
+      let w0 = max(hazardFw * 0.75, 1e-4);
+      weight *= smoothstep(t0 - w0, t0 + w0, misc.b);
+    } else {
+      weight *= smoothstep(0.35, 0.65, floodLand);
+    }
     let band = hazardColor(hazardValue, hazardFw);
     let mn = normalize(vec3f(-macroSlope.x, 1.0, -macroSlope.y));
-    let lit = 0.82 + 0.22 * max(dot(mn, F.sunDir), 0.0);
-    rgb = band * lit * 1.9;
+    // Relative to flat water (the lighting the band colours were solved for).
+    let lit = (0.9 + 0.35 * max(dot(mn, F.sunDir), 0.0)) / (0.9 + 0.35 * max(F.sunDir.y, 0.0));
+    var hz = band * lit;
     if (mode == 3) {
       // Flow-advected speckles (same two-phase flow map as the realistic mode): their motion shows direction.
       let speck = smoothstep(0.5, 0.8, mix(rA.z, rM.z, smoothstep(0.5, 3.0, pixelFoot))) * smoothstep(0.1, 0.6, speed);
-      rgb = mix(rgb, vec3f(2.4), speck * 0.35);
+      hz = mix(hz, vec3f(1.6), speck * 0.3);
     }
-    rgb += spec * 0.2 + skyReflection(R) * fres * 0.3;
-    alpha = 0.82;
+    hz += spec * 0.15;
+    let ha = 0.93;
+    rgb = mix(rgb, hz * ha, weight);
+    alpha = mix(alpha, ha, weight);
+    // In the depth maps the normal river is muted so the flood colours carry the picture.
+    if (mode != 3) {
+      let muted = (1.0 - weight) * normalWet;
+      let grey = vec3f(luminance(rgb));
+      rgb = mix(rgb, grey * vec3f(0.92, 0.97, 1.05), muted * 0.55);
+    }
   }
 
   // Numerical blow-up (stability demo): the prep pass marks non-finite cells with foam = 8. Paint them as hot,

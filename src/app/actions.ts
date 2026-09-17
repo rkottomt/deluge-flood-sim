@@ -10,12 +10,13 @@ export function createActions(app: App): AppActions {
   const { store } = app;
 
   // Declared standalone (not via `this`) so actions still work when destructured by callers.
-  const resetWater = (): void => {
-    app.withSolver('reset', (solver) => {
-      solver.reset();
-      app.driver.onSolverReset();
-    });
-    app.requestRender();
+  // Water resets restart from the scenario's initial fill at the CURRENT river stage (see crest.ts).
+  const resetWater = (opts: { resetTerrain?: boolean } = {}): void => {
+    try {
+      if (!app.crest.resetWater(opts)) app.requestRender();
+    } catch (err) {
+      app.errors.report('sim', `reset failed: ${errorMessage(err)}`, err);
+    }
   };
 
   return {
@@ -40,15 +41,9 @@ export function createActions(app: App): AppActions {
       }
     },
 
-    resetWater,
+    resetWater: () => resetWater(),
 
-    resetAll() {
-      app.withSolver('reset', (solver) => {
-        solver.reset({ resetTerrain: true });
-        app.driver.onSolverReset();
-      });
-      app.requestRender();
-    },
+    resetAll: () => resetWater({ resetTerrain: true }),
 
     clearWalls() {
       // One capsule covering the whole domain erases every barrier (GPU + CPU mirror) in a single op.

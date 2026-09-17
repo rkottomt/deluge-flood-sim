@@ -2,14 +2,16 @@
  * Visual harness for the routing module (served by Vite at /tests/routing/harness.html).
  *
  *   ?data=city  synthetic 20×20-block city with a river and two bridges   &scene=dry|floodA|floodBoth|wet|startWater
- *   ?data=pgh   real Pittsburgh roads + USGS DEM (bake first: tests/routing/tools/bakePittsburgh.ts)   &level=<m above pool>
+ *   ?data=pgh   the shipped Pittsburgh preset (public/presets/pittsburgh)   &level=<m above normal pool>
  *   &start=gx,gy  start point
  *
  * window.__harness = { ready, bench(), state() } for screenshot automation (bench = warm in-browser timings).
  */
-import { createRouter } from '../../src/routing/index';
-import type { RoadNetwork, RouteResult, Shelter } from '../../src/contracts';
+import { createRouter, type DelugeRouteResult } from '../../src/routing/index';
+import type { RoadNetwork, Shelter } from '../../src/contracts';
+import type { PresetMeta } from '../../src/data/presets';
 import { floodRect, makeCity, shelterAt } from './city';
+import { PLACES, pittsburghWorld } from './pittsburghPreset';
 
 interface World {
   name: string;
@@ -35,7 +37,7 @@ const router = createRouter();
 let world: World;
 let depth: Float32Array;
 let start: { gx: number; gy: number } | null = null;
-let lastRoute: RouteResult | null = null;
+let lastRoute: DelugeRouteResult | null = null;
 let timings = '';
 let background: ImageBitmap | null = null;
 
@@ -91,58 +93,32 @@ function cityWorld(): World {
 }
 
 async function pghWorld(): Promise<World> {
-  const base = '/artifacts/routing-pgh';
-  const [meta, roads, elevBuf] = await Promise.all([
-    fetch(`${base}/meta.json`).then((r) => r.json()),
-    fetch(`${base}/roads.json`).then((r) => r.json()),
-    fetch(`${base}/elev.f32`).then((r) => r.arrayBuffer()),
+  const base = '/presets/pittsburgh';
+  const meta = (await fetch(`${base}/meta.json`).then((r) => r.json())) as PresetMeta;
+  const [roads, elevBuf] = await Promise.all([
+    fetch(`${base}/${meta.files.roads}`).then((r) => r.json()),
+    fetch(`${base}/${meta.files.elevation}`).then((r) => r.arrayBuffer()),
   ]);
-  const nx = meta.nx as number, ny = meta.ny as number;
-  const elev = new Float32Array(elevBuf);
-  const net: RoadNetwork = {
-    nodes: Float32Array.from(roads.nodes),
-    edges: roads.edges.map((e: { a: number; b: number; length: number; cls: never; name?: string; pts: number[] }) => ({
-      ...e,
-      pts: Float32Array.from(e.pts),
-    })),
-  };
-  const pool = meta.poolLevel as number;
-  const bathtub = (level: number) => {
-    // Water connected to the river at the Point, filled up to `level` (4-neighbour flood fill).
-    const d = new Float32Array(nx * ny);
-    const queue = new Int32Array(nx * ny);
-    const seen = new Uint8Array(nx * ny);
-    let head = 0, tail = 0;
-    const s = meta.seed.j * nx + meta.seed.i;
-    queue[tail++] = s;
-    seen[s] = 1;
-    while (head < tail) {
-      const k = queue[head++];
-      if (elev[k] >= level) continue;
-      d[k] = level - elev[k];
-      const i = k % nx, j = (k / nx) | 0;
-      if (i > 0 && !seen[k - 1]) (seen[k - 1] = 1), (queue[tail++] = k - 1);
-      if (i < nx - 1 && !seen[k + 1]) (seen[k + 1] = 1), (queue[tail++] = k + 1);
-      if (j > 0 && !seen[k - nx]) (seen[k - nx] = 1), (queue[tail++] = k - nx);
-      if (j < ny - 1 && !seen[k + nx]) (seen[k + nx] = 1), (queue[tail++] = k + nx);
-    }
-    return d;
-  };
-  const baseline = bathtub(pool + 0.8);
-  const levels = [0, 3, 6, 8, 9, 10, 12];
+  const w = pittsburghWorld(meta, elevBuf, roads);
+  const abovePool = (level: number) => `+${(level - w.pool).toFixed(1)} m`;
+  const controls = [
+    { label: 'Normal pool', apply: () => w.bathtub(w.pool) },
+    ...w.marks.map((m) => ({ label: `${m.label} ${m.ft} ft (${abovePool(m.level)})`, apply: () => w.bathtub(m.level) })),
+    ...[8, 12].map((dz) => ({ label: `+${dz} m`, apply: () => w.bathtub(w.pool + dz) })),
+  ];
   const initialLevel = Number(params.get('level') ?? 0);
   return {
-    name: 'Pittsburgh (TIGER roads, USGS 3DEP)',
-    nx,
-    ny,
-    cellSize: meta.cellSize,
-    net,
-    elev,
-    shelters: meta.shelters,
-    baseline,
-    controls: levels.map((l) => ({ label: `+${l} m`, apply: () => bathtub(pool + 0.8 + l) })),
-    initialDepth: () => bathtub(pool + 0.8 + initialLevel),
-    defaultStart: { gx: 330, gy: 565 }, // downtown, near Market Square
+    name: 'Pittsburgh preset (TIGER roads, USGS 3DEP)',
+    nx: w.nx,
+    ny: w.ny,
+    cellSize: w.cellSize,
+    net: w.roads,
+    elev: w.elevation,
+    shelters: w.shelters,
+    baseline: w.initialWater,
+    controls,
+    initialDepth: () => w.bathtub(w.pool + (Number.isFinite(initialLevel) ? initialLevel : 0)),
+    defaultStart: w.at(PLACES.downtown.lon, PLACES.downtown.lat),
   };
 }
 
@@ -263,7 +239,8 @@ function draw(): void {
   msg.textContent = r ? r.message : '—';
   msg.className = `msg ${r?.state ?? 'none'}`;
   $('detail').textContent = r
-    ? `state=${r.state}  length=${Math.round(r.lengthMeters)} m  eta=${Math.round(r.etaSeconds)} s  shelter=${r.shelter?.name ?? '—'}  points=${(r.polyline?.length ?? 0) / 2}`
+    ? `state=${r.state}${r.reason ? ` (${r.reason})` : ''}  length=${Math.round(r.lengthMeters)} m  eta=${Math.round(r.etaSeconds)} s  ` +
+      `wet=${Math.round(r.wetMeters)} m  shelter=${r.shelter?.name ?? '—'}  via=${r.via.join(' → ') || '—'}  points=${(r.polyline?.length ?? 0) / 2}`
     : '';
   $('timing').textContent = timings;
 }

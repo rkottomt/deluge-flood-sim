@@ -1,5 +1,10 @@
 /** Sky, tonemapping, rain streaks and mip generation shaders. */
 import { COMMON_WGSL, FRAME_WGSL } from './common';
+import { ACES_IN, ACES_OUT, POST_SATURATION } from '../tonemap';
+
+const wgslF = (x: number) => (Number.isInteger(x) ? `${x}.0` : `${x}`);
+const mat3 = (m: readonly number[]) =>
+  `mat3x3f(vec3f(${m.slice(0, 3).map(wgslF).join(', ')}), vec3f(${m.slice(3, 6).map(wgslF).join(', ')}), vec3f(${m.slice(6, 9).map(wgslF).join(', ')}))`;
 
 const FULLSCREEN_VS = /* wgsl */ `
 struct FsOut {
@@ -49,15 +54,10 @@ fn rrtOdt(v: vec3f) -> vec3f {
   let b = v * (0.983729 * v + 0.4329510) + 0.238081;
   return a / b;
 }
+// Matrices and the saturation restore come from tonemap.ts, whose CPU mirror solves hazard colours against them.
 fn aces(c: vec3f) -> vec3f {
-  let inM = mat3x3f(
-    vec3f(0.59719, 0.07600, 0.02840),
-    vec3f(0.35458, 0.90834, 0.13383),
-    vec3f(0.04823, 0.01566, 0.83777));
-  let outM = mat3x3f(
-    vec3f(1.60475, -0.10208, -0.00327),
-    vec3f(-0.53108, 1.10813, -0.07276),
-    vec3f(-0.07367, -0.00605, 1.07602));
+  let inM = ${mat3(ACES_IN)};
+  let outM = ${mat3(ACES_OUT)};
   return clamp(outM * rrtOdt(inM * c), vec3f(0.0), vec3f(1.0));
 }
 fn toSrgb(c: vec3f) -> vec3f {
@@ -80,7 +80,7 @@ fn fsTonemap(in: FsOut) -> @location(0) vec4f {
   if (!(dot(hdr, vec3f(1.0)) < 1e7)) { hdr = vec3f(0.0); }
   var c = aces(max(hdr, vec3f(0.0)) * P.exposure);
   // ACES desaturates midtones slightly; restore a touch of color.
-  c = clamp(mix(vec3f(dot(c, vec3f(0.2126, 0.7152, 0.0722))), c, 1.1), vec3f(0.0), vec3f(1.0));
+  c = clamp(mix(vec3f(dot(c, vec3f(0.2126, 0.7152, 0.0722))), c, ${wgslF(POST_SATURATION)}), vec3f(0.0), vec3f(1.0));
   let d = uv - 0.5;
   c *= 1.0 - P.vignette * dot(d, d) * 1.2;
   if (P.srgbOut > 0.5) { c = toSrgb(c); }

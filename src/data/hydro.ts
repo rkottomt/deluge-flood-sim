@@ -1319,6 +1319,288 @@ export function detectWaterBodies(
   return bodies;
 }
 
+export interface GapOptions {
+  /** Widest dry band that can be opened, measured across it from water to water, m. Default 90. */
+  maxWidth?: number;
+  /** Highest a band cell may stand above the (lower) water surface on its two sides, m. Default 3. */
+  maxHeight?: number;
+  /** Max difference between the water levels on the two sides of the band, m. Default 0.25. */
+  levelTolerance?: number;
+  /** Land a band must join at each end: at least this many m², or reaching the domain edge. Default 2 ha. */
+  minLandArea?: number;
+  /**
+   * Cells covered by mapped roads (1 = road). A band carrying a road may be a real causeway (land) as much as a
+   * bridge-removal ridge, and the DEM cannot tell them apart, so such bands are kept.
+   */
+  roads?: Uint8Array;
+  /** Diagnostics: called for every band of candidate cells with the verdict. */
+  onCandidate?: (info: {
+    cells: number;
+    /** Separate stretches of land along the band's outline, and how many of them are substantial land. */
+    landContacts: number;
+    bigLandContacts: number;
+    maxHeight: number;
+    onRoad: boolean;
+    accepted: boolean;
+    bbox: [number, number, number, number];
+  }) => void;
+}
+
+/**
+ * Open thin, low dry bands that cut across detected water (live areas). USGS 3DEP removes bridges from its
+ * bare-earth DEMs and hydro-flattens rivers, but where a water polygon was split (at a bridge, or at a seam
+ * between collections) the surface under the gap is interpolated from the banks and a ridge up to about a metre
+ * high is left across the channel — e.g. from downtown Harrisburg to City Island. In the simulation that ridge is a
+ * dam that splits the river and holds back a head when the stage rises.
+ *
+ * A band is opened (its cells join the adjacent body at the surface level, so the burn carves it like the rest of
+ * the channel) only if it matches that signature, so real features survive:
+ *   - every cell lies on a short straight run (≤ maxWidth, along a row, column or diagonal) of dry cells with
+ *     detected water at BOTH ends, whose two levels agree within `levelTolerance` (a dam holds a head — kept), and
+ *     that stands at most `maxHeight` above that surface (embankments, causeways and levees are higher — kept);
+ *   - the band touches substantial land (≥ minLandArea or the domain edge) at two or more separate places, i.e. it
+ *     connects shore to shore or shore to a large island. Narrow islands (no land contact), bars, spits and piers
+ *     (one contact) and islets are kept.
+ * Mutates the bodies (indices/levels/cells). Returns the number of cells and bands opened.
+ */
+export function openWaterGaps(
+  elev: Float32Array,
+  nx: number,
+  ny: number,
+  cellSize: number,
+  bodies: WaterBody[],
+  opts: GapOptions = {},
+): { cells: number; bands: number } {
+  if (!bodies.length) return { cells: 0, bands: 0 };
+  const roads = opts.roads;
+  const n = nx * ny;
+  const maxWidthCells = (opts.maxWidth ?? 90) / cellSize;
+  const maxHeight = opts.maxHeight ?? 3;
+  const tol = opts.levelTolerance ?? 0.25;
+  const bigLand = Math.max(8, Math.ceil((opts.minLandArea ?? 20000) / (cellSize * cellSize)));
+  if (maxWidthCells < 1) return { cells: 0, bands: 0 };
+
+  const bodyOf = new Int32Array(n); // body index + 1
+  const levelAt = new Float32Array(n);
+  bodies.forEach((b, bi) => {
+    b.indices.forEach((k, q) => {
+      bodyOf[k] = bi + 1;
+      levelAt[k] = b.levels[q];
+    });
+  });
+
+  // 1. Candidate cells: dry runs between two water cells along rows, columns and both diagonals.
+  const gapLevel = new Float32Array(n).fill(Infinity);
+  let marked = 0;
+  const dirs: Array<[number, number]> = [
+    [1, 0],
+    [0, 1],
+    [1, 1],
+    [1, -1],
+  ];
+  for (const [di, dj] of dirs) {
+    const maxRun = Math.floor(maxWidthCells / Math.hypot(di, dj));
+    if (maxRun < 1) continue;
+    const walk = (i0: number, j0: number) => {
+      let lastT = -1;
+      let lastK = -1;
+      let runTop = -Infinity;
+      for (let t = 0, i = i0, j = j0; i >= 0 && i < nx && j >= 0 && j < ny; t++, i += di, j += dj) {
+        const k = j * nx + i;
+        if (!bodyOf[k]) {
+          if (elev[k] > runTop) runTop = elev[k];
+          continue;
+        }
+        const len = t - lastT - 1;
+        if (lastK >= 0 && len >= 1 && len <= maxRun) {
+          const la = levelAt[lastK];
+          const lb = levelAt[k];
+          const surface = Math.min(la, lb);
+          if (Math.abs(la - lb) <= tol && runTop <= surface + maxHeight) {
+            for (let s = lastT + 1; s < t; s++) {
+              const m = (j0 + s * dj) * nx + i0 + s * di;
+              if (gapLevel[m] === Infinity) marked++;
+              if (surface < gapLevel[m]) gapLevel[m] = surface;
+            }
+          }
+        }
+        lastT = t;
+        lastK = k;
+        runTop = -Infinity;
+      }
+    };
+    // Every line starts at a cell whose predecessor lies outside the grid.
+    for (let j = 0; j < ny; j++) {
+      for (let i = 0; i < nx; i++) {
+        const pi = i - di;
+        const pj = j - dj;
+        if (pi >= 0 && pi < nx && pj >= 0 && pj < ny) {
+          // Interior cells are never line starts; jump to the last column of an interior row.
+          if (i > 0 && i < nx - 1 && j > 0 && j < ny - 1) i = nx - 2;
+          continue;
+        }
+        walk(i, j);
+      }
+    }
+  }
+  if (!marked) return { cells: 0, bands: 0 };
+
+  // 2. Bands: 8-connected components of candidate cells, judged by the land they connect.
+  const isGap = (k: number) => gapLevel[k] !== Infinity;
+  const seen = new Uint8Array(n); // 1 = band visited, 2 = contact cell collected (per band, reset after)
+  const landMark = new Int32Array(n); // BFS stamp for land-size probes
+  let landStamp = 0;
+  const stack: number[] = [];
+  const band: number[] = [];
+  const contacts: number[] = [];
+  const addedTo = new Map<number, { idx: number[]; lvl: number[] }>();
+  let opened = 0;
+  let bands = 0;
+  const D8I = [1, -1, 0, 0, 1, 1, -1, -1];
+  const D8J = [0, 0, 1, -1, 1, -1, 1, -1];
+
+  /** True if the dry, non-band land reachable from `seeds` holds ≥ bigLand cells or reaches the domain edge. */
+  const substantialLand = (seeds: number[]): boolean => {
+    const stamp = ++landStamp;
+    const q: number[] = [];
+    for (const s of seeds) {
+      if (landMark[s] !== stamp) {
+        landMark[s] = stamp;
+        q.push(s);
+      }
+    }
+    for (let h = 0; h < q.length; h++) {
+      if (q.length >= bigLand) return true;
+      const k = q[h];
+      const i = k % nx;
+      const j = (k / nx) | 0;
+      if (i === 0 || j === 0 || i === nx - 1 || j === ny - 1) return true;
+      for (let d = 0; d < 4; d++) {
+        const m = k + (d === 0 ? 1 : d === 1 ? -1 : d === 2 ? nx : -nx);
+        if (bodyOf[m] || isGap(m) || landMark[m] === stamp) continue;
+        landMark[m] = stamp;
+        q.push(m);
+      }
+    }
+    return q.length >= bigLand;
+  };
+
+  for (let s = 0; s < n; s++) {
+    if (!isGap(s) || seen[s]) continue;
+    band.length = 0;
+    contacts.length = 0;
+    stack.push(s);
+    seen[s] = 1;
+    let top = -Infinity;
+    let onRoad = false;
+    let i0 = nx;
+    let j0 = ny;
+    let i1 = 0;
+    let j1 = 0;
+    while (stack.length) {
+      const k = stack.pop()!;
+      band.push(k);
+      const i = k % nx;
+      const j = (k / nx) | 0;
+      if (i < i0) i0 = i;
+      if (i > i1) i1 = i;
+      if (j < j0) j0 = j;
+      if (j > j1) j1 = j;
+      top = Math.max(top, elev[k] - gapLevel[k]);
+      if (roads && roads[k]) onRoad = true;
+      for (let d = 0; d < 8; d++) {
+        const ii = i + D8I[d];
+        const jj = j + D8J[d];
+        if (ii < 0 || jj < 0 || ii >= nx || jj >= ny) continue;
+        const m = jj * nx + ii;
+        if (isGap(m)) {
+          if (!seen[m]) {
+            seen[m] = 1;
+            stack.push(m);
+          }
+        } else if (!bodyOf[m] && d < 4 && seen[m] !== 2) {
+          seen[m] = 2;
+          contacts.push(m);
+        }
+      }
+    }
+    // Group the land cells along the band's outline into separate stretches (8-connected among themselves).
+    let landContacts = 0;
+    let bigContacts = 0;
+    const group: number[] = [];
+    for (const c of contacts) {
+      if (seen[c] !== 2) continue;
+      landContacts++;
+      group.length = 0;
+      stack.push(c);
+      seen[c] = 3;
+      while (stack.length) {
+        const k = stack.pop()!;
+        group.push(k);
+        const i = k % nx;
+        const j = (k / nx) | 0;
+        for (let d = 0; d < 8; d++) {
+          const ii = i + D8I[d];
+          const jj = j + D8J[d];
+          if (ii < 0 || jj < 0 || ii >= nx || jj >= ny) continue;
+          const m = jj * nx + ii;
+          if (seen[m] === 2) {
+            seen[m] = 3;
+            stack.push(m);
+          }
+        }
+      }
+      if (substantialLand(group)) bigContacts++;
+    }
+    for (const c of contacts) seen[c] = 0;
+    const accepted = bigContacts >= 2 && !onRoad;
+    opts.onCandidate?.({ cells: band.length, landContacts, bigLandContacts: bigContacts, maxHeight: top, onRoad, accepted, bbox: [i0, j0, i1, j1] });
+    if (!accepted) continue;
+    bands++;
+    // Join the body the band touches most.
+    const votes = new Map<number, number>();
+    for (const k of band) {
+      const i = k % nx;
+      const j = (k / nx) | 0;
+      for (let d = 0; d < 4; d++) {
+        const ii = i + D8I[d];
+        const jj = j + D8J[d];
+        if (ii < 0 || jj < 0 || ii >= nx || jj >= ny) continue;
+        const b = bodyOf[jj * nx + ii];
+        if (b) votes.set(b, (votes.get(b) ?? 0) + 1);
+      }
+    }
+    let target = 0;
+    let best = -1;
+    for (const [b, v] of votes) {
+      if (v > best) {
+        best = v;
+        target = b;
+      }
+    }
+    let add = addedTo.get(target);
+    if (!add) addedTo.set(target, (add = { idx: [], lvl: [] }));
+    for (const k of band) {
+      add.idx.push(k);
+      add.lvl.push(gapLevel[k]);
+    }
+    opened += band.length;
+  }
+  for (const [b, add] of addedTo) {
+    const body = bodies[b - 1];
+    const idx = new Int32Array(body.indices.length + add.idx.length);
+    idx.set(body.indices);
+    idx.set(add.idx, body.indices.length);
+    const lvl = new Float32Array(idx.length);
+    lvl.set(body.levels);
+    lvl.set(add.lvl, body.levels.length);
+    body.indices = idx;
+    body.levels = lvl;
+    body.cells = idx.length;
+  }
+  return { cells: opened, bands };
+}
+
 /**
  * Burn detected water bodies (live areas): lower each by `depth` below its local surface with smooth banks,
  * bed = min(z, level) − depth·smoothstep(0, bankCells, distance to shore).

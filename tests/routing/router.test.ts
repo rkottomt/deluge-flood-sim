@@ -1,8 +1,9 @@
 /// <reference types="node" />
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { createRouter } from '../../src/routing/index';
+import { createRouter, type DelugeRouteResult } from '../../src/routing/index';
 import { SPEED_BY_CLASS, WET_SPEED_FACTOR } from '../../src/routing/constants';
+import { formatDistance, formatDuration } from '../../src/routing/format';
 import type { RouteResult, Shelter } from '../../src/contracts';
 import { CELL_SIZE, floodRect, makeCity, shelterAt, type City } from './city';
 
@@ -70,6 +71,35 @@ function assertRouteGeometry(city: City, r: RouteResult, start: { gx: number; gy
   const lenM = polyLengthCells(poly) * CELL_SIZE;
   assert.ok(Math.abs(lenM - r.lengthMeters) / r.lengthMeters < 0.005, `length ${r.lengthMeters} ≈ polyline ${lenM}`);
   assert.ok(r.etaSeconds > 0 && Number.isFinite(r.etaSeconds));
+}
+
+/**
+ * The structured fields agree with the state and with the message sentence built from them, so a UI can
+ * use either (see DelugeRouteResult).
+ */
+function assertStructured(r: DelugeRouteResult): void {
+  if (r.state === 'ok') {
+    assert.equal(r.reason, null);
+    assert.equal(r.advice, '');
+    assert.ok(r.via.length <= 2 && r.via.every((n) => n.length > 0), `via ${JSON.stringify(r.via)}`);
+    assert.ok(r.wetMeters === 0 || (r.wetMeters >= 1 && r.wetMeters <= r.lengthMeters + 1e-6), `wetMeters ${r.wetMeters}`);
+    let expected = `${r.via.length ? `Via ${r.via.join(' → ')} to` : 'Route to'} ${r.shelter!.name} — ${formatDistance(r.lengthMeters)}, ${formatDuration(r.etaSeconds)}`;
+    if (r.wetMeters > 0) expected += ` (${formatDistance(r.wetMeters)} through shallow water — drive slowly)`;
+    assert.equal(r.message, expected);
+    return;
+  }
+  assert.ok(r.reason, `${r.state} result has a reason`);
+  assert.deepEqual(r.via, []);
+  assert.equal(r.wetMeters, 0);
+  assert.ok(r.advice.length > 0 && r.advice[0] === r.advice[0].toUpperCase(), `advice "${r.advice}"`);
+  if (r.state === 'none') {
+    assert.equal(r.advice, r.message);
+    assert.ok(['no-roads', 'no-start', 'no-shelters', 'start-off-network', 'shelters-off-network', 'start-in-water-body'].includes(r.reason!));
+  } else {
+    assert.ok(['start-flooded', 'start-roads-flooded', 'shelters-flooded', 'cut-off'].includes(r.reason!), r.reason!);
+    const lead = `No safe route — ${r.advice[0].toLowerCase()}${r.advice.slice(1)}`;
+    assert.equal(r.message, r.reason === 'start-flooded' ? r.advice : lead);
+  }
 }
 
 function setup() {
@@ -200,7 +230,9 @@ describe('evacuation routes', () => {
     assert.ok(Math.abs(xs[0] - bridgeX(city, city.bridgeACol)) < 1, 'over bridge A');
     assert.equal(r.shelter, shelter);
     assert.match(r.message, /^Via .+ to Hilltop School — \d/);
-    assert.match(r.message, /Smithfield/, 'names the main street used');
+    assert.ok(r.via.some((n) => n.startsWith('Smithfield')), `names the main street used: ${JSON.stringify(r.via)}`);
+    assert.equal(r.wetMeters, 0);
+    assertStructured(r);
     // Sanity: ETA consistent with local-street speeds (connectors walk at 1.4 m/s).
     assert.ok(r.etaSeconds > r.lengthMeters / SPEED_BY_CLASS.highway && r.etaSeconds < r.lengthMeters / 1.4);
   });
@@ -220,7 +252,8 @@ describe('evacuation routes', () => {
     assert.equal(xs.length, 1);
     assert.ok(Math.abs(xs[0] - bridgeX(city, city.bridgeBCol)) < 1, 'reroutes over bridge B');
     assert.ok(r.lengthMeters > dry.lengthMeters + 1500 && r.etaSeconds > dry.etaSeconds, 'detour is longer');
-    assert.match(r.message, /Hot Metal Bridge|Ave|St/);
+    assert.ok(r.via.length > 0, 'names the detour streets');
+    assertStructured(r);
 
     const bx = bridgeX(city, city.bridgeBCol);
     floodRect(d, city.nx, bx - 12, city.riverY0 - 12, bx + 12, city.riverY1 + 12, 0.6);
@@ -228,6 +261,9 @@ describe('evacuation routes', () => {
     const b = router.route(start, [shelter]);
     assert.equal(b.state, 'blocked');
     assert.equal(b.message, 'No safe route — all roads to shelters are flooded. Shelter in place on higher floors.');
+    assert.equal(b.reason, 'cut-off');
+    assert.equal(b.advice, 'All roads to shelters are flooded. Shelter in place on higher floors.');
+    assertStructured(b);
     assert.equal(b.shelter, null);
     assert.ok(b.polyline && b.polyline.length >= 4, 'blocked result carries the cut route for red rendering');
 
@@ -257,6 +293,8 @@ describe('evacuation routes', () => {
     r = router.route(start, [near]);
     assert.equal(r.state, 'blocked');
     assert.match(r.message, /every shelter is flooded/);
+    assert.equal(r.reason, 'shelters-flooded');
+    assertStructured(r);
   });
 
   test('wet roads slow the ETA (×1/0.3) but stay passable', () => {
@@ -273,6 +311,10 @@ describe('evacuation routes', () => {
     const ratio = wet.etaSeconds / dry.etaSeconds;
     assert.ok(ratio > 2.5 && ratio <= 1 / WET_SPEED_FACTOR + 1e-9, `ETA ratio ${ratio.toFixed(2)}`);
     assert.match(wet.message, /through shallow water/);
+    // Everything but the two short walking connectors is on (wet) road.
+    assert.ok(wet.wetMeters > 0.9 * wet.lengthMeters && wet.wetMeters < wet.lengthMeters, `wetMeters ${wet.wetMeters} of ${wet.lengthMeters}`);
+    assertStructured(wet);
+    assert.equal(dry.wetMeters, 0);
   });
 
   test('start in floodwater is reported with its depth', () => {
@@ -284,6 +326,8 @@ describe('evacuation routes', () => {
     assert.equal(r.state, 'blocked');
     assert.match(r.message, /^Start point is under 0\.8 m of water/);
     assert.match(r.message, /higher floors/);
+    assert.equal(r.reason, 'start-flooded');
+    assertStructured(r);
   });
 
   test('start placed in the river (standing water) asks for a point on land', () => {
@@ -291,6 +335,8 @@ describe('evacuation routes', () => {
     const r = router.route({ gx: 200.5, gy: (city.riverY0 + city.riverY1) / 2 }, [shelter]);
     assert.equal(r.state, 'none');
     assert.match(r.message, /^Start point is under 4\.0 m of water \(river or lake\) — click on land/);
+    assert.equal(r.reason, 'start-in-water-body');
+    assertStructured(r);
   });
 
   test('start whose surrounding roads are all flooded is blocked', () => {
@@ -306,7 +352,7 @@ describe('evacuation routes', () => {
     const r = router.route(start, [shelter]);
     assert.equal(r.state, 'blocked');
     assert.match(r.message, /^No safe route/);
-
+    assertStructured(r);
   });
 
   test("'none' results explain how to use the tool", () => {
@@ -314,10 +360,14 @@ describe('evacuation routes', () => {
     const a = router.route(null, [shelter]);
     assert.equal(a.state, 'none');
     assert.match(a.message, /Evac tool/);
+    assert.equal(a.reason, 'no-start');
+    assertStructured(a);
     assert.equal(a.polyline, null);
     const b = router.route(start, []);
     assert.equal(b.state, 'none');
     assert.match(b.message, /Shelter tool/);
+    assert.equal(b.reason, 'no-shelters');
+    assertStructured(b);
 
     const empty = createRouter();
     assert.equal(empty.updateFlood(city.baseline(), city.nx, city.ny), null);
@@ -326,6 +376,8 @@ describe('evacuation routes', () => {
     const c = empty.route(start, [shelter]);
     assert.equal(c.state, 'none');
     assert.match(c.message, /No road data/);
+    assert.equal(c.reason, 'no-roads');
+    assertStructured(c);
     empty.setNetwork(null, 8);
     assert.equal(empty.updateFlood(city.baseline(), city.nx, city.ny), null);
 
@@ -336,6 +388,8 @@ describe('evacuation routes', () => {
     const out = r2.route({ gx: 500, gy: 500 }, [shelterAt('X', 20, 20)]);
     assert.equal(out.state, 'none');
     assert.match(out.message, /No road within 300 m/);
+    assert.equal(out.reason, 'start-off-network');
+    assertStructured(out);
   });
 
   test('start and shelter on the same street segment', () => {
@@ -399,6 +453,7 @@ describe('evacuation routes', () => {
       const start = { gx: city.net.nodes[2 * s], gy: city.net.nodes[2 * s + 1] };
       const shelter = shelterAt('T', city.net.nodes[2 * t], city.net.nodes[2 * t + 1]);
       const r = router.route(start, [shelter]);
+      assertStructured(r);
       const startDepth = d[Math.floor(start.gy) * city.nx + Math.floor(start.gx)];
       if (startDepth >= 0.3 || d[Math.floor(shelter.gy) * city.nx + Math.floor(shelter.gx)] >= 0.3) continue;
       if (dist[t] === Infinity) {

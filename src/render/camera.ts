@@ -10,7 +10,12 @@ import { clamp, mat4Invert, mat4Multiply, perspectiveReversedInfinite, v3, viewF
 import { cameraRay, intersectPlaneY, type Ray } from './picking';
 
 export const CAMERA_FOV_Y = (42 * Math.PI) / 180;
+/** Absolute lowest pitch: street-level close-ups of a wall. */
 const MIN_PITCH = 0.035;
+/** Lowest pitch once the camera is far out (≥ half the domain away): anything lower only shows the nearest hill. */
+const FAR_MIN_PITCH = 0.2;
+/** Lowest pitch with the eye well outside the diorama (it would look at the terrain block's side wall). */
+const OUTSIDE_MIN_PITCH = 0.42;
 const MAX_PITCH = Math.PI / 2;
 
 /** Scene information the controller needs (supplied by the renderer). */
@@ -57,6 +62,10 @@ const samePose = (a: CameraPose, b: CameraPose) =>
   a.pitch === b.pitch;
 
 const wrapAngle = (a: number) => Math.atan2(Math.sin(a), Math.cos(a));
+const smooth = (e0: number, e1: number, x: number) => {
+  const t = clamp((x - e0) / (e1 - e0), 0, 1);
+  return t * t * (3 - 2 * t);
+};
 const easeInOutCubic = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
 
 function sanitize(p: CameraPose, fallback: CameraPose): CameraPose {
@@ -292,7 +301,39 @@ export class OrbitController implements CameraController {
     this.lastCur = clonePose(this.cur);
   }
 
-  /** Keep the eye above the terrain surface by raising the pitch if needed. */
+  /**
+   * Lowest pitch allowed for a pose. Grazing views are for close-ups: from far away they show only the nearest
+   * hillside (the flood hides behind it), and with the eye outside the terrain footprint the frame fills with the
+   * diorama's side wall. So the floor rises with distance (relative to the domain) and with how far the eye's
+   * ground position lies outside the footprint. It is smooth in distance, target and yaw, so orbiting never pops.
+   */
+  minPitchFor(p: CameraPose): number {
+    const e = this.env;
+    const size = Math.max(e.nx, e.ny) * e.cellSize;
+    const byDistance = MIN_PITCH + (FAR_MIN_PITCH - MIN_PITCH) * smooth(0.06 * size, 0.5 * size, p.distance);
+    // The eye's horizontal offset shrinks as the pitch rises, so the smallest pitch that satisfies the outside
+    // floor is found by bisection (the floor only rises as the eye moves out, so there is one crossing).
+    const need = (pitch: number) => {
+      const cp = Math.cos(pitch);
+      const ex = (p.target.gx - e.nx / 2) * e.cellSize - Math.sin(p.yaw) * cp * p.distance;
+      const ez = (p.target.gy - e.ny / 2) * e.cellSize + Math.cos(p.yaw) * cp * p.distance;
+      const ox = Math.max(0, Math.abs(ex) - (e.nx / 2) * e.cellSize);
+      const oz = Math.max(0, Math.abs(ez) - (e.ny / 2) * e.cellSize);
+      const outside = Math.hypot(ox, oz);
+      return Math.max(byDistance, MIN_PITCH + (OUTSIDE_MIN_PITCH - MIN_PITCH) * smooth(0, 0.15 * size, outside));
+    };
+    let lo = byDistance;
+    let hi = MAX_PITCH;
+    if (need(lo) <= lo) return lo;
+    for (let i = 0; i < 24; i++) {
+      const mid = 0.5 * (lo + hi);
+      if (need(mid) <= mid) hi = mid;
+      else lo = mid;
+    }
+    return hi;
+  }
+
+  /** Keep the eye above the terrain surface (and above the pitch floor) by raising the pitch if needed. */
   private enforceClearance(p: CameraPose): void {
     const e = this.env;
     const x = p.target;
@@ -300,7 +341,7 @@ export class OrbitController implements CameraController {
     x.gy = clamp(x.gy, -0.25 * e.ny, 1.25 * e.ny);
     const size = Math.max(e.nx, e.ny) * e.cellSize;
     p.distance = clamp(p.distance, Math.max(e.cellSize * 1.5, 12), size * 5);
-    p.pitch = clamp(p.pitch, MIN_PITCH, MAX_PITCH);
+    p.pitch = clamp(p.pitch, this.minPitchFor(p), MAX_PITCH);
     for (let iter = 0; iter < 3; iter++) {
       const eye = this.eyeFor(p);
       const h = e.heightAt(eye[0] / e.cellSize + e.nx / 2, eye[2] / e.cellSize + e.ny / 2);

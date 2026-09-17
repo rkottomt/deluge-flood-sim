@@ -1,5 +1,5 @@
 /** Creation of all render/compute pipelines and shared bind group layouts. */
-import { PREP_CELLS_WGSL, PREP_VERTS_WGSL, PREP_WGSL, WET_BASE_WGSL, WET_DOWN_WGSL } from './shaders/prep';
+import { NORMAL_WATER_WGSL, PREP_CELLS_WGSL, PREP_VERTS_WGSL, PREP_WGSL, WET_BASE_WGSL, WET_DOWN_WGSL } from './shaders/prep';
 import { TERRAIN_WGSL } from './shaders/terrain';
 import { WATER_WGSL } from './shaders/water';
 import { MARKER_WGSL, RIBBON_WGSL } from './shaders/overlay';
@@ -16,6 +16,7 @@ export interface Pipelines {
   prepVerts: GPUComputePipeline;
   wetBase: GPUComputePipeline;
   wetDown: GPUComputePipeline;
+  normalWater: GPUComputePipeline;
   sky: GPURenderPipeline;
   terrain: GPURenderPipeline;
   skirt: GPURenderPipeline;
@@ -63,6 +64,9 @@ export async function createPipelines(device: GPUDevice, canvasFormat: GPUTextur
       { binding: 6, visibility: VF, sampler: { type: 'filtering' } },
       { binding: 7, visibility: VF, sampler: { type: 'filtering' } },
       { binding: 8, visibility: GPUShaderStage.VERTEX, texture: { sampleType: 'unfilterable-float' } },
+      // Wall distance field (rgba16float) and the normally-wet mask (rgba8unorm), both filtered.
+      { binding: 9, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
+      { binding: 10, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
     ],
   });
   const overlayBGL = device.createBindGroupLayout({
@@ -77,11 +81,12 @@ export async function createPipelines(device: GPUDevice, canvasFormat: GPUTextur
   const sceneLayout = device.createPipelineLayout({ bindGroupLayouts: [sceneBGL] });
   const overlayLayout = device.createPipelineLayout({ bindGroupLayouts: [overlayBGL] });
 
-  const [prepCellsM, prepVertsM, wetBaseM, wetDownM, terrainM, waterM, ribbonM, markerM, skyM, rainM, bloomM, tonemapM] = await Promise.all([
+  const [prepCellsM, prepVertsM, wetBaseM, wetDownM, normalWaterM, terrainM, waterM, ribbonM, markerM, skyM, rainM, bloomM, tonemapM] = await Promise.all([
     checkedModule(device, PREP_WGSL + PREP_CELLS_WGSL, 'prep-cells'),
     checkedModule(device, PREP_WGSL + PREP_VERTS_WGSL, 'prep-verts'),
     checkedModule(device, WET_BASE_WGSL, 'wet-base'),
     checkedModule(device, WET_DOWN_WGSL, 'wet-down'),
+    checkedModule(device, NORMAL_WATER_WGSL, 'normal-water'),
     checkedModule(device, TERRAIN_WGSL, 'terrain'),
     checkedModule(device, WATER_WGSL, 'water'),
     checkedModule(device, RIBBON_WGSL, 'ribbons'),
@@ -126,7 +131,7 @@ export async function createPipelines(device: GPUDevice, canvasFormat: GPUTextur
   };
 
   const R = (d: GPURenderPipelineDescriptor) => device.createRenderPipelineAsync(d);
-  const [sky, terrain, skirt, water, waterSkirt, ribbons, markersOpaque, markersBlend, rain, bloom, tonemap, prepCells, prepVerts, wetBase, wetDown] =
+  const [sky, terrain, skirt, water, waterSkirt, ribbons, markersOpaque, markersBlend, rain, bloom, tonemap, prepCells, prepVerts, wetBase, wetDown, normalWater] =
     await Promise.all([
       R({
         label: 'sky',
@@ -225,7 +230,8 @@ export async function createPipelines(device: GPUDevice, canvasFormat: GPUTextur
       device.createComputePipelineAsync({ label: 'prep-verts', layout: 'auto', compute: { module: prepVertsM, entryPoint: 'verts' } }),
       device.createComputePipelineAsync({ label: 'wet-base', layout: 'auto', compute: { module: wetBaseM, entryPoint: 'wetBase' } }),
       device.createComputePipelineAsync({ label: 'wet-down', layout: 'auto', compute: { module: wetDownM, entryPoint: 'wetDown' } }),
+      device.createComputePipelineAsync({ label: 'normal-water', layout: 'auto', compute: { module: normalWaterM, entryPoint: 'normalWater' } }),
     ]);
 
-  return { sceneBGL, overlayBGL, prepCells, prepVerts, wetBase, wetDown, sky, terrain, skirt, water, waterSkirt, ribbons, markersOpaque, markersBlend, rain, bloom, tonemap };
+  return { sceneBGL, overlayBGL, prepCells, prepVerts, wetBase, wetDown, normalWater, sky, terrain, skirt, water, waterSkirt, ribbons, markersOpaque, markersBlend, rain, bloom, tonemap };
 }

@@ -14,7 +14,9 @@ import {
   distanceTransform,
   findRiverEnds,
   monotoneNonIncreasing,
+  openWaterGaps,
   riverLevelProfile,
+  type WaterBody,
 } from '../../src/data/hydro';
 import { computeInitialWater } from '../../src/data/initialWater';
 
@@ -370,4 +372,151 @@ test('live areas: a two-reach river with low gravel-bar banks is fully detected 
   assert.ok(maxDepth < 3.3, `max initial depth ${maxDepth.toFixed(2)} m (burn is 3 m)`);
   assert.ok(h[128 * n + 60] > 2.9 && h[128 * n + 200] > 2.9, 'both reaches full');
   assert.equal(h[20 * n + 60], 0, 'valley side dry');
+});
+
+/** A WaterBody from a mask and a per-cell level function (bypasses detection for exact geometry tests). */
+function bodyFromMask(mask: Uint8Array, n: number, levelOf: (i: number, j: number) => number): WaterBody {
+  const idx: number[] = [];
+  const lv: number[] = [];
+  for (let k = 0; k < mask.length; k++) {
+    if (!mask[k]) continue;
+    idx.push(k);
+    lv.push(levelOf(k % n, (k / n) | 0));
+  }
+  const s = idx[idx.length >> 1];
+  const seed = { gx: (s % n) + 0.5, gy: ((s / n) | 0) + 0.5 };
+  return {
+    level: lv[lv.length >> 1],
+    minLevel: Math.min(...lv),
+    maxLevel: Math.max(...lv),
+    cells: idx.length,
+    seed,
+    seeds: [{ ...seed, level: lv[lv.length >> 1] }],
+    indices: Int32Array.from(idx),
+    levels: Float32Array.from(lv),
+    touchesEdge: true,
+  };
+}
+
+/**
+ * A 400 m wide river (rows 60–139, 5 m cells) on 4 m high banks, crossed and interrupted by features that all
+ * stand dry above the water in a hydro-flattened DEM:
+ *   i ≈ 30–60  a diagonal ridge ≤ 1 m high from bank to bank (a bridge-removal / seam artifact) → open
+ *   i = 80     a straight 1.5 m band carrying a mapped road (causeway or bridge — ambiguous)    → keep
+ *   i = 100    a narrow low island in mid-river                                                  → keep
+ *   i = 120    a low spit / pier from the north bank                                             → keep
+ *   i = 150    a dam holding 1 m of head (101 m upstream, 100 m downstream)                      → keep
+ *   i = 175    a 5 m embankment across the river                                                 → keep
+ */
+function crossedRiver() {
+  const n = 200;
+  const cell = 5;
+  const z = new Float32Array(n * n);
+  const water = new Uint8Array(n * n);
+  const road = new Uint8Array(n * n);
+  const kind = new Uint8Array(n * n); // 1 ridge, 2 causeway, 3 island, 4 spit, 5 dam, 6 embankment
+  const levelOf = (i: number) => (i < 150 ? 101 : 100);
+  for (let j = 0; j < n; j++) {
+    for (let i = 0; i < n; i++) {
+      const k = j * n + i;
+      const L = levelOf(i);
+      if (j < 60 || j >= 140) {
+        z[k] = 104 + rough(i, j, 0.2);
+        continue;
+      }
+      z[k] = L;
+      water[k] = 1;
+      const dRidge = Math.abs(i - (30 + (j - 60) * 0.375)); // oblique: from (30, 60) to (60, 140)
+      if (dRidge <= 5) {
+        z[k] = L + 0.1 + 0.9 * (1 - dRidge / 5.5);
+        kind[k] = 1;
+      } else if (Math.abs(i - 80) <= 3) {
+        z[k] = L + 1.5;
+        kind[k] = 2;
+        if (i === 80) road[k] = 1;
+      } else if (Math.abs(i - 100) <= 2 && j >= 92 && j <= 108) {
+        z[k] = L + 0.8;
+        kind[k] = 3;
+      } else if (Math.abs(i - 120) <= 2 && j < 90) {
+        z[k] = L + 1;
+        kind[k] = 4;
+      } else if (Math.abs(i - 150) <= 2) {
+        z[k] = 102.5;
+        kind[k] = 5;
+      } else if (Math.abs(i - 175) <= 3) {
+        z[k] = L + 5;
+        kind[k] = 6;
+      }
+      if (kind[k]) water[k] = 0;
+    }
+  }
+  return { n, cell, z, water, road, kind, body: () => bodyFromMask(water, n, (i) => levelOf(i)) };
+}
+
+test('live areas: a low ridge across a river is opened; causeways, islands, spits, dams and embankments are kept', () => {
+  const { n, cell, z, road, kind, body } = crossedRiver();
+  const bodies = [body()];
+  const verdicts: Array<{ accepted: boolean; bbox: [number, number, number, number]; onRoad: boolean }> = [];
+  const res = openWaterGaps(z, n, n, cell, bodies, { roads: road, onCandidate: (c) => verdicts.push(c) });
+  assert.equal(res.bands, 1, `one band opened (${JSON.stringify(verdicts.filter((v) => v.accepted))})`);
+  const inBody = new Uint8Array(n * n);
+  bodies[0].indices.forEach((k) => (inBody[k] = 1));
+  const count = (kd: number) => {
+    let total = 0;
+    let wet = 0;
+    for (let k = 0; k < n * n; k++) {
+      if (kind[k] !== kd) continue;
+      total++;
+      wet += inBody[k];
+    }
+    return { total, wet };
+  };
+  const ridge = count(1);
+  assert.equal(ridge.wet, ridge.total, `whole ridge joins the river (${ridge.wet}/${ridge.total})`);
+  assert.equal(bodies[0].cells, bodies[0].indices.length);
+  for (const [kd, what] of [
+    [2, 'road causeway'],
+    [3, 'island'],
+    [4, 'spit'],
+    [5, 'dam'],
+    [6, 'embankment'],
+  ] as const) {
+    assert.equal(count(kd).wet, 0, `${what} kept`);
+  }
+  assert.ok(verdicts.some((v) => v.onRoad && !v.accepted), 'the road band was a candidate, kept for its road');
+  // Opened cells carry the surface level of the water around them.
+  const q = bodies[0].indices.findIndex((k) => kind[k] === 1);
+  assert.ok(Math.abs(bodies[0].levels[q] - 101) < 1e-6);
+
+  // Without road information the causeway band would open too: the road is what keeps it.
+  const again = [body()];
+  openWaterGaps(z, n, n, cell, again);
+  const inAgain = new Uint8Array(n * n);
+  again[0].indices.forEach((k) => (inAgain[k] = 1));
+  let causewayOpened = 0;
+  for (let k = 0; k < n * n; k++) if (kind[k] === 2 && inAgain[k]) causewayOpened++;
+  assert.ok(causewayOpened > 0);
+});
+
+test('live areas: after opening, the burned channel is continuous — water filled on one side reaches the other', () => {
+  const { n, cell, z, road, kind, body } = crossedRiver();
+  const fillFromWest = (bodies: WaterBody[]) => {
+    const burned = burnWaterBodies(z, n, n, bodies, 3, 2);
+    // One seed west of the ridge only.
+    const h = computeInitialWater({ nx: n, ny: n, elevation: burned.elevation }, { initialFill: [{ seeds: [{ gx: 10.5, gy: 100.5, level: 101 }], level: 101 }] });
+    return { h, elev: burned.elevation };
+  };
+  const closed = fillFromWest([body()]);
+  assert.equal(closed.h[100 * n + 70], 0, 'without opening, the ridge dams the river');
+  const bodies = [body()];
+  openWaterGaps(z, n, n, cell, bodies, { roads: road });
+  const open = fillFromWest(bodies);
+  assert.ok(open.h[100 * n + 70] > 2.9, 'east of the ridge filled through the opened band');
+  let maxBed = -Infinity;
+  for (let k = 0; k < n * n; k++) {
+    const j = (k / n) | 0;
+    if (kind[k] === 1 && j >= 64 && j < 136) maxBed = Math.max(maxBed, open.elev[k]);
+  }
+  assert.ok(maxBed <= 101 - 2.9, `ridge carved to the river bed (highest ${maxBed.toFixed(2)} m)`);
+  assert.equal(open.h[100 * n + 79], 0, 'the causeway still holds (road band kept)');
 });

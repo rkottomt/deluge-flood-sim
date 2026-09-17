@@ -20,9 +20,13 @@ import { createHowItWorks } from './howItWorks';
 import { createLocationPicker } from './locationPicker';
 import { installKeyboard } from './keyboard';
 import { createWelcome } from './welcome';
+import { createRouteChip } from './routeChip';
+import { installBreakDemoRestore } from './stabilityDemo';
 
 export { createToolController } from './tools';
 export { renderUnsupported } from './overlays';
+/** Non-error notices (neutral toast) — e.g. for startup URL warnings. Safe to call before mountUI. */
+export { postNotice, type Notice } from './bridge';
 
 const mounted = new WeakMap<HTMLElement, () => void>();
 
@@ -66,13 +70,16 @@ export function mountUI(root: HTMLElement, store: Store, actions: AppActions): v
   const { toolbar, options } = createToolbar(ctx);
   const hud = createHud(ctx, topbar.achievedSpeed);
   const probe = createProbeTooltip(ctx);
-  const notices = createNotices(ctx, [createWelcome(ctx)]);
+  const routeChip = createRouteChip(ctx, { reveal: () => panel.reveal('evac') });
+  const notices = createNotices(ctx, { top: [createWelcome(ctx)], bottom: [routeChip] });
   const loading = createLoadingOverlay(ctx);
   const help = createHelp(ctx);
   const how = createHowItWorks(ctx);
   const picker = createLocationPicker(ctx);
 
-  const layer = h('div', { class: 'dl-layer' }, topbar.el, toolbar, options, hud, panel.el, notices, probe.el);
+  installBreakDemoRestore(ctx);
+
+  const layer = h('div', { class: 'dl-layer' }, topbar.el, toolbar, options, hud, panel.el, notices.top, notices.bottom, probe.el);
   root.append(layer, loading, help.el, how.el, picker.el);
 
   const removeTooltips = installTooltips(root);

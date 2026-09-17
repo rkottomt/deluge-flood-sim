@@ -33,8 +33,6 @@ export interface WallCheckInput {
   wallHeight: number;
   /** River surface from the stage control, m (null when the scenario has none). */
   stageLevel: number | null;
-  /** Stage in feet for the message, when known. */
-  stageFt?: number | null;
 }
 
 export interface WallCheck {
@@ -91,19 +89,25 @@ export interface WallScan {
   overtopped: number;
   /** Wall cells whose top is below `level`. */
   belowLevel: number;
-  /** Largest height a wall cell below `level` would need to clear it with freeboard, m. */
+  /**
+   * Height (with freeboard) that would lift 90 % of the wall cells below `level` clear of it, m. A percentile
+   * rather than the maximum, so one cell dipping into the river channel doesn't demand a 10 m wall.
+   */
   neededHeight: number;
   /** Cheap fingerprint of the barrier field (changes when walls are drawn or erased). */
   signature: number;
 }
+
+const NEED_BIN_M = 0.25;
+const NEED_BINS = 48;
 
 /** One pass over the barrier field (row-major nx*ny). ~1 ms for a million cells. */
 export function scanWalls(ground: Float32Array, barrier: Float32Array, depth: Float32Array | null, level: number | null): WallScan {
   let cells = 0;
   let overtopped = 0;
   let belowLevel = 0;
-  let needed = 0;
   let sig = 0;
+  const bins = new Uint32Array(NEED_BINS);
   const n = Math.min(ground.length, barrier.length);
   const useDepth = depth && depth.length >= n ? depth : null;
   for (let k = 0; k < n; k++) {
@@ -117,11 +121,23 @@ export function scanWalls(ground: Float32Array, barrier: Float32Array, depth: Fl
       if (g + b < level) {
         belowLevel++;
         const need = level + WALL_FREEBOARD - g;
-        if (need > needed) needed = need;
+        bins[Math.min(NEED_BINS - 1, Math.max(0, Math.ceil(need / NEED_BIN_M) - 1))]++;
       }
     }
   }
-  return { cells, overtopped, belowLevel, neededHeight: needed, signature: cells * 1e6 + sig };
+  let neededHeight = 0;
+  if (belowLevel) {
+    const target = Math.ceil(belowLevel * 0.9);
+    let acc = 0;
+    for (let b = 0; b < NEED_BINS; b++) {
+      acc += bins[b];
+      if (acc >= target) {
+        neededHeight = (b + 1) * NEED_BIN_M;
+        break;
+      }
+    }
+  }
+  return { cells, overtopped, belowLevel, neededHeight, signature: cells * 1e6 + sig };
 }
 
 /** "225.4 m (46 ft)" for the stage level a check refers to. */

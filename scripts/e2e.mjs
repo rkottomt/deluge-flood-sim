@@ -439,7 +439,11 @@ const FLOWS = [
       });
       const before = await stats();
       await D((o) => window.__deluge.setStageOffset(o), crest.offset);
-      const t900 = await runFor(900);
+      // The crest arrives along the whole river at once (src/app/crest.ts), not as a bore from the domain edges.
+      const t120 = await runFor(120);
+      const early = await stats();
+      await shot('02-crest-120s');
+      const t900 = t120 + (await runFor(780));
       const mid = await stats();
       await D(() => {
         window.__e2e.control900 = window.__deluge.sampleGrid('depth', 4);
@@ -451,8 +455,10 @@ const FLOWS = [
         window.__e2e.control = window.__deluge.sampleGrid('depth', 4);
       });
       await shot('02b-crest-1800s');
-      r.metrics = { before: before?.floodedArea, at900: mid?.floodedArea, at1800: after?.floodedArea, runSeconds: t900 + t1800 };
+      r.metrics = { before: before?.floodedArea, at120: early?.floodedArea, at900: mid?.floodedArea, at1800: after?.floodedArea, runSeconds: t900 + t1800 };
       const grown = (after?.floodedArea ?? 0) - (before?.floodedArea ?? 0);
+      const earlyShare = grown > 0 ? ((early?.floodedArea ?? 0) - (before?.floodedArea ?? 0)) / grown : 0;
+      check(r, 'rivers rise along their whole length: ≥ 30 % of the 30-min flood within 2 sim-min', earlyShare >= 0.3, `${km2(early?.floodedArea ?? 0)} after 120 s (${num(earlyShare * 100, 0)} % of ${km2(after?.floodedArea ?? 0)})`);
       check(r, 'flooded area grows substantially (≥ 0.25 km²)', grown >= 250_000, `${km2(before?.floodedArea ?? 0)} → ${km2(mid?.floodedArea ?? 0)} → ${km2(after?.floodedArea ?? 0)}`);
       check(r, 'flooding is progressive (900 s < 1800 s)', (mid?.floodedArea ?? 0) <= (after?.floodedArea ?? 0) && (mid?.floodedArea ?? 0) > (before?.floodedArea ?? 0), `sim 1800 s in ${(t900 + t1800).toFixed(1)} s real`);
       check(r, 'mass balance error < 1 %', (after?.massError ?? 1) < 0.01, `${num((after?.massError ?? NaN) * 100, 4)} %`);

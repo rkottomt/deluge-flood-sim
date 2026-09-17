@@ -8,7 +8,7 @@
  * Steps per preset: USGS 3DEP DEM (1024²) → no-data/seam repair → river centerlines from waypoints →
  * pool level measured from the DEM → channel burn with smooth banks → sources placed on the channel spine at
  * the domain edges → initial fill seeds along the centerlines (verified: no water outside the channel) →
- * shelters snapped to high road nodes (verified above the maximum stage) → Esri imagery 2048² JPEG →
+ * shelters snapped to high road nodes (verified above the maximum stage) → Esri imagery 4096² JPEG →
  * TIGERweb roads → compact roads.json.
  */
 import fs from 'node:fs';
@@ -24,6 +24,8 @@ import { buildRoadNetwork, encodeRoads, fetchTigerRoads, type RawRoad, ROADS_ATT
 import { makeGeoToGrid } from '../src/data/geo';
 
 const FT = 0.3048;
+/** Baked imagery edge length, pixels. */
+const IMAGERY_SIZE = 4096;
 const CFS = 0.0283168; // m³/s per ft³/s
 type LonLat = [number, number];
 
@@ -92,11 +94,13 @@ const PRESET_DEFS: PresetDef[] = [
     ],
     stage: {
       label: 'Ohio River at Pittsburgh (Point gauge, USGS 03085152)',
+      // NWS PTTP1 flood categories (api.water.noaa.gov/nwps/v1/gauges/PTTP1): action 18 ft, minor (flood stage) 22 ft,
+      // moderate 25 ft ("The Parkway Central (also known as the bathtub) is closed by flooding"), major 28 ft.
       // USGS 03085152 gage datum: 693.6 ft above NAVD88 (GNSS survey). NOAA VERTCON 3.0 at the Point gives
       // NAVD88 = NGVD29 − 0.161 m (−0.53 ft), so the Emsworth pool's 710.0 ft NGVD29 is 216.25 m NAVD88 — the
       // bake measures the flat pool surface in the DEM (≈ 216.3 m) and it reads ≈ 16 ft on this gauge.
       gaugeDatum: 693.6 * FT,
-      floodStageFt: 25,
+      floodStageFt: 22,
       marks: [
         { label: '2004 Ivan', ft: 31.0 },
         { label: '1972 Agnes', ft: 35.8 },
@@ -117,7 +121,7 @@ const PRESET_DEFS: PresetDef[] = [
     description: ({ normalLevel, gaugeDatum }) =>
       "Downtown Pittsburgh sits on the Point, where the Allegheny and Monongahela rivers meet to form the Ohio. " +
       `Normal pool here is about ${(((normalLevel ?? 0) - (gaugeDatum ?? 0)) / FT).toFixed(1)} ft on the Point gauge; ` +
-      'flood stage is 25 ft, about where the Parkway East "bathtub" goes under. On March 18, 1936 — the St. ' +
+      'flood stage is 22 ft, and by 25 ft the Parkway "bathtub" through downtown is closed by flooding. On March 18, 1936 — the St. ' +
       'Patrick\'s Day flood — snowmelt and heavy rain drove the river to a record 46 ft and flooded most of the ' +
       'Golden Triangle. The remnants of Agnes crested at 35.8 ft in June 1972 and Hurricane Ivan at 31 ft in ' +
       'September 2004. ' +
@@ -497,7 +501,12 @@ async function bake(def: PresetDef) {
   };
 
   // ── Imagery
-  const jpg = await cachedBytes(def.id, requestKey, 'imagery.jpg', () => fetchImageryBytes(merc, 2048));
+  // 4096² is the Esri export limit (maxImageWidth/Height): ≈ 2 m per texel over Pittsburgh's 8 km, sharp at the 0.5–2 km
+  // camera distances where walls get drawn and streets inspected. (8192² would need tiled requests and ~360 MB of GPU
+  // memory with mips — too much next to the solver on a fanless laptop.)
+  const jpg = await cachedBytes(def.id, JSON.stringify({ ...JSON.parse(requestKey), imagery: IMAGERY_SIZE }), `imagery-${IMAGERY_SIZE}.jpg`, () =>
+    fetchImageryBytes(merc, IMAGERY_SIZE),
+  );
 
   // ── Write
   const dir = path.join(OUT, def.id);

@@ -37,7 +37,7 @@ export const TOOLS: ToolDef[] = [
     key: '1',
     label: 'Navigate',
     description: 'Move the camera around the terrain.',
-    hints: ['Drag to orbit', 'Right-drag to pan', 'Scroll to zoom'],
+    hints: ['Drag: orbit', 'Right-drag: pan', 'Scroll: zoom'],
     group: 0,
   },
   {

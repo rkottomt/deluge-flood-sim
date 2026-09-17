@@ -6,6 +6,7 @@ import { h, setText, toggleClass, setAttr, type UIContext } from './dom';
 import { icon, iconMarkup, logoMark } from './icons';
 import { segmented } from './controls';
 import { formatClock, fmtNum, formatSpeedup } from './format';
+import { SpeedEstimator } from './stats';
 
 export const SPEEDS: Array<{ value: number; label: string; tip: string }> = [
   { value: 1, label: '1×', tip: 'Real time' },
@@ -17,7 +18,7 @@ export const SPEEDS: Array<{ value: number; label: string; tip: string }> = [
 
 export interface TopBar {
   el: HTMLElement;
-  /** Smoothed achieved speed multiple (sim seconds per real second), shared with the HUD. */
+  /** Measured achieved speed multiple (sim seconds per real second), shared with the HUD; null until known. */
   achievedSpeed(): number | null;
 }
 
@@ -167,19 +168,29 @@ export function createTopBar(ctx: UIContext, opts: { onTogglePanel(): void; isPa
 
   const right = h('div', { class: 'dl-island dl-actions' }, perf, howBtn, helpBtn, panelBtn);
 
-  // Achieved speed (sim seconds per real second). The sampled frame's simulated seconds × the smoothed
-  // frame rate is a direct, low-jitter estimate (it is exactly timeScale unless the GPU budget throttles
-  // the solver); simTime deltas between asynchronous readbacks would wobble ±20%.
+  // Achieved speed (sim seconds per real second), measured as simulated time advanced over wall-clock time across
+  // a few seconds of readbacks. (One frame's simulated seconds × the average frame rate over-reads whenever that
+  // frame happened to be long, e.g. "348×" at 300×.)
+  const estimator = new SpeedEstimator();
   let achieved: number | null = null;
   bind(
-    (s) => s.stepInfo,
-    (si, s) => {
-      if (!si || s.paused || !(s.fps > 0) || !Number.isFinite(si.simSecondsAdvanced)) {
+    (s) => s.stats,
+    (st, s) => {
+      if (!st || s.paused || s.loading) {
+        estimator.reset();
         achieved = null;
         return;
       }
-      const inst = si.simSecondsAdvanced * s.fps;
-      achieved = achieved === null ? inst : achieved + (inst - achieved) * 0.4;
+      estimator.push(performance.now(), st.simTime);
+      achieved = estimator.value();
+    },
+  );
+  // A new requested speed starts a new measurement.
+  bind(
+    (s) => `${s.sim.timeScale}|${s.paused}|${s.terrainName}|${s.sim.stabilityMode}`,
+    () => {
+      estimator.reset();
+      achieved = null;
     },
   );
 
@@ -192,7 +203,7 @@ export function createTopBar(ctx: UIContext, opts: { onTogglePanel(): void; isPa
       const si = s.stepInfo;
       if (s.paused) return 'paused';
       if (!si) return '—';
-      return `${si.substeps} sub${si.throttled ? ` · ${formatSpeedup(achieved)}` : ''}`;
+      return `${si.substeps} sub${si.throttled && achieved !== null ? ` · ${formatSpeedup(achieved)}` : ''}`;
     },
     (v) => setText(sub, v),
   );

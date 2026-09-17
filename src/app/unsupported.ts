@@ -19,9 +19,11 @@ interface FatalScreenOptions {
   /** Trusted, static HTML (never user/remote content). */
   bodyHtml: string;
   details?: string;
+  /** Label of the reload button (default "Try again"). */
+  buttonLabel?: string;
 }
 
-function showScreen(opts: FatalScreenOptions): void {
+function showScreen(opts: FatalScreenOptions): HTMLElement {
   document.getElementById('boot')?.remove();
   document.getElementById(SCREEN_ID)?.remove();
 
@@ -61,7 +63,7 @@ function showScreen(opts: FatalScreenOptions): void {
       <p class="lead"></p>
       ${opts.bodyHtml}
       <details hidden><summary>Technical details</summary><pre></pre></details>
-      <button type="button">Try again</button>
+      <button type="button"></button>
     </div>`;
   // Dynamic strings go through textContent (never innerHTML).
   root.querySelector('h1')!.textContent = opts.title;
@@ -71,8 +73,11 @@ function showScreen(opts: FatalScreenOptions): void {
     details.hidden = false;
     details.querySelector('pre')!.textContent = opts.details;
   }
-  root.querySelector('button')!.addEventListener('click', () => window.location.reload());
+  const button = root.querySelector('button')!;
+  button.textContent = opts.buttonLabel ?? 'Try again';
+  button.addEventListener('click', () => window.location.reload());
   document.body.appendChild(root);
+  return root;
 }
 
 const LOGO_SVG = `<svg width="22" height="22" viewBox="0 0 64 64" aria-hidden="true"><path d="M32 6C22 20 14 30 14 40a18 18 0 0 0 36 0C50 30 42 20 32 6z" fill="#3aa0ff"/><path d="M18 42c5-3 9-3 14 0s9 3 14 0" stroke="#dff4ff" stroke-width="4" fill="none" stroke-linecap="round"/></svg>`;
@@ -109,4 +114,70 @@ export function showFatalError(error: string): void {
     bodyHtml: '',
     details: error,
   });
+}
+
+/** sessionStorage key: when the page last reloaded itself after losing the GPU device (ms since epoch). */
+const AUTO_RELOAD_KEY = 'deluge:gpu-lost-reload-at';
+/** A second device loss this soon after an automatic reload waits for the user (no reload loops). */
+export const AUTO_RELOAD_GUARD_MS = 60_000;
+/** Countdown before the automatic reload, so the message can be read. */
+export const AUTO_RELOAD_DELAY_MS = 3000;
+
+/**
+ * May the page reload itself now? True at most once per AUTO_RELOAD_GUARD_MS (per tab); records the claim.
+ * Without usable storage it never auto-reloads (a loop could not be detected).
+ */
+export function claimAutoReload(storage: Pick<Storage, 'getItem' | 'setItem'> | null, now: number): boolean {
+  if (!storage) return false;
+  try {
+    const last = Number(storage.getItem(AUTO_RELOAD_KEY));
+    if (Number.isFinite(last) && last > 0 && now - last >= 0 && now - last < AUTO_RELOAD_GUARD_MS) return false;
+    storage.setItem(AUTO_RELOAD_KEY, String(now));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function sessionStore(): Storage | null {
+  try {
+    return window.sessionStorage;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The GPU device was lost at runtime (GPU-process crash or reset: sleep/wake, a driver hiccup, the browser's GPU
+ * watchdog, running out of GPU memory). Every GPU resource is gone, so the only honest state is a full-screen
+ * card: the page reloads itself once after a short countdown (a baked preset is back in about a second), and a
+ * repeated loss waits for the user instead of looping.
+ */
+export function showDeviceLost(details: string): void {
+  const auto = claimAutoReload(sessionStore(), Date.now());
+  const root = showScreen({
+    title: 'Lost connection to the GPU',
+    lead: auto
+      ? 'The graphics driver reset, which can happen after sleep/wake, a driver hiccup or when GPU memory runs out. ' +
+        'The simulation lived on the GPU, so Deluge restarts to bring it back.'
+      : 'The graphics driver reset again right after restarting. Close other GPU-heavy tabs or apps, then reload. ' +
+        'If it keeps happening, restart the browser.',
+    bodyHtml: auto ? '<p class="countdown" aria-live="polite"></p>' : '',
+    details,
+    buttonLabel: auto ? 'Reload now' : 'Reload',
+  });
+  if (!auto) return;
+  const countdown = root.querySelector<HTMLElement>('.countdown')!;
+  const deadline = performance.now() + AUTO_RELOAD_DELAY_MS;
+  const tick = () => {
+    const left = Math.ceil((deadline - performance.now()) / 1000);
+    if (left <= 0) {
+      countdown.textContent = 'Reloading…';
+      window.location.reload();
+      return;
+    }
+    countdown.textContent = `Reloading in ${left} s…`;
+    window.setTimeout(tick, 250);
+  };
+  tick();
 }

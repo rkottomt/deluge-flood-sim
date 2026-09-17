@@ -720,3 +720,55 @@ export function roadStats(net: RoadNetwork): { nodes: number; edges: number; km:
   }
   return { nodes: net.nodes.length / 2, edges: net.edges.length, km: m / 1000, byClass };
 }
+
+/**
+ * Raster of the cells a road network passes through (1 = road), widened by `pad` cells on every side so a road that
+ * runs along a cell boundary, or is offset a little from the DEM feature it sits on, still marks it.
+ */
+export function roadMask(net: RoadNetwork, nx: number, ny: number, pad = 1): Uint8Array {
+  const line = new Uint8Array(nx * ny);
+  for (const e of net.edges) {
+    const p = e.pts;
+    for (let q = 0; q + 3 < p.length; q += 2) {
+      const x0 = p[q];
+      const y0 = p[q + 1];
+      const x1 = p[q + 2];
+      const y1 = p[q + 3];
+      const steps = Math.ceil(Math.hypot(x1 - x0, y1 - y0) * 2) + 1;
+      for (let s = 0; s <= steps; s++) {
+        const i = Math.floor(x0 + ((x1 - x0) * s) / steps);
+        const j = Math.floor(y0 + ((y1 - y0) * s) / steps);
+        if (i >= 0 && j >= 0 && i < nx && j < ny) line[j * nx + i] = 1;
+      }
+    }
+  }
+  if (pad <= 0) return line;
+  // Separable dilation by `pad` cells (a square neighbourhood).
+  const tmp = new Uint8Array(nx * ny);
+  for (let j = 0; j < ny; j++) {
+    let last = -Infinity;
+    for (let i = 0; i < nx; i++) {
+      if (line[j * nx + i]) last = i;
+      if (i - last <= pad) tmp[j * nx + i] = 1;
+    }
+    last = Infinity;
+    for (let i = nx - 1; i >= 0; i--) {
+      if (line[j * nx + i]) last = i;
+      if (last - i <= pad) tmp[j * nx + i] = 1;
+    }
+  }
+  const out = new Uint8Array(nx * ny);
+  for (let i = 0; i < nx; i++) {
+    let last = -Infinity;
+    for (let j = 0; j < ny; j++) {
+      if (tmp[j * nx + i]) last = j;
+      if (j - last <= pad) out[j * nx + i] = 1;
+    }
+    last = Infinity;
+    for (let j = ny - 1; j >= 0; j--) {
+      if (tmp[j * nx + i]) last = j;
+      if (last - j <= pad) out[j * nx + i] = 1;
+    }
+  }
+  return out;
+}

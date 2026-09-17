@@ -1,14 +1,17 @@
 /**
- * Loading overlay, error toast, stability-demo banner, and the WebGPU-unsupported screen.
+ * Loading overlay, error & notice toasts, stability-demo banner, and the WebGPU-unsupported screen.
  */
 import { h, setText, toggleClass, type UIContext } from './dom';
 import { icon, logoMark } from './icons';
+import { bridgeFor, type Notice } from './bridge';
+import { stopBreakDemo } from './stabilityDemo';
+import { fmtNum } from './format';
 
 const TIPS = [
   'Tip: press ? any time for shortcuts and a 30-second tour.',
   'Tip: drag a wall (2) across a street and watch the water reroute.',
   'Tip: “How it works” has a button that deliberately breaks the solver.',
-  'Tip: set an evacuation start (8) — the route re-plans as roads flood.',
+  'Tip: plan an evacuation (8) — the route re-plans as roads flood.',
   'Tip: the mass-balance error in the HUD proves no water is created or lost.',
 ];
 
@@ -64,48 +67,49 @@ export function createLoadingOverlay(ctx: UIContext): HTMLElement {
   return el;
 }
 
-export function createNotices(ctx: UIContext, extra: HTMLElement[] = []): HTMLElement {
-  const { bind, store, actions } = ctx;
+export interface Notices {
+  /** Top-center column: getting-started strip, error toast, notices. */
+  top: HTMLElement;
+  /** Bottom-center column: stability-demo banner, evacuation route chip. */
+  bottom: HTMLElement;
+}
 
-  // Stability demo banner.
+export function createNotices(ctx: UIContext, extra: { top?: HTMLElement[]; bottom?: HTMLElement[] } = {}): Notices {
+  const { bind, store } = ctx;
+
+  // Stability demo banner. It sits at the bottom: the blow-up starts where rivers enter the map, which in most
+  // framings is the top of the screen.
   const banner = h(
     'div',
     { class: 'dl-naive-banner', role: 'status' },
     h('span', { class: 'dl-naive-icon' }, icon('bolt', 16)),
-    h('span', { class: 'dl-naive-text' }, h('b', null, 'Stability demo'), ' — naive explicit solver, Courant 1.8. Watch it blow up.'),
+    h(
+      'span',
+      { class: 'dl-naive-text' },
+      h('span', { class: 'dl-naive-line' }, h('b', null, 'Stability demo'), ' — naive explicit solver at Courant 1.8, slowed to ', h('b', { class: 'dl-naive-speed' }), ' so you can watch.'),
+      h('span', { class: 'dl-naive-legend' }, h('i', { class: 'dl-naive-swatch', 'aria-hidden': 'true' }), 'Magenta speckle = cells whose depth became infinite or NaN'),
+    ),
     h(
       'button',
-      { type: 'button', class: 'dl-btn dl-btn-ok dl-btn-sm', onclick: () => actions.setStabilityDemo(false) },
+      { type: 'button', class: 'dl-btn dl-btn-ok dl-btn-sm', onclick: () => stopBreakDemo(ctx) },
       icon('shield', 14),
       h('span', null, 'Restore robust solver'),
     ),
   );
+  const speedText = banner.querySelector('.dl-naive-speed') as HTMLElement;
   bind((s) => s.sim.stabilityMode === 'naive', (on) => toggleClass(banner, 'dl-show', on));
+  bind((s) => s.sim.timeScale, (v) => setText(speedText, `${fmtNum(v, v < 10 ? 1 : 0).replace(/\.0$/, '')}×`));
 
-  // Error toast.
+  // Error toast (real failures only; limits and guidance use the notice toast below).
   const toastMsg = h('p', { class: 'dl-toast-msg' });
-  const timerBar = h('div', { class: 'dl-toast-timer' });
   const toast = h(
     'div',
     { class: 'dl-toast', role: 'alert' },
     h('span', { class: 'dl-toast-icon' }, icon('warning', 18)),
     h('div', { class: 'dl-toast-body' }, h('b', null, 'Something went wrong'), toastMsg),
     h('button', { type: 'button', class: 'dl-icon-btn dl-toast-close', 'aria-label': 'Dismiss', onclick: () => store.set({ error: null }) }, icon('close', 16)),
-    timerBar,
   );
-  let timer = 0;
-  const arm = () => {
-    clearTimeout(timer);
-    timerBar.classList.remove('dl-run');
-    void timerBar.offsetWidth; // restart the CSS countdown animation
-    timerBar.classList.add('dl-run');
-    timer = window.setTimeout(() => store.set({ error: null }), 12000);
-  };
-  toast.addEventListener('pointerenter', () => {
-    clearTimeout(timer);
-    timerBar.classList.remove('dl-run');
-  });
-  toast.addEventListener('pointerleave', () => store.get().error && arm());
+  const errorTimer = autoDismiss(toast, () => store.set({ error: null }), () => !!store.get().error);
   bind(
     (s) => s.error,
     (err) => {
@@ -113,14 +117,97 @@ export function createNotices(ctx: UIContext, extra: HTMLElement[] = []): HTMLEl
       toast.inert = !err;
       if (err) {
         setText(toastMsg, err);
-        arm();
+        errorTimer.arm(12000);
       } else {
-        clearTimeout(timer);
+        errorTimer.stop();
       }
     },
   );
 
-  return h('div', { class: 'dl-notices' }, banner, toast, ...extra);
+  // Notice toast: neutral information, guidance and warnings that are not failures.
+  const noticeIcon = h('span', { class: 'dl-toast-icon' });
+  const noticeTitle = h('b');
+  const noticeMsg = h('p', { class: 'dl-toast-msg' });
+  const noticeActions = h('div', { class: 'dl-toast-actions' });
+  let current: Notice | null = null;
+  const hideNotice = () => {
+    current = null;
+    toggleClass(notice, 'dl-show', false);
+    notice.inert = true;
+    noticeTimer.stop();
+  };
+  const notice = h(
+    'div',
+    { class: 'dl-toast dl-notice', role: 'status', 'aria-live': 'polite' },
+    noticeIcon,
+    h('div', { class: 'dl-toast-body' }, noticeTitle, noticeMsg, noticeActions),
+    h('button', { type: 'button', class: 'dl-icon-btn dl-toast-close', 'aria-label': 'Dismiss', onclick: hideNotice }, icon('close', 16)),
+  );
+  notice.inert = true;
+  const noticeTimer = autoDismiss(notice, hideNotice, () => current !== null);
+  const showNotice = (n: Notice) => {
+    const same = current !== null && n.key !== undefined && current.key === n.key && notice.classList.contains('dl-show');
+    current = n;
+    notice.dataset.kind = n.kind;
+    noticeIcon.replaceChildren(icon(n.kind === 'success' ? 'check' : n.kind === 'warn' ? 'warning' : 'spark', 18));
+    setText(noticeTitle, n.title);
+    setText(noticeMsg, n.message);
+    noticeActions.replaceChildren();
+    if (n.action) {
+      const { label, run } = n.action;
+      noticeActions.append(
+        h('button', { type: 'button', class: 'dl-btn dl-btn-subtle dl-btn-sm', onclick: () => (run(), hideNotice()) }, h('span', null, label)),
+      );
+    }
+    noticeActions.hidden = !n.action;
+    notice.inert = false;
+    if (!same) {
+      // Restart the entrance animation for a new message.
+      notice.classList.remove('dl-show');
+      void notice.offsetWidth;
+    }
+    notice.classList.add('dl-show');
+    noticeTimer.arm(n.durationMs ?? 7000);
+  };
+  bridgeFor(store).onNotice(showNotice);
+  // A new scene makes scene-specific notices stale.
+  bind((s) => s.terrainName, () => current && hideNotice());
+
+  return {
+    top: h('div', { class: 'dl-notices' }, ...(extra.top ?? []), toast, notice),
+    bottom: h('div', { class: 'dl-notices-bottom' }, ...(extra.bottom ?? []), banner),
+  };
+}
+
+/** Auto-dismiss with a visible countdown bar that pauses while hovered. */
+function autoDismiss(el: HTMLElement, onExpire: () => void, stillShown: () => boolean) {
+  const bar = h('div', { class: 'dl-toast-timer' });
+  el.append(bar);
+  let timer = 0;
+  let duration = 7000;
+  const run = () => {
+    clearTimeout(timer);
+    bar.classList.remove('dl-run');
+    void bar.offsetWidth; // restart the CSS countdown animation
+    bar.style.animationDuration = `${duration}ms`;
+    bar.classList.add('dl-run');
+    timer = window.setTimeout(onExpire, duration);
+  };
+  el.addEventListener('pointerenter', () => {
+    clearTimeout(timer);
+    bar.classList.remove('dl-run');
+  });
+  el.addEventListener('pointerleave', () => stillShown() && run());
+  return {
+    arm(ms: number) {
+      duration = ms;
+      run();
+    },
+    stop() {
+      clearTimeout(timer);
+      bar.classList.remove('dl-run');
+    },
+  };
 }
 
 /** Full-screen friendly message for browsers without WebGPU (used by the app on device failure). */
