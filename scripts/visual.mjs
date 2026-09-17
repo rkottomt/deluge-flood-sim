@@ -1051,6 +1051,8 @@ async function runScene(browser, baseUrl, scene, palettes) {
     flickerFrac: flickerFrac(shots),
     pageErrors,
     image: img,
+    // Kept only until the runner has written the flicker heatmap for a failing scene (then deleted with `image`).
+    repeats: shots.slice(1),
   };
 }
 
@@ -1228,6 +1230,17 @@ try {
     }
     row.golden = golden;
     row.checks = checkScene(row, scene, golden);
+    // A flicker failure is unreadable as a number: write the changed pixels as an image so it can be looked at.
+    // `flickerFrac` compares the first capture with each later one; the heatmap shows the worst of those pairs.
+    if (row.checks.some((c) => c.name === 'flicker' && c.status === 'fail') && row.repeats?.length) {
+      let worst = { frac: -1, image: null };
+      for (const later of row.repeats) {
+        const d = perceptualDiff(row.image, later, 0.03);
+        if (d.frac > worst.frac) worst = d;
+      }
+      if (worst.image) fs.writeFileSync(path.join(diffDir, `${scene.id}-flicker.png`), encodePNG(shrink(worst.image, BASELINE_SHRINK)));
+    }
+    delete row.repeats;
     delete row.image;
     rows.push(row);
     const bad = row.checks.filter((c) => c.status === 'fail');
