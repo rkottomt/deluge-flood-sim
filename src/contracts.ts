@@ -602,6 +602,8 @@ export interface LiveAreaRequest {
   resolution: 512 | 1024 | 2048;
   /** Optional display name (e.g. geocoder result). */
   name?: string;
+  /** The name came from a shared link (?name=): used only when reverse geocoding gives nothing. */
+  nameFromLink?: boolean;
 }
 
 // ────────────────────────────────────────────────────────────────────────────────────────────

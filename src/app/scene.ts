@@ -10,7 +10,7 @@ import type {
   Store,
   TerrainData,
 } from '../contracts';
-import { computeInitialWater, listPresets, loadLiveArea, loadPreset } from '../data';
+import { cleanPlaceLabel, computeInitialWater, isCoordinateName, listPresets, loadLiveArea, loadPreset } from '../data';
 import { createSolver } from '../sim';
 import { APP_CONFIG } from './defaults';
 import { cloneScenarioLists, type StageLevels } from './stage';
@@ -78,13 +78,20 @@ export class SceneManager {
   /** Human label for a request (for loading messages and errors). */
   static label(request: SceneRequest): string {
     if (request.kind === 'live') {
-      const { center, sizeMeters, name } = request.req;
-      return name ?? `${center.lat.toFixed(3)}, ${center.lon.toFixed(3)} (${(sizeMeters / 1000).toFixed(1)} km)`;
+      // SEC-01: a name that came from a link is always shown beside the coordinates it claims to describe,
+      // and a coordinate-shaped name is replaced by the real ones. The 3-decimal format matches
+      // withCoordinates() in src/data/placeName.ts on purpose — keep the two in step.
+      const { center, sizeMeters, name, nameFromLink } = request.req;
+      const ll = `${center.lat.toFixed(3)}, ${center.lon.toFixed(3)}`;
+      const nm = isCoordinateName(name) ? '' : cleanPlaceLabel(name);
+      if (!nm) return `${ll} (${(sizeMeters / 1000).toFixed(1)} km)`;
+      return nameFromLink ? `${nm} (${ll})` : nm;
     }
+    // SEC-01: never echo an unknown preset id — it is attacker-controlled text from ?preset=.
     try {
-      return listPresets().find((p: PresetInfo) => p.id === request.id)?.name ?? `preset “${request.id}”`;
+      return listPresets().find((p: PresetInfo) => p.id === request.id)?.name ?? 'an unknown preset';
     } catch {
-      return `preset “${request.id}”`;
+      return 'an unknown preset';
     }
   }
 

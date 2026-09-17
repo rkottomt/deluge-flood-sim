@@ -17,14 +17,48 @@ import { CSP, EXTERNAL_LINKS, isAllowedDataUrl } from './endpoints.js';
 
 const APP_ORIGIN = 'app://deluge';
 const APP_URL = `${APP_ORIGIN}/`;
+/**
+ * A page the window can always reach, answered from the constant below rather than from `dist/` (no build
+ * produces a file at this path). It replaces the blank window a repeatedly crashing renderer used to leave.
+ */
+const RECOVERY_PATH = '/recovery.html';
 
-/* ------------------------------------------------------------------ R12: no debugger on a packaged build */
+/* ------------------------------------------- R12 + R10: a packaged build refuses to disarm itself from argv */
 
-// Defence in depth only — the R11 fuses already refuse --inspect, and a same-user attacker is out of scope.
-const DEBUG_SWITCHES = ['remote-debugging-port', 'remote-debugging-pipe', 'inspect', 'inspect-brk', 'inspect-port', 'js-flags'];
-if (app.isPackaged && DEBUG_SWITCHES.some((s) => app.commandLine.hasSwitch(s))) {
-  console.error('[deluge] refusing to start: debugging switch on a packaged build');
-  app.exit(1);
+/**
+ * A packaged Deluge will not start if its command line asks it to give up a defence this file enforces.
+ *
+ * The debugging half is defence in depth (the R11 fuses already refuse `--inspect`). The rest is not: without it,
+ * `Deluge.app --ignore-certificate-errors` makes the R10 TLS posture optional, and a hostile endpoint standing in
+ * for `tigerweb.geo.census.gov` with a self-signed certificate is trusted — verified end to end in the Electron
+ * penetration test before this guard existed. `--disable-web-security`, `--no-sandbox`, `--load-extension` and
+ * friends are refused for the same reason: each one is a rule below, switched off from outside.
+ */
+const REFUSED_SWITCHES = [
+  // Debugging and code injection into the main process.
+  'remote-debugging-port', 'remote-debugging-pipe', 'remote-allow-origins', 'inspect', 'inspect-brk', 'inspect-port',
+  'js-flags', 'auto-open-devtools-for-tabs', 'load-extension', 'disable-extensions-except', 'test-type',
+  // TLS (R10): certificate validation must never be optional.
+  'ignore-certificate-errors', 'ignore-certificate-errors-spki-list', 'ignore-urlfetcher-cert-requests',
+  'allow-insecure-localhost', 'unsafely-treat-insecure-origin-as-secure',
+  // Same-origin policy, the sandbox and process isolation (R1, R2).
+  'disable-web-security', 'allow-running-insecure-content', 'allow-file-access-from-files', 'no-sandbox',
+  'disable-gpu-sandbox', 'disable-site-isolation-trials', 'disable-site-isolation-for-policy', 'disable-features',
+  'enable-blink-features', 'enable-experimental-web-platform-features',
+  // Where the app's traffic goes (R10 covers the request URL; a proxy would move it wholesale).
+  'proxy-server', 'proxy-pac-url',
+];
+if (app.isPackaged) {
+  const refused = REFUSED_SWITCHES.filter((s) => app.commandLine.hasSwitch(s));
+  if (refused.length) {
+    console.error(`[deluge] refusing to start: ${refused.join(', ')} on a packaged build`);
+    app.exit(1);
+  }
+  // `--host-resolver-rules` is *not* refused: the §V checklist uses it to make every data host unreachable, and on
+  // its own it cannot defeat TLS (the certificate must still validate for the real hostname). Logged, not fatal.
+  if (app.commandLine.hasSwitch('host-resolver-rules')) {
+    console.warn('[deluge] note: --host-resolver-rules is set; TLS validation still applies');
+  }
 }
 
 /* ------------------------------------------------------------------------------ R1: global hardening */
@@ -79,6 +113,32 @@ const ROOT = app.isPackaged
   ? path.join(import.meta.dirname, 'dist')
   : path.resolve(import.meta.dirname, '..', process.env.DELUGE_DIST || 'dist');
 
+/**
+ * Static, script-free, self-contained. `style-src` allows an inline <style> (the built index.html needs one);
+ * nothing here needs script, and `<a href="/">` is an in-origin navigation the R7 handler allows.
+ */
+const RECOVERY_HTML = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Deluge — the view stopped</title><style>
+ html,body{margin:0;height:100%;background:#05070d;color:#e8eef7;
+   font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif}
+ main{max-width:34rem;margin:0 auto;padding:18vh 24px 0}
+ h1{font-size:1.45rem;margin:0 0 .6rem;letter-spacing:-.01em}
+ p{margin:0 0 1rem;color:#aab8cc}
+ a{display:inline-block;margin-top:.4rem;padding:.6rem 1.1rem;border-radius:8px;
+   background:#1f6feb;color:#fff;text-decoration:none;font-weight:600}
+ ul{color:#aab8cc;padding-left:1.2rem}
+</style></head><body><main>
+ <h1>The view stopped and could not restart</h1>
+ <p>The graphics view crashed more than once in a row, so Deluge stopped reloading it instead of flickering.
+    Nothing was lost — the simulation runs entirely on this machine and saves nothing.</p>
+ <a href="/">Restart Deluge</a>
+ <ul>
+  <li>If it stops again, the four built-in scenes need no network: restart and stay off “Pick a location”.</li>
+  <li>Quitting and reopening Deluge from the Dock gives the GPU a completely fresh start.</li>
+ </ul>
+</main></body></html>
+`;
+
 async function serveApp(request) {
   const notFound = () =>
     new Response('Not found', { status: 404, headers: { ...SECURITY_HEADERS, 'Content-Type': 'text/plain; charset=utf-8' } });
@@ -101,6 +161,13 @@ async function serveApp(request) {
 
   // The URL parser already dropped literal dot segments; %2e%2e and ..%2f only appear after decoding.
   if (rel.includes('\0') || rel.includes('\\') || rel.split('/').some((s) => s === '..' || s === '.')) return notFound();
+
+  // Exact match against a constant, answered from memory: no filesystem, no interpolation, same headers.
+  if (rel === RECOVERY_PATH) {
+    return new Response(request.method === 'HEAD' ? null : RECOVERY_HTML, {
+      headers: { ...SECURITY_HEADERS, 'Content-Type': 'text/html; charset=utf-8' },
+    });
+  }
 
   const type = MIME[path.extname(rel).toLowerCase()];
   if (!type) return notFound(); // directories, extensionless paths and .map all land here
@@ -220,81 +287,27 @@ function buildMenu(getWindow) {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
-/* --------------------------------------------------------------------- verification-only smoke report (§V) */
+/* ----------------------------------------------------- verification-only smoke report (§V), never shipped */
 
 /**
- * The name `@electron/packager` gives the verification build (`npm run app:verify`). That build runs the same
- * pipeline as the release one — same asar, same fuses, same security configuration — and differs only in this
- * name and in which `dist/` it carries.
- *
- * It exists because a packaged, fused Deluge cannot be driven from outside: Playwright's `_electron.launch`
- * starts Electron with `--inspect=0` / `--remote-debugging-pipe`, and the R11 fuses plus the R12 guard refuse
- * both, by design. So the packaged app reports on itself instead: with DELUGE_SMOKE_OUT set it writes a
- * screenshot, the GPU it got, every console message and (optionally) the result of one on-disk script, then
- * quits. It opens no port, grants the renderer nothing and changes no security setting.
- *
- * The shipped `Deluge.app` is not named this, so for it the hook does not exist at runtime: every DELUGE_SMOKE_*
- * variable is ignored unless the app is unpackaged or *is* the verification build.
+ * The §V checklist needs a packaged, fused build to report on itself (nothing can drive one from outside — that
+ * is items 9 and 10). That hook lives in `electron/smoke.js`, which `electron/package.mjs` stages **only** for
+ * the `npm run app:verify` bundle: the shipped `release/Deluge.app` asar does not contain the file, so the
+ * import below fails and there is no arbitrary-JavaScript channel in the app a judge launches. The penetration
+ * test used exactly that channel as its harness, which is why it is now a build-time absence and not a
+ * runtime name check.
  */
-const VERIFY_APP_NAME = 'Deluge Verify';
-
-function installSmokeReport(win, consoleLog) {
-  const outDir = process.env.DELUGE_SMOKE_OUT;
-  if (!outDir) return;
-  if (app.isPackaged && app.getName() !== VERIFY_APP_NAME) {
-    console.warn('[deluge] DELUGE_SMOKE_OUT ignored: not a verification build');
+async function installSmokeReport(win, consoleLog) {
+  if (!process.env.DELUGE_SMOKE_OUT) return;
+  let smoke;
+  try {
+    smoke = await import('./smoke.js');
+  } catch {
+    console.warn('[deluge] DELUGE_SMOKE_OUT ignored: this bundle has no verification hook');
     return;
   }
-  const waitMs = Number(process.env.DELUGE_SMOKE_WAIT_MS || 25000);
-  setTimeout(async () => {
-    const report = { app: app.getName(), packaged: app.isPackaged, waitedMs: waitMs, url: win.webContents.getURL(), console: consoleLog, gpu: null, script: null, error: null };
-    try {
-      const gpu = await app.getGPUInfo('complete');
-      // The full blob is megabytes of driver detail; §V-2 only needs the adapter identity.
-      report.gpu = { vendor: gpu?.gpuDevice?.[0]?.vendorId ?? null, device: gpu?.gpuDevice?.[0]?.deviceId ?? null, description: gpu?.machineModelName ?? null, raw: gpu?.auxAttributes ?? null };
-      // What the checklist wants to read off a *packaged* app: items 13 (no DevTools), 15 (no deep link) and the
-      // webPreferences that items 1-2 depend on, straight from the running main process.
-      const prefs = win.webContents.getLastWebPreferences?.() ?? {};
-      report.security = {
-        devTools: prefs.devTools ?? null,
-        sandbox: prefs.sandbox ?? null,
-        contextIsolation: prefs.contextIsolation ?? null,
-        nodeIntegration: prefs.nodeIntegration ?? null,
-        webSecurity: prefs.webSecurity ?? null,
-        preload: prefs.preload ?? null,
-        // `getLastWebPreferences()` does not echo `devTools` or `backgroundThrottling`; read them where they live.
-        backgroundThrottling: win.webContents.backgroundThrottling,
-        devToolsOpened: win.webContents.isDevToolsOpened(),
-        devToolsRequested: !app.isPackaged, // what webPreferences.devTools was set to for this window
-        menu: Menu.getApplicationMenu()?.items.map((i) => ({ label: i.label, items: i.submenu?.items.map((x) => x.role ?? x.label) ?? [] })) ?? null,
-        isDefaultProtocolClient: app.isDefaultProtocolClient('deluge'),
-        displaySleepBlocked: blockerId !== null && powerSaveBlocker.isStarted(blockerId),
-        contentSize: win.getContentSize(),
-        scaleFactor: screen.getPrimaryDisplay().scaleFactor,
-      };
-      const scriptPath = process.env.DELUGE_SMOKE_SCRIPT;
-      if (scriptPath) {
-        // A fixed file on disk, never renderer input and never interpolated (R12). Verification builds only.
-        const source = await readFile(scriptPath, 'utf8');
-        report.script = await win.webContents.executeJavaScript(source, true);
-      }
-      const image = await win.webContents.capturePage();
-      const { writeFile, mkdir } = await import('node:fs/promises');
-      await mkdir(outDir, { recursive: true });
-      await writeFile(path.join(outDir, 'smoke.png'), image.toPNG());
-      await writeFile(path.join(outDir, 'smoke.json'), JSON.stringify(report, null, 2));
-      console.log('[deluge] smoke report written to', outDir);
-    } catch (err) {
-      report.error = String(err?.stack || err);
-      try {
-        const { writeFile, mkdir } = await import('node:fs/promises');
-        await mkdir(outDir, { recursive: true });
-        await writeFile(path.join(outDir, 'smoke.json'), JSON.stringify(report, null, 2));
-      } catch {}
-      console.error('[deluge] smoke report failed', err);
-    }
-    app.exit(0);
-  }, waitMs);
+  // smoke.js re-checks the product name itself, so a bundle that stages the file by mistake still refuses.
+  smoke.installSmokeReport({ app, Menu, powerSaveBlocker, screen, win, consoleLog, getBlockerId: () => blockerId });
 }
 
 /* ------------------------------------------------------------------------------------------ window + session */
@@ -353,20 +366,47 @@ function createWindow(ses) {
   });
   win.webContents.on('did-fail-load', (_e, code, desc, url) => console.error('[deluge] load failed', code, desc, url));
 
-  // R2: a renderer crash (e.g. a hostile upstream body, SEC-03) recovers into the offline presets.
+  /**
+   * R2: a renderer crash (e.g. a hostile upstream body, SEC-03) recovers into the offline presets.
+   *
+   * Three reloads inside a minute, backing off, then the recovery page — never a blank window with no message,
+   * which is what one reload per minute used to leave on screen. `Cmd+R` (View ▸ Reload scene) and the button on
+   * the recovery page both reset the counter, because a person asking for a reload is not a crash loop.
+   */
+  const MAX_CRASH_RELOADS = 3;
+  const CRASH_WINDOW_MS = 60_000;
   let crashReloads = 0;
   let lastCrash = 0;
+  let recovering = false;
   win.webContents.on('render-process-gone', (_e, details) => {
     console.error('[deluge] render process gone:', JSON.stringify(details));
+    if (win.isDestroyed()) return;
     const now = Date.now();
-    if (now - lastCrash > 60_000) crashReloads = 0;
+    if (now - lastCrash > CRASH_WINDOW_MS) crashReloads = 0;
     lastCrash = now;
-    if (crashReloads >= 1) {
-      console.error('[deluge] already reloaded once in the last minute; not reloading again');
+    // The recovery page is static HTML with no script and no GPU work: if even that died, reloading it is futile.
+    if (recovering) {
+      console.error('[deluge] the recovery page itself crashed; leaving the window alone');
+      return;
+    }
+    if (crashReloads >= MAX_CRASH_RELOADS) {
+      console.error(`[deluge] renderer crashed ${crashReloads + 1} times in a minute; showing the recovery page`);
+      recovering = true;
+      win.loadURL(`${APP_ORIGIN}${RECOVERY_PATH}`);
       return;
     }
     crashReloads += 1;
-    win.loadURL(APP_URL);
+    // An instant reload into the same hostile state just crashes again; a short back-off lets the GPU settle.
+    const delay = crashReloads === 1 ? 250 : 1500 * crashReloads;
+    setTimeout(() => {
+      if (!win.isDestroyed()) win.loadURL(APP_URL);
+    }, delay);
+  });
+  // A successful load of the app itself means the loop is over.
+  win.webContents.on('did-finish-load', () => {
+    if (win.isDestroyed() || win.webContents.getURL() !== APP_URL) return;
+    crashReloads = 0;
+    recovering = false;
   });
   win.webContents.on('unresponsive', () => console.error('[deluge] renderer unresponsive'));
 
@@ -389,7 +429,7 @@ function createWindow(ses) {
   });
 
   buildMenu(() => (win.isDestroyed() ? null : win));
-  installSmokeReport(win, consoleLog);
+  void installSmokeReport(win, consoleLog);
 
   // R2: exactly app://deluge/, never file:// and never http://localhost:* in a packaged build.
   win.loadURL(APP_URL);
@@ -401,10 +441,20 @@ app.whenReady().then(async () => {
   // which is also the one the window uses; defaultSession is left alone.
   const ses = session.fromPartition('persist:deluge');
 
-  // A previous visitor's state never carries over. The HTTP cache is kept on purpose — it only holds
-  // public map data and it makes repeated live loads bearable on venue wifi.
-  // Awaited: the window must not start writing storage while the wipe is still running.
-  await ses.clearStorageData({ storages: ['localstorage', 'indexdb', 'serviceworkers', 'cachestorage'] }).catch((e) => console.warn('[deluge] clearStorageData', e));
+  /**
+   * A previous visitor's state never carries over. `filesystem` is the one that matters and the one that was
+   * missing: it covers the Origin Private File System, where a renderer can write real files that survive a
+   * relaunch (planted, read back after quitting, and confirmed gone with this list, in the Electron pentest).
+   * `cookies` and `websql` are free — the app uses neither, so wiping them costs nothing and closes the
+   * question. `shadercache` is deliberately *not* wiped: it holds no visitor state and dropping it would make
+   * every launch recompile shaders. The HTTP cache is kept for the same reason — it only holds public map
+   * data, and it makes repeated live loads bearable on venue wifi.
+   *
+   * Awaited: the window must not start writing storage while the wipe is still running.
+   */
+  await ses
+    .clearStorageData({ storages: ['cookies', 'filesystem', 'indexdb', 'localstorage', 'serviceworkers', 'cachestorage', 'websql'] })
+    .catch((e) => console.warn('[deluge] clearStorageData', e));
 
   // R4/R5
   ses.protocol.handle('app', serveApp);

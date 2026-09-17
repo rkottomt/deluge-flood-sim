@@ -1,4 +1,5 @@
 import type { LiveAreaRequest } from '../contracts';
+import { isPresetId, linkPlaceLabel } from '../data';
 import { APP_CONFIG } from './defaults';
 
 export type SceneRequest = { kind: 'preset'; id: string } | { kind: 'live'; req: LiveAreaRequest };
@@ -26,6 +27,9 @@ export function parseStartupRequest(search: string): { request: SceneRequest; wa
       const km = Number.isFinite(sizeKm) && sizeKm > 0 ? sizeKm : 5;
       const resParam = Number(params.get('res'));
       const resolution = resParam === 512 || resParam === 2048 ? resParam : APP_CONFIG.liveResolution;
+      // SEC-01: a link-supplied name is sanitised here and flagged, so src/data can show it with its
+      // coordinates instead of letting an attacker's sentence pose as a place the app recognised.
+      const name = linkPlaceLabel(params.get('name'));
       return {
         request: {
           kind: 'live',
@@ -33,16 +37,19 @@ export function parseStartupRequest(search: string): { request: SceneRequest; wa
             center: { lat, lon },
             sizeMeters: Math.min(20000, Math.max(1000, km * 1000)),
             resolution,
-            name: params.get('name') ?? undefined,
+            ...(name ? { name, nameFromLink: true } : {}),
           },
         },
         warnings,
       };
     }
-    warnings.push(`Ignoring invalid ?live=${live} (expected lat,lon,sizeKm e.g. 40.44,-80.00,5)`);
+    // SEC-01: never echo the attacker's string back into the UI — the warning is a fixed sentence.
+    warnings.push('Ignoring an invalid ?live= link value (expected lat,lon,sizeKm, e.g. 40.44,-80.00,5)');
   }
-  const id = params.get('preset')?.trim();
-  return { request: { kind: 'preset', id: id || APP_CONFIG.defaultPreset }, warnings };
+  const raw = params.get('preset')?.trim();
+  const known = isPresetId(raw);
+  if (raw && !known) warnings.push('Ignoring an unknown ?preset= link value');
+  return { request: { kind: 'preset', id: known ? raw : APP_CONFIG.defaultPreset }, warnings };
 }
 
 /** Keep the address bar in sync with the loaded scene so a reload (or shared link) reopens it. */
