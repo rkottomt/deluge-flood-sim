@@ -49,14 +49,19 @@ export function dramaticStage(ctrl: StageControl): { ft: number; label: string }
   return { ft: range.max, label: `${fmtNum(range.max, 0)} ft` };
 }
 
+/** "Play the flood" never flies closer than this, m: below it a storm scenario's view drops under the storm's cloud deck
+ * and the renderer greys it out (Ellicott City's baked framing is already 1.1 km away), and the imagery turns soft. */
+export const CLOSE_UP_MIN_M = 1500;
+
 /**
  * A closer look at the scenario's own framing for "Play the flood": flash floods start as thin threads along the
- * creeks, invisible from the wide establishing shot.
+ * creeks, invisible from a wide establishing shot. Half the distance, but not below CLOSE_UP_MIN_M (a framing that is
+ * already close stays where it is).
  */
 export function closeUpPose(pose: CameraPose): CameraPose {
   return {
     target: { ...pose.target },
-    distance: pose.distance * 0.5,
+    distance: Math.max(pose.distance * 0.5, Math.min(pose.distance, CLOSE_UP_MIN_M)),
     yaw: pose.yaw,
     pitch: Math.min(1.2, pose.pitch + 0.08),
   };

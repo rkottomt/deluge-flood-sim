@@ -140,7 +140,9 @@ test('V cycles the water views both ways; Play the flood zooms in on the scenari
   assert.equal(nextViewMode('realistic', true), 'velocity');
   const pose = { target: { gx: 573.8, gy: 550.8, elevation: 75.9 }, distance: 1900, yaw: 1.571, pitch: 0.5 };
   const close = closeUpPose(pose);
-  assert.equal(close.distance, 950);
+  assert.equal(close.distance, 1500, 'not below the close-up floor');
+  assert.equal(closeUpPose({ ...pose, distance: 4000 }).distance, 2000, 'a wide framing halves');
+  assert.equal(closeUpPose({ ...pose, distance: 1100 }).distance, 1100, 'a framing that is already close stays (under a storm cloud deck the view greys out)');
   assert.deepEqual(close.target, pose.target);
   assert.notEqual(close.target, pose.target, 'a copy, not the scenario object');
   assert.ok(close.pitch > pose.pitch && close.pitch <= 1.2);
