@@ -1145,11 +1145,19 @@ const FLOWS = [
         const d = window.__deluge;
         const ready = await Promise.race([d.ready.then(() => 'ready', (e) => `rejected: ${e.message}`), new Promise((res) => setTimeout(() => res('pending'), 10_000))]);
         const s = d.getState();
-        const notice = [...document.querySelectorAll('button')].find((b) => /^Retry Harrisburg/.test(b.textContent ?? ''));
+        const notice = [...document.querySelectorAll('button')].find((b) => /^Retry /.test(b.textContent ?? ''));
         return { ready, presetId: s.presetId, name: s.terrainName, search: location.search, retry: notice?.textContent ?? null };
       });
       check(r, 'Cancel shows the offline default scenario (not a black screen)', shown && after.presetId === 'pittsburgh' && after.ready === 'ready', `${after.name || '(nothing)'} in ${loadS.toFixed(1)} s, ready ${after.ready}`);
-      check(r, 'notice offers a retry of the live area', !!after.retry, after.retry ?? 'no retry button');
+      // SEC-01: the area is named by its coordinates, never by the `?name=` the link carried — an attacker must not
+      // get a sentence of their own into the app's chrome. The link says "Harrisburg, Pennsylvania"; the button
+      // must not.
+      check(
+        r,
+        'notice offers a retry, naming the area by its coordinates and not by the link (SEC-01)',
+        !!after.retry && after.retry.includes('40.260, -76.887') && !/Harrisburg/i.test(after.retry),
+        after.retry ?? 'no retry button',
+      );
       check(r, 'address bar points at the preset (a reload does not download again)', after.search === '?preset=pittsburgh', after.search);
       await shot('12-startup-cancel');
       await releaseStalled();

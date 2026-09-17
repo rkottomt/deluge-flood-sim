@@ -29,21 +29,33 @@ Air's whole screen, which is more than a real browser window gives the page (see
 **Power.** Low Power Mode and Energy Saver can cap the page at 30 fps; heat and a busy GPU cut sim speed.
 
 - [ ] Plug in the charger.
-- [ ] **Turn Low Power Mode off — it is still on for the charger on this laptop.** System Settings → Battery → Low
-  Power Mode → **Never**. It is set per power source and the two disagree here; re-measured on 17 Sep at the end of
-  the build, plugged in:
+- [ ] **Turn Low Power Mode off — it is STILL ON for the charger on this laptop, and that is the setting that
+  bites.** It is stored per power source, and the two disagree here. Measured again at the end of the release run
+  on 17 Sep, on battery:
 
   ```
-  pmset -g custom | grep -A1 'AC Power'   →  lowpowermode  1     ← this is the one that bites
-  pmset -g custom | grep -A1 'Battery'    →  lowpowermode  0
-  pmset -g | grep lowpowermode            →  1               ← effective right now: ON
+  pmset -g custom | grep -A1 'AC Power'   →  lowpowermode  1     ← plugging in switches it back ON
+  pmset -g custom | grep -A1 'Battery'    →  lowpowermode  0     ← off, which is why it looks fixed right now
+  pmset -g | grep lowpowermode            →  0               ← effective on battery only
   ```
 
-  So plugging the charger in switches it back **on**. Set it to Never in System Settings (or
-  `sudo pmset -a lowpowermode 0`), then check with the charger in, which is how you will present:
-  `pmset -g | grep lowpowermode` must print `0`. Every performance number in this kit and in the README was measured
-  with it **off**; the release run on 17 Sep had it on, and `npm run test:perf` says so in its banner and marks itself
-  advisory when it sees it.
+  So turning it off on battery did **not** fix the demo case: the moment the charger goes in, Low Power Mode comes
+  back. Fix both sources at once, in a Terminal:
+
+  ```sh
+  sudo pmset -a lowpowermode 0          # -a = both power sources
+  ```
+
+  Or System Settings → Battery → Low Power Mode → **Never**. Then plug in — which is how you will present — and
+  check:
+
+  ```sh
+  pmset -g | grep lowpowermode          # must print 0 with the charger in
+  ```
+
+  This matters by about 6×: the same scenario measured 162× sim speed with Low Power Mode off and 27× with it on.
+  `npm run test:perf` records the power state in its banner and marks its own run advisory when it sees Low Power
+  Mode, so a number measured in that state never silently becomes the target.
 - [ ] Keep the screen awake.
   - **In Deluge.app:** nothing to do. The app holds a display-sleep assertion from its own main process for as long
     as a window is open — stronger than the browser lock, because it does not depend on a visible tab. (It also

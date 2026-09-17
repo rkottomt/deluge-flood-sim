@@ -416,8 +416,11 @@ permission request is denied — including Screen Wake Lock, because the main pr
 instead, which is stronger and needs no page to be visible. macOS fuses turn off `ELECTRON_RUN_AS_NODE`,
 `NODE_OPTIONS`, `--inspect` and `file://` extra privileges, require asar integrity and refuse to load an app from
 anywhere but the asar; a packaged build also refuses to start if its command line asks it to disarm any of this
-(`--ignore-certificate-errors`, `--disable-web-security`, `--remote-debugging-port`, …). A renderer crash reloads
-with a back-off, and after three crashes in a minute the window shows a recovery page rather than going blank.
+(`--ignore-certificate-errors`, `--disable-web-security`, `--remote-debugging-port`, …). Nothing a page writes
+survives a relaunch: the session's cookies, localStorage, IndexedDB, service workers, cache storage and — the one
+that actually matters, because a renderer can write real files there — the **Origin Private File System** are
+cleared before the window opens. A renderer crash reloads with a back-off (three times inside a minute); the next
+crash shows a static recovery page with a Restart button, rather than leaving a blank window with no message.
 
 `npm run app:check` is the gate: 43 checks, the last 20 of them against the packaged, fused bundle. Because such a
 bundle deliberately cannot be automated from outside, it reports on itself through a hook that `package.mjs` stages

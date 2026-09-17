@@ -165,7 +165,7 @@ every ~300 ms, never blocking: stats reduction pass ─▶ mapAsync ─▶ HUD +
 
 ## Testing
 
-Deluge ships six test layers. The first two are pure CPU and run anywhere; the rest drive a real GPU through
+Deluge ships seven test layers. The first two are pure CPU and run anywhere; the rest drive a real GPU through
 headless Chromium (or a real Electron build) and want a machine with WebGPU — the demo MacBook Air.
 
 | Command | What it guards | Time |
