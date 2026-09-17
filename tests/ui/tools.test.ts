@@ -6,6 +6,7 @@ import { selectTool, scaleBrush, TOOL_BY_ID } from '../../src/ui/toolDefs';
 import type { BrushOp } from '../../src/contracts';
 import { baseState, FakeCanvas, pointer, fakeRenderer, fakeSolver, fakeTerrain } from './helpers';
 import { bridgeFor, type Notice } from '../../src/ui/bridge';
+import { wallVerdict } from '../../src/ui/wallCheck';
 
 function setup(tool: Parameters<typeof baseState>[0] = {}) {
   const store = createStore(baseState(tool));
@@ -240,5 +241,73 @@ test('wall tool publishes the ground under the cursor and turns the ring red whe
   store.set({ tool: 'orbit' });
   ctl.update(1 / 60);
   assert.equal(bridgeFor(store).hover, null);
+  ctl.destroy();
+});
+
+test('the wall card verdict and the overtopping notice come from the same scan', () => {
+  const store0 = setup({ tool: 'wall', wallHeight: 2 });
+  store0.ctl.destroy();
+  const { store, canvas } = store0;
+  const n = 512 * 512;
+  const ground = new Float32Array(n).fill(222);
+  const barrier = new Float32Array(n);
+  const depth = new Float32Array(n);
+  const snap = { simTime: 0, nx: 512, ny: 512, depth, stats: {} };
+  const ops: BrushOp[] = [];
+  const solver = Object.assign(fakeSolver(ops), { getGroundCPU: () => ground, getBarrierCPU: () => barrier, getSnapshot: () => snap });
+  const terrain = fakeTerrain();
+  const ctl = createToolController(canvas as unknown as HTMLCanvasElement, {
+    store,
+    renderer: fakeRenderer(),
+    getSolver: () => solver,
+    getTerrain: () => terrain,
+  });
+  const notices: Notice[] = [];
+  const off = bridgeFor(store).onNotice((x) => notices.push(x));
+  // Draw a wall; the fake solver doesn't rasterize, so put 20 wall cells in the mirror by hand.
+  canvas.dispatchEvent(pointer('pointerdown', 300, 300));
+  canvas.dispatchEvent(pointer('pointermove', 360, 300));
+  for (let k = 0; k < 20; k++) barrier[150 * 512 + 150 + k] = 2;
+  canvas.dispatchEvent(pointer('pointerup', 360, 300));
+  ctl.update(1 / 60);
+  let st = bridgeFor(store).wallStatus;
+  assert.equal(st?.cells, 20);
+  assert.equal(st?.settled, false, 'water on a brand-new wall is not overtopping yet');
+  assert.equal(wallVerdict(st, 2)?.state, 'wait');
+  assert.equal(notices.length, 0);
+
+  // Later: water stands on half the wall.
+  snap.simTime = 600;
+  for (let k = 0; k < 10; k++) depth[150 * 512 + 150 + k] = 0.5;
+  store.set({ tool: 'orbit' });
+  store.set({ tool: 'wall' }); // re-selecting the wall tool re-checks at once
+  ctl.update(1 / 60);
+  st = bridgeFor(store).wallStatus;
+  assert.equal(st?.overtopped, 10);
+  const verdict = wallVerdict(st, 2)!;
+  assert.equal(verdict.state, 'low');
+  const notice = notices.find((x) => x.key === 'wall-overtopped');
+  assert.ok(notice, 'overtopping notice posted');
+  assert.match(verdict.text, /50%/);
+  // With the wall card open the notice stays short and leaves the (live) share to the card, so they can't disagree.
+  assert.ok(notice!.message.length < 60, notice!.message);
+  assert.doesNotMatch(notice!.message, /%/);
+
+  // With another tool active (no card on screen) the notice carries the numbers itself.
+  store.set({ tool: 'orbit' });
+  for (let k = 0; k < 10; k++) barrier[151 * 512 + 150 + k] = 2; // a new wall layout is announced again
+  store.set({ tool: 'wall' });
+  store.set({ tool: 'orbit' });
+  ctl.update(1 / 60);
+  const full = notices.filter((x) => x.key === 'wall-overtopped').at(-1)!;
+  assert.match(full.message, /About 33% of the wall is under water/);
+
+  // Clearing the walls clears the card's verdict.
+  barrier.fill(0);
+  store.set({ tool: 'orbit' });
+  store.set({ tool: 'wall' });
+  ctl.update(1 / 60);
+  assert.equal(bridgeFor(store).wallStatus, null);
+  off();
   ctl.destroy();
 });

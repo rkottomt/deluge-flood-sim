@@ -8,6 +8,8 @@
  * discharge is kept, and the added depth is booked as external inflow in the accounting buffer, so volumeIn and
  * SimStats.massError stay exact. Writes the full state into the other ping-pong texture.
  */
+import { ACC_PER_CELL } from './common';
+
 export const RAISE_UNIFORM_BYTES = 16;
 
 export const raiseWGSL = /* wgsl */ `
@@ -26,7 +28,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
   var h = s.r;
   let goal = textureLoad(baseTex, q, 0).r + rs.offset - s.a;
   if (goal > h) {
-    let idx = 2u * (u32(q.y) * u32(rs.nx) + u32(q.x));
+    let idx = ${ACC_PER_CELL}u * (u32(q.y) * u32(rs.nx) + u32(q.x));
     acc[idx] = acc[idx] + (goal - h);
     h = goal;
   }

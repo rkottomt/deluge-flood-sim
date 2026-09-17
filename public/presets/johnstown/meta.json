@@ -2,7 +2,7 @@
  "version": 1,
  "id": "johnstown",
  "name": "Johnstown — Conemaugh Valley",
- "subtitle": "The Flood City — 1936 peak flows in the concrete channels",
+ "subtitle": "The Flood City — the 1889 flood in today's valley",
  "nx": 1024,
  "ny": 1024,
  "cellSize": 6.8359375,
@@ -14,7 +14,7 @@
  },
  "attribution": "Elevation: USGS 3DEP · Imagery: USDA NAIP via USGS The National Map · Roads: U.S. Census Bureau TIGER/Line",
  "scenario": {
-  "description": "Johnstown fills a narrow valley where the Little Conemaugh and Stonycreek rivers join to form the Conemaugh. On May 31, 1889 the South Fork Dam, about 14 miles upstream, failed after heavy rain and the flood wave killed 2,209 people. The St. Patrick's Day flood of March 1936 swamped the city again (25 deaths), and by 1943 the Army Corps of Engineers had rebuilt the rivers into the concrete-lined flood-control channels you see here, sized for a flood like 1936. In July 1977 up to a foot of rain fell overnight, several dams upstream failed and more than 80 people died. The inflows start at the 1936 peaks: about 59,000 ft³/s on the Stonycreek (USGS, Ferndale) and 28,800 ft³/s on the Little Conemaugh. Can the channels hold it?",
+  "description": "Johnstown fills a narrow valley where the Little Conemaugh and Stonycreek rivers join to form the Conemaugh. On May 31, 1889, after a night of heavy rain, the South Fork Dam 14 miles up the Little Conemaugh gave way; 57 minutes later its lake hit the city as a wall of water and debris that killed 2,209 people. Here that flood comes down the valley into today's city: about 3,730 m³/s (132,000 ft³/s), Lake Conemaugh's 14.5 million m³ spread over the roughly 65 minutes it took to drain (the breach itself peaked at 7,200–9,000 m³/s), while the Stonycreek runs at a typical yearly flood peak. The inflow never stops: remove it after an hour of simulated time to let the valley drain. After the 1936 flood (25 deaths) the Army Corps of Engineers built the concrete channels you see here to carry that flood; in July 1977 up to 12 inches of rain in eight hours and seven failed dams still killed at least 78 people.",
   "sources": [
    {
     "id": "stonycreek-inflow",
@@ -22,8 +22,8 @@
     "gx": 480.5,
     "gy": 1014.5,
     "radius": 4,
-    "discharge": 1671,
-    "label": "Stonycreek River — 1936 peak (59,000 ft³/s)"
+    "discharge": 300,
+    "label": "Stonycreek River — a typical yearly flood peak (10,600 ft³/s)"
    },
    {
     "id": "little-conemaugh-inflow",
@@ -31,8 +31,8 @@
     "gx": 1015.5,
     "gy": 138.5,
     "radius": 4,
-    "discharge": 816,
-    "label": "Little Conemaugh River — 1936 peak (28,800 ft³/s)"
+    "discharge": 3730,
+    "label": "Little Conemaugh River — the 1889 dam-break flood (132,000 ft³/s)"
    }
   ],
   "storms": [],
@@ -1384,7 +1384,7 @@
   "roads": "roads.json"
  },
  "bake": {
-  "bakedAt": "2026-09-17T03:55:36.394Z",
+  "bakedAt": "2026-09-17T09:53:05.147Z",
   "demSource": "usgs3dep",
   "demRepairedCells": 0,
   "center": {

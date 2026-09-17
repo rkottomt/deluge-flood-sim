@@ -17,7 +17,7 @@ export function hasGauge(ctrl: StageControl): boolean {
 /** Rise above the normal level for a stage in feet, as shown for gauge-less controls: "+3.0 m". */
 export function formatRise(ctrl: StageControl, ft: number): string {
   const m = Math.max(0, (ft - stageRangeFt(ctrl).min) * M_PER_FT);
-  return `+${fmtNum(m, m >= 10 ? 0 : 1)} m`;
+  return `+${fmtNum(m, m >= 10 || m === 0 ? 0 : 1)} m`;
 }
 
 /** Slider / chip readout for a stage in feet: gauge feet, or the rise above the detected surface. */
@@ -28,7 +28,7 @@ export function formatStage(ctrl: StageControl, ft: number): string {
 /** Secondary readout: the rise in feet for gauge-less controls ("33 ft"), nothing for gauges (already in feet). */
 export function stageSub(ctrl: StageControl, ft: number): string {
   if (hasGauge(ctrl)) return '';
-  return `${fmtNum(Math.max(0, ft - stageRangeFt(ctrl).min), 0)} ft`;
+  return `${fmtNum(Math.max(0, ft - stageRangeFt(ctrl).min), 0)} ft`;
 }
 
 /** The Try-it strip's raise step: label and tooltip. */
@@ -65,7 +65,7 @@ export function weatherBadge(i: {
   const ctrl = i.stage;
   if (ctrl && i.stageOffsetApplied > 0.05) {
     const ft = stageFt(ctrl, i.stageOffsetApplied);
-    parts.push(hasGauge(ctrl) ? `River ${fmtNum(ft, 0)} ft` : `Water ${formatRise(ctrl, ft)}`);
+    parts.push(hasGauge(ctrl) ? `River ${fmtNum(ft, 0)} ft` : `Water ${formatRise(ctrl, ft)}`);
     severity = maxSev(severity, maxSev('info', stageStatus(ctrl, ft).severity));
   }
   const rain = Math.max(0, i.rainRate);

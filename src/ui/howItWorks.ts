@@ -103,7 +103,7 @@ export function createHowItWorks(ctx: UIContext): Modal {
       'div',
       { class: 'dl-how-cards' },
       h('div', { class: 'dl-how-card' }, h('span', { class: 'dl-how-card-icon' }, icon('water', 20)), h('b', null, 'Water flows downhill'), h('p', null, 'Flow across each edge speeds up toward the lower water surface — the height of the water, not just the ground.')),
-      h('div', { class: 'dl-how-card' }, h('span', { class: 'dl-how-card-icon' }, icon('layers', 20)), h('b', null, 'Friction slows it'), h('p', null, 'Rough ground (grass, buildings, forest) drags on the flow, especially in thin sheets of water.')),
+      h('div', { class: 'dl-how-card' }, h('span', { class: 'dl-how-card-icon' }, icon('layers', 20)), h('b', null, 'Friction slows it'), h('p', null, 'One roughness value for the whole map (Manning’s n = 0.035, adjustable under Advanced) drags on the flow; thin sheets of water feel it most.')),
       h('div', { class: 'dl-how-card' }, h('span', { class: 'dl-how-card-icon' }, icon('check', 20)), h('b', null, 'Every drop is counted'), h('p', null, 'A cell’s depth changes by exactly what flows in minus what flows out, plus rain and rivers. Nothing is created or lost.')),
     ),
     h(
@@ -205,16 +205,22 @@ export function createHowItWorks(ctx: UIContext): Modal {
     'stability',
     '03 · The hard part',
     'Four ingredients that keep it stable at interactive speed',
-    h('p', null, 'A naive explicit solver for these equations explodes on real terrain within seconds. Four ideas keep Deluge stable, exact and fast:'),
+    h(
+      'p',
+      null,
+      'One explicit update has to survive 6 m-deep river channels, centimetre-thin films on steep streets and walls one cell wide — in 32-bit floats, on a million cells at once, many times per frame. The textbook version blows up here within about ten steps (',
+      h('b', null, 'Break it'),
+      ' below shows it failing). Four ingredients keep Deluge stable and exact — every cubic metre is booked, so the HUD’s mass error stays below 0.01 %:',
+    ),
     h(
       'div',
       { class: 'dl-ingredients' },
       ingredient(
         '1',
         'CFL-adaptive timestep',
-        `${dt}${op('=')}${v('C')}${frac(dx, `${sqrt('2')}${paren(`${sqrt(`${g}${sub(v('h'), 'max')}`)}${op('+')}${sub(abs(v('u')), 'max')}`)}`)}`,
+        `${dt}${op('=')}${v('C')}${frac(dx, `${sqrt('2')}${rm('&thinsp;')}${sub(rm('max'), 'cells')}${paren(`${sqrt(`${g}${h_}`)}${op('+')}${abs(v('u'))}`)}`)}`,
         'a wave must never jump more than one cell in a single step.',
-        'Deep, fast water needs smaller steps. The √2 is the 2-D part: the fastest grid-scale wave runs diagonally. The plain scheme is stable while this Courant number C stays below 1; the θ-smoothing Deluge adds (it damps only divergent grid-scale modes) lowers that to √θ ≈ 0.89, so Deluge targets 0.7 and never exceeds 0.85. Depth and speed come back from the GPU a few times per second and Δt is re-chosen automatically — the frame then runs as many substeps as it needs.',
+        'The fastest cell sets the pace: its wave speed √(gh) plus the flow carrying the wave. The √2 is the 2-D part: the fastest grid-scale wave runs diagonally. The plain scheme is stable while this Courant number C stays below 1; the θ-smoothing Deluge adds (it damps only divergent grid-scale modes) lowers that to √θ ≈ 0.89. Depth and speed come back from the GPU a few hundred milliseconds late, so Δt aims for C = 0.7 against a padded estimate: the live Courant number in the HUD usually reads ≈ 0.55 and never exceeds 0.85. The frame then runs as many substeps as it needs.',
       ),
       ingredient(
         '2',
@@ -404,7 +410,7 @@ export function createHowItWorks(ctx: UIContext): Modal {
       'ul',
       { class: 'dl-break-list' },
       h('li', null, 'For the first few steps nothing looks wrong — the error starts far too small to see.'),
-      h('li', null, 'It grows several-fold with every step, usually first where rivers enter the map and the water is deepest: the surface jitters cell by cell, then depths spike to thousands of meters.'),
+      h('li', null, 'It grows several-fold with every step wherever water moves. The demo drops one small splash into the water nearest the middle of your view, so it starts there: the surface jitters cell by cell, then depths spike to thousands of meters.'),
       h('li', null, 'Within about ten steps the numbers overflow. Those cells turn to magenta noise (depth ∞ / NaN) that spreads from there, and the HUD reports the solution has diverged.'),
     ),
     h('p', null, 'This dialog closes so you can watch. Switch back from the red banner at the bottom — the water resets and the robust solver recovers instantly.'),

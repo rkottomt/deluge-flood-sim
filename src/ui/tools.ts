@@ -477,7 +477,7 @@ export function createToolController(canvas: HTMLCanvasElement, deps: ToolContro
       stageFt: ctrl ? stageFt(ctrl, s.stageOffset) : null,
     });
     const need = suggestedWallHeight(scan, s.wallHeight);
-    // With the wall card open the card already carries the details: keep the notice to one line over the map.
+    // With the wall card open the card already carries the details (and the live numbers): keep the notice to one line.
     const brief = s.tool === 'wall';
     // One notice per scan; overtopping (what is happening) wins over the stage warning (what will happen).
     let posted = false;
@@ -488,8 +488,9 @@ export function createToolController(canvas: HTMLCanvasElement, deps: ToolContro
         kind: 'warn',
         key: 'wall-overtopped',
         title: 'Water is pouring over your wall',
+        // Brief: no share — the card next to it shows the live share, which moves as the water does.
         message: brief
-          ? `About ${wallShare(scan.overtopped, scan.cells)}% of the wall is under water.`
+          ? 'A wall only holds while its top stays above the flood.'
           : `About ${wallShare(scan.overtopped, scan.cells)}% of the wall is under water. A wall only holds while its top stays above the flood — ` +
             `and water also runs around open ends, so tie both ends into high ground.`,
         action: level !== null && need !== null ? { label: `Use ${need.toFixed(1)} m walls`, run: () => store.set({ wallHeight: need }) } : undefined,

@@ -246,7 +246,8 @@ export class App {
    * A ?live= link (typically a reload after picking an area) needs the network before anything can be shown, and
    * venue wifi may be down or stall. Bound that wait: offline, or when the download makes no progress for a while
    * or runs too long, show the offline default preset instead. That load supersedes the live one (whose late
-   * result is discarded). The address bar keeps the live link, and the notice offers a retry.
+   * result is discarded). The address bar keeps the live link, and the notice offers a retry. Cancel on the loading
+   * card shows the same preset (see onLoadCancelled), but then the address bar follows it.
    */
   private loadStartupLive(request: SceneRequest & { kind: 'live' }): Promise<LoadOutcome> {
     const scenes = this.scenes;

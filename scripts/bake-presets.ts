@@ -31,6 +31,25 @@ const FT = 0.3048;
 /** Baked imagery edge length, pixels. */
 const IMAGERY_SIZE = 4096;
 const CFS = 0.0283168; // m³/s per ft³/s
+/** ft³/s for a discharge in m³/s, rounded to the nearest thousand, e.g. "132,000". */
+const cfsLabel = (m3s: number) => (Math.round(m3s / CFS / 1000) * 1000).toLocaleString('en-US');
+/**
+ * Johnstown's 1889 flood. Lake Conemaugh held 1.455 × 10⁷ m³ when the South Fork Dam failed, and more than 65 minutes
+ * were needed to drain most of it; the breach peaked at 7,200–8,970 m³/s (Coleman, Kaktins & Wojno, 2016,
+ * "Dam-Breach hydrology of the Johnstown flood of 1889", Heliyon 2(6) e00120, doi:10.1016/j.heliyon.2016.e00120).
+ * A preset inflow is constant, so the Little Conemaugh carries the lake's AVERAGE outflow over those 65 minutes
+ * (≈ 3,730 m³/s): the model delivers the whole lake in about an hour, rather than the breach peak for as long as the
+ * scene runs. Measured on the M4 (runFor, sim time): 0.56 km² of land flooded at T+10 min, 1.9 km² at T+30 min, max
+ * speed 9–14 m/s; the 1936 peaks (1,671 + 816 m³/s) stay in the channels (0.25 km²).
+ */
+const LAKE_CONEMAUGH_M3 = 1.455e7;
+const LAKE_CONEMAUGH_DRAIN_S = 65 * 60;
+const JOHNSTOWN_1889_INFLOW = Math.round(LAKE_CONEMAUGH_M3 / LAKE_CONEMAUGH_DRAIN_S / 10) * 10;
+/**
+ * Stonycreek River at Ferndale (USGS 03040000): median annual peak 10,600 ft³/s over 110 years of record (1936 record
+ * 59,000). On May 31, 1889 the rivers were already running high after a night of heavy rain.
+ */
+const STONYCREEK_TYPICAL_PEAK_CFS = 10600;
 type LonLat = [number, number];
 
 interface RiverDef {
@@ -163,7 +182,7 @@ const PRESET_DEFS: PresetDef[] = [
         depth: 2.5,
         bankCells: 2,
         snapRadius: 8,
-        upstream: { type: 'inflow', discharge: Math.round(59000 * CFS), label: 'Stonycreek River — 1936 peak (59,000 ft³/s)' },
+        upstream: { type: 'inflow', discharge: Math.round(STONYCREEK_TYPICAL_PEAK_CFS * CFS), label: 'Stonycreek River — a typical yearly flood peak (10,600 ft³/s)' },
       },
       {
         name: 'Little Conemaugh River',
@@ -171,7 +190,7 @@ const PRESET_DEFS: PresetDef[] = [
         depth: 2,
         bankCells: 2,
         snapRadius: 8,
-        upstream: { type: 'inflow', discharge: Math.round(28800 * CFS), label: 'Little Conemaugh River — 1936 peak (28,800 ft³/s)' },
+        upstream: { type: 'inflow', discharge: JOHNSTOWN_1889_INFLOW, label: `Little Conemaugh River — the 1889 dam-break flood (${cfsLabel(JOHNSTOWN_1889_INFLOW)} ft³/s)` },
       },
     ],
     shelters: [
@@ -182,16 +201,23 @@ const PRESET_DEFS: PresetDef[] = [
     ],
     storms: [],
     rainRate: 0,
+    // Looking up the Little Conemaugh valley (north-east) over downtown: the flood comes down the valley toward the
+    // camera and spreads over the Point, Woodvale and Kernville. At the achievable ~45–55× sim speed downtown is
+    // visibly under water ~10 s after "Play the flood" (0.56 km² flooded at T+10 min, 1.9 km² at T+30 min).
     camera: { at: [-78.921, 40.3262], distance: 3400, yaw: 0.85, pitch: 0.55 },
+    // Sources: Coleman et al. (2016) and USGS peak-flow records (see the constants above); 1889 timeline and toll from
+    // the National Park Service (Johnstown Flood National Memorial); 1977 from USGS Open-File Report 78-963.
     description: () =>
       'Johnstown fills a narrow valley where the Little Conemaugh and Stonycreek rivers join to form the ' +
-      'Conemaugh. On May 31, 1889 the South Fork Dam, about 14 miles upstream, failed after heavy rain and the ' +
-      'flood wave killed 2,209 people. The St. Patrick\'s Day flood of March 1936 swamped the city again (25 ' +
-      'deaths), and by 1943 the Army Corps of Engineers had rebuilt the rivers into the concrete-lined ' +
-      'flood-control channels you see here, sized for a flood like 1936. In July 1977 up to a foot of rain fell ' +
-      'overnight, several dams upstream failed and more than 80 people died. The inflows start at the 1936 peaks: ' +
-      'about 59,000 ft³/s on the Stonycreek (USGS, Ferndale) and 28,800 ft³/s on the Little Conemaugh. ' +
-      'Can the channels hold it?',
+      'Conemaugh. On May 31, 1889, after a night of heavy rain, the South Fork Dam 14 miles up the Little ' +
+      'Conemaugh gave way; 57 minutes later its lake hit the city as a wall of water and debris that killed ' +
+      `2,209 people. Here that flood comes down the valley into today's city: about ${JOHNSTOWN_1889_INFLOW.toLocaleString('en-US')} m³/s ` +
+      `(${cfsLabel(JOHNSTOWN_1889_INFLOW)} ft³/s), Lake Conemaugh's 14.5 million m³ spread over the roughly 65 minutes it took ` +
+      'to drain (the breach itself peaked at 7,200–9,000 m³/s), while the Stonycreek runs at a typical yearly ' +
+      'flood peak. The inflow never stops: remove it after an hour of simulated time to let the valley drain. ' +
+      'After the 1936 flood (25 deaths) the Army Corps of Engineers built the concrete channels you see here to ' +
+      'carry that flood; in July 1977 up to 12 inches of rain in eight hours and seven failed dams still killed at ' +
+      'least 78 people.',
   },
   {
     id: 'ellicott',
@@ -214,19 +240,30 @@ const PRESET_DEFS: PresetDef[] = [
       { name: 'Fire Station 2 (Montgomery Rd)', at: [-76.82045, 39.25557], search: 250 },
       { name: 'Oella (east bank ridge)', at: [-76.78667, 39.27413], search: 350 },
     ],
-    // Centered on the 3.7 mi² Tiber–Hudson–New Cut watershed west of Main Street (USGS FS 2021–3025, fig. 2).
-    // 75 mm/hr ≈ the 2016 storm's peak two hours (5.96 in between 6:50 and 8:50 p.m.).
-    storms: [{ id: 'tiber-hudson', at: [-76.8115, 39.2665], radiusMeters: 1900, intensity: 75 }],
+    // The storm sits on the centroid of the Tiber Branch watershed at its Patapsco confluence (Hudson, Tiber and New Cut
+    // branches; USGS FS 2021–3025: 3.68 mi²). Delineated on this DEM (priority-flood fill + D8): 8.83 km² draining to
+    // the Patapsco at grid (653, 576), centroid (403, 617). A storm cell rains at full intensity inside 0.3·R and fades
+    // to zero at R (src/sim/forcing.ts stormWeight), so over that watershed a 2,440 m cell averages 0.70 of its peak:
+    // 110 mm/hr peak ≈ 77 mm/hr (3.0 in/hr) on the watershed ≈ the 2016 storm's two peak hours (5.96 in between 6:50
+    // and 8:50 p.m. at gauge ELYM2). The old 1,900 m, 75 mm/hr cell gave the watershed only ~39 mm/hr. Equilibrium
+    // runoff ≈ 77 mm/hr × 8.83 km² ≈ 190 m³/s, below the USGS indirect peaks of 2016 (Hudson 2,750 + Tiber 2,100 +
+    // New Cut 3,320 ft³/s ≈ 231 m³/s). Measured (runFor, sim time): 0.12 km² of land flooded at T+10 min, 0.33 at
+    // T+20 min (was 0.075 / 0.20).
+    storms: [{ id: 'tiber-hudson', at: [-76.81118, 39.26539], radiusMeters: 2440, intensity: 110 }],
     rainRate: 0,
-    camera: { at: [-76.8015, 39.2683], distance: 1900, yaw: Math.PI / 2, pitch: 0.5 },
+    // Low over the Patapsco looking west up lower Main Street and the branches' confluence, ~1.1 km away: the town's
+    // flood channels are ~20–40 px wide at 1470×956 (at the old 1,900 m they were thin threads). Pitch 0.8 keeps the eye
+    // above the storm's cloud deck (452 m × exaggeration 1.5 + margin), where the renderer does not grey the sky.
+    camera: { at: [-76.79775, 39.26781], distance: 1100, yaw: -Math.PI / 2, pitch: 0.8 },
     description: () =>
       'Historic Ellicott City sits at the bottom of a hill where the Hudson, Tiber and New Cut branches converge ' +
       'and empty into the Patapsco River — and Main Street is the overflow channel when they flash. On July 30, ' +
       '2016, 6.6 inches of rain fell in three hours (nearly 6 in two); the branches tore down Main Street, the ' +
       'Patapsco rose over the lower town, and two people died. On May 27, 2018 almost the same rain fell again ' +
       '(6.56 inches in three hours at the gauge, heavier just to the south) and one man died — two roughly ' +
-      '1-in-1,000-year storms in 22 months. A 75 mm/hr storm cell (the 2016 peak two-hour rate) sits over the ' +
-      'branches while the Patapsco runs at its 2016 peak of 22,800 ft³/s. Try walls or a detention pond upstream.',
+      '1-in-1,000-year storms in 22 months. Here a storm cell peaking at 110 mm/hr parks over the 3.7 mi² ' +
+      'watershed of the three branches and soaks it at about 3 inches an hour, the 2016 storm\'s rate over its two ' +
+      'worst hours, while the Patapsco runs at its 2016 peak of 22,800 ft³/s. Try walls or a detention pond upstream.',
   },
 ];
 

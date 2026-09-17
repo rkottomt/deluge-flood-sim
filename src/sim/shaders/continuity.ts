@@ -8,27 +8,31 @@
  *   O = dt/dx · (max(qE,0) + max(−qW,0) + max(qS,0) + max(−qN,0)),   k = min(1, h/O).
  * Every face flux is multiplied by k of its DONOR (upwind) cell. A cell can then never export more water than
  * it holds, so h ≥ 0 holds by construction — no clamping, which would silently create mass. Both cells
- * sharing a face apply the identical limited flux, so mass is conserved exactly (up to Float32 rounding).
+ * sharing a face apply the identical limited flux, so mass is conserved exactly (see EXACT TO THE LAST BIT).
  * Computing k of a neighbour needs that neighbour's four faces, hence the 13-texel flux stencil below.
  *
  * Stage sources set the depth to max(0, level − z) and zero the stored discharge of faces fully inside their disc (a
  * reservoir at rest; see the stage loop). Open-boundary outflow is closed on edge cells near inflow sources (bfluxC).
  *
- * Mass accounting: every change to h that is not an exchange with a neighbour (rain, inflow, infiltration, stage,
- * open-boundary outflow, rounding) is added to acc[2c] (in) or acc[2c+1] (out). The CPU copies + zeroes this buffer
- * in the same command encoder as the depth readback and sums it in Float64, so SimStats.massError is real.
+ * Mass accounting: every change to h other than an exchange with a neighbour is added to the accounting buffer
+ * (ACC_PER_CELL slots per cell): rain, inflow and stage refills to "in", open-boundary outflow, infiltration and stage
+ * drains to "out", Float32 rounding (signed) to "rounding". The stats pass sums it exactly per block and zeroes it in
+ * the same command encoder as the depth readback; the CPU adds the blocks in Float64, so SimStats.massError is real.
  *
- * ROUNDING. On a 20 m deep river one Float32 ULP of h is 1.9e-6 m, while a substep's flux divergence or rain is
- * ~1e-6–1e-5 m, so h + d rounds by up to half a ULP — with the SAME sign substep after substep on a steady cell. That
- * cannot be booked as the measured difference (h + d) − h: Metal's shader compiler reassociates float math and folds
- * that to d, so Pittsburgh at the 1936 crest in hurricane rain drifted 2.8e-4 per sim-hour (tests/sim/
- * conservation.test.ts). So every increment is first snapped to the ULP grid of the depth it is added to (SNAPPING
- * below): the snapped value is exactly what lands in h, and what the snap removed from a flux divergence is booked.
- * Flux divergence and rain/inflow are snapped to the grid of the largest of h, divergence and rain, so their sum is
- * exact too. What remains unbooked is the rounding inside the divergence itself (~1e-7 of it, random in sign).
+ * EXACT TO THE LAST BIT. On a 20 m deep river one Float32 ULP of h is 1.9e-6 m while a substep moves ~1e-6–1e-5 m, so
+ * h + Δ rounds by up to half a ULP, with the same sign substep after substep on a steady cell. The old booking
+ * measured (h + Δ) − h, which Metal's compiler folds to Δ, so the rounding went unbooked: Pittsburgh at the 1936
+ * crest in hurricane rain drifted 2.8e-4 per sim-hour (tests/sim/conservation.test.ts). Now:
+ *   • the volume through each face, v = dt/dx·q, is ONE Float32 product computed identically by both cells sharing
+ *     the face, so interior exchanges cancel exactly (a per-cell dt/dx·(Σq) rounds differently in each cell);
+ *   • every face volume and the rain are snapped (SNAP_WGSL) to the ULP grid of the largest of h and those
+ *     increments, so h + Σ(snapped) is exact, and what the snaps took off each face volume is booked;
+ *   • infiltration and stage changes are snapped to the grid of the depth they change and booked as applied.
+ * Left unbooked: a sum carrying into the next power of two, or h off the grid because an increment exceeds it
+ * (a cell filling from nearly dry): half a ULP at most, once, random in sign.
  */
 import { INFLOW_EDGE_MASK_CELLS } from '../constants';
-import { FORCING_WGSL, HELPERS_WGSL, SIM_WGSL } from './common';
+import { ACC_PER_CELL, FORCING_WGSL, HELPERS_WGSL, SIM_WGSL, SNAP_WGSL } from './common';
 
 export const continuityWGSL = /* wgsl */ `
 ${SIM_WGSL}
@@ -40,6 +44,7 @@ ${FORCING_WGSL}
 @group(0) @binding(4) var stateOut: texture_storage_2d<rgba32float, write>;
 @group(0) @binding(5) var<storage, read_write> acc: array<f32>;
 ${HELPERS_WGSL}
+${SNAP_WGSL}
 
 // Open-boundary outflow of an edge cell, closed near inflow sources: an inflow sits on a river just inside the edge
 // it enters through, and the mound it builds would otherwise pour part of the discharge straight back out of that
@@ -53,23 +58,6 @@ fn bfluxC(h: f32, i: i32, j: i32, di: i32, dj: i32) -> f32 {
     if (distance(p, a.xy) < a.z + ${INFLOW_EDGE_MASK_CELLS.toFixed(1)}) { return 0.0; }
   }
   return bflux(h, i, j, di, dj);
-}
-
-// SNAPPING. snapE(d, e) rounds d to a multiple of 2^(e − 150), the ULP of Float32 values with biased exponent e;
-// ulpExp(m) is that exponent for |m|. A sum of values on the grid of the LARGEST of them is exact (short of carrying
-// into the next power of two), so h + snapped increments lands exactly where the booking says. round() is opaque to
-// the optimizer, unlike (h + d) − h. Only a value larger than h itself (a cell filling from nearly dry) leaves h off
-// the grid, and then h rounds once by at most half a ULP.
-// The grid is kept ≥ 2^-126 (normal): Apple GPUs flush subnormals to zero, and d · 2^150 / 0 made NaN for d ≈ 1e-35.
-// Powers of two are built from bits (exact) and applied by multiplication. Non-finite values stay non-finite.
-fn ulpExp(m: f32) -> i32 {
-  return max(i32((bitcast<u32>(abs(m)) >> 23u) & 0xffu), 24);
-}
-fn snapE(d: f32, e: i32) -> f32 {
-  return round(d * bitcast<f32>(u32(277 - e) << 23u)) * bitcast<f32>(u32(e - 23) << 23u);
-}
-fn snapInc(a: f32, d: f32) -> f32 {
-  return snapE(d, ulpExp(max(abs(a), abs(d))));
 }
 
 fn fl(i: i32, j: i32) -> vec2f {
@@ -176,6 +164,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
   let vN = r * qN;
   var aIn = 0.0;
   var aOut = 0.0;
+  var aRound = 0.0;
   var bOut = 0.0;
   if (i == nx1) { bOut = bOut + vE; }
   if (i == 0)   { bOut = bOut - vW; }
@@ -207,11 +196,10 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
   var h = sc.r + (((vWQ - vEQ) + (vNQ - vSQ)) + rainQ);
   aIn = aIn + rainQ;
   // What the snaps left out of the face volumes (each exact, ≤ half a ULP): booked, never silently created or lost.
-  let resid = ((vW - vWQ) - (vE - vEQ)) + ((vN - vNQ) - (vS - vSQ));
-  if (resid > 0.0) { aOut = aOut + resid; } else { aIn = aIn - resid; }
+  aRound = aRound - (((vW - vWQ) - (vE - vEQ)) + ((vN - vNQ) - (vS - vSQ)));
   // Float32 rounding residue of the limiter (≈1e-9 m at most): accounted.
   if (sim.robust != 0 && h < 0.0) {
-    aIn = aIn - h;
+    aRound = aRound - h;
     h = 0.0;
   }
 
@@ -248,10 +236,11 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     if (dv > 0.0) { aIn = aIn + dv; } else { aOut = aOut - dv; }
   }
 
-  if (aIn != 0.0 || aOut != 0.0) {
-    let idx = 2u * (u32(j) * u32(sim.nx) + u32(i));
+  if (aIn != 0.0 || aOut != 0.0 || aRound != 0.0) {
+    let idx = ${ACC_PER_CELL}u * (u32(j) * u32(sim.nx) + u32(i));
     acc[idx] = acc[idx] + aIn;
     acc[idx + 1u] = acc[idx + 1u] + aOut;
+    acc[idx + 2u] = acc[idx + 2u] + aRound;
   }
   // Stored qx/qy of the last column/row are the limited boundary outflows (diagnostics + θ smoothing).
   textureStore(stateOut, vec2i(i, j), vec4f(h4, qEs, qSs, sc.a));

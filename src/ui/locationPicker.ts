@@ -17,6 +17,7 @@ import { createModal, type Modal } from './modal';
 import { squareDomain, isLikelyUS } from '../data/geo';
 import { formatLatLon, fmtNum } from './format';
 import { looksLikeNetworkError, probeConnectivity } from './connectivity';
+import { postNotice } from './bridge';
 
 const IMAGERY_URL = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
 const LABELS_URL = 'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}';
@@ -49,6 +50,8 @@ export function createLocationPicker(ctx: UIContext): Modal {
   let size: number = 8000;
   let resolution: LiveAreaRequest['resolution'] = 1024;
   let loadingHere = false;
+  /** The live-area request this dialog is loading (to offer "Keep loading" if closing the dialog stops it). */
+  let loadingReq: LiveAreaRequest | null = null;
 
   let map: L.Map | null = null;
   let rect: L.Rectangle | null = null;
@@ -292,6 +295,7 @@ export function createLocationPicker(ctx: UIContext): Modal {
     });
     let outcome: unknown;
     let thrown: unknown = null;
+    loadingReq = req;
     try {
       outcome = await actions.loadLiveArea(req);
     } catch (err) {
@@ -300,6 +304,7 @@ export function createLocationPicker(ctx: UIContext): Modal {
       off();
     }
     loadingHere = false;
+    if (loadingReq === req) loadingReq = null;
     if (outcome === 'superseded') {
       // Cancelled (or overtaken by another load): nothing to explain.
       syncLoad();
@@ -508,8 +513,23 @@ export function createLocationPicker(ctx: UIContext): Modal {
     (s) => s.panels.locationPicker,
     (open) => {
       modal.setOpen(open);
-      // Closing the dialog abandons a load it started (the scene on screen stays).
-      if (!open && loadingHere && store.get().loading?.cancellable) ctx.actions.cancelLoad?.();
+      // Closing the dialog abandons a load it started (the scene on screen stays) — and says so, with a way back:
+      // on a trackpad a stray click outside the dialog is easy, and a silent stop looks like Load did nothing.
+      if (!open && loadingHere && store.get().loading?.cancellable && ctx.actions.cancelLoad) {
+        const req = loadingReq;
+        ctx.actions.cancelLoad();
+        if (req) {
+          const what = req.name ?? placeName;
+          postNotice(store, {
+            kind: 'info',
+            key: 'live-cancelled',
+            title: what ? `Stopped loading ${what}` : 'Stopped loading the live area',
+            message: 'Closing the location dialog stops its download. The scene on screen stays.',
+            action: { label: 'Keep loading', run: () => void actions.loadLiveArea(req) },
+            durationMs: 10000,
+          });
+        }
+      }
     },
   );
 

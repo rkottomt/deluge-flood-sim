@@ -117,7 +117,7 @@ test('SimStats.massError is normalized by the most water held, not by the ever-g
     snap = await stepAndSnapshot(solver, 100, { chunk: 100 });
     peak = Math.max(peak, snap.stats.volume);
     const s = snap.stats;
-    const expected = Math.abs(s.volume - (s.volumeIn - s.volumeOut)) / Math.max(1, peak);
+    const expected = Math.abs(s.volume - (s.volumeIn - s.volumeOut + solver.readbackDiagnostics.roundingVolume)) / Math.max(1, peak);
     assert.ok(Math.abs(s.massError - expected) <= 1e-9 * Math.max(expected, 1e-9), `massError ${s.massError} vs ${expected}`);
   }
   const s = snap.stats;

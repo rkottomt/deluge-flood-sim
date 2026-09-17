@@ -28,6 +28,8 @@ export interface CameraEnvironment {
   maxElev: number;
   /** Rendered terrain elevation (m, unexaggerated) at grid coords, or null without a scene. */
   heightAt(gx: number, gy: number): number | null;
+  /** Ground size of one aerial-imagery texel (m), or null without imagery: limits how close the camera may get. */
+  imageryMetersPerTexel?: number | null;
   /** Terrain hit under a CSS pixel for the given camera matrices (zoom-to-cursor). */
   pickWorld(cssX: number, cssY: number): { gx: number; gy: number; elevation: number } | null;
 }
@@ -115,6 +117,7 @@ export class OrbitController implements CameraController {
   private canvas: HTMLCanvasElement | null = null;
   private listeners: Array<[EventTarget, string, EventListener, AddEventListenerOptions?]> = [];
   private viewportCss = { w: 1, h: 1 };
+  private farLimit = { env: null as CameraEnvironment | null, aspect: 0, distance: 0 };
   /** Viewport aspect (width / height), kept current by the renderer; used by frameAll. */
   aspect = 1.6;
 
@@ -200,8 +203,35 @@ export class OrbitController implements CameraController {
 
   topDown(): void {
     this.adoptExternalEdits();
-    const g = clonePose(this.goal);
+    // Mid-flight (a frame-all or the scene intro just started), look down on where the flight is going, not on
+    // the early in-between pose. A target left outside the map by panning is brought back onto its edge.
+    const g = clonePose(this.flight?.to ?? this.goal);
+    const e = this.env;
+    const gx = clamp(g.target.gx, 0, e.nx);
+    const gy = clamp(g.target.gy, 0, e.ny);
+    if (gx !== g.target.gx || gy !== g.target.gy) {
+      g.target = { gx, gy, elevation: e.heightAt(gx, gy) ?? g.target.elevation };
+    }
     this.flyTo({ ...g, pitch: MAX_PITCH }, 0.9);
+  }
+
+  /** Closest the camera may get to its target (m). */
+  minDistance(): number {
+    return minCameraDistance(this.env.cellSize, this.env.imageryMetersPerTexel);
+  }
+
+  /**
+   * Farthest the camera may get (m): twice the distance that frames the whole map, where it already fills about half
+   * the screen. Farther out it is only a small tile floating in the sky.
+   */
+  maxDistance(): number {
+    const c = this.farLimit;
+    if (c.env !== this.env || Math.abs(c.aspect - this.aspect) > 1e-3) {
+      c.env = this.env;
+      c.aspect = this.aspect;
+      c.distance = Math.max(this.framingPose().distance * 2, this.minDistance() * 2);
+    }
+    return c.distance;
   }
 
   // ── Scene / matrices ───────────────────────────────────────────────────────────────────
@@ -339,8 +369,7 @@ export class OrbitController implements CameraController {
     const x = p.target;
     x.gx = clamp(x.gx, -0.25 * e.nx, 1.25 * e.nx);
     x.gy = clamp(x.gy, -0.25 * e.ny, 1.25 * e.ny);
-    const size = Math.max(e.nx, e.ny) * e.cellSize;
-    p.distance = clamp(p.distance, minCameraDistance(e.cellSize), size * 5);
+    p.distance = clamp(p.distance, this.minDistance(), this.maxDistance());
     p.pitch = clamp(p.pitch, this.minPitchFor(p), MAX_PITCH);
     for (let iter = 0; iter < 3; iter++) {
       const eye = this.eyeFor(p);
@@ -563,10 +592,8 @@ export class OrbitController implements CameraController {
   /** Scale the camera about the terrain point under (x, y): that point stays under the cursor. */
   zoomAt(x: number, y: number, factor: number): void {
     const e = this.env;
-    const size = Math.max(e.nx, e.ny) * e.cellSize;
     const g = this.goal;
-    const minD = minCameraDistance(e.cellSize);
-    const newD = clamp(g.distance * factor, minD, size * 5);
+    const newD = clamp(g.distance * factor, this.minDistance(), this.maxDistance());
     const s = newD / g.distance;
     if (Math.abs(s - 1) < 1e-6) return;
     const hit = e.pickWorld(x, y);
@@ -580,9 +607,12 @@ export class OrbitController implements CameraController {
 }
 
 /**
- * Closest the orbit camera may get, m. Imagery is 1.2–2 m per texel (baked presets, 4096²) and terrain has one vertex
- * per cell, so closer than ~90 m only magnifies texels and facets; coarse grids stop proportionally farther away.
+ * Closest the orbit camera may get, m. Terrain has one vertex per cell and the aerial imagery is 1.2–2 m per texel
+ * (baked presets: 4096² over 5–8 km), so much closer only magnifies texels into blurry blocks and cells into flat
+ * facets. At the limit a texel still spans ~10 CSS px and a cell ~40, close enough to inspect a wall or a route along
+ * a street; coarse grids and coarse imagery stop proportionally farther away.
  */
-export function minCameraDistance(cellSize: number): number {
-  return Math.max(cellSize * 6, 90);
+export function minCameraDistance(cellSize: number, imageryMetersPerTexel?: number | null): number {
+  const texel = imageryMetersPerTexel != null && Number.isFinite(imageryMetersPerTexel) && imageryMetersPerTexel > 0 ? imageryMetersPerTexel : 0;
+  return Math.max(120, cellSize * 16, texel * 100);
 }

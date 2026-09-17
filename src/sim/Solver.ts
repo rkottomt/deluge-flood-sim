@@ -61,7 +61,7 @@ import {
 } from './constants';
 import { footprintRadius, footprintWeight, packForcing, type PackedForcing } from './forcing';
 import { brushWGSL, BRUSH_UNIFORM_BYTES } from './shaders/brush';
-import { FORCING_UNIFORM_BYTES, SIM_UNIFORM_BYTES } from './shaders/common';
+import { ACC_PER_CELL, FORCING_UNIFORM_BYTES, SIM_UNIFORM_BYTES } from './shaders/common';
 import { continuityWGSL } from './shaders/continuity';
 import { exportWGSL } from './shaders/exportState';
 import { momentumWGSL } from './shaders/momentum';
@@ -94,6 +94,11 @@ export interface ReadbackDiagnostics {
   minDepth: number;
   /** Main-thread milliseconds spent turning the mapped buffers into a snapshot. */
   processMs: number;
+  /**
+   * Net volume booked for Float32 rounding since reset, m³ (signed; see shaders/continuity.ts). Part of the mass
+   * balance behind SimStats.massError, and tiny: a check that the ledger books rounding, not physics.
+   */
+  roundingVolume: number;
 }
 
 export class GpuFloodSolver implements FloodSolver {
@@ -193,8 +198,9 @@ export class GpuFloodSolver implements FloodSolver {
   private generation = 0;
   private volumeIn = 0;
   private volumeOut = 0;
+  private volumeRounding = 0;
   private snapshot: SimSnapshot | null = null;
-  private diagnostics: ReadbackDiagnostics = { nonFiniteCells: 0, minDepth: 0, processMs: 0 };
+  private diagnostics: ReadbackDiagnostics = { nonFiniteCells: 0, minDepth: 0, processMs: 0, roundingVolume: 0 };
   private readonly staging: StagingSet[] = [];
   private readonly pendingMaps = new Set<Promise<void>>();
   private lastReadbackMs = -Infinity;
@@ -293,7 +299,7 @@ export class GpuFloodSolver implements FloodSolver {
     const B = GPUBufferUsage;
     this.accBuf = device.createBuffer({
       label: 'sim.accounting',
-      size: this.N * 8,
+      size: this.N * ACC_PER_CELL * 4,
       usage: B.STORAGE | B.COPY_SRC | B.COPY_DST,
     });
     this.depthBuf = device.createBuffer({ label: 'sim.readback.depth', size: this.N * 4, usage: B.STORAGE | B.COPY_SRC });
@@ -712,6 +718,7 @@ export class GpuFloodSolver implements FloodSolver {
     this.pendingSimTime = 0;
     this.volumeIn = 0;
     this.volumeOut = 0;
+    this.volumeRounding = 0;
     this.snapshot = null;
     this.windowDtMax = 0;
     this.lastDt = 0;
@@ -1348,6 +1355,7 @@ export class GpuFloodSolver implements FloodSolver {
     const depth = new Float32Array(depthRange.slice(0, this.N * 4));
     let accIn = 0;
     let accOut = 0;
+    let accRound = 0;
     let vol = 0;
     let maxH = 0;
     let minH = 0;
@@ -1358,9 +1366,10 @@ export class GpuFloodSolver implements FloodSolver {
     let flooded = 0;
     let nonFinite = 0;
     for (let o = 0; o < b.length; o += STATS_PER_BLOCK) {
-      accIn += b[o + STAT.accIn];
-      accOut += b[o + STAT.accOut];
-      vol += b[o + STAT.volume];
+      accIn += b[o + STAT.accIn] + b[o + STAT.accInLo];
+      accOut += b[o + STAT.accOut] + b[o + STAT.accOutLo];
+      accRound += b[o + STAT.accRound] + b[o + STAT.accRoundLo];
+      vol += b[o + STAT.volume] + b[o + STAT.volumeLo];
       if (b[o + STAT.maxDepth] > maxH) maxH = b[o + STAT.maxDepth];
       if (b[o + STAT.minDepth] < minH) minH = b[o + STAT.minDepth];
       if (b[o + STAT.maxSpeed2Wet] > maxSp2Wet) maxSp2Wet = b[o + STAT.maxSpeed2Wet];
@@ -1373,8 +1382,9 @@ export class GpuFloodSolver implements FloodSolver {
     const area = this.cellArea;
     this.volumeIn += accIn * area;
     this.volumeOut += accOut * area;
+    this.volumeRounding += accRound * area;
     const volume = vol * area;
-    const expected = this.initialVolume + this.volumeIn - this.volumeOut;
+    const expected = this.initialVolume + this.volumeIn - this.volumeOut + this.volumeRounding;
     if (Number.isFinite(volume)) this.peakVolume = Math.max(this.peakVolume, volume);
     const blownUp = nonFinite > 0;
     const stats: SimStats = {
@@ -1402,7 +1412,7 @@ export class GpuFloodSolver implements FloodSolver {
     this.waveRead = Number.isFinite(maxWave) ? maxWave : Infinity;
     if (meta.seq >= this.hBoostSeq) this.hBoost = 0;
     if (meta.simTime > this.uBoostTime) this.uBoost = 0;
-    this.diagnostics = { nonFiniteCells: nonFinite, minDepth: minH, processMs: now() - t0 };
+    this.diagnostics = { nonFiniteCells: nonFinite, minDepth: minH, processMs: now() - t0, roundingVolume: this.volumeRounding };
   }
 
   /** Upload the dry-at-reset bitmask read by the stats pass (bit c = 1 ⇔ cell c had h < WET_DEPTH). */

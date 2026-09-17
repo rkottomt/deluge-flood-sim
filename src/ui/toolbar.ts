@@ -236,7 +236,12 @@ export function createToolbar(ctx: UIContext): { toolbar: HTMLElement; options: 
       setText(title, def.label);
       setText(titleKey, def.key);
       setText(desc, def.description);
-      hints.replaceChildren(...def.hints.map((t) => h('span', { class: 'dl-hint' }, t)));
+      hints.replaceChildren(
+        ...def.hints.flatMap((t, i) => [
+          ...(i ? [h('span', { class: 'dl-hint-sep', 'aria-hidden': 'true' }, ' · ')] : []),
+          h('span', { class: 'dl-hint' }, t),
+        ]),
+      );
       options.dataset.tool = tool;
 
       controls.replaceChildren();

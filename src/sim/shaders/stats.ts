@@ -1,23 +1,27 @@
 /**
  * Readback reduction pass (runs only when a readback is due, ~3×/s — never per substep).
  *
- * Instead of mapping the whole rgba32float state (16 B/cell) plus the accounting buffer (8 B/cell) and looping
+ * Instead of mapping the whole rgba32float state (16 B/cell) plus the accounting buffer (12 B/cell) and looping
  * over millions of cells on the main thread, the GPU:
  *   • copies depth h into a compact storage buffer (4 B/cell) → SimSnapshot.depth, and
  *   • reduces everything else to one small record per 16×16 block (layout below).
  * The CPU then does one memcpy and a Float64 loop over N/256 blocks: ~1 ms at 1024² instead of ~20 ms.
  *
- * Per-block sums are Float32 over ≤ 256 cells (relative rounding ~1e-7), then summed in Float64 on the CPU,
- * so SimStats.volume / volumeIn / volumeOut / massError keep far more precision than the 1e-3 they report.
+ * Per-block sums of depth and of the accounting buffer are EXACT: each value is split into a part on the ULP grid of
+ * 512 × the block's largest value (these add up exactly in Float32) and the remainder (tiny; summed separately), and
+ * the CPU adds both in Float64. A plain Float32 running sum rounds every small value added to a large total the same
+ * way every readback: a stage disc's inflow (~100 m of depth per window) summed with its cells' rain (~1e-3 m) drifted
+ * massError by ~1e-5 per sim-hour in tests/sim/conservation.test.ts.
  * Non-finite values (possible only in 'naive' mode) are detected from the IEEE-754 bit pattern — not with
  * `x != x`, which an optimizing shader compiler may fold away — counted, and excluded from sums and maxima.
  */
-import { SIM_WGSL } from './common';
+import { ACC_PER_CELL, SIM_WGSL, SNAP_WGSL } from './common';
 import { FLOODED_DEPTH, WET_DEPTH } from '../constants';
 
 /** Float32 slots per 16×16 block in the stats buffer. */
-export const STATS_PER_BLOCK = 12;
+export const STATS_PER_BLOCK = 16;
 export const STAT = {
+  /** accX + accXLo and volume + volumeLo are the exact block sums (see header). */
   accIn: 0,
   accOut: 1,
   volume: 2,
@@ -32,6 +36,12 @@ export const STAT = {
   wetCells: 8,
   floodedCells: 9,
   nonFiniteCells: 10,
+  accInLo: 11,
+  accOutLo: 12,
+  volumeLo: 13,
+  /** Float32 rounding booked by the continuity pass (signed). */
+  accRound: 14,
+  accRoundLo: 15,
 } as const;
 
 const f = (x: number) => (Number.isInteger(x) ? `${x}.0` : String(x));
@@ -48,6 +58,7 @@ ${SIM_WGSL}
 
 const WET = ${f(WET_DEPTH)};
 const FLOODED = ${f(FLOODED_DEPTH)};
+${SNAP_WGSL}
 
 fn finite(x: f32) -> bool {
   return (bitcast<u32>(x) & 0x7f800000u) != 0x7f800000u;
@@ -61,9 +72,38 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
   let by = i32(id.y);
   if (bx >= bnx || by >= bny) { return; }
 
+  // First pass: the largest magnitudes, which fix the grid of the exact sums. Σ over 256 values ≤ 256·max < 512·max,
+  // so running sums of values snapped to the ULP grid of 512·max never round.
+  var mIn = 0.0;
+  var mOut = 0.0;
+  var mRound = 0.0;
+  var mH = 0.0;
+  for (var jj = 0; jj < 16; jj++) {
+    let j = by * 16 + jj;
+    for (var ii = 0; ii < 16; ii++) {
+      let i = bx * 16 + ii;
+      let c = u32(j) * u32(sim.nx) + u32(i);
+      let a = ${ACC_PER_CELL}u * c;
+      mIn = max(mIn, abs(acc[a]));
+      mOut = max(mOut, abs(acc[a + 1u]));
+      mRound = max(mRound, abs(acc[a + 2u]));
+      let h = textureLoad(exportTex, vec2i(i, j), 0).r;
+      if (finite(h)) { mH = max(mH, abs(h)); }
+    }
+  }
+  let eIn = ulpExp(512.0 * mIn);
+  let eOut = ulpExp(512.0 * mOut);
+  let eRound = ulpExp(512.0 * mRound);
+  let eH = ulpExp(512.0 * mH);
+
   var accIn = 0.0;
+  var accInLo = 0.0;
   var accOut = 0.0;
+  var accOutLo = 0.0;
+  var accRound = 0.0;
+  var accRoundLo = 0.0;
   var vol = 0.0;
+  var volLo = 0.0;
   var maxH = 0.0;
   var minH = 0.0;
   var maxSp2Wet = 0.0;
@@ -81,13 +121,26 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
       let t = textureLoad(exportTex, vec2i(i, j), 0);
       let h = t.r;
       depthOut[c] = h;
-      accIn = accIn + acc[2u * c];
-      accOut = accOut + acc[2u * c + 1u];
+      let a = ${ACC_PER_CELL}u * c;
+      let aI = acc[a];
+      let aO = acc[a + 1u];
+      let aR = acc[a + 2u];
+      let aIQ = snapE(aI, eIn);
+      let aOQ = snapE(aO, eOut);
+      let aRQ = snapE(aR, eRound);
+      accIn = accIn + aIQ;
+      accInLo = accInLo + (aI - aIQ);
+      accOut = accOut + aOQ;
+      accOutLo = accOutLo + (aO - aOQ);
+      accRound = accRound + aRQ;
+      accRoundLo = accRoundLo + (aR - aRQ);
       if (!finite(h)) {
         nonFinite = nonFinite + 1.0;
         continue;
       }
-      vol = vol + h;
+      let hQ = snapE(h, eH);
+      vol = vol + hQ;
+      volLo = volLo + (h - hQ);
       maxH = max(maxH, h);
       minH = min(minH, h);
       if (h >= sim.velDepth) {
@@ -121,5 +174,10 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
   blocks[o + ${STAT.wetCells}u] = wet;
   blocks[o + ${STAT.floodedCells}u] = flooded;
   blocks[o + ${STAT.nonFiniteCells}u] = nonFinite;
+  blocks[o + ${STAT.accInLo}u] = accInLo;
+  blocks[o + ${STAT.accOutLo}u] = accOutLo;
+  blocks[o + ${STAT.volumeLo}u] = volLo;
+  blocks[o + ${STAT.accRound}u] = accRound;
+  blocks[o + ${STAT.accRoundLo}u] = accRoundLo;
 }
 `;

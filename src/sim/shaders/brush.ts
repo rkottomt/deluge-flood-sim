@@ -11,6 +11,8 @@
  * When the bed rises under water, h is kept (the water is lifted) — simple and mass-conserving.
  * Water edits are accounted in the mass-balance buffer.
  */
+import { ACC_PER_CELL } from './common';
+
 export const BRUSH_UNIFORM_BYTES = 64;
 
 export const brushWGSL = /* wgsl */ `
@@ -66,7 +68,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     let before = h;
     h = max(0.0, h + br.value * falloff(d, r));
     let dv = h - before;
-    let idx = 2u * (u32(q.y) * u32(br.nx) + u32(q.x));
+    let idx = ${ACC_PER_CELL}u * (u32(q.y) * u32(br.nx) + u32(q.x));
     if (dv > 0.0) { acc[idx] = acc[idx] + dv; }
     if (dv < 0.0) { acc[idx + 1u] = acc[idx + 1u] - dv; }
   } else {

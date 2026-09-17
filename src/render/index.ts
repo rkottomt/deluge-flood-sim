@@ -355,6 +355,11 @@ class DelugeRenderer implements DelugeRendererAPI {
       minElev: s?.groundMin ?? 0,
       maxElev: s?.groundMax ?? 100,
       heightAt: (gx, gy) => (this.scene ? this.scene.hf.heightAt(gx, gy) : null),
+      // The imagery covers the grid exactly; its coarser axis sets the texel size.
+      imageryMetersPerTexel:
+        s?.hasImagery && s.imageryTex.width > 0 && s.imageryTex.height > 0
+          ? Math.max((s.nx * s.terrain.cellSize) / s.imageryTex.width, (s.ny * s.terrain.cellSize) / s.imageryTex.height)
+          : null,
       pickWorld: (x, y) => {
         const hit = this.pick(x, y);
         return hit ? { gx: hit.gx, gy: hit.gy, elevation: hit.elevation } : null;

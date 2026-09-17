@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { HeightField, meshStride } from '../../src/render/heightfield';
 import { cameraRay, intersectHeightfield, pickTerrain } from '../../src/render/picking';
-import { OrbitController, type CameraEnvironment } from '../../src/render/camera';
+import { minCameraDistance, OrbitController, type CameraEnvironment } from '../../src/render/camera';
 import { transformPoint4 } from '../../src/render/math';
 import { frustumPlanes, LodTree, LOD_INSTANCE_FLOATS, LOD_PATCH } from '../../src/render/lod';
 import { bandsForMode, cssToLinear, DEPTH_BANDS, MAX_DEPTH_BANDS, VELOCITY_BANDS } from '../../src/render/legend';
@@ -197,6 +197,63 @@ test('orbit camera: yaw/pitch conventions, clearance, flyTo, topDown, frameAll',
   cam.update(0);
   const p = cam.pose;
   assert.ok(Number.isFinite(p.target.gx) && p.distance > 0 && Number.isFinite(p.yaw) && p.pitch <= Math.PI / 2);
+});
+
+test('orbit camera: zoom limits follow the data resolution and the framed map size', () => {
+  const { ground, barrier } = makeTerrain();
+  const hf = new HeightField(N, N, CELL, ground, barrier, 1);
+  // No imagery: the grid alone sets the limit; 1.95 m imagery texels push it out (a texel stays ≥ ~10 px).
+  assert.equal(minCameraDistance(8), 128);
+  assert.equal(minCameraDistance(2), 120);
+  assert.ok(Math.abs(minCameraDistance(7.8125, 8000 / 4096) - 195.3) < 0.1);
+  assert.equal(minCameraDistance(8, null), 128);
+  const cam = new OrbitController({ ...env(hf, 1.5), imageryMetersPerTexel: 2 });
+  cam.aspect = 1.54;
+  assert.equal(cam.minDistance(), 200);
+  const framed = cam.framingPose().distance;
+  assert.ok(Math.abs(cam.maxDistance() - 2 * framed) < 1e-6);
+  cam.pose = { target: { gx: 128, gy: 128, elevation: 200 }, distance: 1000, yaw: 0.3, pitch: 0.8 };
+  cam.update(0);
+  // Wheel zoom stops at both limits.
+  for (let i = 0; i < 60; i++) cam.zoomAt(800, 500, 0.7);
+  for (let i = 0; i < 120; i++) cam.update(1 / 60);
+  assert.ok(Math.abs(cam.pose.distance - 200) < 1e-3, `zoomed in to ${cam.pose.distance}`);
+  for (let i = 0; i < 60; i++) cam.zoomAt(800, 500, 1.5);
+  for (let i = 0; i < 120; i++) cam.update(1 / 60);
+  assert.ok(Math.abs(cam.pose.distance - 2 * framed) < 1e-3 * framed, `zoomed out to ${cam.pose.distance}`);
+  // Poses set from outside are clamped too.
+  cam.pose = { target: { gx: 128, gy: 128, elevation: 200 }, distance: 50_000, yaw: 0.3, pitch: 0.8 };
+  cam.update(0);
+  assert.ok(cam.pose.distance <= 2 * framed + 1e-6);
+  // A new environment (e.g. a different exaggeration) recomputes the far limit.
+  cam.setEnvironment({ ...env(hf, 6), imageryMetersPerTexel: 2 });
+  assert.ok(Math.abs(cam.maxDistance() - 2 * cam.framingPose().distance) < 1e-6);
+});
+
+test('orbit camera: top-down during a flight looks down on the flight target', () => {
+  const { ground, barrier } = makeTerrain();
+  const hf = new HeightField(N, N, CELL, ground, barrier, 1);
+  const cam = new OrbitController(env(hf, 1.5));
+  cam.aspect = 1.54;
+  // Panned off the map and zoomed out, then F and T 350 ms apart.
+  cam.pose = { target: { gx: -40, gy: 300, elevation: 200 }, distance: cam.maxDistance(), yaw: 1.2, pitch: 0.5 };
+  cam.update(0);
+  const framing = cam.framingPose();
+  cam.frameAll();
+  for (let i = 0; i < 21; i++) cam.update(1 / 60);
+  cam.topDown();
+  for (let i = 0; i < 120; i++) cam.update(1 / 60);
+  const p = cam.pose;
+  assert.ok(Math.abs(p.pitch - Math.PI / 2) < 1e-6);
+  assert.ok(Math.abs(p.target.gx - framing.target.gx) < 1e-6 && Math.abs(p.target.gy - framing.target.gy) < 1e-6);
+  assert.ok(Math.abs(p.distance - framing.distance) < 1e-6 * framing.distance, `distance ${p.distance} vs ${framing.distance}`);
+  // Top-down from a target panned outside the map comes back onto the map's edge.
+  cam.pose = { target: { gx: -50, gy: N + 30, elevation: 200 }, distance: 2000, yaw: 0, pitch: 0.7 };
+  cam.update(0);
+  cam.topDown();
+  for (let i = 0; i < 120; i++) cam.update(1 / 60);
+  assert.ok(cam.pose.target.gx === 0 && cam.pose.target.gy === N, `target ${cam.pose.target.gx},${cam.pose.target.gy}`);
+  assert.ok(Math.abs(cam.pose.target.elevation - hf.heightAt(0, N)) < 1e-6);
 });
 
 test('reversed-Z projection keeps depth precision over a 10 km domain', () => {

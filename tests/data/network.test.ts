@@ -69,12 +69,19 @@ test('a download whose body stalls fails after stallMs, while a slow but moving 
   assert.deepEqual([...new Uint8Array(buf)], [1, 2, 3, 4, 5], '300 ms total at 60 ms per chunk is not a stall');
 });
 
-test('elevation services unreachable (wifi off): a clear network message, not "open water"', async () => {
+test('elevation services unreachable (wifi off): a clear network message, not "open water"', async (t) => {
+  // The 3DEP → Terrarium fallback logs a warning with the network error's stack; capture it (restored after the test)
+  // so a passing run prints no stack trace, and check the fallback was really taken.
+  const warn = t.mock.method(console, 'warn', () => {});
   const { merc } = squareDomain({ lat: 40.44, lon: -80 }, 2000);
   const offline = (() => Promise.reject(new TypeError('Failed to fetch'))) as typeof fetch;
   const msg = await withFetch(offline, () => fetchDEM(merc, 64, 64, 2000 / 64).then(() => 'loaded', (e: Error) => e.message));
   assert.equal(msg, ELEVATION_UNREACHABLE_MESSAGE);
   assert.match(msg, /Can.t reach the elevation service/);
+  assert.ok(
+    warn.mock.calls.some((c) => /falling back to Terrarium/.test(String(c.arguments[0]))),
+    `expected the Terrarium fallback warning, got ${JSON.stringify(warn.mock.calls.map((c) => String(c.arguments[0])))}`,
+  );
 });
 
 test('a live load on a network that never answers can be cancelled at once', async () => {

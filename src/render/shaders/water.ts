@@ -271,7 +271,15 @@ fn fsWater(in: WOut) -> @location(0) vec4f {
   // Floodwater on land: sediment-laden and effectively opaque within a few decimetres, a lighter khaki-brown sheet
   // that stands apart from roofs, asphalt and trees, with a pale wet line along its advancing edge.
   let path = thick / max(nv, 0.2);
-  let T = exp(-mix(vec3f(2.0, 2.4, 3.1), vec3f(9.0, 9.5, 10.5), floodLand) * path);
+  // River water vs floodwater colour and clarity blend over the soft ramp (5×5 box average, 0.5 on the old bank):
+  // the exact per-cell mask would draw the seam between them as a staircase of 8 m cells. Full river colour from the
+  // bank line inward, fading out over ~2 cells of flooded land, the edge jittered by the advected slick noise so it
+  // reads as a turbid mixing line drifting with the current. Creeks narrower than the ramp keep the exact mask. The
+  // exact mask still decides the hazard colours, the rain film and the wet edge below.
+  let seamJitter = ((rM.w - 0.5) * 0.7 + (slickFar - 0.5)) * 0.14;
+  let riverMix = select(0.0, max(smoothstep(0.0, 0.5, nw.g + seamJitter), nw.r * (1.0 - smoothstep(0.3, 0.5, nw.g))), F.wall.w > 0.5);
+  let floodMix = 1.0 - riverMix;
+  let T = exp(-mix(vec3f(2.0, 2.4, 3.1), vec3f(9.0, 9.5, 10.5), floodMix) * path);
   let tAvg = dot(T, vec3f(0.3333));
   let deep = smoothstep(0.8, 6.0, thick);
   // Advected slicks / sediment plumes: low-frequency brightness variation that makes the current visible from afar.
@@ -279,7 +287,7 @@ fn fsWater(in: WOut) -> @location(0) vec4f {
   let slick = ((rM.w - 0.5) * 0.6 + (slickFar - 0.5) * 0.8 + (rA.w - 0.5) * 0.3 * detailFade) * 0.55;
   let riverSed = mix(vec3f(0.115, 0.088, 0.054), vec3f(0.032, 0.040, 0.027), deep);
   let floodSed = mix(vec3f(0.185, 0.150, 0.095), vec3f(0.130, 0.112, 0.076), smoothstep(0.5, 5.0, thick));
-  let sediment = mix(riverSed, floodSed, floodLand) * (1.0 + slick * mix(0.6, 1.0, turbulence));
+  let sediment = mix(riverSed, floodSed, floodMix) * (1.0 + slick * mix(0.6, 1.0, turbulence));
   let body = sediment * lightIn;
   // Thin rain sheet-flow (a few cm over grass or pavement) is not visible from the air: fade it in with depth.
   let film = mix(1.0, smoothstep(0.012, 0.06, thick), floodLand);

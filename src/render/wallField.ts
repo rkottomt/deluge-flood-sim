@@ -7,8 +7,9 @@
  * Walls are a raster (the solver's barrier heights), edited by brushes on the CPU mirror. The field is rebuilt
  * incrementally on the CPU: per-block checksums of the barrier mirror are scanned under a cell budget each frame
  * (plus "hot" regions under the brush cursor / a just-committed wall preview, scanned every frame), and only
- * changed blocks — expanded by the radius — are recomputed with an exact bounded 2-pass Euclidean distance
- * transform and uploaded as a sub-rectangle.
+ * changed blocks — expanded by the radius — are recomputed and uploaded as a sub-rectangle. Distances are measured
+ * to the wall's sub-cell outline (see compute), so a wall drawn at an angle gets straight edges instead of a
+ * staircase of cells.
  */
 
 /** Maximum distance (cells) the field resolves; beyond it a texel reads as "no wall nearby". */
@@ -48,7 +49,7 @@ export function toHalf(v: number): number {
 /** Recomputed field values over a rectangle (row-major, rect-sized). */
 export interface FieldPatch {
   rect: Rect;
-  /** Distance (cells) to the nearest wall cell centre, capped at radius + 1. */
+  /** Distance (cells) to the nearest wall, as a cell-centre distance corrected to the sub-cell outline; radius + 1 when none. */
   dist: Float32Array;
   /** Height (m) of the nearest wall (0 when none). */
   height: Float32Array;
@@ -129,12 +130,14 @@ export class WallField {
     const d = this.dirty;
     if (!d) return null;
     this.dirty = null;
-    const R = this.radius;
+    // A changed cell changes which cells are walls within 1 cell (the half-local-maximum test), outline status and
+    // insets within 2, and those outline cells reach radius + 1 further.
+    const pad = this.radius + 3;
     const out: Rect = {
-      x0: Math.max(0, d.x0 - R - 1),
-      y0: Math.max(0, d.y0 - R - 1),
-      x1: Math.min(this.nx, d.x1 + R + 1),
-      y1: Math.min(this.ny, d.y1 + R + 1),
+      x0: Math.max(0, d.x0 - pad),
+      y0: Math.max(0, d.y0 - pad),
+      x1: Math.min(this.nx, d.x1 + pad),
+      y1: Math.min(this.ny, d.y1 + pad),
     };
     const patch = this.compute(out);
     let any = false;
@@ -202,112 +205,97 @@ export class WallField {
   }
 
   /**
-   * Exact Euclidean distance transform bounded by the radius, over `out`: pass 1 finds the horizontal distance to
-   * the nearest wall cell in each row (two sweeps), pass 2 minimises hd(x, y+dy)² + dy² over |dy| ≤ R.
+   * Distance field over `out`, measured to the wall's sub-cell outline rather than to the centres of its raster cells.
+   * Distances to cell centres step with the raster: a stroke drawn at a shallow angle is two cells thick here and
+   * three there, and the drawn crest, faces and casing would trace those steps. The brush leaves a smooth falloff
+   * in the barrier heights along the stroke's edges, so for every outline cell (a wall cell with a non-wall
+   * 4-neighbour) the gradient of height / local wall height gives how far past its centre the half-height contour
+   * lies (its inset, 0–1 cells; 0.5 for a hard edge). A cell p then gets the distance
+   *
+   *   min over outline cells c of  |p − c| + 0.5 − inset(c)     (clamped at 0; 0 inside the wall)
+   *
+   * which equals the exact distance to cell centres for hard-edged axis-aligned walls, and otherwise follows the
+   * contour within a small fraction of a cell. Each outline cell stamps its disc of radius + 1 cells.
    */
   private compute(out: Rect): FieldPatch {
     const R = this.radius;
     const { nx, ny, ground, barrier } = this;
     const cap = R + 1;
-    const rx0 = Math.max(0, out.x0 - R);
-    const rx1 = Math.min(nx, out.x1 + R);
-    const ry0 = Math.max(0, out.y0 - R);
-    const ry1 = Math.min(ny, out.y1 + R);
+    const reach = R + 1;
     const w = out.x1 - out.x0;
-    const rows = ry1 - ry0;
-    // Per-row horizontal pass: distance, height and crest of the nearest wall cell in the same row.
-    const hd = new Float32Array(w * rows);
-    const hh = new Float32Array(w * rows);
-    const hc = new Float32Array(w * rows);
-    const rowHas = new Uint8Array(rows);
-    const rw = rx1 - rx0;
-    const lastPos = new Int32Array(rw);
-    const isWall = new Uint8Array(rw);
-    for (let r = 0; r < rows; r++) {
-      const j = ry0 + r;
-      let has = false;
-      for (let x = rx0; x < rx1; x++) {
-        const wall = this.isWallCell(x, j);
-        isWall[x - rx0] = wall ? 1 : 0;
-        if (wall) has = true;
-      }
-      const o = r * w;
-      if (!has) {
-        hd.fill(cap, o, o + w);
-        continue;
-      }
-      rowHas[r] = 1;
-      // Left → right: nearest wall at or before x.
-      let last = -1_000_000;
-      for (let x = rx0; x < rx1; x++) {
-        if (isWall[x - rx0]) last = x;
-        lastPos[x - rx0] = last;
-      }
-      for (let x = out.x0; x < out.x1; x++) {
-        hd[o + x - out.x0] = Math.min(cap, x - lastPos[x - rx0]);
-        hc[o + x - out.x0] = lastPos[x - rx0];
-      }
-      // Right → left.
-      last = 1_000_000;
-      for (let x = rx1 - 1; x >= rx0; x--) {
-        if (isWall[x - rx0]) last = x;
-        if (x >= out.x0 && x < out.x1) {
-          const k = o + x - out.x0;
-          if (last - x < hd[k]) {
-            hd[k] = Math.min(cap, last - x);
-            hc[k] = last;
-          }
-        }
-      }
-      // Wall height + crest of the chosen wall cell (hc temporarily holds its column).
-      for (let x = out.x0; x < out.x1; x++) {
-        const k = o + x - out.x0;
-        if (hd[k] <= R) {
-          const wx = hc[k];
-          const b = this.localMax(wx, j);
-          hh[k] = b;
-          hc[k] = ground[j * nx + wx] + barrier[j * nx + wx];
-        } else {
-          hh[k] = 0;
-          hc[k] = 0;
-        }
-      }
-    }
-    // Prefix counts of rows with walls, to skip empty windows.
-    const pre = new Int32Array(rows + 1);
-    for (let r = 0; r < rows; r++) pre[r + 1] = pre[r] + rowHas[r];
     const h = out.y1 - out.y0;
     const dist = new Float32Array(w * h).fill(cap);
     const height = new Float32Array(w * h);
     const crest = new Float32Array(w * h);
-    for (let y = out.y0; y < out.y1; y++) {
-      const r = y - ry0;
-      const a = Math.max(0, r - R);
-      const b = Math.min(rows - 1, r + R);
-      const row = (y - out.y0) * w - out.x0;
-      if (pre[b + 1] - pre[a] === 0) continue;
-      for (let x = out.x0; x < out.x1; x++) {
-        let best = cap * cap;
-        let bh = 0;
-        let bc = 0;
-        const c = x - out.x0;
-        for (let rr = a; rr <= b; rr++) {
-          if (!rowHas[rr]) continue;
-          const h = hd[rr * w + c];
-          if (h > R) continue;
-          const dy = rr - r;
-          const d2 = h * h + dy * dy;
-          if (d2 < best) {
-            best = d2;
-            bh = hh[rr * w + c];
-            bc = hc[rr * w + c];
+    // Wall cells that can reach `out`, plus a one-cell border for the outline test.
+    const gx0 = Math.max(0, out.x0 - reach);
+    const gx1 = Math.min(nx, out.x1 + reach);
+    const gy0 = Math.max(0, out.y0 - reach);
+    const gy1 = Math.min(ny, out.y1 + reach);
+    const mx0 = Math.max(0, gx0 - 1);
+    const my0 = Math.max(0, gy0 - 1);
+    const mw = Math.min(nx, gx1 + 1) - mx0;
+    const mh = Math.min(ny, gy1 + 1) - my0;
+    const mask = new Uint8Array(mw * mh);
+    let any = false;
+    for (let j = 0; j < mh; j++) {
+      for (let i = 0; i < mw; i++) {
+        if (this.isWallCell(mx0 + i, my0 + j)) {
+          mask[j * mw + i] = 1;
+          any = true;
+        }
+      }
+    }
+    if (!any) return { rect: out, dist, height, crest };
+    const wallAt = (i: number, j: number) => {
+      const x = i - mx0;
+      const y = j - my0;
+      return x >= 0 && y >= 0 && x < mw && y < mh && mask[y * mw + x] === 1;
+    };
+    // Distances of the stamp offsets.
+    const side = 2 * reach + 1;
+    const disc = new Float32Array(side * side);
+    for (let dy = -reach; dy <= reach; dy++) for (let dx = -reach; dx <= reach; dx++) disc[(dy + reach) * side + dx + reach] = Math.hypot(dx, dy);
+    const rel = (x: number, y: number, hLoc: number) => (x < 0 || y < 0 || x >= nx || y >= ny ? 0 : Math.min(1, barrier[y * nx + x] / hLoc));
+    for (let j = gy0; j < gy1; j++) {
+      for (let i = gx0; i < gx1; i++) {
+        if (!wallAt(i, j)) continue;
+        const c = j * nx + i;
+        const hLoc = this.localMax(i, j);
+        const top = ground[c] + barrier[c];
+        const inOut = i >= out.x0 && i < out.x1 && j >= out.y0 && j < out.y1;
+        if (wallAt(i - 1, j) && wallAt(i + 1, j) && wallAt(i, j - 1) && wallAt(i, j + 1)) {
+          if (inOut) {
+            const k = (j - out.y0) * w + (i - out.x0);
+            dist[k] = 0;
+            height[k] = hLoc;
+            crest[k] = top;
+          }
+          continue;
+        }
+        const v = rel(i, j, hLoc);
+        const gx = v - Math.min(rel(i - 1, j, hLoc), rel(i + 1, j, hLoc));
+        const gy = v - Math.min(rel(i, j - 1, hLoc), rel(i, j + 1, hLoc));
+        const g = Math.hypot(gx, gy);
+        const inset = g > 1e-6 ? Math.min(1, Math.max(0, (v - 0.5) / g)) : 0.5;
+        const offset = 0.5 - inset;
+        const sx0 = Math.max(out.x0, i - reach);
+        const sx1 = Math.min(out.x1, i + reach + 1);
+        const sy0 = Math.max(out.y0, j - reach);
+        const sy1 = Math.min(out.y1, j + reach + 1);
+        for (let y = sy0; y < sy1; y++) {
+          const drow = (y - j + reach) * side - i + reach;
+          const orow = (y - out.y0) * w - out.x0;
+          for (let x = sx0; x < sx1; x++) {
+            const d = Math.max(0, disc[drow + x] + offset);
+            const k = orow + x;
+            if (d < dist[k] && d <= R) {
+              dist[k] = d;
+              height[k] = hLoc;
+              crest[k] = top;
+            }
           }
         }
-        const dd = Math.sqrt(best);
-        if (dd > R) continue;
-        dist[row + x] = dd;
-        height[row + x] = bh;
-        crest[row + x] = bc;
       }
     }
     return { rect: out, dist, height, crest };

@@ -11,6 +11,12 @@
  */
 import { MAX_SOURCES, MAX_STORMS } from '../constants';
 
+/**
+ * Accounting buffer slots per cell (Float32, depth units): [0] in (rain, inflow, stage, brush, raise), [1] out (open
+ * boundaries, infiltration, stage, brush), [2] Float32 rounding booked by the continuity pass (signed; see continuity.ts).
+ */
+export const ACC_PER_CELL = 3;
+
 /** Byte size of the `Sim` uniform (keep in sync with SIM_WGSL and packSimUniform in Solver.ts). */
 export const SIM_UNIFORM_BYTES = 112;
 /** Byte size of the `Forcing` uniform. */
@@ -109,5 +115,29 @@ fn bflux(h: f32, i: i32, j: i32, di: i32, dj: i32) -> f32 {
     q = min(q, h * min(sim.uMax, sim.bFrMax * sqrt(sim.g * h)));
   }
   return q;
+}
+`;
+
+/**
+ * Exact Float32 bookkeeping (shaders/continuity.ts, shaders/stats.ts). Needs no bindings.
+ *
+ * snapE(d, e) rounds d to a multiple of 2^(e − 150), the ULP of Float32 values whose biased exponent is e; ulpExp(m) is
+ * that exponent for |m|. Values on the grid of the LARGEST of them add up exactly (as long as the sum stays below the
+ * next power of two), and x − snapE(x, e) is exact. Why not simply measure (a + d) − a: shader compilers reassociate
+ * float math (Metal folds it to d, hiding the rounding), while round() is opaque to them.
+ * The grid is kept ≥ 2^-126 (a normal float): Apple GPUs flush subnormals to zero, and d / 0 then made NaN for
+ * d ≈ 1e-35. The powers of two are built from bits (exact) and applied by multiplication. Non-finite values stay
+ * non-finite (naive mode must still visibly blow up).
+ */
+export const SNAP_WGSL = /* wgsl */ `
+fn ulpExp(m: f32) -> i32 {
+  return max(i32((bitcast<u32>(abs(m)) >> 23u) & 0xffu), 24);
+}
+fn snapE(d: f32, e: i32) -> f32 {
+  return round(d * bitcast<f32>(u32(277 - e) << 23u)) * bitcast<f32>(u32(e - 23) << 23u);
+}
+// d on the grid of max(|a|, |d|): a + snapInc(a, d) is exact whenever |a| ≥ |d|.
+fn snapInc(a: f32, d: f32) -> f32 {
+  return snapE(d, ulpExp(max(abs(a), abs(d))));
 }
 `;

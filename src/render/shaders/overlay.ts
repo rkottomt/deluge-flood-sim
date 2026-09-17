@@ -73,7 +73,8 @@ fn vsRibbon(v: RIn) -> ROut {
     let far = mix(vec2f(1.0, 2.6), vec2f(0.35, 1.1), F.opts.x) * F.domainSize;
     let fade = mix(1.0 - smoothstep(far.x, far.y, d0), 1.0, importance);
     if (st == 0u) { color = vec4f(0.93, 0.92, 0.88, O.roadAlpha * fade); minHalfPx = mix(0.7, 1.1, importance); }
-    else if (st == 1u) { color = vec4f(1.0, 0.55, 0.05, 0.9 * mix(fade, 1.0, 0.5)); minHalfPx = 1.2; }
+    // Wet (passable, slow): orange, clear of both the golden sandbag walls the user builds and the red flooded lines.
+    else if (st == 1u) { color = vec4f(1.35, 0.34, 0.03, 0.9 * mix(fade, 1.0, 0.5)); minHalfPx = 1.2; }
     else {
       // Flooded (impassable) roads lie under the flood itself, which already says "flooded": draw them as thin
       // dashed centre lines that do not hide the water, minor streets fading with distance. A real-width ribbon
@@ -84,16 +85,22 @@ fn vsRibbon(v: RIn) -> ROut {
       // never read as one of the red speed bands.
       let emph = O.evacActive;
       let hazardMap = O.waterMode > 0.5;
-      let rgb = select(vec3f(0.95, 0.16, 0.10), vec3f(0.10, 0.10, 0.12), hazardMap);
+      // HDR red: a thin line needs a brighter colour than a wide ribbon to read (the tone mapper maps 1.0 to mid-grey).
+      let rgb = select(vec3f(2.4, 0.30, 0.22), vec3f(0.10, 0.10, 0.12), hazardMap);
+      // Strongest at mid range; from the overview a whole flooded district of them would net the flood in red.
       let near = mix(mix(0.45, 1.0, smoothstep(350.0, 1500.0, d0)), 1.0, emph);
-      let a = mix(0.5, 0.8, emph) * mix(fade * mix(0.55, 1.0, importance), 1.0, emph * importance) * near;
+      let farOff = smoothstep(1500.0, 7000.0, d0);
+      let a = mix(0.72, 0.92, emph) * mix(fade * mix(0.6, 1.0, importance), 1.0, emph * importance) * near
+            * (1.0 - farOff * mix(0.5, 0.3, emph));
       color = vec4f(rgb, a);
       // Pixel limits measured across the line on screen: a street seen at a grazing angle across the view is
       // foreshortened by the sine of the view elevation, and a fixed ground width would thin it to nothing.
       let across = dot(vec3f(perp.x, 0.0, perp.y), toCenter / max(d0, 1e-3));
       let pxM = d0 * F.elev.w / max(sqrt(max(1.0 - across * across, 0.0)), 0.3);
       minHalfPx = 0.0;
-      halfW = clamp(0.3 * v.attr.z, mix(0.8, 1.0, importance) * mix(1.0, 1.25, emph) * pxM, mix(1.3, 1.7, emph) * pxM);
+      let evacScale = mix(1.0, 1.25, emph);
+      let minPx = mix(mix(1.05, 1.3, importance), mix(0.6, 0.95, importance), farOff) * evacScale;
+      halfW = clamp(0.3 * v.attr.z, minPx * pxM, max(1.6 * evacScale, minPx) * pxM);
       coreFrac = 0.0; // flag for the fragment shader: dashed
     }
   } else if (kind == 1u) {
@@ -146,8 +153,9 @@ fn fsRibbon(in: ROut) -> @location(0) vec4f {
   let dashFw = max(fwidth(in.along) / dashLen, 1e-4);
   if (in.kind == 0u) {
     if (in.coreFrac < 0.5) {
-      // Flooded road: dashes ~7–15 px long every ~12–24 px, no casing.
-      let body = 1.0 - smoothstep(1.0 - aw * 1.5, 1.0, a);
+      // Flooded road: dashes ~7–15 px long every ~12–24 px, no casing. The line is only 2–4 px wide, so its
+      // anti-aliased edge sits mostly outside the core (a centred ramp would halve its coverage).
+      let body = 1.0 - smoothstep(1.0 - aw * 0.8, 1.0 + aw * 0.3, a);
       let dash = mix(dashPattern(in.along / dashLen, dashFw), dashPattern(in.along / (2.0 * dashLen), dashFw * 0.5), dashMix);
       let alpha = in.color.a * body * mix(dash, 0.6, smoothstep(0.3, 0.6, dashFw)) * (1.0 - haze * 0.7);
       return vec4f(in.color.rgb * alpha, alpha);

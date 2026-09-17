@@ -4,7 +4,7 @@
  * Baked files:
  *   meta.json      PresetMeta (grid, bounds, attribution, scenario, provenance)
  *   elevation.f32  nx·ny little-endian Float32, row-major (north row first), hydro-conditioned
- *   imagery.jpg    Esri World Imagery covering exactly `bounds`, north-up
+ *   imagery.jpg    USDA NAIP aerial imagery covering exactly `bounds`, north-up
  *   roads.json     CompactRoads (see roads.ts)
  */
 import type { GeoBounds, PresetInfo, ProgressFn, ScenarioPreset, TerrainData } from '../contracts';
@@ -15,7 +15,7 @@ import { generateSandbox, SANDBOX_NAME } from './sandbox';
 
 export const PRESETS: PresetInfo[] = [
   { id: 'pittsburgh', name: 'Pittsburgh — Three Rivers', subtitle: "1936 St. Patrick's Day flood — raise the rivers" },
-  { id: 'johnstown', name: 'Johnstown — Conemaugh Valley', subtitle: 'The Flood City — 1936 peak flows in the concrete channels' },
+  { id: 'johnstown', name: 'Johnstown — Conemaugh Valley', subtitle: "The Flood City — the 1889 flood in today's valley" },
   { id: 'ellicott', name: 'Ellicott City — Main Street', subtitle: 'Flash floods of 2016 & 2018 — a storm over the Tiber branch' },
   { id: 'sandbox', name: SANDBOX_NAME, subtitle: 'Offline sandbox — river town, reservoir and dam' },
 ];
