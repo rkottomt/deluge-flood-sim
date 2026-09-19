@@ -474,10 +474,13 @@ fn fsWater(in: WOut) -> @location(0) vec4f {
   var sky = skyReflection(R);
   let cine = cinematicTier();
   // Below a few per cent the reflection is invisible under the body colour — and a near-vertical view of a river
-  // is exactly that case — so the march is paid for only where it can be seen, at grazing angles.
-  let reflGate = select(0.055, 0.03, cine);
-  if (fres > reflGate && in.skirt < 0.5) {
-    let h = marchReflection(in.world, R, max(0.9 * F.cellSize, 1.5 * pixelFoot), select(12, 20, cine), select(4, 6, cine));
+  // is exactly that case — so the march is paid for only where it can be seen: at grazing angles, and not on
+  // water so far away that the whole reflection is a couple of pixels. The Cinematic tier lowers the angle it
+  // starts at and nearly doubles the steps, which is what buys the long, sharp reflections in a hero still.
+  let reflGate = select(0.075, 0.03, cine);
+  let reflRange = select(8.0, 40.0, cine);
+  if (fres > reflGate && in.skirt < 0.5 && pixelFoot < reflRange) {
+    let h = marchReflection(in.world, R, max(0.9 * F.cellSize, 1.5 * pixelFoot), select(10, 20, cine), select(3, 6, cine));
     if (h.hit > 0.5) {
       // Rough water scatters what it reflects, so a choppy river reflects a blurred hillside: widen the mip
       // footprint with the chop rather than taking more taps.
