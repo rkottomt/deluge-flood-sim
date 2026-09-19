@@ -134,7 +134,7 @@ export class SunShading {
     const usage = GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING;
     // COPY_SRC so tests (and any future debug view) can read the raster back and check it against the height field.
     this.texture = device.createTexture({ label: 'sun-visibility', size: [nx, ny], format: 'rgba8unorm', usage: usage | GPUTextureUsage.COPY_SRC });
-    // rg32float: the occluder height field and the bare street under it (see SUN_HEIGHT_WGSL).
+    // rg32float: r = everything that blocks the sun (buildings included), g = the land alone (see SUN_HEIGHT_WGSL).
     this.heightTex = device.createTexture({ label: 'sun-height', size: [nx, ny], format: 'rg32float', usage });
     this.noBuildings = device.createTexture({ label: 'sun-no-buildings', size: [1, 1], format: 'r32float', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
     device.queue.writeTexture({ texture: this.noBuildings }, new Float32Array([0]), { bytesPerRow: 4 }, { width: 1, height: 1 });

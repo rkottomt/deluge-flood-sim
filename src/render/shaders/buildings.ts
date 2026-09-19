@@ -44,6 +44,10 @@ export const IMAGERY_ROOF_FADE = 34;
 export const BUILDING_AMBIENT = 1.45;
 /** Fraction of the sun's beam that reaches a wall having bounced off the ground and the buildings around it. */
 export const URBAN_BOUNCE = 0.18;
+/** Extinction of flood water, per metre of path. Muddy river water, not a swimming pool. */
+export const MUD_EXTINCTION = 0.62;
+/** Depth (m) past which a submerged surface is dropped outright and the water pass owns the pixel. */
+export const SUBMERGED_CUT = 2.2;
 
 export const BUILDINGS_WGSL = /* wgsl */ `
 ${FRAME_WGSL}
@@ -69,6 +73,10 @@ ${VTX_SAMPLE_WGSL}
 
 const BUILDING_AMBIENT: f32 = ${BUILDING_AMBIENT.toFixed(3)};
 const URBAN_BOUNCE: f32 = ${URBAN_BOUNCE.toFixed(3)};
+const MUD_EXTINCTION: f32 = ${MUD_EXTINCTION.toFixed(3)};
+const SUBMERGED_CUT: f32 = ${SUBMERGED_CUT.toFixed(3)};
+/** What is left when the flood is deep enough to swallow a wall whole. */
+const DEEP_FLOOD: vec3f = vec3f(0.013, 0.017, 0.014);
 
 struct VIn {
   @location(0) p: vec3f,    // grid x, elevation (m, no exaggeration), grid y
@@ -277,8 +285,10 @@ fn fsBuilding(in: VOut) -> @location(0) vec4f {
       let mull = abs(fract(along / (1.35 + 0.5 * fract(seed * 13.0))) - 0.5) * 2.0;
       // The glazing is darker than the spandrel between floors; mullions and floor edges catch the light. Kept
       // deliberately quiet — at this scale the job is to break the flatness, not to draw windows.
-      let glass = (1.0 - smoothstep(0.25, 0.62, band)) * bandFade;
-      let frame = smoothstep(0.74, 0.96, mull) * mullFade + smoothstep(0.66, 0.92, band) * bandFade;
+      // A crisp-ish split rather than a sine: the glazing is a band, the spandrel between floors is a band, and
+      // the line where they meet is what the eye reads as a storey.
+      let glass = (1.0 - smoothstep(0.28, 0.46, band)) * bandFade;
+      let frame = smoothstep(0.80, 0.97, mull) * mullFade + smoothstep(0.80, 0.96, band) * bandFade;
       let tint = mix(vec3f(0.115, 0.115, 0.120), vec3f(0.070, 0.085, 0.100), smoothstep(12.0, 55.0, bh));
       albedo = mix(albedo, tint, glass * (0.10 + 0.16 * smoothstep(10.0, 45.0, bh)));
       albedo *= 1.0 + clamp(frame, 0.0, 1.0) * 0.05;
@@ -302,13 +312,13 @@ fn fsBuilding(in: VOut) -> @location(0) vec4f {
   let baseAO = mix(1.0 - 0.34 * B.style.w, 1.0, smoothstep(0.0, aoReach, aboveGround));
 
   var foam = 0.0;
+  var submerged = 0.0;
   if (hasWater) {
     let dw = elevM - surfY;
-    // Wet, dark masonry for a metre and a half above the line, muddy attenuation below it.
+    // Wet, dark masonry for a metre and a half above the line.
     let wetBand = (1.0 - smoothstep(0.0, max(1.7, pxM * 3.0), dw)) * step(0.0, dw);
     albedo *= mix(1.0, 0.46, wetBand * B.water.x);
-    let submerge = clamp(-dw, 0.0, 6.0);
-    albedo = mix(albedo, vec3f(0.085, 0.070, 0.050), clamp(submerge * 0.30, 0.0, 0.72) * B.water.w);
+    submerged = max(-dw, 0.0);
     // Foam at the contact line: a band that breathes along the wall rather than a painted stripe.
     let tangent = vec2f(n.z, -n.x);
     let along = dot(in.world.xz, tangent);
@@ -325,31 +335,35 @@ fn fsBuilding(in: VOut) -> @location(0) vec4f {
   }
   albedo *= baseAO;
 
-  // Hazard modes: the legend owns the colour, so the city goes neutral and stays out of its way.
-  albedo = mix(albedo, vec3f(luminance(albedo)) * 1.04, B.lod.w);
+  // Hazard modes: the legend owns the colour, so the city goes to one flat mid grey and stays out of its way —
+  // not a desaturated version of itself, which would leave a dark brick rowhouse reading as a black hole next to
+  // the depth ramp.
+  albedo = mix(albedo, vec3f(0.30, 0.305, 0.31), B.lod.w * 0.92);
   gloss *= 1.0 - B.lod.w * 0.7;
 
   // ── Lighting ───────────────────────────────────────────────────────────────────────────────
-  // The sun-shading raster carries four numbers per cell: sun and sky visibility at the GROUND, and the same two
-  // at roof level (buildings are in the occluder field, so both are real). A wall blends from the ground pair a
-  // cell outside its own footprint — where the sun genuinely reaches its foot — to the roof pair at its top.
+  // The sun-shading raster answers "how much sun and sky reaches the top of this cell", and buildings are part of
+  // the height field it is solved over — so at a footprint the answer is the ROOF's, and one cell away it is the
+  // STREET's. A wall wants both: the street's at its foot, where the sun genuinely reaches it, and the roof's at
+  // its top. Two taps and an interpolation up the facade.
   var vis = vec2f(1.0, 1.0);
   if (F.light.w > 0.5) {
     let hereVis = textureSampleLevel(sunTex, linSamp, uv, 0.0);
     if (isRoof) {
-      vis = hereVis.ba;
+      vis = hereVis.rg;
     } else {
       let outUV = clamp(uv + n.xz * (1.4 / F.grid), vec2f(0.0), vec2f(1.0));
       let below = textureSampleLevel(sunTex, linSamp, outUV, 0.0);
       let t = clamp((elevM - floorY) / max(roofY - floorY, 1.0), 0.0, 1.0);
-      let up = mix(below.rg, hereVis.ba, pow(t, 0.55));
+      let up = mix(below.rg, hereVis.rg, pow(t, 0.55));
       // The raster has one value per DEM cell, which is 7.8 m in Pittsburgh — wider than the gap between two
       // rowhouses. A block of them fuses into one solid mass in the height field, and every facade inside it then
       // comes out in shadow, including the ones the sun plainly reaches. So the cast term is faded in with the
-      // building's size in cells: a tower is resolved and takes the raster in full, a rowhouse is not and is
-      // carried by its own N·L instead, which is the one thing that is still exactly right at any resolution.
-      let resolved = smoothstep(0.8, 2.6, bh / max(F.cellSize, 0.1));
-      vis = mix(mix(vec2f(1.0, 1.0), hereVis.ba, 0.45), up, resolved);
+      // building's size in cells, on the SAME threshold that decides which buildings reach the raster at all
+      // (SHADOW_MIN_CELLS in buildings.ts): a tower is resolved and takes the raster in full, a rowhouse is not
+      // and is carried by its own N·L instead, which is the one thing still exactly right at any resolution.
+      let resolved = smoothstep(1.0, 2.4, bh / max(F.cellSize, 0.1));
+      vis = mix(mix(vec2f(1.0, 1.0), hereVis.rg, 0.45), up, resolved);
     }
   }
   let sunVis = mix(1.0, vis.x, F.light.x);
@@ -376,16 +390,31 @@ fn fsBuilding(in: VOut) -> @location(0) vec4f {
     let r = reflect(-view, n);
     // Deliberately softer than a physical Fresnel: at the grazing angles a distant skyline is seen at, the real
     // curve goes to 1 and turns every tower into a white card.
-    let fres = 0.03 + 0.42 * pow(1.0 - max(dot(n, view), 0.0), 4.0);
+    let fres = 0.03 + 0.30 * pow(1.0 - max(dot(n, view), 0.0), 4.0);
     // Glass is a dark albedo that reads bright because it is a mirror. The cheap version — the ambient dome in the
     // reflected direction — costs nothing and is most of the effect; the cinematic tier puts the real sky and its
-    // clouds in it instead.
-    color += skyAmbient(r) * fres * gloss * 1.5 * occ * (1.0 - B.lod.w * 0.6);
+    // clouds in it instead. Kept under the diffuse term on purpose: once the sheen outweighs the shading, every
+    // face of every tower is the same pale blue and the skyline goes flat.
+    color += skyAmbient(r) * fres * gloss * 0.7 * occ * (1.0 - B.lod.w * 0.6);
     if (B.style.z > 0.01 && gloss > 0.25) {
       color += (skyReflection(r) - skyAmbient(r)) * fres * gloss * B.style.z * occ;
     }
   }
   color += vec3f(0.95, 0.96, 1.0) * foam * (0.35 + 0.65 * max(L.y, 0.15)) * (1.0 - F.opts.w * 0.5);
+
+  // ── Below the surface ──────────────────────────────────────────────────────────────────────
+  // Light reaching a submerged wall has crossed the flood twice, and a flood is not clear water: a metre of it
+  // halves what comes back, three metres leave almost nothing. Without this the roof of a warehouse under eight
+  // metres of river is a bright grey slab showing through the surface, which is what a flooded city emphatically
+  // does not look like — and it is also what was fighting the water mesh for the same pixels.
+  if (submerged > 0.0) {
+    // Past a couple of metres nothing comes back at all, and the pixel belongs to the water pass: handing it over
+    // outright is both truer and cheaper than blending a near-black wall under a nearly opaque surface, which is
+    // what made buildings look like they were standing on dark plinths.
+    if (B.water.w > 0.5 && submerged > SUBMERGED_CUT) { discard; }
+    let atten = exp(-submerged * MUD_EXTINCTION * max(B.water.w, 0.001));
+    color = mix(DEEP_FLOOD, color, atten);
+  }
 
   color = mix(color, in.haze.rgb, in.haze.a);
   return vec4f(color, 1.0);

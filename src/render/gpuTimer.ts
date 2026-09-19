@@ -30,12 +30,22 @@ export class GpuTimer {
     this.used.clear();
   }
 
-  /** timestampWrites for a pass descriptor (undefined when disabled). */
-  writes(pass: TimedPass): GPURenderPassTimestampWrites | undefined {
+  /**
+   * timestampWrites for a pass descriptor (undefined when disabled).
+   *
+   * `part` lets one timed name span SEVERAL render passes: 'start' stamps only the opening of the first pass and
+   * 'end' only the close of the last, so the reported time is the whole span including everything encoded
+   * between. The post chain uses it — bloom is four or five passes plus the tonemap, and timing only the last of
+   * them would report a number that moves when the bloom chain changes by nothing at all.
+   */
+  writes(pass: TimedPass, part: 'both' | 'start' | 'end' = 'both'): GPURenderPassTimestampWrites | undefined {
     if (!this.querySet) return undefined;
     const i = PASSES.indexOf(pass);
     this.used.add(pass);
-    return { querySet: this.querySet, beginningOfPassWriteIndex: i * 2, endOfPassWriteIndex: i * 2 + 1 };
+    const w: GPURenderPassTimestampWrites = { querySet: this.querySet };
+    if (part !== 'end') w.beginningOfPassWriteIndex = i * 2;
+    if (part !== 'start') w.endOfPassWriteIndex = i * 2 + 1;
+    return w;
   }
 
   /** Resolve this frame's queries into the encoder (only when the read buffer is free). */

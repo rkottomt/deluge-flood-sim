@@ -53,6 +53,38 @@ export const MIN_ROOF_CLEARANCE_M = 2.5;
 /** Longest ring edge that is sampled only at its ends when looking for the ground under a footprint (cells). */
 const EDGE_SAMPLE_CELLS = 1.5;
 
+/**
+ * How tall a building has to be, in DEM cells, before it is allowed into the sun-shading raster (fading in
+ * between the two). The raster has one height per cell — 7.8 m in Pittsburgh — so nothing narrower or shorter than
+ * a couple of cells is resolved by it: a block of 7 m rowhouses fuses into one solid slab, and a warehouse under
+ * the flood turns the water above it into a mosaic of lit footprints and shaded gaps, because the cells that
+ * carry a roof are shaded at roof height and the ones between them at street level. Towers are both tall enough to
+ * resolve and the only ones whose shadow anybody can see across a city, so the raster carries those and the rest
+ * are carried by their own N·L — which is exactly right at any resolution. (The same threshold gates how far a
+ * facade trusts the raster; see `resolved` in shaders/buildings.ts.)
+ */
+export const SHADOW_MIN_CELLS = 1.0;
+export const SHADOW_FULL_CELLS = 2.4;
+
+/**
+ * The roof-height raster, with everything the sun raster cannot resolve faded out of it. Returns null when nothing
+ * survives, so the caller can skip the upload and leave the raster exactly as it was before buildings existed.
+ */
+export function shadowOccluderHeights(raster: Float32Array, cellSize: number): Float32Array | null {
+  const lo = SHADOW_MIN_CELLS * cellSize;
+  const hi = SHADOW_FULL_CELLS * cellSize;
+  const out = new Float32Array(raster.length);
+  let any = false;
+  for (let i = 0; i < raster.length; i++) {
+    const h = raster[i];
+    if (!(h > lo)) continue;
+    const t = Math.min(1, (h - lo) / Math.max(hi - lo, 1e-3));
+    out[i] = h * t * t * (3 - 2 * t);
+    if (out[i] > 0) any = true;
+  }
+  return any ? out : null;
+}
+
 /** Vertex stride in bytes: vec3f position (gx, elevation m, gy) + u32 packed attributes + f32 building height. */
 export const BUILDING_VERTEX_BYTES = 20;
 const VERTEX_FLOATS = BUILDING_VERTEX_BYTES / 4;
@@ -748,6 +780,7 @@ export class BuildingLayer {
     ground: Float32Array,
     nx: number,
     ny: number,
+    cellSize: number,
     layout: GPUBindGroupLayout,
     tex: BuildingTextures,
   ): BuildingLayer | null {
@@ -756,14 +789,15 @@ export class BuildingLayer {
     if (mesh.buildingCount === 0 || mesh.indices.length === 0) return null;
     let heightTexture: GPUTexture | null = null;
     const raster = set.heightRaster;
-    if (raster && raster.length >= nx * ny) {
+    const occluders = raster && raster.length >= nx * ny ? shadowOccluderHeights(raster, cellSize) : null;
+    if (occluders) {
       heightTexture = device.createTexture({
         label: 'building-heights',
         size: [nx, ny],
         format: 'r32float',
         usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
       });
-      device.queue.writeTexture({ texture: heightTexture }, raster, { bytesPerRow: nx * 4 }, { width: nx, height: ny });
+      device.queue.writeTexture({ texture: heightTexture }, occluders, { bytesPerRow: nx * 4 }, { width: nx, height: ny });
     }
     return new BuildingLayer(device, mesh, layout, tex, heightTexture);
   }

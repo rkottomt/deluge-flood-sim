@@ -432,11 +432,30 @@ fn fsWater(in: WOut) -> @location(0) vec4f {
   // shadows.ts): floodwater under a hill now goes as cool and dark as the ground beside it, instead of being the
   // one surface in the scene that the sun could not miss.
   let pxCells = max(pixelFoot / F.cellSize, 1e-4);
-  let vis = sunShading(uv, pxCells);
+  // The terrain takes four taps of the raster to keep the DEM's own cell grid from showing through its relief.
+  // Water has no sub-cell relief to hide — it is flat — so one bilinear tap is indistinguishable while a pixel
+  // still covers about a cell, and the four-tap filter is only worth its bandwidth further out, where a single
+  // tap would sparkle. Water covers much of this scene, so that is three taps saved over most of the frame.
+  // (An if, not select: WGSL's select evaluates both arms, which would take all five taps.)
+  var vis = vec2f(1.0);
+  if (F.light.w > 0.5) {
+    if (pxCells > 1.2) {
+      vis = sunShading(uv, pxCells);
+    } else {
+      vis = sunShadingRaw(uv);
+    }
+  }
   // Water is not relit from a photograph the way the draped terrain is — the renderer draws it outright — so it
   // takes the cast shadow at full strength, scaled only by the lighting preset's own knob.
-  let shadowVis = mix(1.0, vis.x, F.light.x);
-  let skyOcc = mix(1.0, vis.y, F.light.y);
+  //
+  // But the raster answers for the GROUND, and a flood stands above the ground. A blocker that hides the bed from
+  // the sky — the kerb, the building across the street, the far bank — hides less and less of the sky from the
+  // surface as the water deepens, and the same goes (more weakly) for the sun. Without this correction, flooded
+  // streets downtown inherit the buildings' own ambient occlusion and the flood turns dark grey exactly where it
+  // has to be read at a glance.
+  let lift = smoothstep(0.3, 8.0, thick);
+  let shadowVis = mix(mix(1.0, vis.x, F.light.x), 1.0, lift * 0.35);
+  let skyOcc = mix(mix(1.0, vis.y, F.light.y), 1.0, lift * 0.8);
   let sunVis = (1.0 - F.opts.w * 0.85) * shadowVis;
   let lightIn = F.sunColor * max(F.sunDir.y, 0.0) * sunVis + skyAmbient(n) * skyOcc;
   let nv = max(dot(n, V), 0.0);

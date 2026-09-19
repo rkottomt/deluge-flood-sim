@@ -93,6 +93,8 @@ export interface CinematicSettings {
 
 /** What the 'cinematic' quality tier switches on by itself. Tuned on the demo machine at 1470x956 @ DPR 2. */
 export const CINEMATIC_DEFAULTS = { dof: 5, chromaticAberration: 2.2 } as const;
+/** Time constant for easing the depth-of-field radius in and out, seconds. */
+const DOF_FADE_TAU = 0.11;
 
 export interface RendererOptions {
   /** Default 'auto': adaptive resolution targeting ≥ 48 fps sustained, idle frames capped at 30 fps. */
@@ -403,6 +405,8 @@ class DelugeRenderer implements DelugeRendererAPI {
   private interactingUntil = 0;
   /** Water mode of the last frame, so ensureTargets knows whether depth of field can run at all. */
   private lastWaterMode = 'realistic';
+  /** Depth-of-field radius actually in force this frame (eased toward the target; see dofFaded). */
+  private dofNow = 0;
 
   // Overlays
   private overlays: OverlayState | null = null;
@@ -703,7 +707,7 @@ class DelugeRenderer implements DelugeRendererAPI {
     // of the occluder field the sun-shading pass marches, which is what makes buildings cast real shadows.
     const t0 = typeof performance !== 'undefined' ? performance.now() : 0;
     try {
-      buildings = BuildingLayer.create(device, terrain.buildings ?? null, solver.getGroundCPU(), nx, ny, this.P.buildingBGL, {
+      buildings = BuildingLayer.create(device, terrain.buildings ?? null, solver.getGroundCPU(), nx, ny, solver.cellSize, this.P.buildingBGL, {
         frame: this.frameBuf,
         sun: sun.texture.createView(),
         imagery: imageryTex.createView(),
@@ -1149,7 +1153,7 @@ class DelugeRenderer implements DelugeRendererAPI {
     this.cine = next;
     this.camera.sway = next.sway;
     // Depth of field changes what the depth attachment has to do, which is a render-target decision.
-    if (this.depthReadable !== this.dofRadiusPx() > 0) this.needsResize = true;
+    if (this.depthReadable !== this.dofCapable()) this.needsResize = true;
     if (was !== next.presentation) {
       // Published two ways because the UI is not this module's business: a subscription for code that wants to
       // react, and a data attribute on <html> so hiding the chrome can be one CSS rule and nothing else.
@@ -1183,10 +1187,36 @@ class DelugeRenderer implements DelugeRendererAPI {
    * suspended in those modes even in the cinematic tier — the same rule as the chromatic aberration below.
    */
   private dofRadiusPx(mode: string = this.lastWaterMode): number {
-    if (!(this.cine.dof > 0) || mode !== 'realistic') return 0;
+    if (!this.dofCapable(mode)) return 0;
     if (this.camera.moving) return 0;
     const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
     return now < this.interactingUntil ? 0 : this.cine.dof;
+  }
+
+  /**
+   * Whether depth of field could run at all in this mode — the *capability*, not this frame's answer.
+   *
+   * These are deliberately two different questions. The capability decides whether the depth attachment has to be
+   * stored and bound, which is a render-target decision: if it followed the per-frame answer instead, every time
+   * a drag started or stopped the renderer would destroy and rebuild every target mid-interaction, which is a
+   * stall exactly where the user would feel it.
+   */
+  private dofCapable(mode: string = this.lastWaterMode): boolean {
+    return this.cine.dof > 0 && mode === 'realistic';
+  }
+
+  /**
+   * This frame's depth-of-field radius, eased toward the target so the blur fades in when the view settles and
+   * out when it is touched, instead of popping between two different-looking images on one frame.
+   */
+  private dofFaded(mode: string): number {
+    const target = this.dofRadiusPx(mode);
+    const k = 1 - Math.exp(-this.frameDt / DOF_FADE_TAU);
+    this.dofNow += (target - this.dofNow) * k;
+    // Snap at the ends: a radius creeping toward zero would keep the gather (and the pacer) alive forever, and a
+    // frozen scene has to be bit-identical frame to frame for the visual suite's flicker detector.
+    if (Math.abs(target - this.dofNow) < 0.02) this.dofNow = target;
+    return this.dofNow;
   }
 
   /** Chromatic aberration for this frame. Always 0 in a hazard mode: those colours are data to be read. */
@@ -1225,7 +1255,7 @@ class DelugeRenderer implements DelugeRendererAPI {
     const [w, h] = targetSize(cssW, cssH, dpr, preset.maxDpr, preset.maxPixels, this.device.limits.maxTextureDimension2D);
     this.stats.renderScale = Math.sqrt((w * h) / Math.max(1, cssW * cssH));
     this.stats.autoLevel = this.qualityMode === 'auto' ? this.adaptive.level : -1;
-    const wantDepth = this.dofRadiusPx() > 0;
+    const wantDepth = this.dofCapable();
     if (w === this.width && h === this.height && this.msaaColor && wantDepth === this.depthReadable) {
       this.needsResize = false;
       return;
@@ -1403,9 +1433,12 @@ class DelugeRenderer implements DelugeRendererAPI {
     // ensureTargets runs before the frame's settings are otherwise consulted, and it has to know whether depth of
     // field can run at all (it decides whether the depth attachment is stored).
     if (settings.waterMode !== this.lastWaterMode) {
-      const couldDof = this.dofRadiusPx(this.lastWaterMode) > 0;
+      const couldDof = this.dofCapable(this.lastWaterMode);
       this.lastWaterMode = settings.waterMode;
-      if (couldDof !== this.dofRadiusPx() > 0) this.needsResize = true;
+      if (couldDof !== this.dofCapable()) {
+        this.needsResize = true;
+        this.dofNow = 0;
+      }
     }
     const cpuStart = typeof performance !== 'undefined' ? performance.now() : Date.now();
     const now = cpuStart;
@@ -1571,7 +1604,7 @@ class DelugeRenderer implements DelugeRendererAPI {
 
     // Depth of field needs the depth buffer after the pass; everywhere else the attachment is discarded on store,
     // which is what lets it stay in tile memory on this GPU.
-    const dofRadius = this.depthReadable ? this.dofRadiusPx(settings.waterMode) : 0;
+    const dofRadius = this.depthReadable ? this.dofFaded(settings.waterMode) : 0;
     // Buildings: the uniform is written on the queue before this frame's commands run, and the per-chunk
     // selection happens at draw time below (it needs the frustum, which the camera has already settled).
     const drawBuildings = !!s?.buildings && this.buildingsEnabled && !this.debugSkip.has('buildings');
@@ -1696,9 +1729,14 @@ class DelugeRenderer implements DelugeRendererAPI {
     // before, so the whole chain costs about what the old single ¼-res blur did.
     const bloomOn = preset.bloom && !this.debugSkip.has('bloom');
     if (bloomOn) {
+      let first = true;
       const chainPass = (view: GPUTextureView, pipeline: GPURenderPipeline, bg: GPUBindGroup, add: boolean) => {
+        // stats.postMs spans the whole chain: opened here on the first bloom pass, closed on the tonemap pass.
+        const timestampWrites = first ? this.timer.writes('post', 'start') : undefined;
+        first = false;
         const p = enc.beginRenderPass({
           colorAttachments: [{ view, loadOp: add ? 'load' : 'clear', storeOp: 'store', clearValue: [0, 0, 0, 1] }],
+          timestampWrites,
         });
         p.setPipeline(pipeline);
         p.setBindGroup(0, bg);
@@ -1734,7 +1772,7 @@ class DelugeRenderer implements DelugeRendererAPI {
     const tp = enc.beginRenderPass({
       label: 'tonemap',
       colorAttachments: [{ view: this.ctx.getCurrentTexture().createView(), loadOp: 'clear', storeOp: 'store', clearValue: [0, 0, 0, 1] }],
-      timestampWrites: this.timer.writes('post'),
+      timestampWrites: this.timer.writes('post', bloomOn ? 'end' : 'both'),
     });
     tp.setPipeline(this.P.tonemap);
     tp.setBindGroup(0, this.tonemapBG!);

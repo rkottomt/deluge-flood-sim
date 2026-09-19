@@ -17,7 +17,9 @@
  *   · shadows stay on the ground that casts them — there is no near plane to push them off their caster;
  *   · the per-frame cost is one texture tap instead of a second geometry pass.
  * Walls and levees are in the march (the barrier field is part of the height), so a levee the user just drew casts
- * its own shadow, and only the edited neighbourhood is recomputed (see shadows.ts).
+ * its own shadow, and only the edited neighbourhood is recomputed (see shadows.ts). So are the extruded buildings
+ * (src/render/buildings.ts): the city casts real shadows across the streets and the flood for the price of one
+ * extra term in the height field and nothing at all per frame.
  *
  * The penumbra is geometry rather than a filter kernel: the sun subtends about half a degree, so the horizon
  * tangent is compared against the sun's with a soft width that grows with the blocker's distance. A ridge a
@@ -47,13 +49,13 @@ struct SunParams {
 @group(0) @binding(1) var heightTex: texture_2d<f32>;
 @group(0) @binding(2) var outTex: texture_storage_2d<rgba8unorm, write>;
 
-/** Occluder height: ground + walls + whatever is BUILT on the cell (see packHeight). */
+/** Height of everything that can block light at a cell: ground + walls + the roof standing on it (see packHeight). */
 fn heightAt(p: vec2i) -> f32 {
   return textureLoad(heightTex, clamp(p, vec2i(0), S.grid - 1), 0).r;
 }
 
-/** Receiver height for the street: the same field with the buildings taken back off. */
-fn groundAt(p: vec2i) -> f32 {
+/** The same field with the buildings taken back off — the land, which is what sky visibility is solved over. */
+fn landAt(p: vec2i) -> f32 {
   return textureLoad(heightTex, clamp(p, vec2i(0), S.grid - 1), 0).g;
 }
 
@@ -68,12 +70,20 @@ fn sunVis(@builtin(global_invocation_id) gid: vec3u) {
   if (local.x >= S.rectSize.x || local.y >= S.rectSize.y) { return; }
   let cell = S.rect0 + local;
   if (outside(cell)) { return; }
-  // Two receivers per cell, marched together along the same ray: the street (bare ground, what the terrain and the
-  // water read) and the roof of whatever stands on it (what the building pass reads). Where nothing is built the
-  // two heights are equal and the second answer costs a subtraction — the taps are shared either way.
-  let z = groundAt(cell);
-  let zRoof = heightAt(cell);
-  let hasRoof = zRoof > z + 0.25;
+  // Two receivers, and the difference between them is deliberate.
+  //
+  // CAST SUN uses the top of the cell — bare ground where nothing is built, the roof where something is — over a
+  // height field that INCLUDES the buildings. One march then answers both questions: a roof is lit unless a taller
+  // neighbour blocks it, and a street is shaded by the buildings along it. Using the ground under a footprint
+  // instead would print each building's own shadow onto the flood covering it, since that water is drawn and the
+  // ground beneath it is not.
+  //
+  // SKY VISIBILITY is solved over the LAND only. It is a short-range term — the sky a point can see, at the height
+  // the raster was solved at — and a flood eight metres deep puts its surface nowhere near that height. Including
+  // the buildings would paint a map of the city's footprints onto the water as patches of brighter and darker
+  // ambient. Terrain relief is long-range and does not have that problem, so it stays in.
+  let z = heightAt(cell);
+  let zLand = landAt(cell);
   let base = vec2f(cell) + 0.5;
 
   // ── Sun visibility ──────────────────────────────────────────────────────────────────────
@@ -81,8 +91,6 @@ fn sunVis(@builtin(global_invocation_id) gid: vec3u) {
   // three kilometres away, so ~48 steps reach far enough for a 9° sun over 200 m of relief.
   var maxTan = -1e9;
   var blockCells = 1.0;
-  var maxTanR = -1e9;
-  var blockCellsR = 1.0;
   var s = 0.0;
   var step = 1.0;
   for (var k = 0; k < S.steps; k++) {
@@ -90,73 +98,55 @@ fn sunVis(@builtin(global_invocation_id) gid: vec3u) {
     step *= S.growth;
     let p = vec2i(floor(base + S.sunXZ * s));
     if (outside(p)) { break; }
-    let hp = heightAt(p);
-    let run = s * S.cellSize;
-    let t = (hp - z) / run;
+    let t = (heightAt(p) - z) / (s * S.cellSize);
     if (t > maxTan) {
       maxTan = t;
       blockCells = s;
     }
-    let tr = (hp - zRoof) / run;
-    if (tr > maxTanR) {
-      maxTanR = tr;
-      blockCellsR = s;
-    }
-    // Already so deep in shadow that no further blocker can change either answer.
-    if (maxTan > S.tanSun + 0.75 && maxTanR > S.tanSun + 0.75) { break; }
+    // Already so deep in shadow that no further blocker can change the answer.
+    if (maxTan > S.tanSun + 0.75) { break; }
   }
   // Contact hardening: the sun's angular radius projects to a wider tangent window the further off the blocker.
   let width = S.penumbra * (1.0 + blockCells * 0.9);
   let sun = smoothstep(-width, width, S.tanSun - maxTan);
-  let widthR = S.penumbra * (1.0 + blockCellsR * 0.9);
-  let sunRoof = select(sun, smoothstep(-widthR, widthR, S.tanSun - maxTanR), hasRoof);
 
   // ── Sky visibility ──────────────────────────────────────────────────────────────────────
   // The fraction of a uniform sky dome a horizontal patch can see, from the horizon elevation found in a ring of
   // azimuths: the cosine-weighted wedge above a horizon of tangent t integrates to 1/(1 + t²). Ridges stay open,
   // hollows and the insides of river valleys close in — the cue that says "landscape", not "photo on a plane".
-  // With buildings in the field this is also what darkens the streets between them into urban canyons.
   var sky = 1.0;
-  var skyRoof = 1.0;
   if (S.aoDirs > 0) {
     var acc = 0.0;
-    var accR = 0.0;
     let aoStepCount = i32(S.aoSteps);
     let dr = S.aoRadius / max(S.aoSteps, 1.0);
     for (var d = 0; d < S.aoDirs; d++) {
       let a = (f32(d) + 0.5) * 6.28318530718 / f32(S.aoDirs);
       let dir = vec2f(cos(a), sin(a));
       var hTan = 0.0;
-      var hTanR = 0.0;
       var r = 0.0;
       for (var k = 0; k < aoStepCount; k++) {
         r += dr * (1.0 + f32(k) * 0.45);
         let p = vec2i(floor(base + dir * r));
         if (outside(p)) { break; }
-        let hp = heightAt(p);
-        let run = r * S.cellSize;
-        hTan = max(hTan, (hp - z) / run);
-        hTanR = max(hTanR, (hp - zRoof) / run);
+        hTan = max(hTan, (landAt(p) - zLand) / (r * S.cellSize));
       }
       acc += 1.0 / (1.0 + hTan * hTan);
-      accR += 1.0 / (1.0 + hTanR * hTanR);
     }
     sky = acc / f32(S.aoDirs);
-    skyRoof = select(sky, accR / f32(S.aoDirs), hasRoof);
   }
 
-  textureStore(outTex, cell, vec4f(sun, sky, sunRoof, skyRoof));
+  textureStore(outTex, cell, vec4f(sun, sky, 0.0, 1.0));
 }
 `;
 
 /**
  * Ground, walls and buildings flattened into one texture so the marches above cost one tap per step instead of
- * three. Two channels, because the sun raster answers two questions per cell:
- *   r — the OCCLUDER height: bed + barrier + roof height above the ground (0 where nothing is built);
- *   g — the RECEIVER height of the street: bed + barrier, with the buildings taken back off, which is what the
- *       terrain and the water are shaded at even where a footprint covers them.
+ * three. Two channels, both read from the same texel by the same tap:
+ *   r — everything that blocks the sun: bed + barrier + the roof standing on the cell (0 where nothing is built);
+ *   g — the land alone: bed + barrier, which is what sky visibility is solved over (see sunVis for why).
  * Rebuilt over the edited rectangle whenever the solver's terrain version moves. The building layer is static, so
- * `bldTex` is uploaded once when the scene loads (`hasBuildings` is 0 while the city is hidden).
+ * `bldTex` is uploaded once when the scene loads, and `hasBuildings` is 0 while the city is hidden — which is why
+ * hiding the buildings invalidates the whole raster rather than just redrawing.
  */
 export const SUN_HEIGHT_WGSL = /* wgsl */ `
 struct HeightParams {
