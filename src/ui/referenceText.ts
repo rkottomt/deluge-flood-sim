@@ -12,13 +12,16 @@
 import type { ReferenceOverlayInfo } from '../contracts';
 import { fmtNum } from './format';
 
+/** No-break space between a number and its unit — the same one src/ui/format.ts uses (thin spaces drop out). */
+const NBSP = '\u00a0';
+
 /** "30:00", "6:05" — the sim clock the reference is a picture of, and the live run's own. */
 export function referenceMinutes(seconds: number): string {
   const s = Math.max(0, Math.round(seconds));
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
 
-const pct = (v: number, digits = 1) => `${v >= 0 ? '+' : '−'}${Math.abs(v).toFixed(digits)}${' '}%`;
+const pct = (v: number, digits = 1) => `${v >= 0 ? '+' : '−'}${Math.abs(v).toFixed(digits)}${NBSP}%`;
 
 /** The control's title: "1024² live vs 4096² reference". */
 export function referenceTitle(info: ReferenceOverlayInfo): string {
@@ -32,16 +35,16 @@ export function referenceTitle(info: ReferenceOverlayInfo): string {
 export function referenceReadout(info: ReferenceOverlayInfo): string {
   const r = info.readout;
   return [
-    `extent IoU ${(r.floodedIou * 100).toFixed(1)}${' '}%`,
+    `extent IoU ${(r.floodedIou * 100).toFixed(1)}${NBSP}%`,
     `flooded area ${pct(r.floodedPct)}`,
-    `max-depth RMSE ${fmtNum(r.rmse, 2)}${' '}m`,
+    `max-depth RMSE ${fmtNum(r.rmse, 2)}${NBSP}m`,
     `water held ${pct(r.waterHeldPct)}`,
   ].join('  ·  ');
 }
 
 /** What the line on screen means, once the overlay is on. */
 export function referenceLegend(info: ReferenceOverlayInfo): string {
-  return `The pale outline is where the ${info.referenceGrid}² run's flood reached ${fmtNum(info.readout.threshold, 2)} m, after ${referenceMinutes(info.seconds)} of ${info.label}.`;
+  return `The pale outline is where the ${info.referenceGrid}² run's flood reached ${fmtNum(info.readout.threshold, 2)}${NBSP}m, after ${referenceMinutes(info.seconds)} of ${info.label}.`;
 }
 
 /**

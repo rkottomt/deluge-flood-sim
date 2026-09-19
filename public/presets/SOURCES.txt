@@ -54,11 +54,16 @@ artifacts/more-cities/nhd_path.py. Peak discharges and stages are from the USGS 
               1,949.93 ft NAVD88 (03451500). Damage to the River Arts District and Biltmore Village and the loss of
               the city's water supply until November: NC/Asheville reporting and City of Asheville recovery records.
 
-  nashville   May 2010 flood. Cumberland River at Nashville (USGS 03431500): gauge datum 367.45 ft NAVD88; peak
-              188,000 ft³/s at 52.55 ft on May 3, 2010; earlier peaks 203,000 ft³/s at 56.20 ft (January 1927) and
-              186,000 ft³/s at 53.90 ft (January 1937), both before the Corps of Engineers dams. Official NWS crest
-              51.86 ft and flood stage 40 ft; the 13.57 in of rain on May 1–2, 2010 (against a previous two-day
-              record of 6.68 in), 18 deaths in Middle Tennessee and >$2 billion of damage: NWS Nashville (weather.gov/ohx).
+  nashville   May 2010 flood, with the pre-dam record above it. Cumberland River at Nashville (USGS 03431500):
+              gauge datum 367.45 ft NAVD88, NWS flood stage 40 ft. The three crests on the stage slider are the
+              gauge's own annual peaks, and the NWS Nashville crest table agrees with each: 203,000 ft³/s at
+              56.20 ft (January 1, 1927 — the record), 186,000 ft³/s at 53.90 ft (January 26, 1937), both before
+              the Corps of Engineers dams, and 188,000 ft³/s at 52.55 ft (May 3, 2010), the highest since. The
+              one-click flood raises the river to the highest mark it can reach, so it plays 1927; 2010 and 1937
+              are on the jump row beside it. 52.55 ft is the crest both USGS and NWS record for 2010 — the
+              51.86 ft this file used to give was the preliminary reading published while the river was still
+              rising. The 13.57 in of rain on May 1–2, 2010 (against a previous two-day record of 6.68 in),
+              18 deaths in Middle Tennessee and >$2 billion of damage: NWS Nashville (weather.gov/ohx).
 
   houston     Hurricane Harvey, August 2017. Buffalo Bayou at Houston (USGS 08074000, Shepherd Drive): peak
               32,600 ft³/s at 41.90 ft on August 28, 2017; 1935 peak 40,000 ft³/s at 49.00 ft. Rainfall — 60.58 in

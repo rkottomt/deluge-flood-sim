@@ -472,13 +472,26 @@ const PRESET_DEFS: PresetDef[] = [
     ],
     stage: {
       label: 'Cumberland River at Nashville (USGS 03431500)',
-      // USGS 03431500 gage datum: 367.45 ft above NAVD88 (NWIS expanded site file). NWS flood stage 40 ft. The
-      // May 3, 2010 crest of 51.86 ft is the highest since the Corps' dams were built; USGS measured that peak at
-      // 52.55 ft and 188,000 ft³/s. The 1937 (53.90 ft) and 1927 (56.20 ft, 203,000 ft³/s) crests predate the dams.
+      /*
+       * USGS 03431500 gage datum: 367.45 ft above NAVD88 (NWIS expanded site file). NWS flood stage 40 ft.
+       * The three marked crests are the gauge's own annual peaks (nwis.waterdata.usgs.gov/nwis/peak), and the
+       * NWS Nashville crest table agrees with all three:
+       *   1927-01-01  56.20 ft  203,000 ft³/s  — record, before the Corps' dams
+       *   1937-01-26  53.90 ft  186,000 ft³/s  — also before the dams
+       *   2010-05-03  52.55 ft  188,000 ft³/s  — highest since the dams
+       * 51.86 ft, which this preset used to mark and sell 2010 as, was the PRELIMINARY reading reported while the
+       * river was still rising; both USGS and NWS put the crest at 52.55 ft (weather.gov/ohx 10th-anniversary
+       * page). It is not the number to replay.
+       *
+       * The marks are what src/ui/welcome.ts offers as the one-click flood: dramaticStage() takes the HIGHEST mark
+       * the slider can reach, so the button here reads "Raise to 1927 record". The subtitle, the description and
+       * public/presets/SOURCES.txt all say so — 2010 is the flood that put this city on the list, 1927 is the
+       * crest the button plays, and the other two are one click away on the jump row.
+       */
       gaugeDatum: 367.45 * FT,
       floodStageFt: 40,
       marks: [
-        { label: '2010 flood', ft: 51.86 },
+        { label: '2010 flood', ft: 52.55 },
         { label: '1937 flood', ft: 53.9 },
         { label: '1927 record', ft: 56.2 },
       ],
@@ -486,7 +499,7 @@ const PRESET_DEFS: PresetDef[] = [
     },
     // One river, so the "confluence" head is simply the reach's water-surface drop: without it both boundaries sit
     // at one level and nothing drives the pool. 0.15 m over the 4.9 km reach at pool, 0.5 m at the 2010 crest.
-    confluenceHead: { normal: 0.15, crestFt: 51.86, crest: 0.5 },
+    confluenceHead: { normal: 0.15, crestFt: 52.55, crest: 0.5 },
     shelters: [
       { name: 'Tennessee State Capitol', at: [-86.7844, 36.1659], search: 300 },
       { name: 'Vanderbilt / Midtown', at: [-86.7996, 36.1477], search: 350 },
@@ -510,12 +523,12 @@ const PRESET_DEFS: PresetDef[] = [
       'pool between Old Hickory Dam upstream and Cheatham Dam downstream. ' +
       `The pool in this elevation model reads about ${(((normalLevel ?? 0) - (gaugeDatum ?? 0)) / FT).toFixed(1)} ft on the Nashville gauge; ` +
       'flood stage is 40 ft. On May 1–2, 2010 a stalled front dropped 13.57 inches of rain on Nashville — double the ' +
-      'previous two-day record of 6.68 inches — and on May 3 the river crested at 51.86 ft, the highest since the ' +
-      'dams were built (USGS measured the peak at 52.55 ft and 188,000 ft³/s). Second Avenue, the Country Music ' +
+      'previous two-day record of 6.68 inches — and on May 3 the river crested at 52.55 ft carrying 188,000 ft³/s, ' +
+      'the highest since the dams were built. Second Avenue, the Country Music ' +
       'Hall of Fame, the Schermerhorn Symphony Center and the stadium all took water; 18 people died in Middle ' +
       'Tennessee and damage passed $2 billion. Before the dams the river reached 53.90 ft in 1937 and a record ' +
-      '56.20 ft in 1927. Raise the river stage to replay those crests and watch the riverfront go under — then try ' +
-      'a wall along First Avenue.',
+      '56.20 ft in 1927, and the slider carries all three: “Raise to 1927 record” plays the highest of them. ' +
+      'Watch the riverfront go under — then try a wall along First Avenue.',
   },
   {
     /*

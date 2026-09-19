@@ -19,7 +19,7 @@ export const PRESETS: PresetInfo[] = [
   { id: 'johnstown', name: 'Johnstown — Conemaugh Valley', subtitle: "The Flood City — the 1889 flood in today's valley" },
   { id: 'ellicott', name: 'Ellicott City — Main Street', subtitle: 'Flash floods of 2016 & 2018 — a storm over the Tiber branch' },
   { id: 'asheville', name: 'Asheville — French Broad Valley', subtitle: 'Hurricane Helene, 2024 — record crests on two rivers' },
-  { id: 'nashville', name: 'Nashville — Cumberland River', subtitle: 'May 2010 flood — raise the river past 51.86 ft' },
+  { id: 'nashville', name: 'Nashville — Cumberland River', subtitle: 'May 2010 flood — and the 1927 record above it' },
   { id: 'houston', name: 'Houston — Buffalo Bayou', subtitle: 'Hurricane Harvey, 2017 — the city floods from above' },
   { id: 'boulder', name: 'Boulder — Canyon Mouth', subtitle: '2013 Front Range flash flood — out of Boulder Canyon' },
   { id: 'sandbox', name: SANDBOX_NAME, subtitle: 'Offline sandbox — river town, reservoir and dam' },
