@@ -262,16 +262,26 @@ fn fsBuilding(in: VOut) -> @location(0) vec4f {
   let fac = facadeFor(kind, seed, bh);
   var albedo = fac.albedo;
   var gloss = fac.gloss;
+  /** How much of this surface's albedo came straight out of the aerial photograph (roofs only). */
+  var photoTrust = 0.0;
   if (isRoof) {
     let proc = roofFor(seed, in.world.xz, detail);
-    // The photo's own shading is baked into its luminance; pull it part of the way back toward a mid tone so the
-    // renderer's light is not applied on top of the morning the picture was taken — but only part of the way,
-    // because a white membrane roof really is brighter than a tar one and that difference is worth keeping.
+    // A near-nadir aerial photo of a flat roof IS that roof, already lit by the sun it was taken under — which is
+    // exactly what the terrain shader assumes about the draped ground. So a trusted roof takes the photograph as
+    // its albedo, and with it the terrain's flat-ground lighting convention and the terrain's plain sky ambient
+    // (both applied under "Lighting" below). A warehouse roof then renders to the colour the photograph had at that
+    // pixel, and the city rises out of the picture instead of replacing it with slabs: measured near-nadir over
+    // the Strip District at the 1936 crest, roofs were coming out at 0.6x the brightness of the ground around
+    // them, so every building read as a hole punched in the flood.
+    //
+    // The evening below — pulling luminance toward a mid tone so the renderer's light is not applied on top of
+    // the morning the picture was taken — is what the UNTRUSTED side needs: the procedural membrane on a tower
+    // whose roof the photo puts tens of metres from its footprint. So it stays, on that side of the mix only.
     let lum = max(luminance(img), 1e-3);
     let evened = img * clamp(0.175 / lum, 0.55, 2.2);
-    let photo = mix(mix(img, evened, 0.65), vec3f(luminance(evened)), 0.22);
     let trust = B.style.y * B.misc.x * (1.0 - smoothstep(B.misc.y * 0.6, B.misc.y, bh));
-    albedo = mix(proc, photo, trust);
+    albedo = mix(mix(proc, evened, 0.3), img, trust);
+    photoTrust = trust;
     gloss = 0.05;
   } else {
     // ── Facade detail: floor bands and mullions, in real metres, fading out before they can alias ──
@@ -369,14 +379,23 @@ fn fsBuilding(in: VOut) -> @location(0) vec4f {
   let occ = mix(1.0, vis.y, F.light.y);
 
   let L = F.sunDir;
-  let ndl = max(dot(n, L), 0.0);
+  let ndlRaw = max(dot(n, L), 0.0);
+  // ONE lighting convention for everything drawn from the photograph. The terrain does not take the sun's real
+  // N·L on draped imagery — the photo already holds its own shading, so the hillshade only departs from flat
+  // ground by F.light.z (see shaders/terrain.ts). A roof taken from that same photograph has to be lit the same
+  // way, or the building and the ground it stands on disagree about what the picture means. Facades are NOT in
+  // the photograph and keep the real N·L.
+  let flatNdl = max(L.y, 0.2);
+  let ndl = mix(ndlRaw, mix(flatNdl, ndlRaw, F.light.z), photoTrust);
   let sunK = F.sunColor * (1.0 - F.opts.w * 0.75);
   // A vertical wall is lit by much more than the sun and the sky above it. Half its hemisphere is the street and
   // the facades across it, both of them lit by the same sun, and in a city that bounce is the difference between
-  // a shaded wall and a black one. Terrain does not need the term (its ambient is the sky it faces, and the
-  // photograph already carries its own bounce), so it lives here rather than in skyAmbient.
-  let ambK = (0.85 + 0.3 * F.shade.z) * BUILDING_AMBIENT;
-  let bounce = URBAN_BOUNCE * max(L.y, 0.05) * F.shade.w * (1.0 - max(n.y, 0.0) * 0.65);
+  // a shaded wall and a black one. A ROOF sees none of that — it sees the sky, exactly like the ground beside it
+  // — so the urban fill fades out with the surface's own tilt, which is what keeps roofs in step with the
+  // photograph while still saving the facades from rendering as silhouettes.
+  let urban = mix(BUILDING_AMBIENT, 1.0, max(n.y, 0.0));
+  let ambK = (0.85 + 0.3 * F.shade.z) * urban;
+  let bounce = URBAN_BOUNCE * max(L.y, 0.05) * F.shade.w * (1.0 - max(n.y, 0.0));
   // F.shade.w is the same relative relighting the photographic terrain uses: the whole scene is held at the
   // illumination the imagery was taken under, so buildings and ground never disagree about how bright noon is.
   var color = albedo * (sunK * (ndl * sunVis * F.shade.w + bounce * occ) + skyAmbient(n) * ambK * occ);
