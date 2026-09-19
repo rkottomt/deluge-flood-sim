@@ -4615,3 +4615,47 @@
   opacity: 0.75;
   font-variant-numeric: tabular-nums;
 }
+
+/* ── "Reference (4096²)" overlay control (View section, src/ui/panel.ts) ────────────────────────
+   A switch plus one note that is either the measured agreement or the reason the reference does not
+   apply to what is on screen. Disabled state is a real `disabled` button, so a refusal cannot be
+   clicked past. */
+.dl-ref {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 2px -8px 0;
+}
+.dl-ref .dl-switch:disabled {
+  opacity: 0.55;
+}
+.dl-ref .dl-switch:disabled:hover {
+  background: none;
+  color: var(--dl-text-2);
+}
+.dl-ref-note {
+  padding: 0 8px 2px 34px;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--dl-text-3);
+}
+.dl-ref-head {
+  color: var(--dl-text-2);
+  font-weight: 600;
+}
+.dl-ref-nums {
+  font-variant-numeric: tabular-nums;
+}
+.dl-ref-legend {
+  margin-top: 3px;
+}
+.dl-ref-why {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+}
+.dl-ref-why .dl-icon {
+  margin-top: 2px;
+  flex: none;
+  color: var(--dl-warn-text, var(--dl-text-3));
+}

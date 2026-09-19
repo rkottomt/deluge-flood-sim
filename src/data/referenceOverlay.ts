@@ -31,6 +31,10 @@
  * strictly weaker requirement than WebGPU, so in practice any browser that can run the simulation can read this.
  */
 
+import type { ReferenceMismatch } from '../contracts';
+
+export type { ReferenceMismatch };
+
 /** Bumped only for a breaking change to the layout; a loader refuses anything it does not recognise. */
 export const REFERENCE_OVERLAY_VERSION = 1;
 
@@ -384,31 +388,6 @@ export async function loadReferenceOverlay(
 // the one dishonest thing this feature could do. So the control is gated on this function and SAYS WHY when it
 // refuses, and the app never uploads the field unless it returns `applies`.
 // ──────────────────────────────────────────────────────────────────────────────────────────────────────
-
-/** Why the reference does not apply. The UI turns this into a sentence (src/ui/panel.ts). */
-export type ReferenceMismatch =
-  /** A different preset (or a live area). */
-  | 'preset'
-  /** Same preset, different grid — the planes are indexed by the baked grid's cells. */
-  | 'grid'
-  /** The naive solver is running (the stability demo): it is deliberately wrong. */
-  | 'naive'
-  /** Walls drawn or ground dug: the live flood is over different terrain. */
-  | 'edits'
-  | 'rain'
-  | 'storms'
-  /** The river is not at the reference's stage. */
-  | 'stage'
-  /** On the way there: the stage ramp has not arrived yet. */
-  | 'rising'
-  /** At the right stage, but it was raised far later than the reference's own ramp — a different flood. */
-  | 'late-crest'
-  | 'friction'
-  | 'boundary'
-  /** Right scenario, not enough simulated time yet: the live flood is still growing toward the reference's extent. */
-  | 'early'
-  /** Run well past the reference's duration: the live flood has kept spreading beyond what was computed. */
-  | 'past';
 
 /** Tolerances and windows the check uses. Exported so the UI can quote them and tests can pin them. */
 export const REFERENCE_FIT = {

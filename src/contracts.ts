@@ -626,6 +626,80 @@ export interface LiveAreaRequest {
 }
 
 // ────────────────────────────────────────────────────────────────────────────────────────────
+// The shipped grid-convergence reference (the View panel's "Reference (N²)" overlay)
+//
+// scripts/reference-run.ts runs this solver on the same scenario at 1024², 2048² and 4096² and ships the finest run's
+// flood as data (src/data/referenceOverlay.ts). The app can then DRAW that run's waterline over the live simulation
+// instead of quoting a table. It is a claim about one scenario at one moment, so the app states whether it currently
+// applies and refuses to draw it when it does not.
+// ────────────────────────────────────────────────────────────────────────────────────────────
+
+/** Why the reference does not apply to the live simulation (src/data/referenceOverlay.ts, referenceFit). */
+export type ReferenceMismatch =
+  /** A different preset, or a live area. */
+  | 'preset'
+  /** Same preset, different grid: the reference is indexed by the baked grid's cells. */
+  | 'grid'
+  /** The naive solver is running (the stability demo). */
+  | 'naive'
+  /** Walls drawn or ground dug: the live flood is over different terrain. */
+  | 'edits'
+  | 'rain'
+  | 'storms'
+  /** The river is not at the reference's stage. */
+  | 'stage'
+  /** On the way there: the stage ramp has not arrived yet. */
+  | 'rising'
+  /** At the right stage, but raised far later than the reference's own ramp — a different flood. */
+  | 'late-crest'
+  | 'friction'
+  | 'boundary'
+  /** Right scenario, not enough simulated time yet. */
+  | 'early'
+  /** Run well past the reference's duration. */
+  | 'past';
+
+/** The measured agreement between the shipped grid and the reference, for the overlay's readout. */
+export interface ReferenceOverlayReadout {
+  /** Depth that counts as flooded, m. */
+  threshold: number;
+  /** Newly flooded land: overlap of the two runs (IoU, 0…1) and the live-vs-reference area difference, %. */
+  floodedIou: number;
+  floodedPct: number;
+  /** Total wet extent, rivers included: the same two numbers. */
+  extentIou: number;
+  extentPct: number;
+  /** Water held at the end, live vs reference, %. */
+  waterHeldPct: number;
+  /** Max-depth difference on flooded land, m. */
+  rmse: number;
+  medianAbs: number | null;
+  p99Abs: number | null;
+}
+
+/** The reference available for the loaded preset, and whether it applies right now. Null when none is shipped. */
+export interface ReferenceOverlayInfo {
+  /** Grid the reference was computed on, and the grid the app is running. */
+  referenceGrid: number;
+  liveGrid: number;
+  /** Simulated seconds the reference covers, and the live run's own simulated time. */
+  seconds: number;
+  simTime: number;
+  /** The scenario it was computed for, e.g. "the 1936 crest (46 ft)", and its gauge reading in ft (null if none). */
+  label: string;
+  stageFt: number | null;
+  /** Global rain during the reference run, mm/hr (0 for the crest) — so a refusal can say what it should be. */
+  scenarioRain: number;
+  readout: ReferenceOverlayReadout;
+  /** True while the live simulation is in the scenario the reference was computed for. */
+  applies: boolean;
+  /** Why not, when it does not apply. */
+  mismatch: ReferenceMismatch | null;
+  /** The field is decoded and this renderer can draw it: switching the overlay on will show something. */
+  ready: boolean;
+}
+
+// ────────────────────────────────────────────────────────────────────────────────────────────
 // App state (src/app owns the loop; src/ui renders this state and calls AppActions)
 // ────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -690,6 +764,13 @@ export interface AppState {
   panels: { howItWorks: boolean; locationPicker: boolean; help: boolean };
   /** GPU adapter description for the diagnostics panel. */
   gpuInfo: string;
+  /**
+   * The shipped grid-convergence reference for this preset and whether it applies to the live state right now
+   * (src/app/reference.ts). Null while none is available — the View panel then offers no reference control at all.
+   */
+  reference: ReferenceOverlayInfo | null;
+  /** The "Reference (N²)" toggle. Nothing is drawn unless `reference.applies` and `reference.ready`. */
+  referenceOn: boolean;
 }
 
 export interface Store {

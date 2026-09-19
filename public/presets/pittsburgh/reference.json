@@ -1,0 +1,79 @@
+{
+ "version": 1,
+ "preset": "pittsburgh",
+ "nx": 1024,
+ "ny": 1024,
+ "cellSize": 7.8125,
+ "referenceGrid": 4096,
+ "refine": 4,
+ "bed": "bilinear",
+ "durationSeconds": 1800,
+ "arrivalThreshold": 0.15,
+ "resample": "block-mean",
+ "encoding": "gzip",
+ "binary": "reference.bin",
+ "sha256": "3c8060b0272b3021b8d8fb610cc6b0fe9d8c9b837c305381f173c34f165c2b6e",
+ "scenarios": {
+  "crest": {
+   "case": "crest",
+   "label": "the 1936 crest (46 ft)",
+   "stageOffset": 9.129799999999989,
+   "stageFt": 46,
+   "rainRate": 0,
+   "stormCells": 0,
+   "boundary": "open",
+   "manningN": 0.035,
+   "stageReachedBy": 215
+  }
+ },
+ "agreement": {
+  "crest": {
+   "liveGrid": 1024,
+   "threshold": 0.15,
+   "flooded": {
+    "liveKm2": 6.5489501953125,
+    "referenceKm2": 6.609432220458984,
+    "pct": -0.915086547968023,
+    "iou": 0.9804998286134571
+   },
+   "extent": {
+    "liveKm2": 10.90216064453125,
+    "referenceKm2": 10.956897735595703,
+    "pct": -0.49956741757868733,
+    "iou": 0.988735445568883
+   },
+   "waterHeldPct": 0.10900575407612367,
+   "maxDepth": {
+    "rmse": 0.2878681356757613,
+    "median": 0.06046628952026367,
+    "p99": 1.2758731842041016
+   }
+  }
+ },
+ "planes": [
+  {
+   "case": "crest",
+   "kind": "maxDepth",
+   "quant": "sqrt",
+   "scale": 15.8,
+   "unit": "m",
+   "offset": 0,
+   "length": 111851,
+   "inflatedLength": 1048576,
+   "quantMaxError": 0.061654090881347656,
+   "nonZeroCells": 184610
+  }
+ ],
+ "provenance": {
+  "generatedAt": "2026-09-19T23:17:57.544Z",
+  "gpu": "apple metal-3 apple-m4 Metal driver on macOS Version 15.6 (Build 24G84)",
+  "host": "darwin arm64 Apple M4 node v24.13.0",
+  "runs": {
+   "crest-4096-bilinear": {
+    "wallClockS": 785.611058375,
+    "substeps": 32159,
+    "massError": 7.54005738375204e-9
+   }
+  }
+ }
+}

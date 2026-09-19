@@ -78,6 +78,12 @@ export interface DelugeDebugExtras {
   pick(cssX: number, cssY: number): PickResult | null;
   /** Screen Wake Lock state (src/app/wakeLock.ts): is the display being held awake right now? */
   getWakeLock(): WakeLockStatus;
+  /**
+   * The View panel's "Reference (N²)" overlay. Switching it on draws nothing unless the live state is the scenario the
+   * reference was computed for — `getReference()` says whether it applies and, when it does not, why.
+   */
+  setReferenceOverlay(on: boolean): void;
+  getReference(): AppState['reference'];
   /** Latest protected-land analysis (src/app/protection.ts) without its mask, and how long it took (ms). */
   getProtection(): { wallCells: number; cells: number; areaM2: number; roadMeters: number; roadEdges: number; level: number | null; ms: number } | null;
   waitFrames(n: number): Promise<void>;
@@ -115,6 +121,8 @@ export function createDebugApi(app: App, ready: Promise<void>): DelugeDebug {
     listPresets: () => actions.listPresets().map((p) => p.id),
     setPaused: (paused) => store.set({ paused }),
     setRain: (mmPerHour) => store.set({ sim: { ...store.get().sim, rainRate: Math.max(0, mmPerHour) } }),
+    setReferenceOverlay: (on) => store.set({ referenceOn: !!on }),
+    getReference: () => store.get().reference,
     setStageOffset: (meters) => store.set({ stageOffset: meters }),
     setStage(meters, opts) {
       if (!Number.isFinite(meters)) return;

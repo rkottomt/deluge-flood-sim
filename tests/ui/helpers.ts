@@ -31,6 +31,8 @@ export function baseState(patch: Partial<AppState> = {}): AppState {
     probe: null,
     panels: { howItWorks: false, locationPicker: false, help: false },
     gpuInfo: 'test',
+    reference: null,
+    referenceOn: false,
     ...patch,
   };
 }

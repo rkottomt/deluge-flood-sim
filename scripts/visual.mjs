@@ -720,16 +720,21 @@ async function setupScene(spec) {
    * ≈ 0.04 % of pixels per simulated second (+25.6 s → 1.06 %, +51.3 s → 2.33 %, +77.0 s → 3.38 %). At the 2 %
    * tolerance that is the whole flake: the suite was comparing frames up to a minute of river apart.
    *
-   * So walk the cap down instead. Each rung measures one frame's real advance (runFor always completes the frame
-   * it is on, so runFor(0) is exactly one frame), leaves that much room, and covers the rest in one call; the last
-   * rung runs a single substep per frame, so the clock lands within one CFL dt (≈ 0.2 s) of the target every time.
-   * The cap only ever goes DOWN, so the solver never takes a step it would not have taken on its own.
+   * The overshoot is worse than one frame, because a run only resolves once a READBACK carrying the target time
+   * has arrived (src/app/runFor.ts) and the sim keeps stepping while that is in flight: measured 58 s for a
+   * runFor(0) at the default cap — two and a half frames.
+   *
+   * So walk the substep cap down instead. `maxSubstepsPerFrame` is the one knob that shortens a frame, and an
+   * override layer can only LOWER it (src/app/simSync.ts), so the solver never takes a step it would not have
+   * taken on its own. One measurement at cap 1 gives the granularity unit (one substep plus readback lag);
+   * every coarser rung is that unit times its cap, and each rung leaves three of its own steps of room so it
+   * always UNDERSHOOTS. The last rung runs a single CFL substep per frame, so the clock lands within a few
+   * tenths of a second of the target — which `simClockError` reports for every scene.
    */
   if (spec.simSeconds > 0) {
     const userCap = d.getState().sim.maxSubstepsPerFrame;
-    // A cap layer can only LOWER the user's value (src/app/simSync.ts), so this is the one knob that shortens a frame.
     const setCap = (n) => d.store.set({ sim: { ...d.getState().sim, maxSubstepsPerFrame: n } });
-    /** One frame's simulated advance at the current cap (runFor finishes the frame it is on, so runFor(0) is one). */
+    /** Simulated time one runFor resolution costs at the current cap (a frame, plus the readback lag behind it). */
     const frameAdvance = async () => {
       for (let i = 0; i < 20; i++) {
         const t0 = d.getSimClock();
@@ -741,18 +746,18 @@ async function setupScene(spec) {
     };
     info.simLadder = [];
     try {
-      // The coarse rung runs first, so the target must exceed one frame at the user's cap (~25 s at 1024²); every
-      // scene here asks for ≥ 300. A shorter one would overshoot, which `simClockError` in the report would show.
+      setCap(1);
+      const unit = await frameAdvance();
       for (const cap of [userCap, 16, 4, 1]) {
-        if (d.getSimClock() >= spec.simSeconds) break;
-        setCap(cap);
-        const step = await frameAdvance();
         const left = spec.simSeconds - d.getSimClock();
-        // Leave a frame and a half of room so this rung always UNDERSHOOTS; the next, finer one closes the gap.
-        // The last rung is a single substep per frame, so it may land on the target without leaving any.
-        const ask = cap === 1 ? left : left - step * 1.5;
+        if (left <= 0) break;
+        const step = Math.max(unit, unit * cap);
+        // Too coarse for what is left: drop to a finer rung. Skipping costs nothing — nothing has been stepped yet.
+        const ask = cap === 1 ? left : left - step * 3;
         info.simLadder.push({ cap, step: +step.toFixed(3), left: +left.toFixed(3), ask: +ask.toFixed(3) });
-        if (ask > 0) await d.runFor(ask);
+        if (!(ask > 0)) continue;
+        setCap(cap);
+        await d.runFor(ask);
       }
     } finally {
       setCap(userCap);

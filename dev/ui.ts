@@ -206,6 +206,32 @@ const initial: AppState = {
   probe: null,
   panels: { howItWorks: false, locationPicker: false, help: false },
   gpuInfo: 'apple metal-3 Apple M4',
+  // The shipped Pittsburgh reference, as the app publishes it (artifacts/reference-run/results.json). `applies: false`
+  // here: this harness has no simulation, so the panel shows the refusal path — flip it to preview the readout.
+  reference: {
+    referenceGrid: 4096,
+    liveGrid: 1024,
+    seconds: 1800,
+    simTime: 0,
+    label: 'the 1936 crest (46 ft)',
+    stageFt: 46,
+    scenarioRain: 0,
+    readout: {
+      threshold: 0.15,
+      floodedIou: 0.9805,
+      floodedPct: -0.915,
+      extentIou: 0.9887,
+      extentPct: -0.4996,
+      waterHeldPct: 0.109,
+      rmse: 0.2879,
+      medianAbs: 0.0605,
+      p99Abs: 1.2759,
+    },
+    applies: false,
+    mismatch: 'stage',
+    ready: true,
+  },
+  referenceOn: false,
 };
 
 const store = createStore(initial);

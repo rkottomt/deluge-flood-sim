@@ -16,6 +16,8 @@ export function createActions(app: App): AppActions {
     try {
       if (app.scenes?.scene) app.restartStage();
       if (!app.crest.resetWater(opts)) app.requestRender();
+      // Terrain is pristine again: the reference overlay may apply once more (it refuses over walls and digging).
+      if (opts.resetTerrain) app.reference.noteTerrainBaseline();
     } catch (err) {
       app.errors.report('sim', `reset failed: ${errorMessage(err)}`, err);
     }

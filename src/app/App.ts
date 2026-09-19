@@ -24,6 +24,7 @@ import { createStore } from './store';
 import { showDeviceLost, WebGPUUnavailableError, type LighterScene } from './unsupported';
 import { bridgeFor, postNotice } from '../ui/bridge';
 import { ProtectionController, type ProtectionInput } from './protection';
+import { ReferenceOverlayController } from './reference';
 import { createProtectionWorker } from './protectionWorkerClient';
 import { parseStartupRequest, writeSceneToUrl, type SceneRequest } from './url';
 import { keepScreenAwake, type ScreenWakeLock } from './wakeLock';
@@ -70,6 +71,8 @@ export class App {
   readonly evac: EvacController;
   /** Land the walls keep dry (≤ 1 Hz, only while walls exist) → UI bridge + renderer glow. */
   readonly protection: ProtectionController;
+  /** The shipped 4096² reference overlay and the check that keeps it honest (see reference.ts). */
+  readonly reference: ReferenceOverlayController;
   readonly sim: SimSync;
   /** Stage raises lift the water in the river channels at once (see crest.ts). */
   readonly crest: CrestFill;
@@ -137,6 +140,14 @@ export class App {
         this.requestRender();
       },
     }, 1000, createProtectionWorker);
+    this.reference = new ReferenceOverlayController({
+      store: this.store,
+      errors: this.errors,
+      getSolver: () => this.scenes?.scene?.solver ?? null,
+      setEdges: (field) => (this.renderer as Partial<DelugeRendererAPI> | null)?.setReferenceEdges?.(field),
+      canDraw: () => typeof (this.renderer as Partial<DelugeRendererAPI> | null)?.setReferenceEdges === 'function',
+      requestRender: () => this.requestRender(),
+    });
     this.sim = new SimSync({
       store: this.store,
       stage: this.stage,
@@ -219,6 +230,7 @@ export class App {
         this.setStageNow(0);
         this.evac.reset();
         this.protection.reset();
+        this.reference.onSceneCleared();
       },
       onSceneReady: (scene) => this.onSceneReady(scene),
     });
@@ -247,6 +259,10 @@ export class App {
       // Paused: nothing advances the ramp, but the UI shows where the river is heading.
       this.requestRender();
     });
+    // The reference's verdict depends on the stage, rain, storms, the solver mode and the sim clock — all of which
+    // arrive through the store — so it is recomputed on store changes rather than per frame. It is a handful of
+    // comparisons and writes back only when the answer changes (see reference.ts).
+    this.store.subscribe(() => this.reference.update());
     this.sim.setOverride('governor', { maxSubstepsPerFrame: this.budget.cap });
     this.installResizeHandling();
     this.installActivityTracking();
@@ -664,6 +680,8 @@ export class App {
     this.crest.prewarm();
     this.evac.reset();
     this.protection.reset();
+    // Starts the (best-effort, backgrounded) fetch of this preset's reference; a preset without one is normal.
+    this.reference.onSceneLoaded(scene.request.kind === 'preset' ? scene.request.id : null);
     this.probe?.reset();
     this.budget.restart();
     this.driver.onSceneChanged(performance.now());

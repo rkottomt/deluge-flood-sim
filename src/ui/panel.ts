@@ -38,6 +38,7 @@ import { blockedAdvice, routeDetail } from './routeText';
 import { MAX_SOURCES, MAX_STORMS } from './tools';
 import { startBreakDemo, stopBreakDemo } from './stabilityDemo';
 import { formatStage, hasGauge, stageSub, weatherBadge } from './stageText';
+import { referenceLegend, referenceReadout, referenceRefusal, referenceTip, referenceTitle } from './referenceText';
 
 export interface Panel {
   el: HTMLElement;
@@ -589,6 +590,46 @@ export function createPanel(ctx: UIContext): Panel {
   bind((s) => s.render.showRoads, (v) => tRoads.set(v));
   bind((s) => s.render.showContours, (v) => tContours.set(v));
 
+  /*
+   * ── "Reference (4096²)" ────────────────────────────────────────────────────────────────────────
+   * Draws the shipped grid-convergence reference's flood edge over the live water, with the agreement the study
+   * actually measured (src/app/reference.ts → AppState.reference; the numbers come from the run, see
+   * src/ui/referenceText.ts). Absent unless the loaded preset ships one, and DISABLED — with the reason in place of
+   * the readout — whenever the live simulation is no longer the scenario the reference was computed for. The switch
+   * shows "on" only while something is actually drawn, but the user's choice is kept: fix the state (drop the rain,
+   * reset the walls) and the outline comes back without another click.
+   */
+  const refSwitch = toggleSwitch('Reference', (on) => store.set({ referenceOn: on }), { icon: 'check' });
+  const refLabel = refSwitch.el.querySelector('.dl-switch-label') as HTMLElement;
+  const refNote = h('div', { class: 'dl-ref-note' });
+  const refWrap = h('div', { class: 'dl-ref' }, refSwitch.el, refNote);
+  bind(
+    (s) => [s.reference, s.referenceOn] as const,
+    ([info, on]) => {
+      refWrap.hidden = info === null;
+      if (!info) return;
+      const usable = info.applies && info.ready;
+      setText(refLabel, `Reference (${info.referenceGrid}²)`);
+      refSwitch.set(on && usable);
+      setAttr(refSwitch.el, 'disabled', usable ? null : '');
+      setAttr(refSwitch.el, 'data-tip', referenceTip(info));
+      toggleClass(refWrap, 'dl-ref-off', !usable);
+      const refusal = info.ready ? referenceRefusal(info) : 'This renderer cannot draw the reference overlay.';
+      refNote.replaceChildren(
+        refusal
+          ? h('div', { class: 'dl-ref-why' }, icon('warning', 13), h('span', null, refusal))
+          : h(
+              'div',
+              null,
+              h('div', { class: 'dl-ref-head' }, referenceTitle(info)),
+              h('div', { class: 'dl-ref-nums' }, referenceReadout(info)),
+              on ? h('div', { class: 'dl-ref-legend' }, referenceLegend(info)) : null,
+            ),
+      );
+    },
+    (a, b) => shallowArrayEq(a, b),
+  );
+
   const viewSec = section(
     'View',
     'eye',
@@ -597,6 +638,7 @@ export function createPanel(ctx: UIContext): Panel {
       legend,
       exag.el,
       h('div', { class: 'dl-switches' }, tImagery.el, tRoads.el, tContours.el),
+      refWrap,
       h(
         'div',
         { class: 'dl-row dl-row-2' },
