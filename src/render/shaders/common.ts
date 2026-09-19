@@ -35,7 +35,7 @@ struct Frame {
   rainBox: f32,       // rain particle box size (m)
   wall: vec4f,        // x: any walls (wallTex valid), y: wall field range (cells), z: wall crest elevation origin (m), w: normal-water mask valid
   bands: array<vec4f, 8>, // rgb (HDR input that tone-maps to the legend colour) + upper threshold in .a
-  protect: vec4f,     // x: protected-land glow strength 0..1 (protectTex valid when > 0), yzw: unused
+  protect: vec4f,     // x: protected-land glow 0..1 (protectTex valid when > 0), y: 1 = roofTex is a real building-height raster, zw: unused
   sunTint: vec3f,     // horizon radiance around the sun's azimuth (the warm band of a low sun)
   skyWarmth: f32,     // 0 with the sun high, 1 with it on the horizon: how far that band is pushed
   light: vec4f,       // shadow strength, sky-occlusion strength, relief strength, 1 = sun raster is built

@@ -109,8 +109,9 @@ fn aces(c: vec3f) -> vec3f {
   return clamp(outM * rrtOdt(inM * c), vec3f(0.0), vec3f(1.0));
 }
 /**
- * Highlight crosstalk + log-pivot contrast, on scene-referred light (tonemap.ts's grade).
- * Crosstalk starts at the bloom threshold, so no hazard colour (peak <= HAZARD_MAX_PEAK) is ever touched by it.
+ * Highlight crosstalk + log-pivot contrast, on exposure-scaled scene light (the CPU mirror is tonemap.ts grade).
+ * Crosstalk starts at the bloom threshold, which at normal exposures is above anything a hazard colour reaches;
+ * where a bright overcast does push one into it, hazardInput solves at that same exposure and cancels it out.
  */
 fn grade(x: vec3f) -> vec3f {
   let peak = max(x.r, max(x.g, x.b));

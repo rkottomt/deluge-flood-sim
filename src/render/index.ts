@@ -44,6 +44,7 @@ import { expandForShadow, SHADOW_QUALITY, shadowReachCells, SunShading, type Cel
 import { AdaptiveQuality, QUALITY_PRESETS, targetSize, type QualityPreset, type RendererQuality, type SimPressure } from './quality';
 import { GpuTimer } from './gpuTimer';
 import { WallField, WALL_FIELD_RADIUS, type Rect } from './wallField';
+import { BuildingLayer, DEFAULT_BUILDING_STYLE, effectiveBuildingStyle, type BuildingStyle } from './buildings';
 import { BASE_EXPOSURE, hazardInput } from './tonemap';
 import { BLOOM_MIPS, BLOOM_PARAMS, BLOOM_UPSAMPLE_RADIUS } from './shaders/post';
 import { footprintRadius, stormWeight } from '../sim/forcing';
@@ -82,11 +83,16 @@ export interface CinematicSettings {
   /** Camera breathing while idle (see OrbitController.sway). */
   sway: boolean;
   /**
-   * Presentation mode: a hint the UI reads to hide its chrome for clean hero images. The renderer itself only
-   * stores and broadcasts it — the keybinding and the actual hiding belong to the UI/app layer.
+   * Presentation mode: hide the UI chrome for clean hero images. The renderer stores it, sets
+   * `data-deluge-presentation="on"` on the document element, and notifies onPresentationChange subscribers; the
+   * keybinding and the rule that actually hides the panels belong to the UI/app layer, which needs only:
+   *   html[data-deluge-presentation] .dl-panel, ... { display: none }
    */
   presentation: boolean;
 }
+
+/** What the 'cinematic' quality tier switches on by itself. Tuned on the demo machine at 1470x956 @ DPR 2. */
+export const CINEMATIC_DEFAULTS = { dof: 5, chromaticAberration: 2.2 } as const;
 
 export interface RendererOptions {
   /** Default 'auto': adaptive resolution targeting ≥ 48 fps sustained, idle frames capped at 30 fps. */
@@ -118,6 +124,11 @@ export interface RendererStats {
   shadowBuildMs: number;
   /** Cells rebuilt by the last sun-shading build (the whole grid at load, an edit's neighbourhood after that). */
   shadowCells: number;
+  /** Buildings in the scene, how many the last frame drew after frustum culling and the distance cut, and the cost. */
+  buildingsTotal: number;
+  buildingsDrawn: number;
+  buildingTris: number;
+  buildingDrawCalls: number;
 }
 
 /** FloodRenderer plus the (non-contract) quality knob and statistics. */
@@ -141,6 +152,13 @@ export interface DelugeRendererAPI extends FloodRenderer {
    * the terrain; null clears it. The mask is copied to the GPU, so the caller may reuse the array.
    */
   setProtectedMask(mask: Uint8Array | null): void;
+  /**
+   * The extruded city: `enabled` hides it outright (e2e flows that only care about the water), and the style
+   * fields override the look on top of whatever the quality tier chose. Everything is optional; omitted fields
+   * keep their current value.
+   */
+  setBuildings(opts: { enabled?: boolean } & Partial<BuildingStyle>): void;
+  readonly buildings: { enabled: boolean; count: number } & Readonly<BuildingStyle>;
   /**
    * Re-capture the "normally wet" mask (rivers and lakes before any flood) from the solver's current water. setScene
    * does this automatically — it is called right after solver.setInitialWater — so this is only needed if the
@@ -259,6 +277,8 @@ interface SceneGPU {
   /** Land kept dry by walls (r8unorm, 255 = protected); only sampled while `protectOn`. */
   protectTex: GPUTexture;
   protectOn: boolean;
+  /** Extruded 3D buildings (src/render/buildings.ts), or null when the scene has no footprints. */
+  buildings: BuildingLayer | null;
   /** Sun visibility + sky visibility over the DEM (src/render/shadows.ts). */
   sun: SunShading;
   /** Terrain rectangle whose lighting an edit invalidated, or null; 'all' forces a full rebuild. */
@@ -289,6 +309,10 @@ class DelugeRenderer implements DelugeRendererAPI {
     gpuTimingAvailable: false,
     shadowBuildMs: 0,
     shadowCells: 0,
+    buildingsTotal: 0,
+    buildingsDrawn: 0,
+    buildingTris: 0,
+    buildingDrawCalls: 0,
   };
 
   private qualityMode: RendererQuality = 'auto';
@@ -324,6 +348,15 @@ class DelugeRenderer implements DelugeRendererAPI {
   private repeat: GPUSampler;
   private rippleTex: GPUTexture;
   private dummyImagery: GPUTexture;
+  /** 1x1 r32float zero: what the scene bind groups bind at the building-height slot when there are none. */
+  private dummyHeights: GPUTexture;
+  /**
+   * 1x1 multisampled depth, bound into the tonemap group whenever depth of field is off. The real depth
+   * attachment then keeps usage RENDER_ATTACHMENT only, which is what lets this GPU keep it in tile memory and
+   * discard it — binding it unconditionally would cost a full-resolution depth write on every frame, forever,
+   * to feed an effect that is off. The shader never reads this one (the gather is behind `dofRadius > 0`).
+   */
+  private dummyDepth: GPUTexture;
   private skyBG: GPUBindGroup;
   private rainBG: GPUBindGroup;
 
@@ -368,6 +401,8 @@ class DelugeRenderer implements DelugeRendererAPI {
   private presentationSubs = new Set<(on: boolean) => void>();
   /** performance.now() until which the user counts as interacting (depth of field stays suspended). */
   private interactingUntil = 0;
+  /** Water mode of the last frame, so ensureTargets knows whether depth of field can run at all. */
+  private lastWaterMode = 'realistic';
 
   // Overlays
   private overlays: OverlayState | null = null;
@@ -396,6 +431,13 @@ class DelugeRenderer implements DelugeRendererAPI {
   private lightingKey = 'daylight';
   /** Sun-shading quality the current raster was built at (a change rebuilds it). */
   private sunShadowsBuiltAt: 'low' | 'standard' | 'cinematic' | null = null;
+  /** Building look; the quality tier owns minPx / detail / reflections, the host may override the rest. */
+  private buildingStyle: BuildingStyle = { ...DEFAULT_BUILDING_STYLE };
+  private buildingsEnabled = true;
+  /** Bumped by setBuildings so an idle frame redraws when the city's look changes. */
+  private buildingVersion = 0;
+  /** World size of one CSS pixel at unit distance (Frame.elev.w), kept so the CPU's building LOD matches the shader's. */
+  private pixelScale = 1 / 1000;
   private hazardCache = new Map<string, number[]>();
   private lastFrameMs = 0;
   private frameCounter = 0;
@@ -442,8 +484,16 @@ class DelugeRenderer implements DelugeRendererAPI {
       addressModeU: 'repeat',
       addressModeV: 'repeat',
     });
+    this.dummyDepth = device.createTexture({
+      label: 'dummy-depth',
+      size: [1, 1],
+      format: DEPTH_FORMAT,
+      sampleCount: MSAA,
+      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+    });
     this.rippleTex = createRippleTexture(device);
     this.dummyImagery = createSolidTexture(device, [0.3, 0.35, 0.25, 1]);
+    this.dummyHeights = device.createTexture({ label: 'no-buildings', size: [1, 1], format: 'r32float', usage: GPUTextureUsage.TEXTURE_BINDING });
     this.skyBG = device.createBindGroup({ layout: P.sky.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer: this.frameBuf } }] });
     this.rainBG = device.createBindGroup({ layout: P.rain.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer: this.frameBuf } }] });
 
@@ -582,6 +632,8 @@ class DelugeRenderer implements DelugeRendererAPI {
       }
     }
 
+    // Declared here (filled in below) so the scene bind groups can bind the roof-height raster.
+    let buildings: BuildingLayer | null = null;
     const sceneEntries = (tex5: GPUTexture, samp7: GPUSampler): GPUBindGroupEntry[] => [
       { binding: 0, resource: { buffer: this.frameBuf } },
       { binding: 1, resource: vtxTex.createView() },
@@ -597,9 +649,8 @@ class DelugeRenderer implements DelugeRendererAPI {
       { binding: 11, resource: protectTex.createView() },
       { binding: 12, resource: sun.texture.createView() },
       { binding: 13, resource: imageryTex.createView() },
+      { binding: 14, resource: (buildings?.heightTexture ?? this.dummyHeights).createView() },
     ];
-    const terrainBG = device.createBindGroup({ label: 'terrain', layout: this.P.sceneBGL, entries: sceneEntries(imageryTex, this.aniso) });
-    const waterBG = device.createBindGroup({ label: 'water', layout: this.P.sceneBGL, entries: sceneEntries(this.rippleTex, this.repeat) });
 
     // Roads
     let roadVerts: GPUBuffer | null = null;
@@ -647,6 +698,34 @@ class DelugeRenderer implements DelugeRendererAPI {
       ],
     });
 
+    // The extruded city (src/render/buildings.ts). Meshed from the solver's own bed rather than the raw DEM, so a
+    // hydro-conditioned bank cannot leave a warehouse hanging over the water. Its roof-height raster becomes part
+    // of the occluder field the sun-shading pass marches, which is what makes buildings cast real shadows.
+    const t0 = typeof performance !== 'undefined' ? performance.now() : 0;
+    try {
+      buildings = BuildingLayer.create(device, terrain.buildings ?? null, solver.getGroundCPU(), nx, ny, this.P.buildingBGL, {
+        frame: this.frameBuf,
+        sun: sun.texture.createView(),
+        imagery: imageryTex.createView(),
+        vtx: vtxTex.createView(),
+        misc: miscTex.createView(),
+        linear: this.linClamp,
+        imagery_: this.aniso,
+      });
+    } catch (e) {
+      console.warn('[render] buildings unavailable', e);
+      buildings = null;
+    }
+    if (buildings) {
+      const ms = (typeof performance !== 'undefined' ? performance.now() : 0) - t0;
+      console.info(`[render] ${buildings.buildingCount} buildings, ${(buildings.triangleCount / 1000) | 0}k triangles, ${ms.toFixed(0)} ms`);
+    }
+    sun.buildingHeights = buildings && this.buildingsEnabled ? buildings.heightTexture : null;
+    // Built here, after the city: both scene bind groups carry its roof-height raster (see sceneEntries).
+    const terrainBG = device.createBindGroup({ label: 'terrain', layout: this.P.sceneBGL, entries: sceneEntries(imageryTex, this.aniso) });
+    const waterBG = device.createBindGroup({ label: 'water', layout: this.P.sceneBGL, entries: sceneEntries(this.rippleTex, this.repeat) });
+    this.stats.buildingsTotal = buildings?.buildingCount ?? 0;
+
     const relief = Math.max(1, gMax - gMin);
     this.scene = {
       terrain,
@@ -687,6 +766,7 @@ class DelugeRenderer implements DelugeRendererAPI {
       contourInterval: niceStep(relief / 24),
       wallField: new WallField(nx, ny, solver.getGroundCPU(), solver.getBarrierCPU()),
       wallTex,
+      buildings,
       normalWetTex,
       normalWetValid: false,
       protectTex,
@@ -813,6 +893,7 @@ class DelugeRenderer implements DelugeRendererAPI {
     s.prepCache.clear();
     s.cellTex.destroy();
     s.vtxBedTex.destroy();
+    s.buildings?.destroy();
     s.sun.destroy();
     this.sunShadowsBuiltAt = null;
     this.scene = null;
@@ -996,6 +1077,37 @@ class DelugeRenderer implements DelugeRendererAPI {
     this.editEpoch++;
   }
 
+  get buildings(): { enabled: boolean; count: number } & Readonly<BuildingStyle> {
+    return { enabled: this.buildingsEnabled, count: this.scene?.buildings?.buildingCount ?? 0, ...this.buildingStyle };
+  }
+
+  setBuildings(opts: { enabled?: boolean } & Partial<BuildingStyle>): void {
+    const before = `${this.buildingsEnabled}|${JSON.stringify(this.buildingStyle)}`;
+    if (typeof opts.enabled === 'boolean') this.buildingsEnabled = opts.enabled;
+    const num = (v: number | undefined, cur: number, hi = 1) => (Number.isFinite(v) ? clamp(v as number, 0, hi) : cur);
+    const st = this.buildingStyle;
+    st.minPx = num(opts.minPx, st.minPx, 64);
+    st.detail = num(opts.detail, st.detail);
+    st.reflections = num(opts.reflections, st.reflections);
+    st.roofImagery = num(opts.roofImagery, st.roofImagery);
+    st.baseAO = num(opts.baseAO, st.baseAO);
+    st.wetBand = num(opts.wetBand, st.wetBand);
+    st.foam = num(opts.foam, st.foam);
+    st.stain = num(opts.stain, st.stain);
+    st.mud = num(opts.mud, st.mud);
+    if (`${this.buildingsEnabled}|${JSON.stringify(st)}` === before) return;
+    this.buildingVersion++;
+    // Hiding the city must also take it out of the shadow raster, or the streets keep shadows nothing casts.
+    const scene = this.scene;
+    if (scene?.buildings) {
+      const want = this.buildingsEnabled ? scene.buildings.heightTexture : null;
+      if (want !== scene.sun.buildingHeights) {
+        scene.sun.buildingHeights = want;
+        scene.sunDirty = 'all';
+      }
+    }
+  }
+
   get lighting(): Readonly<LightingSettings> {
     return this.lightingSettings;
   }
@@ -1038,7 +1150,15 @@ class DelugeRenderer implements DelugeRendererAPI {
     this.camera.sway = next.sway;
     // Depth of field changes what the depth attachment has to do, which is a render-target decision.
     if (this.depthReadable !== this.dofRadiusPx() > 0) this.needsResize = true;
-    if (was !== next.presentation) for (const fn of this.presentationSubs) fn(next.presentation);
+    if (was !== next.presentation) {
+      // Published two ways because the UI is not this module's business: a subscription for code that wants to
+      // react, and a data attribute on <html> so hiding the chrome can be one CSS rule and nothing else.
+      if (typeof document !== 'undefined' && document.documentElement) {
+        if (next.presentation) document.documentElement.dataset.delugePresentation = 'on';
+        else delete document.documentElement.dataset.delugePresentation;
+      }
+      for (const fn of this.presentationSubs) fn(next.presentation);
+    }
   }
 
   onPresentationChange(fn: (on: boolean) => void): () => void {
@@ -1054,11 +1174,17 @@ class DelugeRenderer implements DelugeRendererAPI {
   }
 
   /**
-   * Depth-of-field radius in CSS pixels for this frame: 0 unless it is switched on AND the user is not currently
-   * moving the view. Blurring while someone drags reads as lag, not as photography.
+   * Depth-of-field radius in CSS pixels for this frame: 0 unless it is switched on, the user is not currently
+   * moving the view, and the water is being drawn photorealistically.
+   *
+   * Blurring during a drag reads as lag rather than as photography. Blurring a HAZARD map is worse than that: the
+   * depth / max-depth / velocity views are how a judge reads the flood, every pixel of them is a measurement, and
+   * a lens effect that throws half of them out of focus is not a look, it is a loss of data. So the effect is
+   * suspended in those modes even in the cinematic tier — the same rule as the chromatic aberration below.
    */
-  private dofRadiusPx(): number {
-    if (!(this.cine.dof > 0)) return 0;
+  private dofRadiusPx(mode: string = this.lastWaterMode): number {
+    if (!(this.cine.dof > 0) || mode !== 'realistic') return 0;
+    if (this.camera.moving) return 0;
     const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
     return now < this.interactingUntil ? 0 : this.cine.dof;
   }
@@ -1071,9 +1197,20 @@ class DelugeRenderer implements DelugeRendererAPI {
   setQuality(quality: RendererQuality): void {
     if (!(quality in QUALITY_PRESETS) && quality !== 'auto') return;
     if (quality === this.qualityMode) return;
+    const wasCine = this.qualityMode !== 'auto' && QUALITY_PRESETS[this.qualityMode]?.cinematicPost;
     this.qualityMode = quality;
     this.adaptive.reset();
     this.needsResize = true;
+    // Entering (or leaving) the hero tier carries its post defaults with it, so picking 'Cinematic' in the UI is
+    // one decision rather than three. An explicit setCinematic afterwards still wins.
+    const nowCine = quality !== 'auto' && QUALITY_PRESETS[quality].cinematicPost === true;
+    if (nowCine !== !!wasCine) {
+      this.setCinematic(
+        nowCine
+          ? { dof: CINEMATIC_DEFAULTS.dof, chromaticAberration: CINEMATIC_DEFAULTS.chromaticAberration }
+          : { dof: 0, chromaticAberration: 0 },
+      );
+    }
   }
 
   private preset(): QualityPreset {
@@ -1152,9 +1289,7 @@ class DelugeRenderer implements DelugeRendererAPI {
         { binding: 1, resource: this.hdr.createView() },
         { binding: 2, resource: this.bloomViews[0] },
         { binding: 3, resource: this.linClamp },
-        // Without DOF the depth texture is never sampled, but the bind group still needs an entry of the right
-        // type; the attachment is simply not stored, so what it holds is last frame's discarded contents.
-        { binding: 4, resource: this.msaaDepth.createView() },
+        { binding: 4, resource: (wantDepth ? this.msaaDepth : this.dummyDepth).createView() },
       ],
     });
     this.needsResize = false;
@@ -1232,6 +1367,7 @@ class DelugeRenderer implements DelugeRendererAPI {
       this.overlayVersion,
       this.editEpoch,
       this.lightingKey,
+      this.buildingVersion,
       // While the protected-land glow fades in or out, every frame differs.
       this.protectFade > 0 && this.protectFade < 1 ? this.protectFade : s?.protectOn ? 1 : 0,
       s ? this.stateKey(s.solver) : 0,
@@ -1264,6 +1400,13 @@ class DelugeRenderer implements DelugeRendererAPI {
 
   render(settings: RenderSettings): void {
     if (this.destroyed) return;
+    // ensureTargets runs before the frame's settings are otherwise consulted, and it has to know whether depth of
+    // field can run at all (it decides whether the depth attachment is stored).
+    if (settings.waterMode !== this.lastWaterMode) {
+      const couldDof = this.dofRadiusPx(this.lastWaterMode) > 0;
+      this.lastWaterMode = settings.waterMode;
+      if (couldDof !== this.dofRadiusPx() > 0) this.needsResize = true;
+    }
     const cpuStart = typeof performance !== 'undefined' ? performance.now() : Date.now();
     const now = cpuStart;
     const dt = this.lastFrameMs ? (now - this.lastFrameMs) / 1000 : 1 / 60;
@@ -1428,7 +1571,16 @@ class DelugeRenderer implements DelugeRendererAPI {
 
     // Depth of field needs the depth buffer after the pass; everywhere else the attachment is discarded on store,
     // which is what lets it stay in tile memory on this GPU.
-    const dofRadius = this.depthReadable ? this.dofRadiusPx() : 0;
+    const dofRadius = this.depthReadable ? this.dofRadiusPx(settings.waterMode) : 0;
+    // Buildings: the uniform is written on the queue before this frame's commands run, and the per-chunk
+    // selection happens at draw time below (it needs the frustum, which the camera has already settled).
+    const drawBuildings = !!s?.buildings && this.buildingsEnabled && !this.debugSkip.has('buildings');
+    const bldStyle = effectiveBuildingStyle(preset, this.buildingStyle);
+    if (drawBuildings && s?.buildings) {
+      const hazard = (WATER_MODE_INDEX[settings.waterMode] ?? 0) > 0 ? 1 : 0;
+      s.buildings.writeUniform(bldStyle, this.buildingStyle, hazard, !!settings.showImagery && s.hasImagery);
+    }
+
     const pass = enc.beginRenderPass({
       label: 'main',
       colorAttachments: [
@@ -1460,6 +1612,30 @@ class DelugeRenderer implements DelugeRendererAPI {
       pass.setIndexBuffer(m.skirt, 'uint32');
       pass.setPipeline(this.P.skirt);
       pass.drawIndexed(m.skirtCount);
+
+      // The city, drawn with the rest of the opaque geometry so the terrain occludes it and the water — which is
+      // blended afterwards — runs up its walls and stops exactly at its own surface.
+      if (drawBuildings && s.buildings) {
+        s.buildings.draw(
+          pass,
+          this.P.buildings,
+          matrices.eye,
+          frustumPlanes(matrices.viewProj),
+          s.nx,
+          s.ny,
+          s.terrain.cellSize,
+          this.exaggeration,
+          this.pixelScale,
+          bldStyle.minPx,
+        );
+        this.stats.buildingsDrawn = s.buildings.drawnBuildings;
+        this.stats.buildingTris = s.buildings.drawnIndices / 3;
+        this.stats.buildingDrawCalls = s.buildings.drawCalls;
+      } else {
+        this.stats.buildingsDrawn = 0;
+        this.stats.buildingTris = 0;
+        this.stats.buildingDrawCalls = 0;
+      }
 
       pass.setBindGroup(0, s.overlayBG);
       if (this.markerOpaqueI.count > 0 && this.markerOpaqueV.buffer && this.markerOpaqueI.buffer) {
@@ -1645,6 +1821,7 @@ class DelugeRenderer implements DelugeRendererAPI {
     f[61] = gMax;
     f[62] = gMin - Math.max(20, (gMax - gMin) * 0.25);
     f[63] = (2 * Math.tan(m.fovY / 2)) / cssH;
+    this.pixelScale = f[63];
     f[64] = settings.showImagery && s?.hasImagery ? 1 : 0;
     f[65] = settings.showContours ? 1 : 0;
     f[66] = s?.contourInterval ?? 10;
@@ -1676,7 +1853,9 @@ class DelugeRenderer implements DelugeRendererAPI {
     const protectTarget = s?.protectOn ? 1 : 0;
     this.protectFade = protectTarget > this.protectFade ? Math.min(1, this.protectFade + this.frameDt / 0.6) : Math.max(0, this.protectFade - this.frameDt / 0.3);
     f[112] = s?.protectOn || this.protectFade > 0 ? this.protectFade : 0;
-    f[113] = 0;
+    // Is there a roof-height raster the water pass may march for its reflections? (Cleared when the city is
+    // hidden, so hiding the buildings also takes them out of the water.)
+    f[113] = s?.buildings?.heightTexture && this.buildingsEnabled ? 1 : 0;
     f[114] = 0;
     f[115] = 0;
     // Sky and shading. skyWarmth is the single number the low-sun look hangs off: the warm horizon band, the wider
@@ -1787,7 +1966,7 @@ class DelugeRenderer implements DelugeRendererAPI {
     this.mesh = null;
     this.patchIndex.destroy();
     this.nodeBuf.destroy();
-    for (const t of [this.msaaColor, this.msaaDepth, this.hdr, this.bloomTex, this.rippleTex, this.dummyImagery]) t?.destroy();
+    for (const t of [this.msaaColor, this.msaaDepth, this.hdr, this.bloomTex, this.rippleTex, this.dummyImagery, this.dummyHeights, this.dummyDepth]) t?.destroy();
     for (const b of [this.frameBuf, this.overlayBuf, this.postBuf, ...this.bloomBufs]) b.destroy();
     for (const b of [this.dynRibbons, this.dynRibbonIdx, this.markerOpaqueV, this.markerOpaqueI, this.markerBlendV, this.markerBlendI]) b.destroy();
     this.timer.destroy();

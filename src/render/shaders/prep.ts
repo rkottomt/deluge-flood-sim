@@ -3,7 +3,7 @@
  *
  *  cells  (nx×ny)  → surfTex rgba16float: h, u, v, foam source          (filterable)
  *                    normTex rgba16float: ∂bed/∂x, ∂bed/∂z, ∂η/∂x, ∂η/∂z (filterable, wet-only η differences)
- *                    miscTex rgba16float: barrier, max depth, 0, 0        (filterable)
+ *                    miscTex rgba16float: barrier, max depth, speed, collected whitewater (filterable)
  *                    cellTex rg32float:   displayed depth d, water surface bed + d (full precision, for verts)
  *  vtxBed (vx×vy)  → vtxBedTex r32float: vertex bed (mean ground of its 4 cells + max barrier); only rebuilt when
  *                    the terrain changes (walls, digging), not every frame
@@ -78,23 +78,38 @@ export const PREP_CELLS_WGSL = /* wgsl */ `
 @group(0) @binding(6) var miscOut: texture_storage_2d<rgba16float, write>;
 @group(0) @binding(7) var cellOut: texture_storage_2d<rg32float, write>;
 
-fn etaSlope(c: vec2i, axis: vec2i, hc: f32, ec: f32) -> f32 {
-  let pr = c + axis;
-  let pl = c - axis;
-  let inR = all(pr == cl(pr));
-  let inL = all(pl == cl(pl));
-  let sr = state(pr);
-  let sl = state(pl);
-  let dr = depthOf(sr);
-  let dl = depthOf(sl);
-  let wr = inR && dr > P.hWet;
-  let wl = inL && dl > P.hWet;
-  let er = bed(pr) + dr;
-  let el = bed(pl) + dl;
+/**
+ * One 4-neighbour of a cell, loaded once. The bed slope, the water-surface slope and the whitewater term below
+ * all want the same four neighbours; fetching them once takes the pass from twelve texel loads per cell to eight,
+ * which is what pays for the new term.
+ */
+struct Nb {
+  inside: bool,
+  d: f32,        // displayed depth (m)
+  vel: vec2f,    // depth-averaged velocity (m/s)
+  bedY: f32,     // bed elevation, barriers included (m)
+  eta: f32,      // water surface (m)
+  wet: bool,
+}
+
+fn neighbour(p: vec2i) -> Nb {
+  var o: Nb;
+  o.inside = all(p == cl(p));
+  let s = state(p);
+  o.d = depthOf(s);
+  o.vel = s.gb;
+  o.bedY = bed(p);
+  o.eta = o.bedY + o.d;
+  o.wet = o.inside && o.d > P.hWet;
+  return o;
+}
+
+/** Central water-surface slope along one axis (one-sided where only one side is wet, 0 where neither is). */
+fn etaSlopeNb(a: Nb, b: Nb, ec: f32) -> f32 {
   let dx = P.cellSize;
-  if (wr && wl) { return (er - el) / (2.0 * dx); }
-  if (wr) { return (er - ec) / dx; }
-  if (wl) { return (ec - el) / dx; }
+  if (a.wet && b.wet) { return (a.eta - b.eta) / (2.0 * dx); }
+  if (a.wet) { return (a.eta - ec) / dx; }
+  if (b.wet) { return (ec - b.eta) / dx; }
   return 0.0;
 }
 
@@ -107,34 +122,61 @@ fn cells(@builtin(global_invocation_id) gid: vec3u) {
   let b = bed(c);
   let dx = P.cellSize;
 
+  let nR = neighbour(c + vec2i(1, 0));
+  let nL = neighbour(c - vec2i(1, 0));
+  let nD = neighbour(c + vec2i(0, 1));
+  let nU = neighbour(c - vec2i(0, 1));
+
   // Bed slope (central differences, one-sided at the domain edge).
   let xr = cl(c + vec2i(1, 0));
   let xl = cl(c - vec2i(1, 0));
   let yd = cl(c + vec2i(0, 1));
   let yu = cl(c - vec2i(0, 1));
-  let sbx = (bed(xr) - bed(xl)) / (max(f32(xr.x - xl.x), 1.0) * dx);
-  let sbz = (bed(yd) - bed(yu)) / (max(f32(yd.y - yu.y), 1.0) * dx);
+  let sbx = (nR.bedY - nL.bedY) / (max(f32(xr.x - xl.x), 1.0) * dx);
+  let sbz = (nD.bedY - nU.bedY) / (max(f32(yd.y - yu.y), 1.0) * dx);
 
   var sex = 0.0;
   var sez = 0.0;
   var foam = 0.0;
+  var collect = 0.0;
   let speed = length(s.gb);
   if (h > P.hWet) {
     let e = b + h;
-    sex = clamp(etaSlope(c, vec2i(1, 0), h, e), -3.0, 3.0);
-    sez = clamp(etaSlope(c, vec2i(0, 1), h, e), -3.0, 3.0);
+    sex = clamp(etaSlopeNb(nR, nL, e), -3.0, 3.0);
+    sez = clamp(etaSlopeNb(nD, nU, e), -3.0, 3.0);
     let froude = speed / sqrt(9.81 * max(h, 0.05));
     let rapids = smoothstep(0.02, 0.25, length(vec2f(sex, sez)));
     foam = smoothstep(0.55, 1.5, froude) * smoothstep(0.02, 0.25, h)
          + smoothstep(1.8, 5.0, speed) * 0.55
          + rapids * smoothstep(0.3, 1.5, speed) * 0.6;
+
+    // ── Where whitewater collects ────────────────────────────────────────────────────────────────────
+    // Read only by the water shader (miscOut.a); nothing here feeds back into the solver. Three things the
+    // solved field already knows and a real surface would show:
+    //   · the advancing front — a wet cell with a dry neighbour, weighted by how fast it is moving into it;
+    //   · water piling against something it cannot cross — a neighbouring bed or barrier crest standing above
+    //     this cell's own water surface (a levee, a building pad, a bank), with flow still pushing at it;
+    //   · converging flow (−∇·u), which is where a real surface heaps up and aerates.
+    // The domain edge is deliberately not a front: the diorama's cut face is not a shoreline, and treating it as
+    // one drew a white outline around the whole map.
+    let dry = select(0.0, 1.0, nR.inside && !nR.wet) + select(0.0, 1.0, nL.inside && !nL.wet)
+            + select(0.0, 1.0, nD.inside && !nD.wet) + select(0.0, 1.0, nU.inside && !nU.wet);
+    let front = min(dry, 2.0) * 0.5 * smoothstep(0.08, 0.8, speed);
+    let block = max(max(nR.bedY, nL.bedY), max(nD.bedY, nU.bedY)) - e;
+    let against = smoothstep(0.0, 0.5, block) * smoothstep(0.15, 1.2, speed);
+    let div = (nR.vel.x - nL.vel.x + nD.vel.y - nU.vel.y) / (2.0 * dx);
+    let conv = smoothstep(0.004, 0.06, -div) * smoothstep(0.1, 1.0, speed);
+    // The max-depth view is a static map of where the water reached; live foam on it would be a lie about a
+    // field that is not moving, so it is left off there.
+    let live = select(1.0, 0.0, P.useMax == 1);
+    collect = clamp(front * 0.85 + against * 0.9 + conv * 0.55, 0.0, 1.0) * smoothstep(0.02, 0.12, h) * live;
   }
   let vel = select(s.gb, vec2f(0.0), P.useMax == 1 && s.r <= P.hWet);
   let foamOut = select(clamp(foam, 0.0, 1.5), BLOWN_FOAM, blownState(textureLoad(stateTex, c, 0)));
   textureStore(surfOut, c, vec4f(h, vel, foamOut));
   textureStore(normOut, c, vec4f(clamp(sbx, -60.0, 60.0), clamp(sbz, -60.0, 60.0), sex, sez));
   let barrier = textureLoad(barrierTex, c, 0).r;
-  textureStore(miscOut, c, vec4f(max(barrier, 0.0), max(s.a, 0.0), speed, 0.0));
+  textureStore(miscOut, c, vec4f(max(barrier, 0.0), max(s.a, 0.0), speed, collect));
   textureStore(cellOut, c, vec4f(h, b + h, 0.0, 0.0));
 }
 `;

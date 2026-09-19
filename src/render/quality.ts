@@ -33,18 +33,36 @@ export interface QualityPreset {
   detailNormals: number;
   /** Which sun-shading raster to build (see SHADOW_QUALITY in shadows.ts). Costs load time, not frame time. */
   shadows: 'low' | 'standard' | 'cinematic';
+  /**
+   * Buildings: the smallest on-screen height, in pixels, at which a building is still drawn. This is the whole
+   * building LOD — a rowhouse three pixels tall adds nothing but triangles, and Pittsburgh's median roof is
+   * 6.75 m, so a pixel either way moves tens of thousands of buildings in or out of the frame.
+   */
+  buildingMinPx: number;
+  /** Floor bands / mullions on close facades (0 = flat colour). */
+  buildingDetail: number;
+  /** Sky and cloud reflections in glass curtain wall — cinematic only; it costs a sky evaluation per glass pixel. */
+  buildingReflections: number;
+  /**
+   * Hero-shot post: depth of field on the orbit target and edge chromatic aberration. True only in the
+   * 'cinematic' preset — these cost real frame time and are for a still, not for a flood running at 300x. The
+   * renderer applies the tier's defaults on setQuality and the host may still override them (setCinematic).
+   */
+  cinematicPost?: boolean;
 }
 
 /**
  * 'cinematic' is the hero-screenshot tier: everything the default cannot afford to hold 60 fps under a full
- * Pittsburgh flood with hurricane rain. It is never selected automatically — the adaptive controller works the
- * AUTO_LADDER below and can always step down under load.
+ * Pittsburgh flood with hurricane rain — the densest sun-shading raster, full detail normals, and (unique to this
+ * tier) the depth of field and edge aberration in shaders/post.ts. It is never selected automatically: the
+ * adaptive controller works the AUTO_LADDER below, which contains no cinematic entry, and can always step down
+ * under load from wherever it is.
  */
 export const QUALITY_PRESETS: Record<Exclude<RendererQuality, 'auto'>, QualityPreset> = {
-  cinematic: { maxDpr: 2, maxPixels: 2560 * 1600, bloom: true, prepInterval: 1, idleFps: 60, rainDrops: 22000, lodQuadPixels: 2.5, shadowFilterCells: 1.1, detailNormals: 1, shadows: 'cinematic' },
-  high: { maxDpr: 2, maxPixels: 2560 * 1600, bloom: true, prepInterval: 1, idleFps: 60, rainDrops: 16000, lodQuadPixels: 3, shadowFilterCells: 0.8, detailNormals: 0.75, shadows: 'standard' },
-  balanced: { maxDpr: 1.5, maxPixels: 1920 * 1200, bloom: true, prepInterval: 2, idleFps: 30, rainDrops: 12000, lodQuadPixels: 4, shadowFilterCells: 0.7, detailNormals: 0.6, shadows: 'standard' },
-  low: { maxDpr: 1, maxPixels: 1440 * 900, bloom: false, prepInterval: 2, idleFps: 30, rainDrops: 6000, lodQuadPixels: 5, shadowFilterCells: 0, detailNormals: 0, shadows: 'low' },
+  cinematic: { maxDpr: 2, maxPixels: 2560 * 1600, bloom: true, prepInterval: 1, idleFps: 60, rainDrops: 22000, lodQuadPixels: 2.5, shadowFilterCells: 1.1, detailNormals: 1, shadows: 'cinematic', cinematicPost: true, buildingMinPx: 1.6, buildingDetail: 1, buildingReflections: 1 },
+  high: { maxDpr: 2, maxPixels: 2560 * 1600, bloom: true, prepInterval: 1, idleFps: 60, rainDrops: 16000, lodQuadPixels: 3, shadowFilterCells: 0.8, detailNormals: 0.75, shadows: 'standard', buildingMinPx: 2.6, buildingDetail: 1, buildingReflections: 0 },
+  balanced: { maxDpr: 1.5, maxPixels: 1920 * 1200, bloom: true, prepInterval: 2, idleFps: 30, rainDrops: 12000, lodQuadPixels: 4, shadowFilterCells: 0.7, detailNormals: 0.6, shadows: 'standard', buildingMinPx: 3.6, buildingDetail: 0.85, buildingReflections: 0 },
+  low: { maxDpr: 1, maxPixels: 1440 * 900, bloom: false, prepInterval: 2, idleFps: 30, rainDrops: 6000, lodQuadPixels: 5, shadowFilterCells: 0, detailNormals: 0, shadows: 'low', buildingMinPx: 6, buildingDetail: 0, buildingReflections: 0 },
 };
 
 /**
@@ -56,12 +74,12 @@ export const QUALITY_PRESETS: Record<Exclude<RendererQuality, 'auto'>, QualityPr
  * no visible difference (the imagery carries the detail and shorelines are resolved per fragment).
  */
 export const AUTO_LADDER: QualityPreset[] = [
-  { maxDpr: 2, maxPixels: 2560 * 1600, bloom: true, prepInterval: 1, idleFps: 30, rainDrops: 16000, lodQuadPixels: 3, shadowFilterCells: 0.8, detailNormals: 0.75, shadows: 'standard' },
-  { maxDpr: 1.5, maxPixels: 1920 * 1200, bloom: true, prepInterval: 2, idleFps: 30, rainDrops: 14000, lodQuadPixels: 4, shadowFilterCells: 0.8, detailNormals: 0.75, shadows: 'standard' },
-  { maxDpr: 1.25, maxPixels: 1680 * 1050, bloom: true, prepInterval: 2, idleFps: 30, rainDrops: 12000, lodQuadPixels: 4.5, shadowFilterCells: 0.7, detailNormals: 0.6, shadows: 'standard' },
-  { maxDpr: 1, maxPixels: 1600 * 1000, bloom: true, prepInterval: 2, idleFps: 30, rainDrops: 10000, lodQuadPixels: 5, shadowFilterCells: 0.7, detailNormals: 0.6, shadows: 'standard' },
-  { maxDpr: 1, maxPixels: 1440 * 900, bloom: false, prepInterval: 2, idleFps: 30, rainDrops: 8000, lodQuadPixels: 6, shadowFilterCells: 0, detailNormals: 0.4, shadows: 'standard' },
-  { maxDpr: 0.8, maxPixels: 1280 * 800, bloom: false, prepInterval: 3, idleFps: 30, rainDrops: 6000, lodQuadPixels: 7, shadowFilterCells: 0, detailNormals: 0, shadows: 'low' },
+  { maxDpr: 2, maxPixels: 2560 * 1600, bloom: true, prepInterval: 1, idleFps: 30, rainDrops: 16000, lodQuadPixels: 3, shadowFilterCells: 0.8, detailNormals: 0.75, shadows: 'standard', buildingMinPx: 2.6, buildingDetail: 1, buildingReflections: 0 },
+  { maxDpr: 1.5, maxPixels: 1920 * 1200, bloom: true, prepInterval: 2, idleFps: 30, rainDrops: 14000, lodQuadPixels: 4, shadowFilterCells: 0.8, detailNormals: 0.75, shadows: 'standard', buildingMinPx: 3.2, buildingDetail: 1, buildingReflections: 0 },
+  { maxDpr: 1.25, maxPixels: 1680 * 1050, bloom: true, prepInterval: 2, idleFps: 30, rainDrops: 12000, lodQuadPixels: 4.5, shadowFilterCells: 0.7, detailNormals: 0.6, shadows: 'standard', buildingMinPx: 4.0, buildingDetail: 0.85, buildingReflections: 0 },
+  { maxDpr: 1, maxPixels: 1600 * 1000, bloom: true, prepInterval: 2, idleFps: 30, rainDrops: 10000, lodQuadPixels: 5, shadowFilterCells: 0.7, detailNormals: 0.6, shadows: 'standard', buildingMinPx: 4.8, buildingDetail: 0.7, buildingReflections: 0 },
+  { maxDpr: 1, maxPixels: 1440 * 900, bloom: false, prepInterval: 2, idleFps: 30, rainDrops: 8000, lodQuadPixels: 6, shadowFilterCells: 0, detailNormals: 0.4, shadows: 'standard', buildingMinPx: 6.0, buildingDetail: 0.4, buildingReflections: 0 },
+  { maxDpr: 0.8, maxPixels: 1280 * 800, bloom: false, prepInterval: 3, idleFps: 30, rainDrops: 6000, lodQuadPixels: 7, shadowFilterCells: 0, detailNormals: 0, shadows: 'low', buildingMinPx: 8.0, buildingDetail: 0, buildingReflections: 0 },
 ];
 const AUTO_START_LEVEL = 1;
 

@@ -6,8 +6,11 @@
  *   1. exposure
  *   2. HIGHLIGHT CROSSTALK — above the bloom threshold, colour is pulled toward its own peak channel. Without it
  *      a per-channel filmic curve clips a bright saturated colour to a primary (a blown sky goes cyan, a sun glint
- *      goes yellow); with it, bright things roll off to white the way film does. It starts exactly AT the bloom
- *      threshold, so no hazard colour (peak <= HAZARD_MAX_PEAK < BLOOM_THRESHOLD) is ever touched by it.
+ *      goes yellow); with it, bright things roll off to white the way film does. Its onset is CROSSTALK_LO, set
+ *      equal to BLOOM_THRESHOLD, so at normal exposures no hazard colour reaches it (hazardInput caps them at
+ *      HAZARD_MAX_PEAK < BLOOM_THRESHOLD). Under a heavy overcast the exposure rises enough to push the top band
+ *      into it; that is harmless, because the solve below runs at the frame's own exposure and compensates
+ *      exactly — which the tests check at every exposure the renderer can produce.
  *   3. LOG-PIVOT CONTRAST — the filmic grade, a power law about 18 % grey. This is where the picture stops looking
  *      like a flat photo composite: it is applied to scene-referred light BEFORE the tone curve, so the curve's own
  *      shoulder still does the highlight rolloff instead of the grade clipping it.
@@ -42,7 +45,7 @@ export const HAZARD_MAX_PEAK = 2.1;
 export const BLOOM_KNEE = 1.0;
 /** Crosstalk: how far a colour is pulled toward its peak channel once it is well above CROSSTALK_LO. */
 export const CROSSTALK = 0.5;
-/** Crosstalk onset. Equal to BLOOM_THRESHOLD on purpose, so hazard colours (peak <= HAZARD_MAX_PEAK) never see it. */
+/** Crosstalk onset, on exposure-scaled light. Equal to BLOOM_THRESHOLD on purpose (see the module note). */
 export const CROSSTALK_LO = 2.2;
 /** Crosstalk saturates here. */
 export const CROSSTALK_HI = 9.0;
@@ -57,6 +60,19 @@ export const GRADE_GAIN = [1.012, 1.0, 0.985] as const;
 // ACES filmic, Stephen Hill fit: column-major 3×3 matrices (as in WGSL mat3x3f(col0, col1, col2)).
 export const ACES_IN = [0.59719, 0.076, 0.0284, 0.35458, 0.90834, 0.13383, 0.04823, 0.01566, 0.83777] as const;
 export const ACES_OUT = [1.60475, -0.10208, -0.00327, -0.53108, 1.10813, -0.07276, -0.07367, -0.00605, 1.07602] as const;
+
+/**
+ * Bloom bright-pass response to a colour's peak channel, mirroring BLOOM_WGSL's soft knee. Two properties matter
+ * and are tested (tests/render/tonemap.test.ts):
+ *   • it is exactly 0 at and below BLOOM_THRESHOLD — the contract that keeps hazard water from glowing, since
+ *     `hazardInput` caps every hazard colour at HAZARD_MAX_PEAK < BLOOM_THRESHOLD;
+ *   • it is C1 at the threshold (value AND slope zero), so there is no step for the blur to smear into a halo.
+ */
+export function bloomContribution(peak: number): number {
+  const x = peak - BLOOM_THRESHOLD;
+  if (!(x > 0)) return 0;
+  return x < BLOOM_KNEE ? (x * x) / (2 * BLOOM_KNEE) : x - 0.5 * BLOOM_KNEE;
+}
 
 export type RGB = [number, number, number];
 

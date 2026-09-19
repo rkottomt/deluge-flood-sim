@@ -109,7 +109,16 @@ export class SunShading {
   private heightBG: GPUBindGroup | null = null;
   private heightBGKey: GPUTexture | null = null;
   private heightBGKey2: GPUTexture | null = null;
+  private heightBGKey3: GPUTexture | null = null;
   private visBG: GPUBindGroup;
+  /** 1x1 stand-in bound when nothing is built on the grid, so the bind group layout never changes. */
+  private noBuildings: GPUTexture;
+  /**
+   * Roof height above ground per cell (r32float over the grid), or null when the scene has no buildings or they
+   * are hidden. Set it before `build()`: buildings then cast their own shadows and close the streets in, at no
+   * per-frame cost, because they are simply part of the height field the raster is solved over.
+   */
+  buildingHeights: GPUTexture | null = null;
   /** Cells rebuilt by the last build() — the measurement the perf report quotes. */
   lastCells = 0;
   /** True once a full-grid build has been encoded: before that the shaders must ignore the texture. */
@@ -125,7 +134,10 @@ export class SunShading {
     const usage = GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING;
     // COPY_SRC so tests (and any future debug view) can read the raster back and check it against the height field.
     this.texture = device.createTexture({ label: 'sun-visibility', size: [nx, ny], format: 'rgba8unorm', usage: usage | GPUTextureUsage.COPY_SRC });
-    this.heightTex = device.createTexture({ label: 'sun-height', size: [nx, ny], format: 'r32float', usage });
+    // rg32float: the occluder height field and the bare street under it (see SUN_HEIGHT_WGSL).
+    this.heightTex = device.createTexture({ label: 'sun-height', size: [nx, ny], format: 'rg32float', usage });
+    this.noBuildings = device.createTexture({ label: 'sun-no-buildings', size: [1, 1], format: 'r32float', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
+    device.queue.writeTexture({ texture: this.noBuildings }, new Float32Array([0]), { bytesPerRow: 4 }, { width: 1, height: 1 });
     this.heightParams = device.createBuffer({ label: 'sun-height-params', size: HEIGHT_PARAMS_SIZE, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     this.sunParams = device.createBuffer({ label: 'sun-vis-params', size: SUN_PARAMS_SIZE, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     this.visBG = device.createBindGroup({
@@ -140,7 +152,8 @@ export class SunShading {
   }
 
   private heightBindGroup(bed: GPUTexture, barrier: GPUTexture): GPUBindGroup {
-    if (this.heightBG && this.heightBGKey === bed && this.heightBGKey2 === barrier) return this.heightBG;
+    const bld = this.buildingHeights ?? this.noBuildings;
+    if (this.heightBG && this.heightBGKey === bed && this.heightBGKey2 === barrier && this.heightBGKey3 === bld) return this.heightBG;
     this.heightBG = this.device.createBindGroup({
       label: 'sun-height',
       layout: this.P.packHeight.getBindGroupLayout(0),
@@ -149,10 +162,12 @@ export class SunShading {
         { binding: 1, resource: bed.createView() },
         { binding: 2, resource: barrier.createView() },
         { binding: 3, resource: this.heightTex.createView() },
+        { binding: 4, resource: bld.createView() },
       ],
     });
     this.heightBGKey = bed;
     this.heightBGKey2 = barrier;
+    this.heightBGKey3 = bld;
     return this.heightBG;
   }
 
@@ -188,6 +203,7 @@ export class SunShading {
     hp[3] = hr.y0;
     hp[4] = hw;
     hp[5] = hh;
+    hp[6] = this.buildingHeights ? 1 : 0;
     this.device.queue.writeBuffer(this.heightParams, 0, hp);
 
     const sp = new ArrayBuffer(SUN_PARAMS_SIZE);
@@ -231,6 +247,7 @@ export class SunShading {
   destroy(): void {
     this.texture.destroy();
     this.heightTex.destroy();
+    this.noBuildings.destroy();
     this.heightParams.destroy();
     this.sunParams.destroy();
     this.heightBG = null;

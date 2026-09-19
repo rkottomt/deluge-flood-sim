@@ -117,6 +117,18 @@ test('the cinematic tier is opt-in only, and every rung of the auto ladder is a 
   }
 });
 
+test('the hero-shot post effects are on the cinematic tier only, and never on the auto ladder', () => {
+  // Depth of field and edge aberration cost real frame time. The adaptive controller must never be able to switch
+  // them on: it only ever picks a rung of AUTO_LADDER, so no rung may carry the flag.
+  for (const [i, rung] of AUTO_LADDER.entries()) {
+    assert.notEqual(rung.cinematicPost, true, `auto ladder rung ${i} must not enable cinematic post`);
+  }
+  assert.equal(QUALITY_PRESETS.cinematic.cinematicPost, true);
+  for (const name of ['high', 'balanced', 'low'] as const) {
+    assert.notEqual(QUALITY_PRESETS[name].cinematicPost, true, `${name} must not enable cinematic post`);
+  }
+});
+
 test('the adaptive controller still gives up levels under load with the new fields in place', () => {
   const q = new AdaptiveQuality();
   const start = q.level;

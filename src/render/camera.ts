@@ -7,10 +7,11 @@
  *    slows from there, so every drag begins with a jerk; a critically damped spring accelerates into the move and
  *    settles without overshoot, which is what a real head does. `damping` still means the same thing (bigger =
  *    snappier) and the settle time is matched, so this is a feel change and not a responsiveness change.
- *  • a QUINTIC fly-to ease. The cubic ease-in-out it replaces is only C1: acceleration jumps at both ends, and
- *    that jump is visible as a kick at the start and a stop at the end of every Try-it beat. Quintic smootherstep
- *    is C2 — it starts and ends with zero acceleration as well as zero speed. Rotation is also run a little
- *    behind translation, so the camera swings into its new heading as it arrives instead of with it: a crane move.
+ *  • a QUINTIC fly-to ease. The cubic ease-in-out it replaces is only C1, and its break is in the MIDDLE: its
+ *    acceleration jumps from +12 to -12 at t = 0.5, so halfway through every Try-it beat the camera visibly
+ *    changes its mind. Quintic smootherstep is C2 — acceleration passes through zero smoothly instead of
+ *    flipping sign in one frame. Rotation is also run a little behind translation, so the camera swings onto its
+ *    new heading as it arrives rather than turning and travelling in lockstep: a crane move, not a slider.
  *  • optional idle SWAY (off by default, see `sway`): a slow two-axis breath that stops the instant anything is
  *    touched. It is applied to the live pose, so the render pacer keeps drawing while it runs — which is why it is
  *    opt-in and why screenshots and the visual suite never see it.
@@ -82,8 +83,9 @@ const smooth = (e0: number, e1: number, x: number) => {
   return t * t * (3 - 2 * t);
 };
 /**
- * Quintic smootherstep: zero velocity AND zero acceleration at both ends (C2). The cubic ease this replaces has
- * an acceleration step at t=0 and t=1, which is the little kick you see at the start of a fly-to.
+ * Quintic smootherstep: C2, so acceleration is continuous through the whole move. The cubic ease this replaces
+ * is C1 — its two halves meet at t = 0.5 with acceleration +12 on one side and -12 on the other, and that
+ * one-frame sign flip is the lurch you see in the middle of a fly-to.
  */
 const smootherstep = (t: number) => t * t * t * (t * (t * 6 - 15) + 10);
 /** How far behind the translation the rotation runs, as a fraction of the flight. */
@@ -144,6 +146,8 @@ export class OrbitController implements CameraController {
   /** Current sway amplitude, 0..1, ramped so it can never start or stop with a jump. */
   private swayAmp = 0;
   private swayPhase = 0;
+  /** The offset the breath added to the live pose last frame; stripped again before this frame integrates. */
+  private swayApplied = { yaw: 0, pitch: 0, distScale: 1 };
   /** Velocity state of the pose spring (per-component, in each component's own units per second). */
   private vel = { gx: 0, gy: 0, elevation: 0, logDistance: 0, yaw: 0, pitch: 0 };
 
@@ -319,6 +323,9 @@ export class OrbitController implements CameraController {
   /** Advance damping / flight / breathing. Call once per frame before computing matrices. */
   update(dt: number): void {
     dt = clamp(Number.isFinite(dt) ? dt : 0, 0, 0.25);
+    // Take last frame's breath back out before anything looks at the pose, from the live pose AND from the copy
+    // adoptExternalEdits compares against — otherwise the breath itself would read as an external edit.
+    this.stripSway();
     this.adoptExternalEdits();
     let settled = false;
     if (this.flight) {
@@ -382,10 +389,23 @@ export class OrbitController implements CameraController {
         settled = true;
       }
     }
-    this.advanceSway(dt, settled);
     this.enforceClearance(this.cur);
     this.enforceClearance(this.goal);
+    this.advanceSway(dt, settled);
     this.lastCur = clonePose(this.cur);
+  }
+
+  private stripSway(): void {
+    const a = this.swayApplied;
+    if (a.yaw === 0 && a.pitch === 0 && a.distScale === 1) return;
+    for (const p of [this.cur, this.lastCur]) {
+      p.yaw -= a.yaw;
+      p.pitch -= a.pitch;
+      p.distance /= a.distScale;
+    }
+    a.yaw = 0;
+    a.pitch = 0;
+    a.distScale = 1;
   }
 
   private zeroVelocity(): void {
@@ -413,14 +433,36 @@ export class OrbitController implements CameraController {
     const t = this.swayPhase;
     const a = this.swayAmp * this.swayAmp * (3 - 2 * this.swayAmp);
     const c = this.cur;
-    const g = this.goal;
-    c.yaw = g.yaw + a * SWAY_YAW * Math.sin(t * 0.211);
-    c.pitch = clamp(g.pitch + a * SWAY_PITCH * Math.sin(t * 0.137 + 1.7), MIN_PITCH, MAX_PITCH);
-    c.distance = g.distance * (1 + a * SWAY_DIST * Math.sin(t * 0.091 + 0.6));
+    const o = this.swayApplied;
+    o.yaw = a * SWAY_YAW * Math.sin(t * 0.211);
+    o.pitch = a * SWAY_PITCH * Math.sin(t * 0.137 + 1.7);
+    o.distScale = 1 + a * SWAY_DIST * Math.sin(t * 0.091 + 0.6);
+    c.yaw += o.yaw;
+    c.pitch = clamp(c.pitch + o.pitch, MIN_PITCH, MAX_PITCH);
+    c.distance *= o.distScale;
+  }
+
+  /**
+   * Whether the view is moving right now: a drag or pinch in progress, a fly-to running, or the spring still
+   * catching up with its goal. Hero-shot post (depth of field) reads this and steps aside while it is true, so
+   * the blur only ever appears on a settled frame — no host wiring required.
+   */
+  get moving(): boolean {
+    if (this.drag || this.pinch || this.flight) return true;
+    const v = this.vel;
+    return (
+      Math.abs(v.yaw) > 1e-4 ||
+      Math.abs(v.pitch) > 1e-4 ||
+      Math.abs(v.logDistance) > 1e-4 ||
+      Math.abs(v.gx) > 1e-3 ||
+      Math.abs(v.gy) > 1e-3 ||
+      Math.abs(v.elevation) > 1e-2
+    );
   }
 
   /** The user touched the view: stop breathing at once and restart the idle clock. */
   noteInteraction(): void {
+    this.stripSway();
     this.idleFor = 0;
     this.swayAmp = 0;
     this.swayPhase = 0;

@@ -30,6 +30,9 @@
 
 import type { BuildingSet } from '../contracts';
 import { BUILDING_KINDS } from '../data/buildings';
+import { BUILDING_UNIFORM_SIZE, IMAGERY_ROOF_FADE } from './shaders/buildings';
+
+const BUILDING_UNIFORM_FLOATS = BUILDING_UNIFORM_SIZE / 4;
 
 /** Buildings per chunk: the unit of frustum culling and of the distance cut. */
 export const BUILDING_CHUNK = 384;
@@ -352,9 +355,9 @@ export function buildBuildingMesh(set: BuildingSet, ground: Float32Array, nx: nu
     const seed = buildingSeed(k, xs[0], ys[0]);
     const kind = set.kind[k] & 0xf;
     const src = set.heightSource[k] & 3;
-    const common = PACK.roofBit * 0 + (src << PACK.heightSourceShift) + (kind << PACK.kindShift) + (seed << PACK.seedShift);
+    const common =
+      ((src << PACK.heightSourceShift) | (kind << PACK.kindShift) | (seed << PACK.seedShift)) >>> 0;
 
-    const vStart = vCount;
     const iStart = iCount;
 
     // ── Walls ────────────────────────────────────────────────────────────────────────────────
@@ -366,7 +369,7 @@ export function buildBuildingMesh(set: BuildingSet, ground: Float32Array, nx: nu
       // Outward normal of a clockwise ring: rotate the edge direction by +90° in grid axes.
       const onx = -dy / len;
       const ony = dx / len;
-      const packBase = common + (snorm8(onx) << PACK.nxShift) + (snorm8(ony) << PACK.nzShift);
+      const packBase = (common | (snorm8(onx) << PACK.nxShift) | (snorm8(ony) << PACK.nzShift)) >>> 0;
       const base = vCount * VERTEX_FLOATS;
       // P0 (i, floor), P1 (j, floor), P2 (j, roof), P3 (i, roof)
       vf[base] = xs[i];
@@ -382,12 +385,12 @@ export function buildBuildingMesh(set: BuildingSet, ground: Float32Array, nx: nu
       vf[base + 10] = xs[j];
       vf[base + 11] = roofY;
       vf[base + 12] = ys[j];
-      vu[base + 13] = packBase | PACK.topBit;
+      vu[base + 13] = (packBase | PACK.topBit) >>> 0;
       vf[base + 14] = h;
       vf[base + 15] = xs[i];
       vf[base + 16] = roofY;
       vf[base + 17] = ys[i];
-      vu[base + 18] = packBase | PACK.topBit;
+      vu[base + 18] = (packBase | PACK.topBit) >>> 0;
       vf[base + 19] = h;
       indices[iCount] = vCount;
       indices[iCount + 1] = vCount + 1;
@@ -401,7 +404,7 @@ export function buildBuildingMesh(set: BuildingSet, ground: Float32Array, nx: nu
 
     // ── Roof ─────────────────────────────────────────────────────────────────────────────────
     const roofBase = vCount;
-    const roofPack = common | PACK.roofBit | PACK.topBit;
+    const roofPack = (common | PACK.roofBit | PACK.topBit) >>> 0;
     for (let i = 0; i < n; i++) {
       const o = (vCount + i) * VERTEX_FLOATS;
       vf[o] = xs[i];
@@ -424,7 +427,6 @@ export function buildBuildingMesh(set: BuildingSet, ground: Float32Array, nx: nu
     bYMin[built] = floorY;
     bYMax[built] = roofY;
     built++;
-    void vStart;
   }
   bIndexFirst[built] = iCount;
 
@@ -588,3 +590,240 @@ export function selectBuildings(
 
 /** Human-readable class names in the order `BuildingSet.kind` indexes them (re-exported for the shader comments). */
 export const BUILDING_KIND_NAMES: readonly string[] = BUILDING_KINDS;
+
+// ────────────────────────────────────────────────────────────────────────────────────────────
+// GPU layer
+// ────────────────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Per-frame style knobs. Three of them sit on top of the quality tier rather than replacing it, so the adaptive
+ * controller keeps its say while a host can still push further:
+ *   minPx       — a FLOOR: the effective cut is max(tier, this), so 0 means "whatever the tier chose";
+ *   detail      — a MULTIPLIER on the tier's facade detail, so 1 means "whatever the tier chose";
+ *   reflections — a CEILING raiser: max(tier, this), so a screenshot can ask for glass on a non-cinematic tier.
+ * The rest are plain strengths for the look, all 1 by default.
+ */
+export interface BuildingStyle {
+  /** Extra floor under the tier's smallest on-screen building height (px). 0 = follow the tier. */
+  minPx: number;
+  /** Multiplier on the tier's facade detail (floor bands, mullions), 0..1. */
+  detail: number;
+  /** Raise the tier's sky/cloud reflections in glass curtain wall, 0..1. */
+  reflections: number;
+  /** How far the aerial photo is trusted for roof colour, 0..1. */
+  roofImagery: number;
+  /** Strength of the ambient darkening in the first few metres above the street. */
+  baseAO: number;
+  /** Wet-masonry band above the waterline. */
+  wetBand: number;
+  /** Foam at the contact line. */
+  foam: number;
+  /** Stain at the high-water mark. */
+  stain: number;
+  /** Muddy attenuation of the submerged facade. */
+  mud: number;
+}
+
+/** The tier and the style, combined. Produced by `effectiveBuildingStyle` and used by BOTH the CPU cut and the shader. */
+export interface EffectiveBuildingStyle {
+  minPx: number;
+  detail: number;
+  reflections: number;
+}
+
+export function effectiveBuildingStyle(
+  tier: { buildingMinPx: number; buildingDetail: number; buildingReflections: number },
+  style: BuildingStyle,
+): EffectiveBuildingStyle {
+  return {
+    minPx: Math.max(tier.buildingMinPx, style.minPx),
+    detail: tier.buildingDetail * style.detail,
+    reflections: Math.max(tier.buildingReflections, style.reflections),
+  };
+}
+
+export const DEFAULT_BUILDING_STYLE: BuildingStyle = {
+  minPx: 0,
+  detail: 1,
+  reflections: 0,
+  roofImagery: 0.72,
+  baseAO: 1,
+  wetBand: 1,
+  foam: 1,
+  stain: 1,
+  mud: 1,
+};
+
+/** Multiplier on `minPx` over which a building grows from nothing to full height (see the vertex shader). */
+export const LOD_FADE_RANGE = 2.4;
+
+export interface BuildingTextures {
+  frame: GPUBuffer;
+  sun: GPUTextureView;
+  imagery: GPUTextureView;
+  vtx: GPUTextureView;
+  misc: GPUTextureView;
+  linear: GPUSampler;
+  imagery_: GPUSampler;
+}
+
+/**
+ * The city on the GPU: one static vertex/index buffer, the chunk table the per-frame selection walks, the uniform
+ * the shader reads, and the roof-height raster the sun-shading pass takes as an occluder field.
+ */
+export class BuildingLayer {
+  readonly vertexBuffer: GPUBuffer;
+  readonly indexBuffer: GPUBuffer;
+  readonly chunks: readonly BuildingChunk[];
+  readonly buildingCount: number;
+  readonly triangleCount: number;
+  readonly vertexCount: number;
+  /** Roof height above ground per cell (r32float), for SunShading.buildingHeights. Null when the raster is absent. */
+  readonly heightTexture: GPUTexture | null;
+  private uniform: GPUBuffer;
+  private bindGroup: GPUBindGroup;
+  private uniformData = new Float32Array(BUILDING_UNIFORM_FLOATS);
+  private draws: BuildingDraw[] = [];
+  /** Diagnostics for the perf report: what the last frame actually asked the GPU to draw. */
+  drawnBuildings = 0;
+  drawnIndices = 0;
+  drawCalls = 0;
+
+  private constructor(
+    private device: GPUDevice,
+    mesh: BuildingMesh,
+    layout: GPUBindGroupLayout,
+    tex: BuildingTextures,
+    heightTexture: GPUTexture | null,
+  ) {
+    this.chunks = mesh.chunks;
+    this.buildingCount = mesh.buildingCount;
+    this.triangleCount = mesh.triangleCount;
+    this.vertexCount = mesh.vertexCount;
+    this.heightTexture = heightTexture;
+    this.vertexBuffer = device.createBuffer({
+      label: 'buildings-verts',
+      size: mesh.vertices.byteLength,
+      usage: GPUBufferUsage.VERTEX,
+      mappedAtCreation: true,
+    });
+    new Uint8Array(this.vertexBuffer.getMappedRange()).set(new Uint8Array(mesh.vertices));
+    this.vertexBuffer.unmap();
+    this.indexBuffer = device.createBuffer({
+      label: 'buildings-idx',
+      size: Math.max(4, mesh.indices.byteLength),
+      usage: GPUBufferUsage.INDEX,
+      mappedAtCreation: true,
+    });
+    new Uint32Array(this.indexBuffer.getMappedRange()).set(mesh.indices);
+    this.indexBuffer.unmap();
+    this.uniform = device.createBuffer({
+      label: 'buildings-uniform',
+      size: BUILDING_UNIFORM_FLOATS * 4,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    });
+    this.bindGroup = device.createBindGroup({
+      label: 'buildings',
+      layout,
+      entries: [
+        { binding: 0, resource: { buffer: tex.frame } },
+        { binding: 1, resource: { buffer: this.uniform } },
+        { binding: 2, resource: tex.sun },
+        { binding: 3, resource: tex.imagery },
+        { binding: 4, resource: tex.vtx },
+        { binding: 5, resource: tex.misc },
+        { binding: 6, resource: tex.linear },
+        { binding: 7, resource: tex.imagery_ },
+      ],
+    });
+  }
+
+  /**
+   * Mesh a scene's buildings and upload them. Returns null when there is nothing to draw, so every call site can
+   * feature-detect with `?? null` exactly like the data contract asks.
+   */
+  static create(
+    device: GPUDevice,
+    set: BuildingSet | null | undefined,
+    ground: Float32Array,
+    nx: number,
+    ny: number,
+    layout: GPUBindGroupLayout,
+    tex: BuildingTextures,
+  ): BuildingLayer | null {
+    if (!set || set.count <= 0) return null;
+    const mesh = buildBuildingMesh(set, ground, nx, ny);
+    if (mesh.buildingCount === 0 || mesh.indices.length === 0) return null;
+    let heightTexture: GPUTexture | null = null;
+    const raster = set.heightRaster;
+    if (raster && raster.length >= nx * ny) {
+      heightTexture = device.createTexture({
+        label: 'building-heights',
+        size: [nx, ny],
+        format: 'r32float',
+        usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+      });
+      device.queue.writeTexture({ texture: heightTexture }, raster, { bytesPerRow: nx * 4 }, { width: nx, height: ny });
+    }
+    return new BuildingLayer(device, mesh, layout, tex, heightTexture);
+  }
+
+  /**
+   * Write the per-frame uniform. `eff` carries the values the quality tier and the style have already been
+   * combined into (see `effectiveBuildingStyle`) — the shader's LOD cut MUST be the same number the CPU used to
+   * truncate the chunks, or buildings pop at the boundary. `hazard` is 1 in the depth / max-depth / velocity modes.
+   */
+  writeUniform(eff: EffectiveBuildingStyle, style: BuildingStyle, hazard: number, imageryOn: boolean): void {
+    const u = this.uniformData;
+    u[0] = eff.minPx;
+    u[1] = LOD_FADE_RANGE;
+    u[2] = 0;
+    u[3] = hazard;
+    u[4] = eff.detail;
+    u[5] = style.roofImagery;
+    u[6] = eff.reflections;
+    u[7] = style.baseAO;
+    u[8] = style.wetBand;
+    u[9] = style.foam;
+    u[10] = style.stain;
+    u[11] = style.mud;
+    u[12] = imageryOn ? 1 : 0;
+    u[13] = IMAGERY_ROOF_FADE;
+    u[14] = 0;
+    u[15] = 0;
+    this.device.queue.writeBuffer(this.uniform, 0, u);
+  }
+
+  /** Frustum-cull and truncate, then issue the draws. Returns how many buildings survived. */
+  draw(
+    pass: GPURenderPassEncoder,
+    pipeline: GPURenderPipeline,
+    eye: readonly [number, number, number],
+    planes: Float64Array,
+    nx: number,
+    ny: number,
+    cellSize: number,
+    exaggeration: number,
+    pixelScale: number,
+    minPx: number,
+  ): number {
+    const sel = selectBuildings(this.chunks, eye, planes, nx, ny, cellSize, exaggeration, pixelScale, minPx, this.draws);
+    this.drawnBuildings = sel.buildings;
+    this.drawnIndices = sel.indices;
+    this.drawCalls = sel.draws.length;
+    if (sel.draws.length === 0) return 0;
+    pass.setPipeline(pipeline);
+    pass.setBindGroup(0, this.bindGroup);
+    pass.setVertexBuffer(0, this.vertexBuffer);
+    pass.setIndexBuffer(this.indexBuffer, 'uint32');
+    for (const d of sel.draws) pass.drawIndexed(d.indexCount, 1, d.firstIndex);
+    return sel.buildings;
+  }
+
+  destroy(): void {
+    this.vertexBuffer.destroy();
+    this.indexBuffer.destroy();
+    this.uniform.destroy();
+    this.heightTexture?.destroy();
+  }
+}

@@ -31,11 +31,19 @@
  */
 import { COMMON_WGSL, FRAME_WGSL, VTX_SAMPLE_WGSL } from './common';
 
-/** Byte size of the Buildings uniform (must match BLD_WGSL and writeBuildingUniforms in buildings hook). */
+/** Byte size of the Buildings uniform (must match `Bld` below and writeBuildingUniforms in index.ts). */
 export const BUILDING_UNIFORM_SIZE = 64;
 
 /** Above this roof height (m) the aerial photo is no longer trusted for the roof (relief displacement). */
 export const IMAGERY_ROOF_FADE = 34;
+
+/**
+ * Ambient multiplier for buildings over the terrain's. A wall sees the street and the facades opposite it as well
+ * as the sky, and both of those are lit; without the extra fill every north face renders as a silhouette.
+ */
+export const BUILDING_AMBIENT = 1.45;
+/** Fraction of the sun's beam that reaches a wall having bounced off the ground and the buildings around it. */
+export const URBAN_BOUNCE = 0.18;
 
 export const BUILDINGS_WGSL = /* wgsl */ `
 ${FRAME_WGSL}
@@ -59,6 +67,9 @@ struct Bld {
 ${COMMON_WGSL}
 ${VTX_SAMPLE_WGSL}
 
+const BUILDING_AMBIENT: f32 = ${BUILDING_AMBIENT.toFixed(3)};
+const URBAN_BOUNCE: f32 = ${URBAN_BOUNCE.toFixed(3)};
+
 struct VIn {
   @location(0) p: vec3f,    // grid x, elevation (m, no exaggeration), grid y
   @location(1) pack: u32,   // see PACK in src/render/buildings.ts
@@ -69,13 +80,15 @@ struct VOut {
   @builtin(position) pos: vec4f,
   @location(0) world: vec3f,
   @location(1) grid: vec2f,
-  @location(2) nrm: vec3f,
+  // Flat by construction: every vertex of a wall quad carries the same outward normal, every roof vertex is up.
+  @location(2) @interpolate(flat) nrm: vec3f,
   @location(3) haze: vec4f,
-  // x: elevation (m), y: building height (m), z: 1 = roof, w: packed kind/seed/source as a float
-  @location(4) info: vec4f,
+  // x: elevation (m), y: floor elevation, z: roof elevation (after the LOD collapse), w: true roof height (m)
+  @location(4) geom: vec4f,
+  @location(5) @interpolate(flat) bits: u32,
 }
 
-/** Per-vertex aerial perspective (copied from the LOD block rather than pulling the whole CDLOD machinery in). */
+/** Per-vertex aerial perspective (copied from the CDLOD block rather than pulling the whole machinery in). */
 fn buildingHaze(world: vec3f) -> vec4f {
   let v = world - F.camPos;
   let dir = v / max(length(v), 1e-3);
@@ -96,8 +109,9 @@ fn vsBuilding(in: VIn) -> VOut {
   let floorY = select(elev0, elev0 - in.h, isTop);
 
   // ── Distance LOD: a building shorter than a few pixels sinks into its own floor instead of popping out ──
-  // The cut the CPU applies per chunk (selectBuildings) is the same expression at the chunk's NEAREST corner, so
-  // by the time a building's index range is dropped it has already been fully collapsed here.
+  // The cut the CPU applies per chunk (selectBuildings) is the same expression evaluated at the chunk's NEAREST
+  // corner, so by the time a building's index range is dropped it has already been fully collapsed here. The
+  // floor is metres below the ground, so a collapsed building is under the terrain, not a decal on it.
   let world0 = gridToWorld(in.p.xz, elev0);
   let dist = distance(world0, F.camPos);
   let minH = B.lod.x * max(dist, 1.0) * F.elev.w / max(F.exag, 0.01);
@@ -113,7 +127,8 @@ fn vsBuilding(in: VIn) -> VOut {
   let n = vec3f(unpackSnorm8(in.pack), 0.0, unpackSnorm8(in.pack >> 8u));
   o.nrm = select(normalize(n + vec3f(1e-6, 0.0, 0.0)), vec3f(0.0, 1.0, 0.0), isRoof);
   o.haze = buildingHaze(world);
-  o.info = vec4f(elev, in.h, select(0.0, 1.0, isRoof), f32(in.pack >> 18u));
+  o.geom = vec4f(elev, floorY, floorY + in.h * fade, in.h);
+  o.bits = in.pack >> 16u;
   return o;
 }
 
@@ -131,7 +146,7 @@ struct Facade {
  * Albedo by building class (the indices are BUILDING_KINDS in src/data/buildings.ts), varied by a per-building
  * seed and pushed toward glass as the building gets tall. These are linear-light albedos of real Pittsburgh
  * materials: red brick and buff brick for the rowhouses and warehouses, pale limestone for the civic buildings,
- * concrete for the decks, and a cool blue-green curtain wall for the towers.
+ * concrete for the decks, and a cool curtain wall for the towers.
  */
 fn facadeFor(kind: u32, seed: f32, h: f32) -> Facade {
   var base = vec3f(0.20, 0.18, 0.16);
@@ -178,36 +193,49 @@ fn facadeFor(kind: u32, seed: f32, h: f32) -> Facade {
       gloss = 0.08;
     }
   }
-  // Tall means modern means glass: above ~30 m the palette drifts cool and the surface starts to reflect.
+  // Above ~26 m the palette becomes a tower's. Downtown Pittsburgh is not one material: limestone and pale
+  // concrete (Gulf Tower, Koppers), the rust-brown Cor-Ten of the U.S. Steel Tower, and dark glass curtain wall
+  // (PPG Place, Fifth Avenue Place). The seed picks between the three, so the skyline reads as a skyline and not
+  // as one building repeated.
   let tall = smoothstep(26.0, 85.0, h);
-  let curtain = mix(vec3f(0.115, 0.140, 0.160), vec3f(0.150, 0.155, 0.150), seed);
+  var tower = vec3f(0.300, 0.285, 0.255);   // limestone / pale precast
+  var towerGloss = 0.16;
+  if (seed > 0.62) {
+    tower = mix(vec3f(0.085, 0.105, 0.125), vec3f(0.120, 0.135, 0.140), fract(seed * 7.0));  // dark curtain wall
+    towerGloss = 0.62;
+  } else if (seed > 0.30) {
+    tower = mix(vec3f(0.155, 0.095, 0.062), vec3f(0.215, 0.160, 0.115), fract(seed * 11.0)); // bronze / Cor-Ten
+    towerGloss = 0.34;
+  }
   var o: Facade;
-  o.albedo = mix(base, curtain, tall * 0.8) * (0.86 + 0.28 * seed);
-  o.gloss = mix(gloss, 0.55, tall);
+  o.albedo = mix(base, tower, tall * 0.88) * (0.88 + 0.24 * fract(seed * 3.0));
+  o.gloss = mix(gloss, towerGloss, tall);
   return o;
 }
 
-/** Procedural flat roof: tar/gravel membrane with mechanical plant, for buildings the photo cannot place. */
-fn roofFor(kind: u32, seed: f32, worldXZ: vec2f, detail: f32) -> vec3f {
-  let membrane = mix(vec3f(0.055, 0.054, 0.052), vec3f(0.130, 0.128, 0.120), seed);
+/**
+ * Procedural flat roof, for buildings the photo cannot place: dark tar and gravel through pale reflective
+ * membrane, with a patch of mechanical plant. A city roofscape is genuinely darker than its streets — but not
+ * black, which is what a literal tar albedo renders as once the tonemapper has had it.
+ */
+fn roofFor(seed: f32, worldXZ: vec2f, detail: f32) -> vec3f {
+  let membrane = mix(vec3f(0.085, 0.083, 0.078), vec3f(0.240, 0.238, 0.228), seed * seed);
   let gravel = vnoise(worldXZ * 0.55) * 0.5 + vnoise(worldXZ * 1.9) * 0.5;
-  var c = membrane * (0.80 + 0.45 * gravel * detail);
-  // A pale patch of plant / ducting on the bigger roofs.
-  let plant = smoothstep(0.62, 0.78, vnoise(worldXZ * 0.08 + seed * 13.0));
-  c = mix(c, vec3f(0.22, 0.225, 0.23), plant * 0.55 * detail);
-  return c;
+  let c = membrane * (0.85 + 0.35 * gravel * detail);
+  let plant = smoothstep(0.60, 0.78, vnoise(worldXZ * 0.08 + seed * 13.0));
+  return mix(c, vec3f(0.26, 0.265, 0.27), plant * 0.6 * detail);
 }
 
 @fragment
 fn fsBuilding(in: VOut) -> @location(0) vec4f {
   let uv = clamp(in.grid / F.grid, vec2f(0.0), vec2f(1.0));
-  let elevM = in.info.x;
-  let bh = in.info.y;
-  let isRoof = in.info.z > 0.5;
-  let bits = u32(in.info.w);
-  let src = bits & 3u;
-  let kind = (bits >> 2u) & 0xfu;
-  let seed = f32((bits >> 6u) & 0xffu) / 255.0;
+  let elevM = in.geom.x;
+  let floorY = in.geom.y;
+  let roofY = in.geom.z;
+  let bh = in.geom.w;
+  let isRoof = (in.bits & 1u) != 0u;
+  let kind = (in.bits >> 4u) & 0xfu;
+  let seed = f32((in.bits >> 8u) & 0xffu) / 255.0;
   let n = normalize(in.nrm);
 
   // The photograph, sampled with derivatives while control flow is still uniform.
@@ -216,19 +244,24 @@ fn fsBuilding(in: VOut) -> @location(0) vec4f {
   let dist = length(viewVec);
   let view = viewVec / max(dist, 1e-3);
   let pxM = max(dist * F.elev.w, 1e-4);
-  let detail = (1.0 - smoothstep(0.30, 1.10, pxM)) * B.style.x;
+  // Two detail fades, because the two features have different periods and therefore alias at different distances:
+  // floor bands repeat every 3.85 m, mullions every 1.55 m. Both are gone well before they reach a pixel.
+  let bandFade = (1.0 - smoothstep(0.22, 0.80, pxM)) * B.style.x;
+  let mullFade = (1.0 - smoothstep(0.09, 0.32, pxM)) * B.style.x;
+  let detail = max(bandFade, mullFade);
 
   // ── Albedo ─────────────────────────────────────────────────────────────────────────────────
   let fac = facadeFor(kind, seed, bh);
   var albedo = fac.albedo;
   var gloss = fac.gloss;
   if (isRoof) {
-    let proc = roofFor(kind, seed, in.world.xz, detail);
-    // The photo's own shading is baked into its luminance; pull it back toward a mid tone so the renderer's light
-    // is not applied on top of the morning the picture was taken.
+    let proc = roofFor(seed, in.world.xz, detail);
+    // The photo's own shading is baked into its luminance; pull it part of the way back toward a mid tone so the
+    // renderer's light is not applied on top of the morning the picture was taken — but only part of the way,
+    // because a white membrane roof really is brighter than a tar one and that difference is worth keeping.
     let lum = max(luminance(img), 1e-3);
-    let flat = img * clamp(0.155 / lum, 0.5, 2.0);
-    let photo = mix(flat, vec3f(luminance(flat)), 0.30);
+    let evened = img * clamp(0.175 / lum, 0.55, 2.2);
+    let photo = mix(mix(img, evened, 0.65), vec3f(luminance(evened)), 0.22);
     let trust = B.style.y * B.misc.x * (1.0 - smoothstep(B.misc.y * 0.6, B.misc.y, bh));
     albedo = mix(proc, photo, trust);
     gloss = 0.05;
@@ -237,21 +270,24 @@ fn fsBuilding(in: VOut) -> @location(0) vec4f {
     if (detail > 0.01) {
       let tangent = vec2f(n.z, -n.x);
       let along = dot(in.world.xz, tangent);
-      let storey = 3.85;
+      // Storey height varies a little per building (3.4–4.3 m): identical banding on every tower is the single
+      // most model-like thing a city of boxes can do.
+      let storey = 3.4 + 0.9 * fract(seed * 5.0);
       let band = abs(fract(elevM / storey) - 0.5) * 2.0;
-      let mull = abs(fract(along / 1.55) - 0.5) * 2.0;
-      // Spandrel (the opaque strip between floors) is lighter than the glazing; mullions are lighter still.
-      let glass = 1.0 - smoothstep(0.25, 0.62, band);
-      let frame = smoothstep(0.72, 0.94, mull) + smoothstep(0.62, 0.9, band);
-      let tint = mix(vec3f(0.055, 0.070, 0.088), vec3f(0.10, 0.10, 0.105), 1.0 - smoothstep(20.0, 60.0, bh));
-      albedo = mix(albedo, tint, glass * detail * (0.35 + 0.35 * smoothstep(10.0, 45.0, bh)));
-      albedo *= 1.0 + clamp(frame, 0.0, 1.0) * 0.12 * detail;
-      gloss = mix(gloss, min(1.0, gloss + 0.35), glass * detail);
+      let mull = abs(fract(along / (1.35 + 0.5 * fract(seed * 13.0))) - 0.5) * 2.0;
+      // The glazing is darker than the spandrel between floors; mullions and floor edges catch the light. Kept
+      // deliberately quiet — at this scale the job is to break the flatness, not to draw windows.
+      let glass = (1.0 - smoothstep(0.25, 0.62, band)) * bandFade;
+      let frame = smoothstep(0.74, 0.96, mull) * mullFade + smoothstep(0.66, 0.92, band) * bandFade;
+      let tint = mix(vec3f(0.115, 0.115, 0.120), vec3f(0.070, 0.085, 0.100), smoothstep(12.0, 55.0, bh));
+      albedo = mix(albedo, tint, glass * (0.10 + 0.16 * smoothstep(10.0, 45.0, bh)));
+      albedo *= 1.0 + clamp(frame, 0.0, 1.0) * 0.05;
+      gloss = mix(gloss, min(1.0, gloss + 0.3), glass);
     }
-    // A pale cornice / parapet cap along the top of the wall: cheap, and it is what separates one roofline
-    // from the one behind it.
-    let cap = 1.0 - smoothstep(0.0, max(0.55, pxM * 1.4), (elevM - (in.world.y / max(F.exag, 0.01))) * 0.0 + (bh - (elevM - (elevM - bh))) * 0.0 + max(0.0, (elevM - elevM)));
-    albedo *= 1.0 + cap * 0.0;
+    // Pale cornice along the top of the wall: it is what separates one roofline from the one behind it, and it
+    // never gets thinner than a pixel.
+    let cap = 1.0 - smoothstep(0.0, max(0.5, pxM * 1.6), roofY - elevM);
+    albedo *= 1.0 + cap * 0.22;
   }
 
   // ── Where the building stands, and where the water stands against it ───────────────────────
@@ -260,31 +296,32 @@ fn fsBuilding(in: VOut) -> @location(0) vec4f {
   let surfY = v.g;
   let hasWater = v.a > 0.5;
   let aboveGround = elevM - groundY;
-  // Ambient occlusion in the last few metres above the street: the dark line every building has at its foot.
-  let baseAO = mix(1.0 - 0.45 * B.style.w, 1.0, smoothstep(0.0, 6.0, aboveGround));
+  // Ambient occlusion in the last few metres above the street: the dark line every building has at its foot. Its
+  // reach is a fraction of the building, not a fixed 6 m — on a 7 m rowhouse a fixed reach is the whole wall.
+  let aoReach = clamp(bh * 0.45, 1.2, 6.0);
+  let baseAO = mix(1.0 - 0.34 * B.style.w, 1.0, smoothstep(0.0, aoReach, aboveGround));
 
   var foam = 0.0;
-  var submerge = 0.0;
   if (hasWater) {
     let dw = elevM - surfY;
     // Wet, dark masonry for a metre and a half above the line, muddy attenuation below it.
-    let wetBand = (1.0 - smoothstep(0.0, 1.7, dw)) * step(0.0, dw);
+    let wetBand = (1.0 - smoothstep(0.0, max(1.7, pxM * 3.0), dw)) * step(0.0, dw);
     albedo *= mix(1.0, 0.46, wetBand * B.water.x);
-    submerge = clamp(-dw, 0.0, 6.0);
+    let submerge = clamp(-dw, 0.0, 6.0);
     albedo = mix(albedo, vec3f(0.085, 0.070, 0.050), clamp(submerge * 0.30, 0.0, 0.72) * B.water.w);
     // Foam at the contact line: a band that breathes along the wall rather than a painted stripe.
     let tangent = vec2f(n.z, -n.x);
     let along = dot(in.world.xz, tangent);
     let churn = vnoise(vec2f(along * 0.55, F.time * 0.55)) * 0.6 + vnoise(vec2f(along * 1.9 + 4.0, F.time * 0.9)) * 0.4;
-    let width = 0.18 + 0.34 * churn;
-    foam = (1.0 - smoothstep(0.0, width, abs(dw - width * 0.25))) * B.water.y * select(1.0, 0.55, isRoof);
-    // The high-water mark: a thin stain where the flood has been, only once it has dropped away from it.
+    // Screen-space floor on the band, the same trick the levee profile uses: at 300 m a 30 cm line of foam is a
+    // fifth of a pixel and simply is not there, and the buildings go back to standing on the water like cut-outs.
+    let width = max(0.18 + 0.34 * churn, pxM * 1.6);
+    foam = (1.0 - smoothstep(0.0, width, abs(dw - width * 0.25))) * B.water.y * select(1.0, 0.4, isRoof);
+    // The high-water mark: a thin stain where the flood has been, once it has dropped away from it.
     let maxD = textureSampleLevel(miscTex, linSamp, uv, 0.0).g;
-    if (maxD > 0.2) {
-      let dm = elevM - (groundY + maxD);
-      let stain = (1.0 - smoothstep(0.0, 0.55 + pxM, abs(dm))) * step(0.35, maxD - max(surfY - groundY, 0.0));
-      albedo *= mix(1.0, 0.55, stain * B.water.z);
-    }
+    let dm = elevM - (groundY + maxD);
+    let stain = (1.0 - smoothstep(0.0, 0.55 + pxM, abs(dm))) * step(0.35, maxD - max(surfY - groundY, 0.0));
+    albedo *= mix(1.0, 0.55, stain * B.water.z);
   }
   albedo *= baseAO;
 
@@ -298,14 +335,21 @@ fn fsBuilding(in: VOut) -> @location(0) vec4f {
   // cell outside its own footprint — where the sun genuinely reaches its foot — to the roof pair at its top.
   var vis = vec2f(1.0, 1.0);
   if (F.light.w > 0.5) {
-    let self = textureSampleLevel(sunTex, linSamp, uv, 0.0);
+    let hereVis = textureSampleLevel(sunTex, linSamp, uv, 0.0);
     if (isRoof) {
-      vis = self.ba;
+      vis = hereVis.ba;
     } else {
       let outUV = clamp(uv + n.xz * (1.4 / F.grid), vec2f(0.0), vec2f(1.0));
-      let ground = textureSampleLevel(sunTex, linSamp, outUV, 0.0);
-      let t = clamp(aboveGround / max(bh, 1.0), 0.0, 1.0);
-      vis = mix(ground.rg, self.ba, t * t);
+      let below = textureSampleLevel(sunTex, linSamp, outUV, 0.0);
+      let t = clamp((elevM - floorY) / max(roofY - floorY, 1.0), 0.0, 1.0);
+      let up = mix(below.rg, hereVis.ba, pow(t, 0.55));
+      // The raster has one value per DEM cell, which is 7.8 m in Pittsburgh — wider than the gap between two
+      // rowhouses. A block of them fuses into one solid mass in the height field, and every facade inside it then
+      // comes out in shadow, including the ones the sun plainly reaches. So the cast term is faded in with the
+      // building's size in cells: a tower is resolved and takes the raster in full, a rowhouse is not and is
+      // carried by its own N·L instead, which is the one thing that is still exactly right at any resolution.
+      let resolved = smoothstep(0.8, 2.6, bh / max(F.cellSize, 0.1));
+      vis = mix(mix(vec2f(1.0, 1.0), hereVis.ba, 0.45), up, resolved);
     }
   }
   let sunVis = mix(1.0, vis.x, F.light.x);
@@ -314,26 +358,36 @@ fn fsBuilding(in: VOut) -> @location(0) vec4f {
   let L = F.sunDir;
   let ndl = max(dot(n, L), 0.0);
   let sunK = F.sunColor * (1.0 - F.opts.w * 0.75);
-  let ambK = 0.85 + 0.3 * F.shade.z;
+  // A vertical wall is lit by much more than the sun and the sky above it. Half its hemisphere is the street and
+  // the facades across it, both of them lit by the same sun, and in a city that bounce is the difference between
+  // a shaded wall and a black one. Terrain does not need the term (its ambient is the sky it faces, and the
+  // photograph already carries its own bounce), so it lives here rather than in skyAmbient.
+  let ambK = (0.85 + 0.3 * F.shade.z) * BUILDING_AMBIENT;
+  let bounce = URBAN_BOUNCE * max(L.y, 0.05) * F.shade.w * (1.0 - max(n.y, 0.0) * 0.65);
   // F.shade.w is the same relative relighting the photographic terrain uses: the whole scene is held at the
   // illumination the imagery was taken under, so buildings and ground never disagree about how bright noon is.
-  var color = albedo * (sunK * ndl * sunVis * F.shade.w + skyAmbient(n) * ambK * occ);
+  var color = albedo * (sunK * (ndl * sunVis * F.shade.w + bounce * occ) + skyAmbient(n) * ambK * occ);
 
   // Sun glint off glazing, and the sky in the glass on the towers.
   if (gloss > 0.02) {
     let hv = normalize(L + view);
     let spec = pow(max(dot(n, hv), 0.0), mix(24.0, 160.0, gloss)) * gloss;
     color += sunK * spec * sunVis * 0.55 * (1.0 - B.lod.w);
+    let r = reflect(-view, n);
+    // Deliberately softer than a physical Fresnel: at the grazing angles a distant skyline is seen at, the real
+    // curve goes to 1 and turns every tower into a white card.
+    let fres = 0.03 + 0.42 * pow(1.0 - max(dot(n, view), 0.0), 4.0);
+    // Glass is a dark albedo that reads bright because it is a mirror. The cheap version — the ambient dome in the
+    // reflected direction — costs nothing and is most of the effect; the cinematic tier puts the real sky and its
+    // clouds in it instead.
+    color += skyAmbient(r) * fres * gloss * 1.5 * occ * (1.0 - B.lod.w * 0.6);
     if (B.style.z > 0.01 && gloss > 0.25) {
-      let fres = 0.04 + 0.96 * pow(1.0 - max(dot(n, view), 0.0), 5.0);
-      color += skyReflection(reflect(-view, n)) * fres * gloss * B.style.z * occ;
+      color += (skyReflection(r) - skyAmbient(r)) * fres * gloss * B.style.z * occ;
     }
   }
   color += vec3f(0.95, 0.96, 1.0) * foam * (0.35 + 0.65 * max(L.y, 0.15)) * (1.0 - F.opts.w * 0.5);
 
   color = mix(color, in.haze.rgb, in.haze.a);
-  // src is provenance only — never colour — but keeping it in the interpolant documents that it reached the
-  // shader, and the compiler folds this away.
-  return vec4f(color + vec3f(f32(src) * 0.0), 1.0);
+  return vec4f(color, 1.0);
 }
 `;
