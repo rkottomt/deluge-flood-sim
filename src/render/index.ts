@@ -60,6 +60,10 @@ const WATER_MODE_INDEX = { realistic: 0, depth: 1, maxDepth: 2, velocity: 3 } as
 const EDIT_RELIEF_M = 40;
 /** Ceiling on how far downsun that rebuild reaches, so a sun near the horizon cannot ask for the whole grid. */
 const SHADOW_EDIT_MAX_CELLS = 220;
+/** A gap this long in the stream of edits means the drag has paused and the sun raster may be rebuilt (ms). */
+const SUN_EDIT_QUIET_MS = 120;
+/** ...but never let an unbroken drag hold the shadows stale longer than this (ms). */
+const SUN_EDIT_MAX_STALE_MS = 400;
 
 /**
  * Post / camera options that are not on the quality ladder: either they are too expensive for the default tier
@@ -435,6 +439,21 @@ class DelugeRenderer implements DelugeRendererAPI {
   private lightingKey = 'daylight';
   /** Sun-shading quality the current raster was built at (a change rebuilds it). */
   private sunShadowsBuiltAt: 'low' | 'standard' | 'cinematic' | null = null;
+  /**
+   * Coalescing for INCREMENTAL sun-raster rebuilds (see the build site in render()). A wall or a dig dirties a
+   * rectangle, and a real pointer drag dirties a new one every single frame — so without this the raster is
+   * rebuilt 60 times a second, on the same GPU the solver is trying to use. It is cheap per rebuild (a few
+   * thousand cells) but not free, and the perf suite caught it: the levee-build scenario at 1600x1000 fell from
+   * 60x to 28x of requested sim speed, through the floor, while the frame rate stayed at 60 (the host simply gave
+   * the solver fewer substeps).
+   *
+   * So while edits keep arriving the rectangle is only unioned, and the build waits for a gap of SUN_EDIT_QUIET_MS
+   * or for SUN_EDIT_MAX_STALE_MS of continuous editing, whichever comes first. The levee itself is drawn by the
+   * solver and appears immediately; only its shadow settles a fraction of a second later, which is not a thing a
+   * presenter can see. Full rebuilds ('all' — scene load, a new sun, a quality tier change) are never deferred.
+   */
+  private sunDirtySince = 0;
+  private sunDirtyGrewAt = 0;
   /** Building look; the quality tier owns minPx / detail / reflections, the host may override the rest. */
   private buildingStyle: BuildingStyle = { ...DEFAULT_BUILDING_STYLE };
   private buildingsEnabled = true;
@@ -824,6 +843,12 @@ class DelugeRenderer implements DelugeRendererAPI {
     return rect;
   }
 
+  /** True while an edit is still arriving and its sun-raster rebuild should keep waiting (see sunDirtySince). */
+  private sunEditSettling(): boolean {
+    const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    return now - this.sunDirtyGrewAt < SUN_EDIT_QUIET_MS && now - this.sunDirtySince < SUN_EDIT_MAX_STALE_MS;
+  }
+
   /** Union an edited rectangle into the region whose sun shading has to be recomputed. */
   private markSunDirty(s: SceneGPU, rect: CellRect | 'all' | null): void {
     if (!rect) return;
@@ -834,8 +859,11 @@ class DelugeRenderer implements DelugeRendererAPI {
     // Whole cells: the rectangle ends up in an Int32Array of dispatch bounds, and a brush cursor's rect is not.
     const r = { x0: Math.floor(rect.x0), y0: Math.floor(rect.y0), x1: Math.ceil(rect.x1), y1: Math.ceil(rect.y1) };
     const d = s.sunDirty;
+    const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    this.sunDirtyGrewAt = now;
     if (!d) {
       s.sunDirty = r;
+      this.sunDirtySince = now;
       return;
     }
     d.x0 = Math.min(d.x0, r.x0);
@@ -1579,7 +1607,10 @@ class DelugeRenderer implements DelugeRendererAPI {
       // A different tier wants a differently-solved raster, and the old one is not a subset of the new one.
       s.sunDirty = 'all';
     }
-    if (s && s.sunDirty && !this.debugSkip.has('shadows')) {
+    if (s && s.sunDirty && s.sunDirty !== 'all' && this.sunEditSettling()) {
+      // Still being edited: keep unioning, rebuild when the drag pauses (or when it has gone on long enough).
+      this.stats.shadowCells = 0;
+    } else if (s && s.sunDirty && !this.debugSkip.has('shadows')) {
       const want = preset.shadows;
       const q = SHADOW_QUALITY[want];
       const dir = sunDirection(this.lightingSettings.azimuthDeg, this.lightingSettings.elevationDeg);
