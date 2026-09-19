@@ -40,6 +40,28 @@ export function gridToGeo(terrain: Pick<TerrainData, 'nx' | 'ny' | 'bounds'>, gx
 
 // Extra helpers other modules may find useful (not part of the contract).
 export { isPresetId, setPresetBaseUrl, validatePresetMeta, type PresetMeta } from './presets';
+// The shipped grid-convergence reference ("Reference (4096²)" in the View panel), its codec and the check that keeps
+// it honest. Optional per preset: loadReferenceOverlay resolves null wherever there is no reference.
+export {
+  loadReferenceOverlay,
+  referenceFit,
+  referenceOverlayCases,
+  referenceOverlaySupported,
+  validateReferenceOverlayManifest,
+  decodeArrivalPlane,
+  decodeDepthPlane,
+  encodeArrivalPlane,
+  encodeDepthPlane,
+  REFERENCE_FIT,
+  REFERENCE_OVERLAY_VERSION,
+  type ReferenceFitInput,
+  type ReferenceFitVerdict,
+  type ReferenceMismatch,
+  type ReferenceOverlay,
+  type ReferenceOverlayAgreement,
+  type ReferenceOverlayManifest,
+  type ReferenceOverlayScenario,
+} from './referenceOverlay';
 export { cleanPlaceLabel, coordinateName, isCoordinateName, linkPlaceLabel, withCoordinates } from './placeName';
 export { generateSandbox } from './sandbox';
 export { cellSizeFor, squareDomain, isLikelyUS } from './geo';

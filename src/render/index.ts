@@ -33,6 +33,7 @@ import { AdaptiveQuality, QUALITY_PRESETS, targetSize, type QualityPreset, type 
 import { GpuTimer } from './gpuTimer';
 import { WallField, WALL_FIELD_RADIUS, type Rect } from './wallField';
 import { BASE_EXPOSURE, hazardInput } from './tonemap';
+import { REFERENCE_RANGE_CELLS } from './reference';
 import { footprintRadius, stormWeight } from '../sim/forcing';
 
 export { DEPTH_BANDS, MAX_DEPTH_BANDS, NORMAL_WATER_LEGEND, VELOCITY_BANDS, bandsForMode } from './legend';
@@ -42,6 +43,16 @@ export type { RendererQuality, SimPressure } from './quality';
 const WATER_MODE_INDEX = { realistic: 0, depth: 1, maxDepth: 2, velocity: 3 } as const;
 /** Cells over which the detail-imagery inset fades into the base photo, so its rectangle never reads as an edge. */
 const DETAIL_FEATHER_CELLS = 8;
+/**
+ * Reference flood edge (src/render/reference.ts), drawn only while the View panel's overlay is on. A line ~2.6 px
+ * wide with a 2 px halo: thin enough to show exactly where the reference waterline runs (the live shoreline is
+ * within a cell or two of it), wide enough to survive the 4× MSAA resolve and a screenshot. Near-white, because it
+ * is an annotation about the picture — it must not be mistaken for one of the hazard bands or for water.
+ */
+const REFERENCE_LINE_CSS = '#f4fbff';
+const REFERENCE_LINE_HALF_PX = 1.3;
+const REFERENCE_HALO_PX = 2.0;
+const REFERENCE_HALO_DARKEN = 0.55;
 /**
  * Can this inset rectangle be drawn on this grid? The data layer validates the same rectangle against meta.json
  * (src/data/imagery.ts), but the renderer is handed terrain from live areas and tests too, so it checks for itself
@@ -97,6 +108,14 @@ export interface DelugeRendererAPI extends FloodRenderer {
    * the terrain; null clears it. The mask is copied to the GPU, so the caller may reuse the array.
    */
   setProtectedMask(mask: Uint8Array | null): void;
+  /**
+   * The reference flood edge to draw over the live water: the signed-distance field from src/render/reference.ts
+   * (nx·ny u8, built from the shipped 4096² reference), or null to draw nothing. Off is the default and costs nothing
+   * per frame — the shader never samples the field while it is null. The array is copied to the GPU, so the caller may
+   * reuse it. Only the app's reference controller calls this, and only while the comparison is honest
+   * (src/app/reference.ts, src/data/referenceOverlay.ts).
+   */
+  setReferenceEdges(field: Uint8Array | null): void;
   /**
    * Re-capture the "normally wet" mask (rivers and lakes before any flood) from the solver's current water. setScene
    * does this automatically — it is called right after solver.setInitialWater — so this is only needed if the
@@ -198,6 +217,9 @@ interface SceneGPU {
   /** Land kept dry by walls (r8unorm, 255 = protected); only sampled while `protectOn`. */
   protectTex: GPUTexture;
   protectOn: boolean;
+  /** Signed distance to the reference flood edge (r8unorm); only sampled while `referenceOn`. */
+  refTex: GPUTexture;
+  referenceOn: boolean;
 }
 
 interface MeshBuffers {
@@ -434,6 +456,9 @@ class DelugeRenderer implements DelugeRendererAPI {
       usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
     });
     const protectTex = device.createTexture({ label: 'protected-land', size: [nx, ny], format: 'r8unorm', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
+    // Reference flood edge: one byte per cell, uploaded once when the overlay is first switched on (see
+    // setReferenceEdges). Allocated with the scene, like the protected-land mask, so the bind group never changes.
+    const refTex = device.createTexture({ label: 'reference-edge', size: [nx, ny], format: 'r8unorm', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
     const wetBGs: GPUBindGroup[] = [
       device.createBindGroup({
         label: 'wet-base',
@@ -514,6 +539,7 @@ class DelugeRenderer implements DelugeRendererAPI {
       { binding: 10, resource: normalWetTex.createView() },
       { binding: 11, resource: protectTex.createView() },
       { binding: 12, resource: detailTex.createView() },
+      { binding: 13, resource: refTex.createView() },
     ];
     const terrainBG = device.createBindGroup({ label: 'terrain', layout: this.P.sceneBGL, entries: sceneEntries(imageryTex, this.aniso) });
     const waterBG = device.createBindGroup({ label: 'water', layout: this.P.sceneBGL, entries: sceneEntries(this.rippleTex, this.repeat) });
@@ -611,6 +637,8 @@ class DelugeRenderer implements DelugeRendererAPI {
       normalWetValid: false,
       protectTex,
       protectOn: false,
+      refTex,
+      referenceOn: false,
     };
     this.protectFade = 0;
     this.markerKey = '';
@@ -695,6 +723,7 @@ class DelugeRenderer implements DelugeRendererAPI {
     s.wallTex.destroy();
     s.normalWetTex.destroy();
     s.protectTex.destroy();
+    s.refTex.destroy();
     if (s.hasImagery) s.imageryTex.destroy();
     if (s.hasDetail) s.detailTex.destroy();
     s.roadVerts?.destroy();
@@ -885,6 +914,19 @@ class DelugeRenderer implements DelugeRendererAPI {
     this.editEpoch++;
   }
 
+  setReferenceEdges(field: Uint8Array | null): void {
+    const s = this.scene;
+    if (!s || this.destroyed) return;
+    if (!field || field.length < s.nx * s.ny) {
+      if (s.referenceOn) this.editEpoch++;
+      s.referenceOn = false;
+      return;
+    }
+    this.device.queue.writeTexture({ texture: s.refTex }, field, { bytesPerRow: s.nx }, { width: s.nx, height: s.ny });
+    s.referenceOn = true;
+    this.editEpoch++;
+  }
+
   setQuality(quality: RendererQuality): void {
     if (!(quality in QUALITY_PRESETS) && quality !== 'auto') return;
     if (quality === this.qualityMode) return;
@@ -1027,6 +1069,7 @@ class DelugeRenderer implements DelugeRendererAPI {
       this.editEpoch,
       // While the protected-land glow fades in or out, every frame differs.
       this.protectFade > 0 && this.protectFade < 1 ? this.protectFade : s?.protectOn ? 1 : 0,
+      s?.referenceOn ? 1 : 0,
       s ? this.stateKey(s.solver) : 0,
       this.canvas.clientWidth,
       this.canvas.clientHeight,
@@ -1409,6 +1452,18 @@ class DelugeRenderer implements DelugeRendererAPI {
     f[121] = DETAIL_FEATHER_CELLS;
     f[122] = 0;
     f[123] = 0;
+    // Reference flood edge: strength (0 = the shader never samples refTex), the field's encoded range, and the line's
+    // half-width and halo width in PIXELS — a constant on-screen width at every zoom (see reference.ts).
+    const refOn = s?.referenceOn ?? false;
+    f[124] = refOn ? 1 : 0;
+    f[125] = REFERENCE_RANGE_CELLS;
+    f[126] = REFERENCE_LINE_HALF_PX;
+    f[127] = REFERENCE_HALO_PX;
+    const ink = this.referenceInk();
+    f[128] = ink[0];
+    f[129] = ink[1];
+    f[130] = ink[2];
+    f[131] = REFERENCE_HALO_DARKEN;
     this.device.queue.writeBuffer(this.frameBuf, 0, f);
 
     // Overlay uniforms.
@@ -1461,6 +1516,22 @@ class DelugeRenderer implements DelugeRendererAPI {
   }
 
   /** HDR shader inputs (rgb per band) whose tone-mapped colours are the legend colours at this frame's exposure. */
+  /**
+   * HDR colour of the reference line, solved so it tone-maps to REFERENCE_LINE_CSS at the current exposure (the same
+   * trick as the hazard bands: an annotation must be the colour the legend says it is). Cached per exposure.
+   */
+  private referenceInk(): [number, number, number] {
+    const exposure = Math.round(this.exposure() * 200) / 200;
+    if (this.refInk && this.refInkExposure === exposure) return this.refInk;
+    const [r, g, b] = hazardInput(cssToLinear(REFERENCE_LINE_CSS), exposure);
+    this.refInkExposure = exposure;
+    this.refInk = [r, g, b];
+    return this.refInk;
+  }
+
+  private refInk: [number, number, number] | null = null;
+  private refInkExposure = -1;
+
   private hazardInputs(mode: string, bands: ReadonlyArray<{ color: string }>): number[] {
     if (bands.length === 0) return [];
     const exposure = Math.round(this.exposure() * 200) / 200;

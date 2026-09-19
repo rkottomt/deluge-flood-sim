@@ -72,6 +72,9 @@ export async function createPipelines(device: GPUDevice, canvasFormat: GPUTextur
       { binding: 11, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
       // Close-up imagery inset (rgba8unorm-srgb, filtered) — a 1x1 placeholder when the area has none.
       { binding: 12, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
+      // Signed distance to the reference flood edge (r8unorm, filtered; see src/render/reference.ts). Only sampled
+      // while F.reference.x > 0, i.e. while the View panel's "Reference" overlay is on.
+      { binding: 13, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
     ],
   });
   const overlayBGL = device.createBindGroupLayout({

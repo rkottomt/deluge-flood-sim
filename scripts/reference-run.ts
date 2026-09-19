@@ -83,7 +83,7 @@ import { StageLevels, stageOffsetForFeet } from '../src/app/stage';
 import { geoToGrid } from '../src/data/geo';
 import { computeInitialWater } from '../src/data/initialWater';
 import { decodeElevation, type PresetMeta } from '../src/data/presets';
-import type { SimParams, SimStats, StormCell, WaterSource } from '../src/contracts';
+import { DEFAULT_SIM_PARAMS, type SimParams, type SimStats, type StormCell, type WaterSource } from '../src/contracts';
 
 // ──────────────────────────────────────────────────────────────────────────────────────────────────────
 // Tunables that define the measurement (every one of them appears in the report)
@@ -397,6 +397,51 @@ export interface OverlayPlane {
   nonZeroCells: number;
 }
 
+/**
+ * The scenario the reference run WAS: everything the app must match before an overlay of it is an honest comparison.
+ * The loader hands this to `referenceFit` (src/data/referenceOverlay.ts), which refuses the overlay when the live
+ * state has drifted from it — different stage, rain switched on, walls drawn.
+ */
+export interface OverlayScenario {
+  case: CaseId;
+  /** One line for the UI, e.g. "the 1936 crest (46 ft at the Point gauge)". */
+  label: string;
+  /** River-stage offset above normal pool the run ramped to, m (0 for cases with no stage change). */
+  stageOffset: number;
+  /** The gauge reading that offset is, ft; null when the case has no stage. */
+  stageFt: number | null;
+  /** Global rain rate during the run, mm/hr. */
+  rainRate: number;
+  stormCells: number;
+  boundary: 'open' | 'wall';
+  manningN: number;
+  /**
+   * Simulated seconds by which the stage had reached `stageOffset`. The harness ramps from t = 0 with the shipped
+   * StageRamp, so a live run that raises the river much later is NOT this scenario even at the same final stage.
+   */
+  stageReachedBy: number;
+}
+
+/**
+ * What the convergence study measured for THIS pairing (the shipped grid against the reference grid), so the app can
+ * put the numbers on screen beside the drawing instead of restating them in prose that can drift from the data.
+ * Straight out of the Comparison the same run produced — see results.md for the full ladder.
+ */
+export interface OverlayAgreement {
+  /** The grid the app ships, i.e. the coarse side of the comparison. */
+  liveGrid: number;
+  /** Depth at which the areas and the extent are counted, m (the hazard legend's first band). */
+  threshold: number;
+  /** Newly flooded land, rivers excluded, km² (`pct` = live vs reference, `iou` their overlap). */
+  flooded: { liveKm2: number; referenceKm2: number; pct: number; iou: number };
+  /** Total wet extent, rivers included, km². */
+  extent: { liveKm2: number; referenceKm2: number; pct: number; iou: number };
+  /** Water held at the end, live vs reference, %. */
+  waterHeldPct: number;
+  /** Max-depth difference on flooded land, measured on the reference grid, m (percentiles null if not computed). */
+  maxDepth: { rmse: number; median: number | null; p99: number | null };
+}
+
 export interface ReferenceOverlayManifest {
   version: typeof OVERLAY_VERSION;
   preset: string;
@@ -415,6 +460,10 @@ export interface ReferenceOverlayManifest {
   encoding: 'gzip';
   binary: string;
   sha256: string;
+  /** The scenario every plane was computed for, keyed by case. */
+  scenarios: Record<string, OverlayScenario>;
+  /** The measured agreement between the shipped grid and this reference, keyed by case. */
+  agreement: Record<string, OverlayAgreement>;
   planes: OverlayPlane[];
   provenance: {
     generatedAt: string;
@@ -1393,7 +1442,25 @@ function markdown(runs: RunResult[], comps: Comparison[], p: Preset): string {
  * saved fields, so it needs no GPU and can be re-run after the fact (including on a different machine from the one
  * that produced the fields).
  */
-function exportOverlay(outDir: string, p: Preset, runs: RunResult[], destDir: string): void {
+/**
+ * Simulated seconds the shipped stage ramp needs to reach `target` from rest, at the harness's tick. Recorded in the
+ * manifest so the app can tell "the 1936 crest, raised at the start" (this scenario) from "the same stage, raised
+ * twenty minutes in" (a different flood at the same final level).
+ */
+function stageArrivalSeconds(target: number, tick: number): number {
+  if (!(target > 0)) return 0;
+  const ramp = new StageRamp();
+  ramp.setTarget(target);
+  const step = Math.max(0.05, tick);
+  let t = 0;
+  while (ramp.moving && t < 4 * 3600) {
+    ramp.advance(step);
+    t += step;
+  }
+  return Math.round(t);
+}
+
+function exportOverlay(outDir: string, p: Preset, runs: RunResult[], comps: Comparison[], destDir: string): void {
   const byCase = new Map<CaseId, RunResult>();
   for (const r of runs) {
     const cur = byCase.get(r.case);
@@ -1462,6 +1529,43 @@ function exportOverlay(outDir: string, p: Preset, runs: RunResult[], destDir: st
     );
   }
 
+  /*
+   * The scenario each case ran, and the agreement the study measured for it. Both come from the runs and the
+   * comparisons themselves — never from a constant retyped here — so the overlay's on-screen readout and results.md
+   * can never disagree.
+   */
+  const scenarios: Record<string, OverlayScenario> = {};
+  const agreement: Record<string, OverlayAgreement> = {};
+  for (const run of finest) {
+    const isCrest = run.case === 'crest';
+    const ft = isCrest ? CREST_FT : null;
+    scenarios[run.case] = {
+      case: run.case,
+      label: isCrest ? `the 1936 crest (${CREST_FT} ft)` : `${RAIN_MM_HR} mm/hr rain, river at normal pool`,
+      stageOffset: run.stageOffset,
+      stageFt: ft,
+      rainRate: isCrest ? p.meta.scenario.rainRate : RAIN_MM_HR,
+      stormCells: 0,
+      boundary: 'open',
+      manningN: DEFAULT_SIM_PARAMS.manningN,
+      stageReachedBy: stageArrivalSeconds(run.stageOffset, run.tick),
+    };
+    const c = comps.find((x) => x.case === run.case && x.coarse === n && x.fine === refGrid);
+    if (!c) throw new Error(`no ${run.case} ${n}² vs ${refGrid}² comparison to source the overlay's readout from`);
+    const area = (list: AreaAgreement[]) => {
+      const a = list.find((x) => x.threshold === FLOOD_THRESHOLD_M) ?? list[0];
+      return { liveKm2: a.coarseKm2, referenceKm2: a.fineKm2, pct: a.pct ?? 0, iou: a.iou };
+    };
+    agreement[run.case] = {
+      liveGrid: n,
+      threshold: FLOOD_THRESHOLD_M,
+      flooded: area(c.flooded),
+      extent: area(c.extent),
+      waterHeldPct: c.volume.pct ?? 0,
+      maxDepth: { rmse: c.maxDepthFlooded.rmse, median: c.maxDepthFlooded.p50, p99: c.maxDepthFlooded.p99 },
+    };
+  }
+
   const bin = Buffer.concat(chunks);
   const manifest: ReferenceOverlayManifest = {
     version: OVERLAY_VERSION,
@@ -1478,6 +1582,8 @@ function exportOverlay(outDir: string, p: Preset, runs: RunResult[], destDir: st
     encoding: 'gzip',
     binary: 'reference.bin',
     sha256: crypto.createHash('sha256').update(bin).digest('hex'),
+    scenarios,
+    agreement,
     planes,
     provenance: {
       generatedAt: new Date().toISOString(),
@@ -1618,7 +1724,7 @@ async function main(): Promise<void> {
   fs.writeFileSync(path.join(outDir, 'results.md'), markdown(runs, comps, p));
   console.log(`\nWrote ${path.join(outDir, 'results.json')} and results.md`);
   if (flag('export-overlay')) {
-    exportOverlay(outDir, p, runs, path.resolve(ROOT, arg('overlay-out', `public/presets/${p.meta.id}`)));
+    exportOverlay(outDir, p, runs, comps, path.resolve(ROOT, arg('overlay-out', `public/presets/${p.meta.id}`)));
   }
   for (const c of comps) {
     console.log(

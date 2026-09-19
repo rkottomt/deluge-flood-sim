@@ -1,5 +1,6 @@
 /** Terrain surface + diorama skirt shaders. */
 import { COMMON_WGSL, FRAME_WGSL, LOD_WGSL, WALL_WGSL } from './common';
+import { REFERENCE_WGSL } from '../reference';
 
 /**
  * Close-up imagery inset (src/data/imagery.ts): how much of the finer photo shows at a grid position — 0 outside its
@@ -29,10 +30,12 @@ ${FRAME_WGSL}
 @group(0) @binding(9) var wallTex: texture_2d<f32>;
 @group(0) @binding(11) var protectTex: texture_2d<f32>;
 @group(0) @binding(12) var detailTex: texture_2d<f32>;
+@group(0) @binding(13) var refTex: texture_2d<f32>;
 ${COMMON_WGSL}
 ${LOD_WGSL}
 ${WALL_WGSL}
 ${DETAIL_IMAGERY_WGSL}
+${REFERENCE_WGSL}
 
 struct VOut {
   @builtin(position) pos: vec4f,
@@ -250,6 +253,16 @@ fn fsTerrain(in: VOut) -> @location(0) vec4f {
     let strength = select(0.32, 0.5, F.opts.y > 0.5);
     let ink = select(vec3f(0.02, 0.02, 0.015), vec3f(1.0, 0.97, 0.9) * 0.9, false);
     color = mix(color, ink, clamp(max(line * fade * strength, major * strength * 1.3 * (1.0 - smoothstep(0.1, 0.35, contourFw / 5.0))), 0.0, 0.85));
+  }
+
+  // ── Reference flood edge (src/render/reference.ts): the 4096² run's waterline, drawn over the ground it is on ──
+  // Last, over contours and the protected wash, because it is an annotation about the picture rather than part of it.
+  // Zero cost when the overlay is off: F.reference.x is 0 and refTex is never sampled.
+  if (F.reference.x > 0.001) {
+    let pxCells = max(distance(in.world, F.camPos) * F.elev.w, 1e-3) / F.cellSize;
+    let e = refEdge(in.grid, pxCells) * F.reference.x;
+    color *= 1.0 - e.y * F.referenceInk.a;
+    color = mix(color, F.referenceInk.rgb, e.x);
   }
 
   color = mix(color, in.haze.rgb, in.haze.a);

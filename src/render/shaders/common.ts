@@ -4,7 +4,7 @@
  */
 
 /** Byte size of the Frame uniform (must match FRAME_WGSL and writeFrameUniforms in index.ts). */
-export const FRAME_UNIFORM_SIZE = 496;
+export const FRAME_UNIFORM_SIZE = 528;
 
 export const FRAME_WGSL = /* wgsl */ `
 struct Frame {
@@ -38,6 +38,8 @@ struct Frame {
   protect: vec4f,     // x: protected-land glow strength 0..1 (protectTex valid when > 0), yzw: unused
   detailRect: vec4f,  // detail-imagery inset, grid cells: x0, y0, x1, y1 (empty when detail.x == 0)
   detail: vec4f,      // x: inset strength 0..1 (detailTex valid when > 0), y: feather width (cells), zw: unused
+  reference: vec4f,   // x: reference-edge strength 0..1 (refTex valid when > 0), y: encoded range (cells), z: line half-width (px), w: halo width (px)
+  referenceInk: vec4f,// rgb: HDR line colour (tone-maps to white), a: halo darkness 0..1
 }
 `;
 

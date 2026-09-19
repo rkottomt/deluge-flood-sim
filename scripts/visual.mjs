@@ -10,10 +10,16 @@
  * From a fresh clone with no extra setup it builds the production bundle, serves it, and drives it in headless
  * Chromium on the real GPU at the demo viewport (1470x956 @ DPR 2).
  *
- * DETERMINISM. Every scene is frozen before it is captured: the sim is paused, advanced by an exact number of
- * simulated seconds with `__deluge.runFor`, and the camera is assigned a fixed pose (no fly-to). The render pacer
- * then freezes its animation clock once nothing has changed for ~1.2 s (src/app/pacer.ts), so successive frames
- * are bit-identical apart from GPU noise — which is what makes both checks below meaningful.
+ * DETERMINISM. Every scene is frozen before it is captured, and each of the four wall-clock inputs is removed:
+ *   · the sim is PAUSED and the render quality PINNED (no adaptive ladder chasing frame time);
+ *   · the sim clock is walked to the scene's exact simulated second, not merely past it — `runFor` alone stops at
+ *     the first frame that reaches the target, and one frame is ~25 simulated seconds, so the same scene used to
+ *     be photographed anywhere in a 25 s window (see setupScene for the measurement and the substep ladder);
+ *   · the renderer's animation clock is pinned to ANIM_CLOCK, instead of being left wherever the load's wall-clock
+ *     duration stopped it (see pinAnimClock);
+ *   · the camera is assigned a fixed pose (no fly-to), and the auto-dismissing toasts are hidden (see runScene).
+ * What is left is GPU noise: repeat captures of a frozen scene measure 0 differing pixels at baseline resolution,
+ * worst single-pixel Δ 0.017 on an M4 — which is what makes both checks below meaningful.
  *
  * TWO INDEPENDENT KINDS OF CHECK
  *   (a) GOLDEN IMAGES — each scene is compared against a committed baseline in tests/visual/baselines/ with a
@@ -72,6 +78,11 @@ const numEnvRaw = (key, fallback) => {
 };
 /** Baselines are stored at 1/8 of device resolution: 367x239, a few hundred KB each, plenty to see a real change. */
 const BASELINE_SHRINK = 8;
+/**
+ * The renderer's animation clock (s) that every scene is photographed at (see pinAnimClock). Any fixed value
+ * would do; this one sits inside the range the scenes used to settle at by themselves (3.9–8.3 s).
+ */
+const ANIM_CLOCK = 6;
 /** Hard ceiling on one scene, so a busy machine fails the run instead of hanging it. */
 const SCENE_TIMEOUT_MS = Number(argv['scene-timeout'] ?? numEnvRaw('DELUGE_VISUAL_SCENE_TIMEOUT_MS', 600000));
 
@@ -696,11 +707,59 @@ async function setupScene(spec) {
     }
   }
 
-  // Exact simulated time, independent of how fast this machine is. Advanced BEFORE the camera is moved: runFor
-  // competes with rendering for the GPU, and a close-up pose makes each frame expensive enough that the same 900
-  // simulated seconds took minutes instead of tens of seconds. The water state does not depend on the camera.
-  if (spec.simSeconds > 0) await d.runFor(spec.simSeconds);
-  info.simClock = +d.getSimClock().toFixed(2);
+  /*
+   * Exact simulated time, independent of how fast this machine is. Advanced BEFORE the camera is moved: runFor
+   * competes with rendering for the GPU, and a close-up pose makes each frame expensive enough that the same 900
+   * simulated seconds took minutes instead of tens of seconds. The water state does not depend on the camera.
+   *
+   * runFor() alone is NOT exact — it stops at the first frame that reaches the target, and a frame under it runs
+   * a whole substep-capped block (APP_CONFIG.runForTimeScale 3600, SIM_PARAMS.maxSubstepsPerFrame 120), which on a
+   * 1024² preset is 120 × the CFL dt ≈ 25 simulated seconds. So `runFor(600)` lands anywhere in [600, 625) and the
+   * scene that gets photographed is a different one each run. That is measured, not assumed: two fresh loads of
+   * pittsburgh-velocity landed at 662.4 s and 705.8 s, and the golden diff between them tracks the gap at
+   * ≈ 0.04 % of pixels per simulated second (+25.6 s → 1.06 %, +51.3 s → 2.33 %, +77.0 s → 3.38 %). At the 2 %
+   * tolerance that is the whole flake: the suite was comparing frames up to a minute of river apart.
+   *
+   * So walk the cap down instead. Each rung measures one frame's real advance (runFor always completes the frame
+   * it is on, so runFor(0) is exactly one frame), leaves that much room, and covers the rest in one call; the last
+   * rung runs a single substep per frame, so the clock lands within one CFL dt (≈ 0.2 s) of the target every time.
+   * The cap only ever goes DOWN, so the solver never takes a step it would not have taken on its own.
+   */
+  if (spec.simSeconds > 0) {
+    const userCap = d.getState().sim.maxSubstepsPerFrame;
+    // A cap layer can only LOWER the user's value (src/app/simSync.ts), so this is the one knob that shortens a frame.
+    const setCap = (n) => d.store.set({ sim: { ...d.getState().sim, maxSubstepsPerFrame: n } });
+    /** One frame's simulated advance at the current cap (runFor finishes the frame it is on, so runFor(0) is one). */
+    const frameAdvance = async () => {
+      for (let i = 0; i < 20; i++) {
+        const t0 = d.getSimClock();
+        await d.runFor(0);
+        const adv = d.getSimClock() - t0;
+        if (adv > 0) return adv;
+      }
+      return 0;
+    };
+    info.simLadder = [];
+    try {
+      // The coarse rung runs first, so the target must exceed one frame at the user's cap (~25 s at 1024²); every
+      // scene here asks for ≥ 300. A shorter one would overshoot, which `simClockError` in the report would show.
+      for (const cap of [userCap, 16, 4, 1]) {
+        if (d.getSimClock() >= spec.simSeconds) break;
+        setCap(cap);
+        const step = await frameAdvance();
+        const left = spec.simSeconds - d.getSimClock();
+        // Leave a frame and a half of room so this rung always UNDERSHOOTS; the next, finer one closes the gap.
+        // The last rung is a single substep per frame, so it may land on the target without leaving any.
+        const ask = cap === 1 ? left : left - step * 1.5;
+        info.simLadder.push({ cap, step: +step.toFixed(3), left: +left.toFixed(3), ask: +ask.toFixed(3) });
+        if (ask > 0) await d.runFor(ask);
+      }
+    } finally {
+      setCap(userCap);
+    }
+  }
+  info.simClock = +d.getSimClock().toFixed(3);
+  info.simClockError = +(d.getSimClock() - spec.simSeconds).toFixed(3);
   if (spec.requireProtection) {
     for (let i = 0; i < 100 && !d.getProtection(); i++) await new Promise((r) => setTimeout(r, 100));
     info.protection = d.getProtection();
@@ -782,6 +841,25 @@ async function settle(maxMs) {
     last = t;
   }
   return { frozen: false, animTime: +d.getPerf().animTime.toFixed(4), waitedMs: Math.round(maxMs) };
+}
+
+/**
+ * Freeze the renderer's animation clock at one fixed value for every run.
+ *
+ * The pacer's clock is wall-clock driven (`animTime += realDt` on full-rate frames, src/app/pacer.ts), so settle()
+ * leaves it stopped at whatever the load happened to take — 3.9 s to 8.3 s across the suite's own scenes. The water
+ * shader takes it as `F.time` for ripple phase, ripple advection and the Break-it speckle, so the frozen picture is
+ * a function of how long the machine took to get here. Measured, that is a small effect on the golden diff (a whole
+ * second of shift moved 0.006 % of pixels in pittsburgh-velocity), but it costs nothing to remove and it keeps a
+ * wall clock out of a test that claims to be deterministic. Pinned AFTER settle(), while the pacer is idling at its
+ * 4 Hz heartbeat: those frames do not advance the clock, so the value sticks.
+ */
+async function pinAnimClock(t) {
+  const d = window.__deluge;
+  d.app.pacer.animTime = t;
+  // One idle heartbeat (250 ms) is enough to draw with the pinned value; wait for two.
+  await new Promise((r) => setTimeout(r, 600));
+  return { asked: t, animTime: +d.getPerf().animTime.toFixed(4) };
 }
 
 /**
@@ -1022,6 +1100,7 @@ async function runScene(browser, baseUrl, scene, palettes) {
   };
   const info = await page.evaluate(setupScene, spec);
   const settled = await page.evaluate(settle, 8000);
+  const anim = await page.evaluate(pinAnimClock, ANIM_CLOCK);
   const sim = await page.evaluate(simSanity);
   const ui = await page.evaluate(uiBoxes);
 
@@ -1038,6 +1117,8 @@ async function runScene(browser, baseUrl, scene, palettes) {
   if (refMode) {
     await page.evaluate((m) => window.__deluge.setWaterMode(m), refMode);
     await page.evaluate(settle, 5000);
+    // Changing the mode pokes the pacer, so the clock ran again: pin it back before the reference shot.
+    await page.evaluate(pinAnimClock, ANIM_CLOCK);
     refShot = decodePNG(await page.screenshot({ type: 'png' }));
     await page.evaluate((m) => window.__deluge.setWaterMode(m), scene.mode);
   }
@@ -1055,6 +1136,7 @@ async function runScene(browser, baseUrl, scene, palettes) {
     capture: { width: img.width, height: img.height },
     info,
     settled,
+    anim,
     sim,
     ui: { checked: ui.checked, offenders: ui.offenders },
     stats,

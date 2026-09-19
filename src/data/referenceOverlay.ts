@@ -58,6 +58,46 @@ export interface ReferenceOverlayPlane {
   nonZeroCells: number;
 }
 
+/**
+ * The scenario a plane was computed for. The overlay is only honest over a live simulation that is still in THIS
+ * state, so every field here is something `referenceFit` checks (see below). Written by the export path in
+ * scripts/reference-run.ts from the run itself, never from a constant typed twice.
+ */
+export interface ReferenceOverlayScenario {
+  case: ReferenceOverlayCase;
+  /** One line for the UI, e.g. "the 1936 crest (46 ft)". */
+  label: string;
+  /** River-stage offset above normal pool the run ramped to, m (0 when the case has no stage change). */
+  stageOffset: number;
+  /** The gauge reading that offset is, ft; null when the case has no stage. */
+  stageFt: number | null;
+  rainRate: number;
+  stormCells: number;
+  boundary: 'open' | 'wall';
+  manningN: number;
+  /** Simulated seconds by which the run's stage had reached `stageOffset` (it ramps from t = 0). */
+  stageReachedBy: number;
+}
+
+/**
+ * What the convergence study measured for this pairing — the shipped grid against this reference. The app puts these
+ * numbers next to the drawing, so the readout is the measurement and cannot drift from it.
+ */
+export interface ReferenceOverlayAgreement {
+  /** The grid the app ships, i.e. the coarse side of the comparison. */
+  liveGrid: number;
+  /** Depth at which areas and extent are counted, m. */
+  threshold: number;
+  /** Newly flooded land, rivers excluded, km². `pct` is live vs reference; `iou` their overlap, 0…1. */
+  flooded: { liveKm2: number; referenceKm2: number; pct: number; iou: number };
+  /** Total wet extent, rivers included, km². */
+  extent: { liveKm2: number; referenceKm2: number; pct: number; iou: number };
+  /** Water held at the end, live vs reference, %. */
+  waterHeldPct: number;
+  /** Max-depth difference on flooded land, on the reference grid, m. */
+  maxDepth: { rmse: number; median: number | null; p99: number | null };
+}
+
 export interface ReferenceOverlayManifest {
   version: number;
   preset: string;
@@ -76,6 +116,10 @@ export interface ReferenceOverlayManifest {
   encoding: 'gzip';
   binary: string;
   sha256: string;
+  /** The scenario every plane was computed for, keyed by case. */
+  scenarios: Record<string, ReferenceOverlayScenario>;
+  /** The measured agreement between the shipped grid and this reference, keyed by case. */
+  agreement: Record<string, ReferenceOverlayAgreement>;
   planes: ReferenceOverlayPlane[];
   provenance: {
     generatedAt: string;
@@ -88,6 +132,10 @@ export interface ReferenceOverlayManifest {
 export interface ReferenceOverlay {
   manifest: ReferenceOverlayManifest;
   case: ReferenceOverlayCase;
+  /** The scenario this case was computed for (what `referenceFit` holds the live simulation to). */
+  scenario: ReferenceOverlayScenario;
+  /** The measured agreement for this case, for the on-screen readout. */
+  agreement: ReferenceOverlayAgreement;
   /** Deepest water each cell reached during the reference run, m. Length nx*ny. */
   maxDepth: Float32Array;
   /**
@@ -171,6 +219,40 @@ export function validateReferenceOverlayManifest(m: unknown, binaryLength?: numb
     return p;
   }
   const cells = int(o.nx) && int(o.ny) ? o.nx * o.ny : 0;
+  // A plane without its scenario would be a picture with no statement of what it is a picture OF, and the app would
+  // have nothing to hold the live simulation to: refuse the file rather than draw an unlabelled comparison.
+  const scenarios = (o.scenarios ?? {}) as Record<string, Partial<ReferenceOverlayScenario>>;
+  const agreement = (o.agreement ?? {}) as Record<string, Partial<ReferenceOverlayAgreement>>;
+  const num = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
+  for (const id of new Set((o.planes as ReferenceOverlayPlane[]).map((pl) => pl?.case).filter((c) => typeof c === 'string'))) {
+    const sc = scenarios[id];
+    const ag = agreement[id];
+    if (!sc || typeof sc !== 'object') {
+      p.push(`scenarios["${id}"] missing`);
+    } else {
+      if (typeof sc.label !== 'string' || sc.label.length === 0) p.push(`scenarios["${id}"].label must be a non-empty string`);
+      if (!num(sc.stageOffset) || sc.stageOffset < 0) p.push(`scenarios["${id}"].stageOffset must be >= 0`);
+      if (!num(sc.rainRate) || sc.rainRate < 0) p.push(`scenarios["${id}"].rainRate must be >= 0`);
+      if (!num(sc.manningN) || sc.manningN <= 0) p.push(`scenarios["${id}"].manningN must be positive`);
+      if (sc.boundary !== 'open' && sc.boundary !== 'wall') p.push(`scenarios["${id}"].boundary ${String(sc.boundary)} unknown`);
+      if (!num(sc.stageReachedBy) || sc.stageReachedBy < 0) p.push(`scenarios["${id}"].stageReachedBy must be >= 0`);
+    }
+    if (!ag || typeof ag !== 'object') {
+      p.push(`agreement["${id}"] missing`);
+    } else {
+      const areaOk = (a: unknown): boolean => {
+        if (typeof a !== 'object' || a === null) return false;
+        const x = a as Partial<ReferenceOverlayAgreement['flooded']>;
+        return num(x.liveKm2) && num(x.referenceKm2) && num(x.pct) && num(x.iou) && x.iou >= 0 && x.iou <= 1;
+      };
+      if (!num(ag.liveGrid) || ag.liveGrid <= 0) p.push(`agreement["${id}"].liveGrid must be positive`);
+      if (!num(ag.threshold) || ag.threshold < 0) p.push(`agreement["${id}"].threshold must be >= 0`);
+      if (!areaOk(ag.flooded)) p.push(`agreement["${id}"].flooded is not an area agreement`);
+      if (!areaOk(ag.extent)) p.push(`agreement["${id}"].extent is not an area agreement`);
+      if (!num(ag.waterHeldPct)) p.push(`agreement["${id}"].waterHeldPct must be a number`);
+      if (!ag.maxDepth || !num(ag.maxDepth.rmse)) p.push(`agreement["${id}"].maxDepth.rmse must be a number`);
+    }
+  }
   o.planes.forEach((pl, i) => {
     const at = `planes[${i}]`;
     if (typeof pl !== 'object' || pl === null) {
@@ -266,6 +348,9 @@ export async function loadReferenceOverlay(
 
   const depthPlane = manifest.planes.find((p) => p.case === caseId && p.kind === 'maxDepth');
   if (!depthPlane) return bail(`no maxDepth plane for case "${caseId}"`);
+  const scenario = manifest.scenarios?.[caseId];
+  const agreement = manifest.agreement?.[caseId];
+  if (!scenario || !agreement) return bail(`case "${caseId}" carries no scenario / agreement`);
   const arrivalPlane = manifest.planes.find((p) => p.case === caseId && p.kind === 'arrival');
 
   const inflate = async (pl: ReferenceOverlayPlane): Promise<Uint8Array | null> => {
@@ -288,5 +373,121 @@ export async function loadReferenceOverlay(
     else opts.onUnavailable?.('arrival plane inflated to the wrong length; depths only');
   }
 
-  return { manifest, case: caseId, maxDepth, arrival };
+  return { manifest, case: caseId, scenario, agreement, maxDepth, arrival };
+}
+
+// ──────────────────────────────────────────────────────────────────────────────────────────────────────
+// Does the reference apply to what the user is looking at RIGHT NOW?
+//
+// The overlay draws one specific computed flood: one scenario, one stage, one duration, no edits. Drawn over any
+// other state it would look like a verdict on the live simulation while actually comparing two different floods —
+// the one dishonest thing this feature could do. So the control is gated on this function and SAYS WHY when it
+// refuses, and the app never uploads the field unless it returns `applies`.
+// ──────────────────────────────────────────────────────────────────────────────────────────────────────
+
+/** Why the reference does not apply. The UI turns this into a sentence (src/ui/panel.ts). */
+export type ReferenceMismatch =
+  /** A different preset (or a live area). */
+  | 'preset'
+  /** Same preset, different grid — the planes are indexed by the baked grid's cells. */
+  | 'grid'
+  /** The naive solver is running (the stability demo): it is deliberately wrong. */
+  | 'naive'
+  /** Walls drawn or ground dug: the live flood is over different terrain. */
+  | 'edits'
+  | 'rain'
+  | 'storms'
+  /** The river is not at the reference's stage. */
+  | 'stage'
+  /** On the way there: the stage ramp has not arrived yet. */
+  | 'rising'
+  /** At the right stage, but it was raised far later than the reference's own ramp — a different flood. */
+  | 'late-crest'
+  | 'friction'
+  | 'boundary'
+  /** Right scenario, not enough simulated time yet: the live flood is still growing toward the reference's extent. */
+  | 'early'
+  /** Run well past the reference's duration: the live flood has kept spreading beyond what was computed. */
+  | 'past';
+
+/** Tolerances and windows the check uses. Exported so the UI can quote them and tests can pin them. */
+export const REFERENCE_FIT = {
+  /** River stage may differ from the reference's by this much, m (≈ 0.16 ft at the gauge). */
+  stageOffsetM: 0.05,
+  /** Rain may differ by this much, mm/hr. */
+  rainMmHr: 0.5,
+  /** Manning's n may differ by this much. */
+  manningN: 0.001,
+  /**
+   * Simulated seconds past the reference's own stage ramp by which the live run must also have reached the crest.
+   * Generous enough for a presenter dragging the slider by hand at the start of a run, far short of "and then twenty
+   * minutes later I raised the river", which is a different flood at the same final level.
+   */
+  crestLateS: 120,
+  /** Simulated seconds short of the reference's duration that still count as the same moment. */
+  earlyS: 30,
+  /** Simulated seconds past the reference's duration the comparison is still offered for. */
+  pastS: 300,
+} as const;
+
+/** The live state the check needs. Assembled by src/app/reference.ts; deliberately not AppState, so this stays pure. */
+export interface ReferenceFitInput {
+  presetId: string | null;
+  grid: { nx: number; ny: number; cellSize: number } | null;
+  /** Stage offset the simulation has applied, and the target the slider asks for, m. */
+  stageApplied: number;
+  stageTarget: number;
+  /**
+   * Simulated seconds at which the applied stage first matched the reference's, or null if it never has since the
+   * last water reset.
+   */
+  stageMatchedAt: number | null;
+  rainRate: number;
+  /** Number of storm cells on the map. */
+  storms: number;
+  manningN: number;
+  boundary: 'open' | 'wall';
+  stabilityMode: 'robust' | 'naive';
+  /** Simulated seconds since the last water reset (SimStats.simTime), or null before the first readback. */
+  simTime: number | null;
+  /** Walls drawn or ground dug since the scene loaded. */
+  terrainEdited: boolean;
+}
+
+export interface ReferenceFitVerdict {
+  applies: boolean;
+  mismatch: ReferenceMismatch | null;
+  /** Simulated seconds the live run has, and the duration the reference was computed for. */
+  simTime: number;
+  referenceSeconds: number;
+}
+
+/**
+ * Compare the live state with the scenario the reference was computed for. Returns the FIRST thing that differs, in
+ * the order a user would fix it (wrong city → wrong scenario → wrong moment), so the message is always the most
+ * useful one rather than the last check to fail.
+ */
+export function referenceFit(
+  manifest: ReferenceOverlayManifest,
+  scenario: ReferenceOverlayScenario,
+  live: ReferenceFitInput,
+): ReferenceFitVerdict {
+  const simTime = live.simTime ?? 0;
+  const dur = manifest.durationSeconds;
+  const no = (mismatch: ReferenceMismatch): ReferenceFitVerdict => ({ applies: false, mismatch, simTime, referenceSeconds: dur });
+
+  if (live.presetId !== manifest.preset) return no('preset');
+  if (!live.grid || live.grid.nx !== manifest.nx || live.grid.ny !== manifest.ny) return no('grid');
+  if (live.stabilityMode !== 'robust') return no('naive');
+  if (live.terrainEdited) return no('edits');
+  if (Math.abs(live.rainRate - scenario.rainRate) > REFERENCE_FIT.rainMmHr) return no('rain');
+  if (live.storms > scenario.stormCells) return no('storms');
+  if (Math.abs(live.stageTarget - scenario.stageOffset) > REFERENCE_FIT.stageOffsetM) return no('stage');
+  if (Math.abs(live.stageApplied - scenario.stageOffset) > REFERENCE_FIT.stageOffsetM) return no('rising');
+  if (live.stageMatchedAt === null || live.stageMatchedAt > scenario.stageReachedBy + REFERENCE_FIT.crestLateS) return no('late-crest');
+  if (Math.abs(live.manningN - scenario.manningN) > REFERENCE_FIT.manningN) return no('friction');
+  if (live.boundary !== scenario.boundary) return no('boundary');
+  if (simTime < dur - REFERENCE_FIT.earlyS) return no('early');
+  if (simTime > dur + REFERENCE_FIT.pastS) return no('past');
+  return { applies: true, mismatch: null, simTime, referenceSeconds: dur };
 }

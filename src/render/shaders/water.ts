@@ -1,5 +1,6 @@
 /** Water surface shaders: photoreal floodwater and hazard colormaps. */
 import { COMMON_WGSL, FRAME_WGSL, LOD_WGSL, VTX_SAMPLE_WGSL, WALL_WGSL } from './common';
+import { REFERENCE_WGSL } from '../reference';
 
 export const WATER_WGSL = /* wgsl */ `
 ${FRAME_WGSL}
@@ -14,10 +15,12 @@ ${FRAME_WGSL}
 @group(0) @binding(8) var wetTex: texture_2d<f32>;
 @group(0) @binding(9) var wallTex: texture_2d<f32>;
 @group(0) @binding(10) var normalWetTex: texture_2d<f32>;
+@group(0) @binding(13) var refTex: texture_2d<f32>;
 ${COMMON_WGSL}
 ${LOD_WGSL}
 ${VTX_SAMPLE_WGSL}
 ${WALL_WGSL}
+${REFERENCE_WGSL}
 
 struct WOut {
   @builtin(position) pos: vec4f,
@@ -394,6 +397,17 @@ fn fsWater(in: WOut) -> @location(0) vec4f {
     let glitch = mix(vec3f(2.8, 0.15, 1.4), vec3f(3.2, 1.6, 0.2), flicker * hash12(cellId + vec2f(7.0, 3.0)));
     rgb = mix(rgb, glitch, blown);
     alpha = mix(alpha, 1.0, blown);
+  }
+
+  // ── Reference flood edge (src/render/reference.ts) ──────────────────────────────────────────────
+  // The same line the terrain pass draws, so it crosses the live shoreline without a break — which is the whole
+  // point: where the 4096² run's waterline and the live one coincide, the line hugs the water's edge. Opaque, so it
+  // reads over deep water; the halo only darkens the water already there. Nothing is sampled while the overlay is off.
+  if (F.reference.x > 0.001 && in.skirt < 0.5) {
+    let e = refEdge(in.grid, max(pixelFoot, 1e-3) / F.cellSize) * F.reference.x;
+    rgb = mix(rgb, rgb * (1.0 - F.referenceInk.a), e.y);
+    rgb = mix(rgb, F.referenceInk.rgb, e.x);
+    alpha = mix(alpha, 1.0, e.x);
   }
 
   alpha = clamp(alpha, 0.0, 1.0) * shore;
