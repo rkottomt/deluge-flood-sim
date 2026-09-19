@@ -416,6 +416,9 @@ const PRESET_DEFS: PresetDef[] = [
     // confluence and Biltmore Village are in the foreground, the River Arts District mid-frame and downtown
     // Asheville on the hill beyond — the three places Helene destroyed, in one frame.
     camera: { at: [-82.566, 35.574], distance: 3200, yaw: 0.4, pitch: 0.5 },
+    // 8 km domain = 1.95 m/texel in the base photo, the same mush as Pittsburgh: inset the confluence, the River
+    // Arts District and Biltmore Village — everything the scenario camera frames.
+    detail: { sizeMeters: 3000 },
     description: () =>
       'Asheville sits in a Blue Ridge valley where the Swannanoa River joins the French Broad. On September 27, ' +
       "2024 Hurricane Helene's rain fell on ground already soaked by a storm two days before, and both rivers broke " +
@@ -496,6 +499,9 @@ const PRESET_DEFS: PresetDef[] = [
     // From East Nashville looking west across the Cumberland at the downtown skyline — the view every photograph of
     // the 2010 flood was taken from. The stadium is on the near bank, Second Avenue and the riverfront on the far one.
     camera: { at: [-86.7735, 36.1635], distance: 2100, yaw: -Math.PI / 2, pitch: 0.45 },
+    // 6 km domain = 1.46 m/texel, still coarser than NAIP resolves: inset the riverfront, the stadium and Second
+    // Avenue, which is the whole frame this scenario opens on.
+    detail: { sizeMeters: 2500 },
     description: ({ normalLevel, gaugeDatum }) =>
       'Downtown Nashville stands on the west bank of the Cumberland River, which crosses the city as a navigation ' +
       'pool between Old Hickory Dam upstream and Cheatham Dam downstream. ' +
@@ -559,6 +565,9 @@ const PRESET_DEFS: PresetDef[] = [
     // Over Buffalo Bayou Park looking east-south-east down the bayou at the downtown skyline: the park trench fills
     // in the foreground (the Harvey photograph everyone saw) with the towers behind it.
     camera: { at: [-95.385, 29.762], distance: 2200, yaw: 1.45, pitch: 0.42 },
+    // 8 km domain = 1.95 m/texel in the base photo: inset Buffalo Bayou Park and the downtown towers behind it,
+    // the frame this scenario opens on.
+    detail: { sizeMeters: 3000 },
     description: () =>
       'Houston is built on a dead-flat coastal plain drained by slow bayous, and Buffalo Bayou runs in a deep trench ' +
       'past downtown. Hurricane Harvey stalled over the city in August 2017 and dropped more than 40 inches of rain ' +

@@ -1026,10 +1026,17 @@
  "files": {
   "elevation": "elevation.f32",
   "imagery": "imagery.jpg",
-  "roads": "roads.json"
+  "roads": "roads.json",
+  "imageryDetail": "imagery-detail.jpg"
+ },
+ "imageryDetail": {
+  "x0": 366,
+  "y0": 448,
+  "x1": 750,
+  "y1": 832
  },
  "bake": {
-  "bakedAt": "2026-09-19T15:35:49.858Z",
+  "bakedAt": "2026-09-19T17:58:10.972Z",
   "demSource": "usgs3dep",
   "demRepairedCells": 0,
   "center": {
