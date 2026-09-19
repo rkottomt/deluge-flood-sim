@@ -31,8 +31,9 @@
  *    grids different timesteps for reasons that have nothing to do with dx.
  *
  * WHAT IS NOT identical, on purpose: the timestep. Each grid runs at its own CFL limit from the shipping
- * `Solver.computeDt()` (dt ∝ dx), snapped down so a whole number of substeps lands exactly on each tick — so every
- * grid is at the same simulated time at every comparison point.
+ * `Solver.computeDt()` (dt ∝ dx). A tick is covered by ⌊tick/dt⌋ substeps AT that timestep plus one short substep for
+ * the remainder, so no grid is quietly run at a lower Courant number than another and every grid sits at exactly the
+ * same simulated time at every comparison point.
  *
  * SCENARIOS (both from `public/presets/pittsburgh/meta.json`, nothing invented here):
  *  • `crest` — the 1936 St. Patrick's Day flood: the river stage ramps from normal pool to 46 ft on the Point gauge
@@ -46,6 +47,25 @@
  *                                     metrics without a GPU — and so a 4096² run done on a cloud box can be
  *                                     scp'd back and compared here
  *   results.json, results.md          the comparison table
+ *
+ * RUNNING THE NEXT RUNG (8192², 64× the demo grid) ON A CLOUD GPU. 1024²–4096² all fit on the demo MacBook Air;
+ * 8192² needs ~7.5 GB of GPU memory and ~64× the 4096² work, so it wants a rented GPU (NVIDIA Brev, an A100/L40S
+ * instance). `webgpu` ships prebuilt Dawn for linux-x64 and runs headless on the NVIDIA Vulkan ICD. Only the DEM and
+ * the scenario are needed, so the upload is ~4 MB:
+ *
+ *   ssh brev … 'mkdir -p deluge/public/presets/pittsburgh'
+ *   rsync -a package.json package-lock.json tsconfig.json src scripts tests/helpers brev:deluge/
+ *   rsync -a public/presets/pittsburgh/{meta.json,elevation.f32} brev:deluge/public/presets/pittsburgh/
+ *   ssh brev 'cd deluge && npm ci --omit=optional &&  *             npx tsx scripts/reference-run.ts --grids=8192 --cases=crest,rain --minutes=30'
+ *   # copy back the run records and the two fields per case (67 MB each at 8192²… 268 MB total)
+ *   rsync -a brev:deluge/artifacts/reference-run/{runs,fields} artifacts/reference-run/
+ *   npx tsx scripts/reference-run.ts --compare-only --grids=1024,2048,4096,8192
+ *
+ * Expect roughly 25–60 min per case on an A100 (extrapolating 40 substeps/s at 4096² on an M4 by cells × 1/dt);
+ * check the first progress line, which prints a projection. CAVEAT: comparing fields produced on two different GPUs
+ * mixes two Float32 implementations. Differences from that are ~1e-5 m (tests/sim/reference.test.ts bounds the same
+ * effect between Dawn/Metal and a Float64 CPU reference), i.e. far below the centimetre-scale numbers here — but say
+ * so when quoting a cross-device result, and prefer running the whole ladder on one device where the memory allows.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -67,8 +87,15 @@ import type { SimParams, SimStats, StormCell, WaterSource } from '../src/contrac
 // Tunables that define the measurement (every one of them appears in the report)
 // ──────────────────────────────────────────────────────────────────────────────────────────────────────
 
-/** Depth that counts as "flooded" for extent, area and IoU, m. The app's hazard legend starts here. */
+/** Depth that counts as "flooded" for the headline extent, area and IoU numbers, m. The app's hazard legend starts here. */
 export const FLOOD_THRESHOLD_M = 0.15;
+/**
+ * The whole ladder of depth thresholds the areas are reported at. A single threshold is a trap: 100 mm/hr sheet flow
+ * puts most of its water just below 0.15 m, where a percentage difference between two nearly-empty masks says nothing,
+ * and the deep bands are where a flood map is actually used. Reporting all four makes the threshold sensitivity
+ * visible instead of letting the choice of 0.15 m pick the answer.
+ */
+export const AREA_THRESHOLDS_M = [0.05, 0.15, 0.5, 1] as const;
 /** Point-gauge stage the crest case ramps to, ft (the preset's "1936 record" mark). */
 const CREST_FT = 46;
 /** Rain rate of the rain case, mm/hr. */
@@ -181,6 +208,13 @@ export function maskAnd(a: Uint8Array, b: Uint8Array): Uint8Array {
   return m;
 }
 
+/** mask[k] = a[k] || b[k] (in place on a fresh array). */
+export function maskOr(a: Uint8Array, b: Uint8Array): Uint8Array {
+  const m = new Uint8Array(a.length);
+  for (let k = 0; k < a.length; k++) if (a[k] || b[k]) m[k] = 1;
+  return m;
+}
+
 export function maskCount(m: Uint8Array): number {
   let c = 0;
   for (let k = 0; k < m.length; k++) c += m[k];
@@ -203,17 +237,34 @@ export function iou(a: Uint8Array, b: Uint8Array): { iou: number; inter: number;
   return { iou: union > 0 ? inter / union : 1, inter, union, onlyA, onlyB };
 }
 
-/** RMSE, mean |Δ| (L1) and max |Δ| of two fields over `mask` (all cells when mask is null). */
-export function fieldError(
-  a: Float32Array,
-  b: Float32Array,
-  mask: Uint8Array | null,
-): { rmse: number; l1: number; maxAbs: number; cells: number; nonFinite: number } {
+/** Largest masked cell count for which fieldError also sorts |Δ| for percentiles (bounds the temporary array). */
+const PERCENTILE_CELL_CAP = 12e6;
+
+export interface FieldError {
+  rmse: number;
+  l1: number;
+  maxAbs: number;
+  cells: number;
+  nonFinite: number;
+  /**
+   * Percentiles of |Δ| over the mask, or null when no mask was given (or it covered too many cells to sort). The
+   * mean and RMSE hide the shape: a flood map can agree to a few centimetres over most of its area and still be a
+   * metre out down the narrow flow paths a 7.8 m cell cannot resolve. p50/p90/p99 is where that shows.
+   */
+  p50: number | null;
+  p90: number | null;
+  p99: number | null;
+}
+
+/** RMSE, mean |Δ| (L1), max |Δ| and (masked only) percentiles of |Δ| over `mask` (all cells when mask is null). */
+export function fieldError(a: Float32Array, b: Float32Array, mask: Uint8Array | null): FieldError {
   let sq = 0;
   let abs = 0;
   let maxAbs = 0;
   let cells = 0;
   let nonFinite = 0;
+  const want = mask !== null ? maskCount(mask) : 0;
+  const keep = mask !== null && want > 0 && want <= PERCENTILE_CELL_CAP ? new Float64Array(want) : null;
   for (let k = 0; k < a.length; k++) {
     if (mask && !mask[k]) continue;
     const d = a[k] - b[k];
@@ -221,12 +272,24 @@ export function fieldError(
       nonFinite++;
       continue;
     }
+    const m = Math.abs(d);
+    if (keep) keep[cells] = m;
     cells++;
     sq += d * d;
-    abs += Math.abs(d);
-    if (Math.abs(d) > maxAbs) maxAbs = Math.abs(d);
+    abs += m;
+    if (m > maxAbs) maxAbs = m;
   }
-  return { rmse: cells ? Math.sqrt(sq / cells) : 0, l1: cells ? abs / cells : 0, maxAbs, cells, nonFinite };
+  let p50: number | null = null;
+  let p90: number | null = null;
+  let p99: number | null = null;
+  if (keep && cells > 0) {
+    const v = keep.subarray(0, cells).slice().sort();
+    const at = (q: number) => v[Math.min(cells - 1, Math.max(0, Math.round(q * (cells - 1))))];
+    p50 = at(0.5);
+    p90 = at(0.9);
+    p99 = at(0.99);
+  }
+  return { rmse: cells ? Math.sqrt(sq / cells) : 0, l1: cells ? abs / cells : 0, maxAbs, cells, nonFinite, p50, p90, p99 };
 }
 
 /** Row-major indices of the cells whose centres lie within `radius` cells of (gx, gy), clipped to the grid. */
@@ -314,8 +377,6 @@ interface Grid {
   cellSize: number;
   elevation: Float32Array;
   initialWater: Float32Array;
-  /** 1 where the initial fill is dry (h < WET_DEPTH): the land a flood can newly cover. */
-  dry0: Uint8Array;
   storms: StormCell[];
   sources: WaterSource[];
   /** Channel water surface for the crest raise (src/app/crest.ts), or null. */
@@ -339,8 +400,6 @@ function buildGrid(p: Preset, n: number, bed: BedMode): Grid {
   for (let k = 0; k < initialWater.length; k++) {
     if (wet[k]) initialWater[k] = Math.max(0, p.fillLevel - elevation[k]);
   }
-  const dry0 = new Uint8Array(n * n);
-  for (let k = 0; k < dry0.length; k++) if (initialWater[k] < WET_DEPTH) dry0[k] = 1;
   const sources = p.meta.scenario.sources.map((s) => ({ ...s, gx: s.gx * r, gy: s.gy * r, radius: s.radius * r }));
   const storms = p.meta.scenario.storms.map((s) => ({ ...s, gx: s.gx * r, gy: s.gy * r, radius: s.radius * r }));
   const channelBase = channelBaseSurface(initialWater, (k) => elevation[k], n, n, sources);
@@ -354,7 +413,6 @@ function buildGrid(p: Preset, n: number, bed: BedMode): Grid {
     cellSize,
     elevation,
     initialWater,
-    dry0,
     storms,
     sources,
     channelBase,
@@ -411,6 +469,13 @@ interface LandmarkResult {
   peak: number;
   peakCell: number;
   final: number;
+  /**
+   * The whole probe series (one value per entry of RunResult.sampleTimes), so `--compare-only` can re-derive an
+   * arrival time at ANY threshold without re-running. 100 mm/hr rain never puts 0.15 m on most of these sites, and a
+   * table of "never / never" would have hidden a real difference in when the water shows up at all.
+   */
+  series: number[];
+  seriesCell: number[];
 }
 
 interface RunResult {
@@ -421,10 +486,16 @@ interface RunResult {
   duration: number;
   tick: number;
   sample: number;
+  /** Simulated seconds at which the probes were sampled. */
+  sampleTimes: number[];
   substeps: number;
   dtMean: number;
   dtMin: number;
   dtMax: number;
+  /** Mean CFL timestep the solver asked for (dtMean/dtCflMean shows how close the run stayed to its CFL limit). */
+  dtCflMean: number;
+  /** Largest 2-D Courant number the solver's own stats reported in the final window. */
+  courant: number;
   wallClockS: number;
   peakRssMB: number;
   gpuBytesEstimate: number;
@@ -493,6 +564,9 @@ async function runOne(device: GPUDevice, gpuName: string, p: Preset, grid: Grid,
   let dtSum = 0;
   let dtMin = Infinity;
   let dtMax = 0;
+  /** Mean of the raw CFL timestep the solver asked for, so the report can show we ran at it and not below it. */
+  let cflSum = 0;
+  let cflTicks = 0;
   let peakRss = process.memoryUsage().rss;
   let simTime = 0;
   let nextSample = 0;
@@ -523,16 +597,35 @@ async function runOne(device: GPUDevice, gpuName: string, p: Preset, grid: Grid,
         if (grid.channelBase) solver.raiseWaterSurface(grid.channelBase, pushed);
       }
     }
-    // Whole substeps landing exactly on the tick, at or below the solver's own CFL timestep: every grid is at the
-    // same simulated time at every sample, and dt still falls with dx the way the CFL rule says.
+    // Cover the tick with whole substeps at the solver's own CFL timestep, plus one short substep for the
+    // remainder. Every grid therefore runs AT its CFL limit (not at tick/⌈tick/dt⌉, which would have run the coarse
+    // grid at a materially lower Courant number than the fine one and flattered it), and every grid is at exactly
+    // the same simulated time at every comparison point.
     const cfl = solver.computeDt();
-    const k = Math.max(1, Math.ceil(tick / cfl));
-    const dt = tick / k;
-    solver.runSubsteps(k, dt);
-    substeps += k;
-    dtSum += dt * k;
-    dtMin = Math.min(dtMin, dt);
-    dtMax = Math.max(dtMax, dt);
+    cflSum += cfl;
+    cflTicks++;
+    const k = Math.floor(tick / cfl);
+    if (k < 1) {
+      solver.runSubsteps(1, tick);
+      substeps += 1;
+      dtSum += tick;
+      dtMin = Math.min(dtMin, tick);
+      dtMax = Math.max(dtMax, tick);
+    } else {
+      solver.runSubsteps(k, cfl);
+      substeps += k;
+      dtSum += cfl * k;
+      dtMin = Math.min(dtMin, cfl);
+      dtMax = Math.max(dtMax, cfl);
+      const rem = tick - k * cfl;
+      if (rem > 1e-6) {
+        solver.runSubsteps(1, rem);
+        substeps += 1;
+        dtSum += rem;
+        dtMin = Math.min(dtMin, rem);
+        dtMax = Math.max(dtMax, rem);
+      }
+    }
     simTime += tick;
     if (simTime >= nextSample - 1e-9) {
       await sample();
@@ -543,7 +636,7 @@ async function runOne(device: GPUDevice, gpuName: string, p: Preset, grid: Grid,
         const el = (performance.now() - t0) / 1000;
         process.stdout.write(
           `    ${o.case} ${n}²  ${(frac * 100).toFixed(0)}%  sim ${(simTime / 60).toFixed(1)} min  ` +
-            `dt ${dt.toFixed(4)}s  ${substeps} substeps  ${el.toFixed(0)}s elapsed, ~${(el / Math.max(frac, 1e-6) - el).toFixed(0)}s left\n`,
+            `dt ${dtMax.toFixed(4)}s  ${substeps} substeps  ${el.toFixed(0)}s elapsed, ~${(el / Math.max(frac, 1e-6) - el).toFixed(0)}s left\n`,
         );
       }
     }
@@ -584,9 +677,11 @@ async function runOne(device: GPUDevice, gpuName: string, p: Preset, grid: Grid,
     discCells: pr.cells.length,
     arrival: arrivalTime(times, pr.disc, FLOOD_THRESHOLD_M),
     arrivalCell: arrivalTime(times, pr.point, FLOOD_THRESHOLD_M),
-    peak: Math.max(...pr.disc),
-    peakCell: Math.max(...pr.point),
+    peak: pr.disc.reduce((a, b) => Math.max(a, b), 0),
+    peakCell: pr.point.reduce((a, b) => Math.max(a, b), 0),
     final: pr.disc[pr.disc.length - 1],
+    series: pr.disc,
+    seriesCell: pr.point,
   }));
 
   const result: RunResult = {
@@ -597,10 +692,13 @@ async function runOne(device: GPUDevice, gpuName: string, p: Preset, grid: Grid,
     duration: o.duration,
     tick: o.tick,
     sample: o.sample,
+    sampleTimes: times,
     substeps,
     dtMean: dtSum / Math.max(1, substeps),
     dtMin: Number.isFinite(dtMin) ? dtMin : 0,
     dtMax,
+    dtCflMean: cflSum / Math.max(1, cflTicks),
+    courant: snap.stats.courant,
     wallClockS,
     peakRssMB: peakRss / 1e6,
     gpuBytesEstimate: gpuBytesEstimate(n, { raise: isCrest && !!grid.channelBase }),
@@ -625,6 +723,16 @@ async function runOne(device: GPUDevice, gpuName: string, p: Preset, grid: Grid,
 // Comparison
 // ──────────────────────────────────────────────────────────────────────────────────────────────────────
 
+interface AreaAgreement {
+  threshold: number;
+  coarseKm2: number;
+  fineKm2: number;
+  pct: number | null;
+  iou: number;
+  onlyCoarseKm2: number;
+  onlyFineKm2: number;
+}
+
 interface Comparison {
   case: CaseId;
   bed: BedMode;
@@ -633,33 +741,39 @@ interface Comparison {
   /** Refinement factor between them, and the cell-count ratio. */
   refine: number;
   cells: number;
-  /** Wet extent (maxDepth ≥ threshold), whole domain. */
-  extent: { coarseKm2: number; fineKm2: number; pct: number | null; iou: number; onlyCoarseKm2: number; onlyFineKm2: number };
+  /** Wet extent (maxDepth ≥ threshold), whole domain, one entry per AREA_THRESHOLDS_M. */
+  extent: AreaAgreement[];
   /** Newly flooded land only (maxDepth ≥ threshold on ground the initial fill left dry) — the headline number. */
-  flooded: { coarseKm2: number; fineKm2: number; pct: number | null; iou: number; onlyCoarseKm2: number; onlyFineKm2: number };
+  flooded: AreaAgreement[];
   /** Max-depth field error on the FINE grid, coarse replicated cell-for-cell. */
-  maxDepthFine: { rmse: number; l1: number; maxAbs: number; cells: number };
+  maxDepthFine: ErrorSummary;
   /** Same, restricted to the union of the two newly-flooded masks. */
-  maxDepthFlooded: { rmse: number; l1: number; maxAbs: number; cells: number };
+  maxDepthFlooded: ErrorSummary;
+  /**
+   * Same, restricted to the INTERSECTION — land both grids flood. Splitting interior from margin separates "the two
+   * grids disagree about how deep it gets" from "they disagree about where the edge of the flood is".
+   */
+  maxDepthBothFlooded: ErrorSummary;
   /** Max-depth error after block-averaging the fine field onto the coarse grid (what the coarse grid can represent). */
-  maxDepthCoarsened: { rmse: number; l1: number; maxAbs: number; cells: number };
+  maxDepthCoarsened: ErrorSummary;
   /** Same, restricted to the coarse grid's newly-flooded cells. */
-  maxDepthCoarsenedFlooded: { rmse: number; l1: number; maxAbs: number; cells: number };
+  maxDepthCoarsenedFlooded: ErrorSummary;
   /** Final depth field, same two frames. */
-  depthFine: { rmse: number; l1: number; maxAbs: number; cells: number };
-  depthCoarsenedFlooded: { rmse: number; l1: number; maxAbs: number; cells: number };
+  depthFine: ErrorSummary;
+  depthCoarsenedFlooded: ErrorSummary;
   /** Volume held at the end, m³. */
   volume: { coarse: number; fine: number; pct: number | null };
-  landmarks: Array<{
-    name: string;
-    expect: 'wet' | 'dry';
-    coarseArrival: number | null;
-    fineArrival: number | null;
-    dArrival: number | null;
-    coarsePeak: number;
-    finePeak: number;
-    dPeak: number;
-  }>;
+  landmarks: LandmarkComparison[];
+}
+
+interface LandmarkComparison {
+  name: string;
+  expect: 'wet' | 'dry';
+  /** Arrival times (s) at each threshold of AREA_THRESHOLDS_M, and the coarse − fine difference. */
+  arrivals: Array<{ threshold: number; coarse: number | null; fine: number | null; delta: number | null }>;
+  coarsePeak: number;
+  finePeak: number;
+  dPeak: number;
 }
 
 function loadField(outDir: string, rel: string, cells: number): Float32Array {
@@ -668,8 +782,10 @@ function loadField(outDir: string, rel: string, cells: number): Float32Array {
   return new Float32Array(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength));
 }
 
-function trim(e: { rmse: number; l1: number; maxAbs: number; cells: number }) {
-  return { rmse: e.rmse, l1: e.l1, maxAbs: e.maxAbs, cells: e.cells };
+type ErrorSummary = Pick<FieldError, 'rmse' | 'l1' | 'maxAbs' | 'cells' | 'p50' | 'p90' | 'p99'>;
+
+function trim(e: FieldError): ErrorSummary {
+  return { rmse: e.rmse, l1: e.l1, maxAbs: e.maxAbs, cells: e.cells, p50: e.p50, p90: e.p90, p99: e.p99 };
 }
 
 function compare(outDir: string, p: Preset, coarse: RunResult, fine: RunResult): Comparison {
@@ -689,39 +805,55 @@ function compare(outDir: string, p: Preset, coarse: RunResult, fine: RunResult):
   const dryC = buildDryMask(p, nc, coarse.bed);
   const dryF = buildDryMask(p, nf, fine.bed);
 
-  const extentC = maskAtLeast(mdC, FLOOD_THRESHOLD_M);
-  const extentF = maskAtLeast(mdF, FLOOD_THRESHOLD_M);
-  const floodC = maskAnd(extentC, dryC);
-  const floodF = maskAnd(extentF, dryF);
+  // Areas and IoU at every threshold of the ladder; the 0.15 m masks also define the "flooded land" the field
+  // errors are restricted to.
+  const agree = (mc: Uint8Array, mf: Uint8Array, threshold: number): AreaAgreement => {
+    const o = iou(refineMask(mc, nc, r), mf);
+    return {
+      threshold,
+      coarseKm2: maskCount(mc) * areaC * km2,
+      fineKm2: maskCount(mf) * areaF * km2,
+      pct: pctDiff(maskCount(mc) * areaC, maskCount(mf) * areaF),
+      iou: o.iou,
+      onlyCoarseKm2: o.onlyA * areaF * km2,
+      onlyFineKm2: o.onlyB * areaF * km2,
+    };
+  };
+  const extent: AreaAgreement[] = [];
+  const flooded: AreaAgreement[] = [];
+  for (const t of AREA_THRESHOLDS_M) {
+    const ec = maskAtLeast(mdC, t);
+    const ef = maskAtLeast(mdF, t);
+    extent.push(agree(ec, ef, t));
+    flooded.push(agree(maskAnd(ec, dryC), maskAnd(ef, dryF), t));
+  }
+  const floodC = maskAnd(maskAtLeast(mdC, FLOOD_THRESHOLD_M), dryC);
+  const floodF = maskAnd(maskAtLeast(mdF, FLOOD_THRESHOLD_M), dryF);
 
-  const extentCf = refineMask(extentC, nc, r);
-  const floodCf = refineMask(floodC, nc, r);
   const mdCf = refineField(mdC, nc, r, 'nearest');
   const dCf = refineField(dC, nc, r, 'nearest');
-
-  const extIou = iou(extentCf, extentF);
-  const floodIou = iou(floodCf, floodF);
-  const unionFlood = new Uint8Array(nf * nf);
-  for (let k = 0; k < unionFlood.length; k++) if (floodCf[k] || floodF[k]) unionFlood[k] = 1;
+  // Fine frame: land either grid calls flooded. Using only one grid's mask would hide exactly the disagreement we
+  // are trying to measure (water the fine grid puts somewhere the coarse grid leaves dry, and vice versa).
+  const unionFlood = maskOr(refineMask(floodC, nc, r), floodF);
 
   // Coarse frame: block-average the fine field down. This asks the fairer question — does the demo grid get the
   // answer right at the scales it can represent at all — and separates that from structure below 7.8 m.
   const mdFc = blockMean(mdF, nf, r);
   const dFc = blockMean(dF, nf, r);
+  // Same union rule in the coarse frame (the rain case's coarse flood mask is nearly empty, and an empty mask would
+  // have reported a flattering RMSE of exactly zero).
+  const unionFloodC = maskOr(floodC, maskAnd(maskAtLeast(mdFc, FLOOD_THRESHOLD_M), dryC));
 
-  const extentKm2C = maskCount(extentC) * areaC * km2;
-  const extentKm2F = maskCount(extentF) * areaF * km2;
-  const floodKm2C = maskCount(floodC) * areaC * km2;
-  const floodKm2F = maskCount(floodF) * areaF * km2;
-
-  const lm = coarse.landmarks.map((a, i) => {
+  const lm: LandmarkComparison[] = coarse.landmarks.map((a, i) => {
     const b = fine.landmarks[i];
     return {
       name: a.name,
       expect: a.expect,
-      coarseArrival: a.arrival,
-      fineArrival: b.arrival,
-      dArrival: a.arrival !== null && b.arrival !== null ? a.arrival - b.arrival : null,
+      arrivals: AREA_THRESHOLDS_M.map((t) => {
+        const ca = arrivalTime(coarse.sampleTimes, a.series, t);
+        const fa = arrivalTime(fine.sampleTimes, b.series, t);
+        return { threshold: t, coarse: ca, fine: fa, delta: ca !== null && fa !== null ? ca - fa : null };
+      }),
       coarsePeak: a.peak,
       finePeak: b.peak,
       dPeak: a.peak - b.peak,
@@ -735,28 +867,15 @@ function compare(outDir: string, p: Preset, coarse: RunResult, fine: RunResult):
     fine: nf,
     refine: r,
     cells: r * r,
-    extent: {
-      coarseKm2: extentKm2C,
-      fineKm2: extentKm2F,
-      pct: pctDiff(extentKm2C, extentKm2F),
-      iou: extIou.iou,
-      onlyCoarseKm2: extIou.onlyA * areaF * km2,
-      onlyFineKm2: extIou.onlyB * areaF * km2,
-    },
-    flooded: {
-      coarseKm2: floodKm2C,
-      fineKm2: floodKm2F,
-      pct: pctDiff(floodKm2C, floodKm2F),
-      iou: floodIou.iou,
-      onlyCoarseKm2: floodIou.onlyA * areaF * km2,
-      onlyFineKm2: floodIou.onlyB * areaF * km2,
-    },
+    extent,
+    flooded,
     maxDepthFine: trim(fieldError(mdCf, mdF, null)),
     maxDepthFlooded: trim(fieldError(mdCf, mdF, unionFlood)),
+    maxDepthBothFlooded: trim(fieldError(mdCf, mdF, maskAnd(refineMask(floodC, nc, r), floodF))),
     maxDepthCoarsened: trim(fieldError(mdC, mdFc, null)),
-    maxDepthCoarsenedFlooded: trim(fieldError(mdC, mdFc, floodC)),
+    maxDepthCoarsenedFlooded: trim(fieldError(mdC, mdFc, unionFloodC)),
     depthFine: trim(fieldError(dCf, dF, null)),
-    depthCoarsenedFlooded: trim(fieldError(dC, dFc, floodC)),
+    depthCoarsenedFlooded: trim(fieldError(dC, dFc, unionFloodC)),
     volume: { coarse: coarse.stats.volume, fine: fine.stats.volume, pct: pctDiff(coarse.stats.volume, fine.stats.volume) },
     landmarks: lm,
   };
@@ -780,6 +899,8 @@ function buildDryMask(p: Preset, n: number, bed: BedMode): Uint8Array {
 // ──────────────────────────────────────────────────────────────────────────────────────────────────────
 
 const f2 = (v: number) => v.toFixed(2);
+/** The headline (FLOOD_THRESHOLD_M) row of a comparison's newly-flooded ladder. */
+const headline = (c: Comparison): AreaAgreement => c.flooded.find((a) => a.threshold === FLOOD_THRESHOLD_M) ?? c.flooded[0];
 const sgn = (v: number | null, digits = 1, unit = '') => (v === null ? 'n/a' : `${v >= 0 ? '+' : ''}${v.toFixed(digits)}${unit}`);
 const mins = (s: number) => `${(s / 60).toFixed(0)} min`;
 
@@ -793,64 +914,154 @@ function markdown(runs: RunResult[], comps: Comparison[], p: Preset): string {
   L.push('');
   L.push('## Runs');
   L.push('');
-  L.push('| Case | Grid | dx (m) | Sim duration | Substeps | mean dt (s) | Wall clock | GPU alloc | Peak RSS | mass error | max depth (m) | wet area (km²) | flooded area (km², h > 0.3) |');
-  L.push('| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |');
+  L.push(
+    `Each run: ${mins(first?.duration ?? 0)} of simulated time, stage ramp advanced every ${first?.tick ?? 0} sim-s, readback every ${first?.sample ?? 0} sim-s.`,
+  );
+  L.push('');
+  L.push('### Cost and timestep');
+  L.push('');
+  L.push('| Case | Grid | dx (m) | Substeps | mean dt (s) | dt / CFL dt | Courant | Wall clock | GPU alloc | Peak RSS (node) |');
+  L.push('| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |');
+  for (const r of runs) {
+    const wall = r.wallClockS < 90 ? `${r.wallClockS.toFixed(0)} s` : `${(r.wallClockS / 60).toFixed(1)} min`;
+    L.push(
+      `| ${r.case} | ${r.grid}² | ${r.cellSize.toFixed(3)} | ${r.substeps.toLocaleString('en-US')} | ${r.dtMean.toFixed(4)} | ` +
+        `${(r.dtMean / Math.max(r.dtCflMean, 1e-9)).toFixed(2)} | ${r.courant.toFixed(2)} | ${wall} | ${(r.gpuBytesEstimate / 1e9).toFixed(2)} GB | ${r.peakRssMB.toFixed(0)} MB |`,
+    );
+  }
+  L.push('');
+  L.push('### Result and conservation');
+  L.push('');
+  L.push('| Case | Grid | initial water (Mm³) | water held (Mm³) | mass error | max depth (m) | wet area (km²) | flooded area, h > 0.3 (km²) | non-finite cells |');
+  L.push('| --- | --- | --- | --- | --- | --- | --- | --- | --- |');
   for (const r of runs) {
     L.push(
-      `| ${r.case} | ${r.grid}² | ${r.cellSize.toFixed(3)} | ${mins(r.duration)} | ${r.substeps.toLocaleString('en-US')} | ${r.dtMean.toFixed(4)} | ` +
-        `${r.wallClockS < 90 ? `${r.wallClockS.toFixed(0)} s` : `${(r.wallClockS / 60).toFixed(1)} min`} | ${(r.gpuBytesEstimate / 1e9).toFixed(2)} GB | ` +
-        `${r.peakRssMB.toFixed(0)} MB | ${r.stats.massError.toExponential(1)} | ${f2(r.stats.maxDepth)} | ${(r.stats.wetArea / 1e6).toFixed(3)} | ${(r.stats.floodedArea / 1e6).toFixed(3)} |`,
+      `| ${r.case} | ${r.grid}² | ${(r.initialVolume / 1e6).toFixed(3)} | ${(r.stats.volume / 1e6).toFixed(3)} | ${r.stats.massError.toExponential(1)} | ` +
+        `${f2(r.stats.maxDepth)} | ${(r.stats.wetArea / 1e6).toFixed(3)} | ${(r.stats.floodedArea / 1e6).toFixed(3)} | ${r.nonFiniteCells} |`,
     );
   }
   L.push('');
   for (const c of comps) {
     L.push(`## ${c.case}: ${c.coarse}² vs ${c.fine}² (${c.cells}× the cells, bed refinement \`${c.bed}\`)`);
     L.push('');
+    L.push(`Newly flooded land = max depth ≥ threshold on ground the initial river fill left dry.`);
+    L.push('');
+    L.push(`| Depth threshold | ${c.coarse}² | ${c.fine}² | difference | IoU | only ${c.coarse}² | only ${c.fine}² |`);
+    L.push('| --- | --- | --- | --- | --- | --- | --- |');
+    for (const a of c.flooded) {
+      L.push(
+        `| ≥ ${a.threshold} m${a.threshold === FLOOD_THRESHOLD_M ? ' **(headline)**' : ''} | ${a.coarseKm2.toFixed(3)} km² | ${a.fineKm2.toFixed(3)} km² | ` +
+          `${sgn(a.pct, 1, ' %')} | ${(a.iou * 100).toFixed(1)} % | ${a.onlyCoarseKm2.toFixed(3)} km² | ${a.onlyFineKm2.toFixed(3)} km² |`,
+      );
+    }
+    L.push('');
+    L.push(`Total wet extent (rivers included), same thresholds:`);
+    L.push('');
+    L.push(`| Depth threshold | ${c.coarse}² | ${c.fine}² | difference | IoU |`);
+    L.push('| --- | --- | --- | --- | --- |');
+    for (const a of c.extent) {
+      L.push(
+        `| ≥ ${a.threshold} m | ${a.coarseKm2.toFixed(3)} km² | ${a.fineKm2.toFixed(3)} km² | ${sgn(a.pct, 1, ' %')} | ${(a.iou * 100).toFixed(1)} % |`,
+      );
+    }
+    L.push('');
     L.push('| Measure | Value |');
     L.push('| --- | --- |');
-    L.push(
-      `| Newly flooded land, ${c.coarse}² / ${c.fine}² | ${c.flooded.coarseKm2.toFixed(3)} km² / ${c.flooded.fineKm2.toFixed(3)} km² (${sgn(c.flooded.pct, 2, ' %')}) |`,
-    );
-    L.push(`| Newly flooded IoU (≥ ${FLOOD_THRESHOLD_M} m) | ${(c.flooded.iou * 100).toFixed(1)} % |`);
-    L.push(
-      `| — disagreement | ${c.flooded.onlyCoarseKm2.toFixed(3)} km² only ${c.coarse}², ${c.flooded.onlyFineKm2.toFixed(3)} km² only ${c.fine}² |`,
-    );
-    L.push(
-      `| Total wet extent, ${c.coarse}² / ${c.fine}² | ${c.extent.coarseKm2.toFixed(3)} km² / ${c.extent.fineKm2.toFixed(3)} km² (${sgn(c.extent.pct, 2, ' %')}), IoU ${(c.extent.iou * 100).toFixed(1)} % |`,
-    );
     L.push(`| Water held at the end | ${sgn(c.volume.pct, 2, ' %')} (${(c.volume.coarse / 1e6).toFixed(2)} vs ${(c.volume.fine / 1e6).toFixed(2)} Mm³) |`);
+    L.push('');
+    L.push('Max-depth field error (|Δ| between the two runs). "on the fine grid" replicates each coarse cell into its');
+    L.push('r² fine cells; "at coarse resolution" block-averages the fine field down first.');
+    L.push('');
+    L.push('| Where | cells | RMSE | mean \\|Δ\\| | median | p90 | p99 | max |');
+    L.push('| --- | --- | --- | --- | --- | --- | --- | --- |');
+    const erow = (label: string, e: ErrorSummary, digits = 3) => {
+      const q = (v: number | null) => (v === null ? '—' : `${v.toFixed(digits)} m`);
+      L.push(
+        `| ${label} | ${e.cells.toLocaleString('en-US')} | ${e.rmse.toFixed(digits)} m | ${e.l1.toFixed(digits)} m | ` +
+          `${q(e.p50)} | ${q(e.p90)} | ${q(e.p99)} | ${e.maxAbs.toFixed(2)} m |`,
+      );
+    };
+    erow(`flooded land (either grid), on the ${c.fine}² grid`, c.maxDepthFlooded);
+    erow(`flooded land (both grids), on the ${c.fine}² grid`, c.maxDepthBothFlooded);
+    erow(`whole domain, on the ${c.fine}² grid`, c.maxDepthFine, 4);
+    erow(`flooded land, at ${c.coarse}² resolution`, c.maxDepthCoarsenedFlooded);
+    erow(`final depth, flooded land, at ${c.coarse}² resolution`, c.depthCoarsenedFlooded);
+    L.push('');
     L.push(
-      `| Max-depth error on the ${c.fine}² grid, flooded land | RMSE ${c.maxDepthFlooded.rmse.toFixed(3)} m, L1 ${c.maxDepthFlooded.l1.toFixed(3)} m, max ${c.maxDepthFlooded.maxAbs.toFixed(2)} m |`,
+      `| Landmark | expect | arrival ≥ 0.05 m (${c.coarse}² / ${c.fine}² / Δ) | arrival ≥ ${FLOOD_THRESHOLD_M} m (${c.coarse}² / ${c.fine}² / Δ) | peak ${c.coarse}² | peak ${c.fine}² | Δ peak |`,
     );
+    L.push('| --- | --- | --- | --- | --- | --- | --- |');
+    const cell = (a: { coarse: number | null; fine: number | null; delta: number | null }) => {
+      const t = (v: number | null) => (v === null ? 'never' : `${(v / 60).toFixed(2)} min`);
+      const d = a.delta === null ? (a.coarse === null && a.fine === null ? '—' : 'n/a') : sgn(a.delta, 1, ' s');
+      return `${t(a.coarse)} / ${t(a.fine)} / ${d}`;
+    };
+    for (const l of c.landmarks) {
+      const shallow = l.arrivals.find((a) => a.threshold === 0.05) ?? l.arrivals[0];
+      const main = l.arrivals.find((a) => a.threshold === FLOOD_THRESHOLD_M) ?? l.arrivals[0];
+      L.push(
+        `| ${l.name} | ${l.expect} | ${cell(shallow)} | ${cell(main)} | ${f2(l.coarsePeak)} m | ${f2(l.finePeak)} m | ${sgn(l.dPeak, 2, ' m')} |`,
+      );
+    }
+    L.push('');
+  }
+  // Observed convergence: with the finest grid as the reference, halving dx should roughly halve a first-order
+  // scheme's error. Two error pairs are enough to see the trend; they are NOT enough for a formal order estimate,
+  // which is why the report says "consistent with" and never prints an exponent.
+  const cases = [...new Set(comps.map((c) => c.case))];
+  const trend = cases
+    .map((cs) => ({ cs, list: comps.filter((c) => c.case === cs).sort((a, b) => a.coarse - b.coarse) }))
+    .filter((t) => t.list.length >= 2);
+  if (trend.length) {
+    L.push('## Observed convergence');
+    L.push('');
     L.push(
-      `| Max-depth error on the ${c.fine}² grid, whole domain | RMSE ${c.maxDepthFine.rmse.toFixed(3)} m, L1 ${c.maxDepthFine.l1.toFixed(4)} m, max ${c.maxDepthFine.maxAbs.toFixed(2)} m |`,
-    );
-    L.push(
-      `| Max-depth error at ${c.coarse}² resolution (fine block-averaged), flooded land | RMSE ${c.maxDepthCoarsenedFlooded.rmse.toFixed(3)} m, L1 ${c.maxDepthCoarsenedFlooded.l1.toFixed(3)} m, max ${c.maxDepthCoarsenedFlooded.maxAbs.toFixed(2)} m |`,
-    );
-    L.push(
-      `| Final-depth error at ${c.coarse}² resolution, flooded land | RMSE ${c.depthCoarsenedFlooded.rmse.toFixed(3)} m, L1 ${c.depthCoarsenedFlooded.l1.toFixed(3)} m |`,
+      `Error of each grid against the finest run. A first-order scheme roughly halves its error when the cell size halves; the ratio column is error(${trend[0].list[0].coarse}²) / error(${trend[0].list[1].coarse}²).`,
     );
     L.push('');
-    L.push('| Landmark | expect | ' + `${c.coarse}² arrival | ${c.fine}² arrival | Δ | ${c.coarse}² peak | ${c.fine}² peak | Δ |`);
-    L.push('| --- | --- | --- | --- | --- | --- | --- | --- |');
-    for (const l of c.landmarks) {
-      const a = l.coarseArrival === null ? 'never' : `${(l.coarseArrival / 60).toFixed(2)} min`;
-      const b = l.fineArrival === null ? 'never' : `${(l.fineArrival / 60).toFixed(2)} min`;
-      const d = l.dArrival === null ? (l.coarseArrival === null && l.fineArrival === null ? '—' : 'n/a') : `${sgn(l.dArrival, 1, ' s')}`;
-      L.push(`| ${l.name} | ${l.expect} | ${a} | ${b} | ${d} | ${f2(l.coarsePeak)} m | ${f2(l.finePeak)} m | ${sgn(l.dPeak, 2, ' m')} |`);
+    L.push('| Case | Measure | ' + trend[0].list.map((c) => `${c.coarse}²`).join(' | ') + ' | ratio |');
+    L.push('| --- | --- | ' + trend[0].list.map(() => '---').join(' | ') + ' | --- |');
+    for (const t of trend) {
+      const vals = [
+        {
+          label: `flooded-area difference vs ${t.list[0].fine}²`,
+          v: t.list.map((c) => Math.abs(headline(c).pct ?? NaN)),
+          fmt: (x: number) => `${x.toFixed(2)} %`,
+        },
+        {
+          label: 'max-depth RMSE on flooded land (m)',
+          v: t.list.map((c) => c.maxDepthFlooded.rmse),
+          fmt: (x: number) => x.toFixed(3),
+        },
+        {
+          label: 'max-depth p90 on flooded land (m)',
+          v: t.list.map((c) => c.maxDepthFlooded.p90 ?? NaN),
+          fmt: (x: number) => x.toFixed(3),
+        },
+        {
+          label: 'flood-extent IoU shortfall (1 − IoU)',
+          v: t.list.map((c) => 1 - headline(c).iou),
+          fmt: (x: number) => `${(x * 100).toFixed(2)} %`,
+        },
+      ];
+      for (const row of vals) {
+        const ratio = row.v.length >= 2 && row.v[1] > 0 ? (row.v[0] / row.v[1]).toFixed(2) + '×' : 'n/a';
+        L.push(`| ${t.cs} | ${row.label} | ${row.v.map(row.fmt).join(' | ')} | ${ratio} |`);
+      }
     }
     L.push('');
   }
   L.push('## Definitions');
   L.push('');
-  L.push(`* "Flooded"/"wet" = max depth reached during the run ≥ ${FLOOD_THRESHOLD_M} m (the app's hazard legend's first band).`);
+  L.push(
+    `* "Flooded"/"wet" = max depth reached during the run ≥ the threshold; ${FLOOD_THRESHOLD_M} m (the app's hazard legend's first band) is the headline, the rest of the ladder shows how much the choice of threshold matters.`,
+  );
   L.push('* "Newly flooded land" excludes every cell the scenario\'s initial fill left wet, i.e. the rivers themselves.');
   L.push(
     '* Field errors "on the fine grid" replicate each coarse cell into its r² fine cells, so structure finer than the coarse cell counts as error. Errors "at coarse resolution" block-average the fine field down first, so only what the coarse grid can represent counts.',
   );
   L.push(
-    `* Landmark probes are the mean depth over a ${PROBE_RADIUS_M} m radius disc — the same patch of ground on every grid — and arrival is the interpolated first crossing of ${FLOOD_THRESHOLD_M} m.`,
+    `* Landmark probes are the mean depth over a ${PROBE_RADIUS_M} m radius disc — the same patch of ground on every grid — sampled every ${runs[0]?.sample ?? 0} sim-s, with arrival the interpolated first crossing of the threshold. The full series is in results.json, so an arrival at any other threshold can be re-derived.`,
   );
   L.push('* Mass error is the solver\'s own ledger: |V − (V₀ + in − out)| / max(V₀, peak V).');
   L.push('* GPU alloc is computed from the resource list in `src/sim/Solver.ts`; peak RSS is the Node process only (Dawn\'s Metal heaps do not show there).');
@@ -968,8 +1179,8 @@ async function main(): Promise<void> {
   console.log(`\nWrote ${path.join(outDir, 'results.json')} and results.md`);
   for (const c of comps) {
     console.log(
-      `  ${c.case} ${c.coarse}² vs ${c.fine}²: flooded ${c.flooded.coarseKm2.toFixed(3)} vs ${c.flooded.fineKm2.toFixed(3)} km² ` +
-        `(${sgn(c.flooded.pct, 2, ' %')}), IoU ${(c.flooded.iou * 100).toFixed(1)} %, max-depth RMSE ${c.maxDepthFlooded.rmse.toFixed(3)} m on flooded land`,
+      `  ${c.case} ${c.coarse}² vs ${c.fine}²: flooded ${headline(c).coarseKm2.toFixed(3)} vs ${headline(c).fineKm2.toFixed(3)} km² ` +
+        `(${sgn(headline(c).pct, 2, ' %')}), IoU ${(headline(c).iou * 100).toFixed(1)} %, max-depth RMSE ${c.maxDepthFlooded.rmse.toFixed(3)} m on flooded land`,
     );
   }
 }
