@@ -1099,6 +1099,7 @@ class DelugeRenderer implements DelugeRendererAPI {
     st.foam = num(opts.foam, st.foam);
     st.stain = num(opts.stain, st.stain);
     st.mud = num(opts.mud, st.mud);
+    st.hazardCity = num(opts.hazardCity, st.hazardCity);
     if (`${this.buildingsEnabled}|${JSON.stringify(st)}` === before) return;
     this.buildingVersion++;
     // Hiding the city must also take it out of the shadow raster, or the streets keep shadows nothing casts.
@@ -1607,10 +1608,17 @@ class DelugeRenderer implements DelugeRendererAPI {
     const dofRadius = this.depthReadable ? this.dofFaded(settings.waterMode) : 0;
     // Buildings: the uniform is written on the queue before this frame's commands run, and the per-chunk
     // selection happens at draw time below (it needs the frustum, which the camera has already settled).
-    const drawBuildings = !!s?.buildings && this.buildingsEnabled && !this.debugSkip.has('buildings');
+    // Hazard modes are the analysis view and the city is hidden there by default (BuildingStyle.hazardCity): an
+    // opaque downtown stands in front of the very colours the mode exists to show. Draw-time only, so switching
+    // modes costs nothing.
+    const hazard = (WATER_MODE_INDEX[settings.waterMode] ?? 0) > 0 ? 1 : 0;
+    const drawBuildings =
+      !!s?.buildings &&
+      this.buildingsEnabled &&
+      !this.debugSkip.has('buildings') &&
+      (hazard === 0 || this.buildingStyle.hazardCity > 0.5);
     const bldStyle = effectiveBuildingStyle(preset, this.buildingStyle);
     if (drawBuildings && s?.buildings) {
-      const hazard = (WATER_MODE_INDEX[settings.waterMode] ?? 0) > 0 ? 1 : 0;
       s.buildings.writeUniform(bldStyle, this.buildingStyle, hazard, !!settings.showImagery && s.hasImagery);
     }
 

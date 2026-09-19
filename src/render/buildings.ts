@@ -659,6 +659,20 @@ export interface BuildingStyle {
   stain: number;
   /** Muddy attenuation of the submerged facade. */
   mud: number;
+  /**
+   * How much of the city survives a HAZARD mode (depth / max depth / velocity), 0..1. Default 0 — hidden.
+   *
+   * The hazard modes are the instrument, not the picture: they are how a judge reads how deep the water is and
+   * how fast it moves, and they were designed and validated against a scene with no buildings in it. An opaque
+   * city sits exactly on top of the answer — at the oblique angle the demo is framed at, a block of downtown
+   * hides the flooded streets behind it, and the flood's extent, the one thing the colormap exists to show,
+   * stops being legible. Neutralising the facades to grey (B.lod.w in shaders/buildings.ts) keeps the city from
+   * competing for the legend's colours, but it cannot stop it from standing in front of them.
+   *
+   * So the realistic mode gets the city and the hazard modes get the data. This is a draw-time switch: the
+   * footprints stay resident and toggling a mode costs nothing.
+   */
+  hazardCity: number;
 }
 
 /** The tier and the style, combined. Produced by `effectiveBuildingStyle` and used by BOTH the CPU cut and the shader. */
@@ -689,6 +703,7 @@ export const DEFAULT_BUILDING_STYLE: BuildingStyle = {
   foam: 1,
   stain: 1,
   mud: 1,
+  hazardCity: 0,
 };
 
 /** Multiplier on `minPx` over which a building grows from nothing to full height (see the vertex shader). */

@@ -420,22 +420,43 @@ test('Pittsburgh’s skyline lands on its real heights, and says where each numb
     const n = set.names[k];
     if (n && (!byName.has(n) || set.height[k] > set.height[byName.get(n) as number])) byName.set(n, k);
   }
-  /** name → [real height in metres, tolerance as a fraction]. Roof/architectural heights from the buildings' records. */
-  const REAL: Array<[string, number, number]> = [
-    ['U.S. Steel Tower', 256, 0.05],
-    ['BNY Mellon Center', 223, 0.05],
-    ['One Oxford Center', 187, 0.05],
-    ['Gulf Tower', 177, 0.05],
-    ['Cathedral of Learning', 163, 0.06],
-    ['One PPG Place', 166, 0.06],
-    ['Grant Building', 149, 0.08],
+  /**
+   * name → [height in metres this dataset should carry, tolerance as a fraction, which surface that number is].
+   *
+   * Pittsburgh's heights are now measured from USGS 3DEP lidar (public/presets/SOURCES.txt, LIDAR ROOF HEIGHTS),
+   * so the number to check against is the height of the SURFACE AN AIRCRAFT SAW, which is what the renderer
+   * extrudes to — not always the height a building's record publishes. The two differ in both directions, and the
+   * reason is geometric rather than an error:
+   *   • a published ROOF height excludes the parapet and the roof plant standing on it, which the lidar sees, so
+   *     measured runs about 1.4 m high (median over the 1 311 buildings that also carry a surveyed tag);
+   *   • a published ARCHITECTURAL height includes masts and spires. A thin rod returns too little energy to be
+   *     resolved, so the Grant Building measures to its roof and not to the beacon that its 149 m figure counts;
+   *     One PPG Place's "spires" are 231 solid glass pinnacles, so they ARE the top and the lidar is right to
+   *     report them where the building's 166 m roof figure would leave the tower stunted.
+   * Tolerances are tight enough that a units slip or a lost lidar pass fails this test.
+   */
+  const REAL: Array<[string, number, number, string]> = [
+    ['U.S. Steel Tower', 256.3, 0.03, 'roof — the lidar and the surveyed tag agree to half a metre'],
+    ['BNY Mellon Center', 223, 0.03, 'roof, plus the parapet the lidar sees'],
+    ['One Oxford Center', 187, 0.04, 'roof'],
+    ['Gulf Tower', 177, 0.04, 'roof below the stepped crown'],
+    ['Cathedral of Learning', 163, 0.05, 'roof; the published figure is to the finial above it'],
+    ['One PPG Place', 194, 0.05, 'the glass spires — solid, so the lidar sees them and they are the real top'],
+    ['Grant Building', 140, 0.06, 'roof; the published 149 m is to the tip of the aviation beacon mast'],
   ];
-  for (const [name, real, tol] of REAL) {
+  for (const [name, real, tol, surface] of REAL) {
     const k = byName.get(name);
     assert.ok(k !== undefined, `${name} is missing from the dataset`);
     const h = set.height[k as number];
-    assert.ok(Math.abs(h - real) / real <= tol, `${name} is ${h.toFixed(1)} m, expected ~${real} m`);
-    assert.ok(set.heightSource[k as number] <= 1, `${name} must not be a guess (source ${set.heightSource[k as number]})`);
+    assert.ok(Math.abs(h - real) / real <= tol, `${name} is ${h.toFixed(1)} m, expected ~${real} m (${surface})`);
+    // Never a guess. 'estimated' is the only source that is one: 'measured' and 'levels' come from OSM's own
+    // surveyed tags, and 'remote' is Pittsburgh's lidar (the 2-bit provenance field has no separate value for it,
+    // see the NOTE ON THE FLAG in SOURCES.txt) — a measurement, not an inference from footprint area.
+    assert.notEqual(
+      HEIGHT_SOURCES[set.heightSource[k as number]],
+      'estimated',
+      `${name} must not be a guess (source ${HEIGHT_SOURCES[set.heightSource[k as number]]})`,
+    );
   }
   // Stadium bowls: broad and low, never towers.
   for (const name of ['PNC Park', 'Acrisure Stadium', 'PPG Paints Arena']) {
@@ -448,10 +469,15 @@ test('Pittsburgh’s skyline lands on its real heights, and says where each numb
   // Nothing in Pittsburgh is taller than its tallest tower.
   const stats = buildingStats(set);
   assert.ok(stats.maxHeight <= 260, `something is ${stats.maxHeight.toFixed(1)} m tall`);
-  // The provenance split must stay honest: the skyline measured, the mass estimated and flagged as such.
-  assert.ok(stats.measured + stats.levels > 2000, 'too few buildings carry a real height');
-  assert.ok(stats.estimated > stats.count * 0.5, 'the estimated share should be the low-rise majority');
-  assert.equal(stats.remote, 0, 'Pittsburgh is mapped densely enough in OSM to need no machine-extracted fill');
+  // The provenance split must stay honest. Since the lidar bake this is the other way round from every other
+  // preset: the great majority of Pittsburgh's roofs are measured, and the estimates are the flagged remainder
+  // (the footprints the sampler declined — tree crowns over small buildings, footprints over water, open stadium
+  // bowls). Johnstown and Ellicott have not been re-baked and are still estimate-dominated, which the per-preset
+  // loop above deliberately does not police.
+  const measuredish = stats.measured + stats.levels + stats.remote;
+  assert.ok(measuredish > stats.count * 0.9, `only ${measuredish} of ${stats.count} Pittsburgh heights are measured`);
+  assert.ok(stats.estimated > 0, 'an estimate-free city would mean the estimator silently stopped flagging');
+  assert.ok(stats.estimated < stats.count * 0.2, `${stats.estimated} estimates is too many to call the city measured`);
 });
 
 test('Microsoft ML footprints parse, clip to the domain and carry their stereo heights', () => {
