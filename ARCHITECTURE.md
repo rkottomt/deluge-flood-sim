@@ -270,12 +270,46 @@ Monongahela and Ohio cross the domain edge.
   centreline waypoints and a measured pool level; live areas detect flat water bodies, open narrow false ridges
   across rivers (keeping dams, islands and road causeways), and burn them. Live conditioning runs in a Web Worker.
 * **Imagery:** baked presets use USDA NAIP (public domain) via USGS The National Map at 4096²; live areas use Esri
-  World Imagery.
+  World Imagery. **Esri imagery is never baked into the repo** — it is not redistributable, so `public/presets` holds
+  NAIP only and `--imagery=esri` exists for local experiments, not for anything committed.
+* **Close-up imagery inset.** A 4096² photo over an 8 km domain is 1.95 m/texel, which is mush once the camera drops
+  to street level. Domains coarser than NAIP's own ~1 m limit carry a second 4096² NAIP photo (`imagery-detail.jpg`)
+  covering the `imageryDetail` rectangle of `meta.json` — the middle 2.5–3.0 km, where the scenario cameras go — and
+  the terrain shader blends it over the base with an 8-cell smoothstep feather, sampling both through the same
+  trilinear/aniso-16 sampler in uniform control flow. It is an exact sub-rectangle of the base export bbox, so it
+  registers to the pixel (measured best-fit shift 0 px in both axes; mean per-channel colour within 2 %, so the
+  feathered edge shows no tonal step). Pittsburgh, Johnstown, Asheville and Houston have one (0.61–0.73 m/texel,
+  2.4–2.7×); Ellicott City, Boulder and Nashville do not, because their smaller domains already give 1.22–1.46 m/texel.
+  Cost: 89.5 MB of GPU memory and 3.5–5.1 MB on disk per inset, −23 ms on load (interleaved A/B: both photos fetch and
+  decode concurrently and the upload is ~17 ms) and a main-pass delta inside sample noise. The alternatives were
+  measured and rejected: an 8192² base costs 357.9 MB of GPU memory and still only reaches 0.98 m/texel; tiled
+  streaming needs a pyramid, a residency policy and upload scheduling for a demo that flies between fixed poses; and
+  KTX2/ASTC — which this M4 supports and which would cut 89.5 MB to ~5.6 MB — is the right long-term answer but needs
+  an encoder and a container reader that the repo does not have.
 * **Roads:** US Census TIGER/Line via TIGERweb, fallback OpenStreetMap; noded into a graph in grid coordinates.
-* **Presets** (`public/presets/<id>/`: `meta.json`, `elevation.f32`, `imagery.jpg`, `roads.json`) are baked by
-  `npx tsx scripts/bake-presets.ts` and work fully offline: Pittsburgh (three rivers, with a demo levee), Johnstown (the
-  1889 South Fork Dam flood, as a lake-average 3,730 m³/s inflow on the Little Conemaugh, entering today's valley),
-  Ellicott City (the 2016 flash-flood storm over the Tiber-Hudson-New Cut watershed), and a procedural sandbox.
+* **Presets** (`public/presets/<id>/`: `meta.json`, `elevation.f32`, `imagery.jpg`, `roads.json`, and
+  `imagery-detail.jpg` where the base photo is too coarse) are baked by `npx tsx scripts/bake-presets.ts` and work
+  fully offline. Seven cities plus a procedural sandbox:
+
+  | Preset | Domain / cell | Scenario forcing | Photo | Road edges |
+  | --- | --- | --- | --- | --- |
+  | `pittsburgh` | 8.0 km / 7.81 m | 1936 crest via the stage control, plus a demo levee | 1.95 + inset 0.73 | 11,053 |
+  | `johnstown` | 7.0 km / 6.84 m | 1889 South Fork Dam flood as a lake-average 3,730 m³/s inflow on the Little Conemaugh | 1.71 + inset 0.61 | 4,903 |
+  | `ellicott` | 5.0 km / 4.88 m | 2016 flash-flood storm over the Tiber–Hudson–New Cut watershed | 1.22 | 1,224 |
+  | `asheville` | 8.0 km / 7.81 m | Helene 2024: 3,200 m³/s French Broad + 1,722 m³/s Swannanoa, sloping (no stage control) | 1.95 + inset 0.73 | 3,556 |
+  | `nashville` | 6.0 km / 5.86 m | Cumberland stage control: 2010 (51.86 ft), 1937 (53.90), 1927 record (56.20) | 1.46 | 5,410 |
+  | `houston` | 8.0 km / 7.81 m | Harvey 2017: 173 mm/hr over the whole domain, bayou at its 923 m³/s peak | 1.95 + inset 0.73 | 10,529 |
+  | `boulder` | 5.0 km / 4.88 m | 2013 Front Range flood: 238 m³/s out of Boulder Canyon | 1.22 | 1,749 |
+
+  River centrelines for the four 2024/2025 additions are traced from USGS NHD high-resolution flowlines; peak
+  discharges, stages and gauge datums come from the USGS annual peak-flow files and NWIS site file. Everything in
+  `public/presets` is public-domain U.S. government data, recorded per city in `public/presets/SOURCES.txt`.
+* **Deploy budget.** `public/presets` is served from a public static host, so `tests/data/presets.test.ts` caps the
+  whole directory at 90 MB and each preset at 25 MB. It currently stands at 87.7 MB — Pittsburgh is the largest single
+  city at 14.7 MB. Nashville qualifies for an inset on the texel-density rule and one was baked and measured
+  (0.611 m/texel, 2.4×, 3.80 MB), but five insets came to 91.5 MB, so it was dropped rather than raising the ceiling;
+  the export is cached in `artifacts/bake-cache`, so re-adding it costs one bake if the budget ever moves. With
+  2.3 MB of headroom, the next city will need either a smaller base photo or a deliberate decision to raise the cap.
 * **Live areas** are cancellable. A download that stalls mid-transfer fails after 20 s without data, and the elevation
   has a 90 s overall deadline (the error then says the service can't be reached). Dead venue wifi often leaves requests
   hanging instead of failing: while no elevation has arrived, the loader checks every 9 s that the data hosts answer at
@@ -379,12 +413,27 @@ From `npm test` (tests run on the real GPU through Dawn); the grid-convergence r
 | Grid convergence, 1024² demo grid vs a 4096² reference (§9.1), Pittsburgh 1936 crest | flooded area −0.92 %, extent IoU 98.0 %, max-depth RMSE 0.29 m | `scripts/reference-run.ts` |
 | The same, 100 mm/hr rain | flooded area −0.55 %, extent IoU 78.2 %, max-depth RMSE 0.22 m | `scripts/reference-run.ts` |
 | The convergence harness's own arithmetic (refinement, masks, IoU, percentiles, arrival times) | 21 checks | `tests/sim/referenceMetrics.test.ts` |
+| All seven baked cities in the production build, offline, 1470x956 DPR 2: cold load, scenario play, streets, routing | load 606–744 ms, 60 fps, sim 48–125× real time, mass error ≤ 6.6·10⁻⁸, 0 console/WebGPU errors, 0 network requests | `scripts/e2e.mjs` flow 7 |
+| Each preset's files, grid, scenario, shelters on high ground, confined initial water, inset registration and deploy size | 7 cities × 5 checks | `tests/data/presets.test.ts` |
 
 `npm run e2e` drives 14 end-to-end demo flows (load, raise to the crest, levee, rain, evacuation, break and recover,
 presets, tools, frame rate, idle power, cancelling a stalled `?live=` link, the one-click levee, the screen wake
 lock, and a GPU device loss mid-load; `--live` adds a live-area flow) in headless Chromium on the real GPU,
 offline — every request to a non-local host is blocked and reported, so a flow that quietly needed the network
 fails.
+
+**Per-city verification.** `scripts/e2e.mjs` flow 7 reads the list of cities off `public/presets` rather than a
+hard-coded array, so a city added by a bake cannot be forgotten by the suite. Every one of the seven is loaded cold in
+the production build at the demo viewport, played with its own camera and forcing, and checked for finite stats, a
+plausible maximum speed, zero console/WebGPU errors and zero network requests.
+
+**One known-flaky golden.** `pittsburgh-velocity` is the only visual scene that compares an *instantaneous* field
+(flow speed at exactly 600 simulated seconds of crest + 100 mm/hr rain) rather than an accumulated one. Its golden
+diff measured 0.0051, 0.0163, 0.0215 and 0.0305 on four runs of identical code against a 0.02 threshold, with
+187,512–193,610 wet cells at the same simulated time: with the adaptive budget off and `runFor` pinning sim time, what
+still varies is the CFL readback latency under GPU contention, which changes the substep sequence and therefore the
+trajectory. Every other scene sits at 0.0000–0.0051. The scene is worth keeping — it is the one that would catch a
+velocity-shader regression — but its tolerance is not honest at 0.02 on a loaded machine.
 
 ### 9.1 Grid convergence: the demo grid against a 16× finer reference
 
