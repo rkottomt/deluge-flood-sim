@@ -18,6 +18,7 @@ export function baseState(patch: Partial<AppState> = {}): AppState {
     stageOffset: 0,
     stageOffsetApplied: 0,
     render: { waterMode: 'realistic', verticalExaggeration: 1.5, showImagery: true, showRoads: true, showContours: false },
+    look: { quality: 'auto', timeOfDay: 'daylight', buildings: true, presentation: false },
     sources: [],
     storms: [],
     shelters: [],

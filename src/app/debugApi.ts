@@ -124,6 +124,8 @@ export function createDebugApi(app: App, ready: Promise<void>): DelugeDebug {
     getStageApplied: () => ({ applied: app.stageRamp.applied, target: app.stageRamp.target, moving: app.stageRamp.moving }),
     setTimeScale: (scale) => store.set({ sim: { ...store.get().sim, timeScale: Math.max(0, scale) } }),
     setWaterMode: (mode) => store.set({ render: { ...store.get().render, waterMode: mode } }),
+    // The same path the View panel's controls take, so a capture script and a presenter drive one code path.
+    setLook: (patch) => store.set({ look: { ...store.get().look, ...patch } }),
 
     drawWall(points, height) {
       const solver = requireSolver();

@@ -193,6 +193,7 @@ const initial: AppState = {
   stageOffset: 0,
   stageOffsetApplied: 0,
   render: { waterMode: 'realistic', verticalExaggeration: 1.5, showImagery: true, showRoads: true, showContours: false },
+  look: { quality: 'auto', timeOfDay: 'daylight', buildings: true, presentation: false },
   sources: scenario.sources.slice(),
   storms: [{ id: 'storm-a', gx: 700, gy: 320, radius: 150, intensity: 60 }],
   shelters: scenario.shelters.slice(),

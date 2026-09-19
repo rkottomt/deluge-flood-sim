@@ -588,6 +588,8 @@ export interface DelugeDebugAPI {
   setStageOffset(meters: number): void;
   setTimeScale(scale: number): void;
   setWaterMode(mode: WaterViewMode): void;
+  /** View-panel look controls (quality tier, time of day, buildings, presentation mode). */
+  setLook(patch: Partial<LookSettings>): void;
   /** Draw a wall through grid-coord points. */
   drawWall(points: Array<{ gx: number; gy: number }>, height: number): void;
   addSource(source: WaterSource): void;
@@ -704,6 +706,12 @@ export interface AppState {
     showRoads: boolean;
     showContours: boolean;
   };
+  /**
+   * Look controls a presenter drives from the View panel. Kept apart from `render` because that object is spread
+   * straight into RenderSettings every frame, while these are scene-level settings pushed to the renderer only
+   * when they change: each of the first three rebuilds the sun-shading raster or the city's LOD cut.
+   */
+  look: LookSettings;
   sources: WaterSource[];
   storms: StormCell[];
   shelters: Shelter[];
@@ -720,6 +728,23 @@ export interface AppState {
   panels: { howItWorks: boolean; locationPicker: boolean; help: boolean };
   /** GPU adapter description for the diagnostics panel. */
   gpuInfo: string;
+}
+
+/** Time of day, as the three named suns the renderer ships (src/render/atmosphere.ts LIGHTING_PRESETS). */
+export type TimeOfDay = 'daylight' | 'goldenHour' | 'morning';
+
+export interface LookSettings {
+  /**
+   * 'auto' is the demo default: the adaptive ladder, which can still step down under load. 'cinematic' is the
+   * hero-still tier (depth of field, edge aberration, the densest sun raster, glass reflections) and is never
+   * selected automatically — a presenter has to ask for it.
+   */
+  quality: 'auto' | 'cinematic';
+  timeOfDay: TimeOfDay;
+  /** Draw the extruded city. Off gives the pre-buildings look (and the cheapest frame). */
+  buildings: boolean;
+  /** Hide every piece of UI chrome for a clean capture or a projector. */
+  presentation: boolean;
 }
 
 export interface Store {

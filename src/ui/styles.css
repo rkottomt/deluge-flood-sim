@@ -4615,3 +4615,11 @@
   opacity: 0.75;
   font-variant-numeric: tabular-nums;
 }
+
+/* ── Presentation mode ─────────────────────────────────────────────────────────────────────────
+   renderer.setCinematic({ presentation: true }) stamps the document element; the View panel's switch and the
+   debug API both go through it. Everything the UI draws lives in .dl-layer, so one rule clears the frame for a
+   screenshot or a projector — the canvas keeps rendering and the keyboard still works. */
+html[data-deluge-presentation='on'] .dl-layer {
+  display: none;
+}

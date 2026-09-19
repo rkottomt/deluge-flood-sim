@@ -333,6 +333,14 @@ interface LidarRoofFile {
   preset: string;
   /** Footprint key -> measured roof elevation in metres (same vertical datum as elevation.f32) and sample count. */
   roofs: Record<string, [z: number, n: number]>;
+  /** How the roof elevation was reduced from the DSM. */
+  estimator?: string;
+  /** Acquisition window of the point cloud. */
+  acquired?: string;
+  /** Measured lidar-ground-minus-DEM residual, the evidence that the two vertical datums agree. */
+  groundResidualVsDemM?: { median: number; mad: number };
+  /** Why the sampler declined to measure a footprint, by reason — these keep whatever the OSM path decided. */
+  keptOsmBecause?: Record<string, number>;
 }
 
 /** Overwrite heights with lidar roof elevations where the sample is trustworthy; keep the OSM value where it is not. */
@@ -341,7 +349,7 @@ function applyLidarRoofs(
   file: string,
   set: BuildingSet,
   cellSize: number,
-): { applied: number; missing: number; rejected: number; deltas: number[] } {
+): { applied: number; missing: number; rejected: number; deltas: number[]; doc: LidarRoofFile } {
   const doc = JSON.parse(fs.readFileSync(file, 'utf8')) as LidarRoofFile;
   if (doc.preset !== id) throw new Error(`lidar roof file is for "${doc.preset}", not "${id}"`);
   let applied = 0;
@@ -366,8 +374,11 @@ function applyLidarRoofs(
     set.heightSource[k] = HS_LIDAR;
     applied++;
   }
-  log(id, `lidar: ${applied} roofs measured, ${missing} footprints not sampled, ${rejected} rejected as implausible`);
-  return { applied, missing, rejected, deltas };
+  log(id, `lidar: ${applied} roofs measured, ${missing} footprints kept their OSM/estimated height, ${rejected} rejected as implausible`);
+  if (doc.keptOsmBecause) {
+    for (const [why, n] of Object.entries(doc.keptOsmBecause)) if (n) log(id, `  kept OSM — ${why}: ${n}`);
+  }
+  return { applied, missing, rejected, deltas, doc };
 }
 
 /** Re-derive report.tallest after the lidar pass rewrote heights (mirrors the top-15 buildBuildingSet computes). */
@@ -458,7 +469,7 @@ async function bake(id: string): Promise<void> {
     writeLidarExport(id, path.resolve(ROOT, LIDAR_EXPORT), set, { nx, ny, cellSize, bounds });
     return;
   }
-  let lidar: { applied: number; missing: number; rejected: number; deltas: number[] } | null = null;
+  let lidar: ReturnType<typeof applyLidarRoofs> | null = null;
   if (LIDAR_APPLY) {
     lidar = applyLidarRoofs(id, path.resolve(ROOT, LIDAR_APPLY), set, cellSize);
     recountProvenance(set, report);
@@ -529,9 +540,12 @@ async function bake(id: string): Promise<void> {
             lidar: {
               source: 'USGS 3DEP via AWS Open Data s3://usgs-lidar-public (EPT), PA_WesternPA_1_2019 + PA_WesternPA_2_2019',
               licence: 'public domain (USGS)',
+              acquired: lidar.doc.acquired,
+              estimator: lidar.doc.estimator,
+              groundResidualVsDemM: lidar.doc.groundResidualVsDemM,
               measured: lidar.applied,
-              notSampled: lidar.missing,
-              rejected: lidar.rejected,
+              keptOsmBecause: lidar.doc.keptOsmBecause,
+              rejectedOnApply: lidar.rejected,
             },
           }
         : {}),

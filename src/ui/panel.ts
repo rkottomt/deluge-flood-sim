@@ -1,7 +1,7 @@
 /**
  * Right-hand collapsible control panel: Scenario, Weather & rivers, Evacuation, View, Advanced.
  */
-import type { AppState, RouteResult, StageControl, WaterViewMode } from '../contracts';
+import type { AppState, RouteResult, StageControl, TimeOfDay, WaterViewMode } from '../contracts';
 import { h, setText, toggleClass, setAttr, shallowArrayEq, type UIContext } from './dom';
 import { icon, type IconName } from './icons';
 import { slider, segmented, toggleSwitch, button, confirmButton, kbd, type SliderMark } from './controls';
@@ -589,6 +589,38 @@ export function createPanel(ctx: UIContext): Panel {
   bind((s) => s.render.showRoads, (v) => tRoads.set(v));
   bind((s) => s.render.showContours, (v) => tContours.set(v));
 
+  // ── Look: the presenter's scene-level controls (see LookSettings in contracts.ts) ───────────────
+  // Deliberately below the hazard modes and the legend: those are how the flood is read, these only change how
+  // it is lit. Each of these rebuilds something (the sun-shading raster, the city's LOD cut), so they are
+  // buttons and switches rather than sliders — nothing here should fire on every pointermove.
+  const setLook = (patch: Partial<AppState['look']>) => store.set({ look: { ...store.get().look, ...patch } });
+  const timeOfDay = segmented<TimeOfDay>(
+    [
+      { value: 'daylight', label: 'Midday', tip: 'The sun the aerial imagery was shot under' },
+      { value: 'morning', label: 'Morning', tip: 'A lower sun from the east' },
+      { value: 'goldenHour', label: 'Golden', tip: 'Evening sun low in the west — the hero-shot light' },
+    ],
+    (v) => setLook({ timeOfDay: v }),
+    { label: 'Time of day', className: 'dl-seg-full', tipSide: 'top' },
+  );
+  bind((s) => s.look.timeOfDay, (v) => timeOfDay.set(v));
+  const tCinematic = toggleSwitch(
+    'Cinematic quality',
+    (on) => setLook({ quality: on ? 'cinematic' : 'auto' }),
+    { icon: 'spark', tip: 'Depth of field, sharper shadows, glass reflections. For stills — it is not on the adaptive ladder, so it will not step down under load.' },
+  );
+  const tBuildings = toggleSwitch('Buildings', (on) => setLook({ buildings: on }), {
+    icon: 'layers',
+    tip: '45,084 real Pittsburgh buildings at their mapped heights',
+  });
+  const tPresent = toggleSwitch('Presentation mode', (on) => setLook({ presentation: on }), {
+    icon: 'eye',
+    tip: 'Hide every panel for a clean capture or a projector',
+  });
+  bind((s) => s.look.quality, (v) => tCinematic.set(v === 'cinematic'));
+  bind((s) => s.look.buildings, (v) => tBuildings.set(v));
+  bind((s) => s.look.presentation, (v) => tPresent.set(v));
+
   const viewSec = section(
     'View',
     'eye',
@@ -596,7 +628,9 @@ export function createPanel(ctx: UIContext): Panel {
       modes.el,
       legend,
       exag.el,
-      h('div', { class: 'dl-switches' }, tImagery.el, tRoads.el, tContours.el),
+      h('div', { class: 'dl-switches' }, tImagery.el, tRoads.el, tContours.el, tBuildings.el),
+      timeOfDay.el,
+      h('div', { class: 'dl-switches' }, tCinematic.el, tPresent.el),
       h(
         'div',
         { class: 'dl-row dl-row-2' },
