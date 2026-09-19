@@ -986,6 +986,22 @@ interface Comparison {
   depthCoarsenedFlooded: ErrorSummary;
   /** Volume held at the end, m³. */
   volume: { coarse: number; fine: number; pct: number | null };
+  /**
+   * PER-CELL arrival-time agreement, s — present only when both runs were made with `--arrival`. The landmark table
+   * gives nine points; this gives every cell, which is what the overlay actually draws. Restricted to cells BOTH
+   * grids flooded: a cell only one grid ever wets has no time to compare, and that disagreement is already counted
+   * by the IoU, so folding it in here as some sentinel value would double-count it as a huge time error.
+   */
+  arrival?: {
+    /** Coarse replicated onto the fine grid. */
+    fine: ErrorSummary;
+    /** Fine block-averaged onto the coarse grid (what the demo grid can represent). */
+    coarsened: ErrorSummary;
+    /** Cells (coarse grid) where exactly one of the two grids ever reached the threshold. */
+    onlyCoarseCells: number;
+    onlyFineCells: number;
+    bothCells: number;
+  };
   landmarks: LandmarkComparison[];
 }
 
@@ -1083,6 +1099,39 @@ function compare(outDir: string, p: Preset, coarse: RunResult, fine: RunResult):
     };
   });
 
+  // Per-cell arrival agreement, when both runs tracked it.
+  let arrivalCmp: Comparison['arrival'];
+  if (coarse.fields.arrival && fine.fields.arrival) {
+    const aC = loadField(outDir, coarse.fields.arrival, nc * nc);
+    const aF = loadField(outDir, fine.fields.arrival, nf * nf);
+    const arrived = (f: Float32Array): Uint8Array => {
+      const m = new Uint8Array(f.length);
+      for (let k = 0; k < f.length; k++) if (f[k] >= 0) m[k] = 1;
+      return m;
+    };
+    const okC = arrived(aC);
+    const okF = arrived(aF);
+    const bothFine = maskAnd(refineMask(okC, nc, r), okF);
+    // Coarse frame: block-average the fine arrivals the same way the shipped overlay does, so this number bounds
+    // the error of the artifact in public/presets/, not of some other reduction.
+    const aFc = coarsenArrival(aF, nf, r, mdFc, FLOOD_THRESHOLD_M);
+    const bothCoarse = maskAnd(okC, arrived(aFc));
+    let onlyC = 0;
+    let onlyF = 0;
+    const okFc = arrived(aFc);
+    for (let k = 0; k < okC.length; k++) {
+      if (okC[k] && !okFc[k]) onlyC++;
+      else if (!okC[k] && okFc[k]) onlyF++;
+    }
+    arrivalCmp = {
+      fine: trim(fieldError(refineField(aC, nc, r, 'nearest'), aF, bothFine)),
+      coarsened: trim(fieldError(aC, aFc, bothCoarse)),
+      onlyCoarseCells: onlyC,
+      onlyFineCells: onlyF,
+      bothCells: maskCount(bothCoarse),
+    };
+  }
+
   return {
     case: coarse.case,
     bed: coarse.bed,
@@ -1100,6 +1149,7 @@ function compare(outDir: string, p: Preset, coarse: RunResult, fine: RunResult):
     depthFine: trim(fieldError(dCf, dF, null)),
     depthCoarsenedFlooded: trim(fieldError(dC, dFc, unionFloodC)),
     volume: { coarse: coarse.stats.volume, fine: fine.stats.volume, pct: pctDiff(coarse.stats.volume, fine.stats.volume) },
+    ...(arrivalCmp ? { arrival: arrivalCmp } : {}),
     landmarks: lm,
   };
 }
@@ -1210,6 +1260,33 @@ function markdown(runs: RunResult[], comps: Comparison[], p: Preset): string {
     erow(`flooded land, at ${c.coarse}² resolution`, c.maxDepthCoarsenedFlooded);
     erow(`final depth, flooded land, at ${c.coarse}² resolution`, c.depthCoarsenedFlooded);
     L.push('');
+    if (c.arrival) {
+      L.push(
+        `Per-cell arrival time of ${FLOOD_THRESHOLD_M} m (every cell, not just the nine landmarks), over cells both ` +
+          'grids flooded.',
+      );
+      L.push('');
+      L.push('| Where | cells | RMSE | mean \\|Δ\\| | median | p90 | p99 | max |');
+      L.push('| --- | --- | --- | --- | --- | --- | --- | --- |');
+      const arow = (label: string, e: ErrorSummary) => {
+        const q = (v: number | null) => (v === null ? '—' : `${v.toFixed(1)} s`);
+        L.push(
+          `| ${label} | ${e.cells.toLocaleString('en-US')} | ${e.rmse.toFixed(1)} s | ${e.l1.toFixed(1)} s | ` +
+            `${q(e.p50)} | ${q(e.p90)} | ${q(e.p99)} | ${e.maxAbs.toFixed(0)} s |`,
+        );
+      };
+      arow(`on the ${c.fine}² grid`, c.arrival.fine);
+      arow(`at ${c.coarse}² resolution (the shipped overlay's reduction)`, c.arrival.coarsened);
+      L.push('');
+      L.push(
+        `Cells at ${c.coarse}² where only one grid ever reached ${FLOOD_THRESHOLD_M} m: ` +
+          `${c.arrival.onlyCoarseCells.toLocaleString('en-US')} only ${c.coarse}², ` +
+          `${c.arrival.onlyFineCells.toLocaleString('en-US')} only ${c.fine}² ` +
+          `(against ${c.arrival.bothCells.toLocaleString('en-US')} both) — that disagreement is an extent difference, ` +
+          'already counted by the IoU above, so it is excluded from the times.',
+      );
+      L.push('');
+    }
     L.push(
       `| Landmark | expect | arrival ≥ 0.05 m (${c.coarse}² / ${c.fine}² / Δ) | arrival ≥ ${FLOOD_THRESHOLD_M} m (${c.coarse}² / ${c.fine}² / Δ) | peak ${c.coarse}² | peak ${c.fine}² | Δ peak |`,
     );
@@ -1266,6 +1343,15 @@ function markdown(runs: RunResult[], comps: Comparison[], p: Preset): string {
           v: t.list.map((c) => 1 - headline(c).iou),
           fmt: (x: number) => `${(x * 100).toFixed(2)} %`,
         },
+        ...(t.list.every((c) => c.arrival)
+          ? [
+              {
+                label: 'per-cell arrival RMSE, both flooded (s)',
+                v: t.list.map((c) => c.arrival!.fine.rmse),
+                fmt: (x: number) => x.toFixed(1),
+              },
+            ]
+          : []),
       ];
       for (const row of vals) {
         const ratio = row.v.length >= 2 && row.v[1] > 0 ? (row.v[0] / row.v[1]).toFixed(2) + '×' : 'n/a';
@@ -1302,6 +1388,119 @@ function markdown(runs: RunResult[], comps: Comparison[], p: Preset): string {
 // Main
 // ──────────────────────────────────────────────────────────────────────────────────────────────────────
 
+/**
+ * Write public/presets/<id>/reference.{json,bin} from the finest run of each case. Pure post-processing: it reads the
+ * saved fields, so it needs no GPU and can be re-run after the fact (including on a different machine from the one
+ * that produced the fields).
+ */
+function exportOverlay(outDir: string, p: Preset, runs: RunResult[], destDir: string): void {
+  const byCase = new Map<CaseId, RunResult>();
+  for (const r of runs) {
+    const cur = byCase.get(r.case);
+    if (!cur || r.grid > cur.grid) byCase.set(r.case, r);
+  }
+  if (byCase.size === 0) throw new Error('no runs to export an overlay from');
+  const n = p.meta.nx;
+  const finest = [...byCase.values()];
+  const grids = new Set(finest.map((r) => r.grid));
+  if (grids.size !== 1) {
+    // Shipping one case at 4096² next to another at 2048² would put two different accuracies under one label.
+    throw new Error(`cases disagree on the finest grid (${[...grids].join(', ')}); run the missing ones first`);
+  }
+  const refGrid = finest[0].grid;
+  const r = refGrid / n;
+  if (!Number.isInteger(r) || r < 1) throw new Error(`reference grid ${refGrid} is not a whole multiple of ${n}`);
+  const durations = new Set(finest.map((x) => x.duration));
+  if (durations.size !== 1) throw new Error(`cases disagree on duration (${[...durations].join(', ')})`);
+
+  const chunks: Buffer[] = [];
+  const planes: OverlayPlane[] = [];
+  let offset = 0;
+  const push = (
+    plane: Omit<OverlayPlane, 'offset' | 'length' | 'inflatedLength' | 'quantMaxError' | 'nonZeroCells'>,
+    q: Uint8Array,
+    decoded: Float32Array,
+    truth: Float32Array,
+    /** Cells to measure the round-trip error over; others are "dry"/"never" in both. */
+    count: (k: number) => boolean,
+  ): void => {
+    const gz = zlib.gzipSync(Buffer.from(q.buffer, q.byteOffset, q.byteLength), { level: 9 });
+    let worst = 0;
+    let nz = 0;
+    for (let k = 0; k < q.length; k++) {
+      if (q[k] !== 0) nz++;
+      if (!count(k)) continue;
+      const e = Math.abs(decoded[k] - truth[k]);
+      if (e > worst) worst = e;
+    }
+    planes.push({ ...plane, offset, length: gz.byteLength, inflatedLength: q.length, quantMaxError: worst, nonZeroCells: nz });
+    chunks.push(gz);
+    offset += gz.byteLength;
+  };
+
+  for (const run of finest.sort((a, b) => a.case.localeCompare(b.case))) {
+    const mdFine = loadField(outDir, run.fields.maxDepth, refGrid * refGrid);
+    const md = blockMean(mdFine, refGrid, r);
+    // Scale to the plane's own maximum (rounded up to 10 cm) rather than a shared constant: the rain case peaks at
+    // ~8.8 m and gets ~40 % finer steps than it would under a 16 m scale shared with the crest case.
+    let dmax = 0;
+    for (let k = 0; k < md.length; k++) if (md[k] > dmax) dmax = md[k];
+    const dScale = Math.max(0.5, Math.ceil(dmax * 10) / 10);
+    const qd = encodeDepthPlane(md, dScale);
+    push({ case: run.case, kind: 'maxDepth', quant: 'sqrt', scale: dScale, unit: 'm' }, qd, decodeDepthPlane(qd, dScale), md, (k) => md[k] > 0);
+
+    if (!run.fields.arrival) continue;
+    const arrFine = loadField(outDir, run.fields.arrival, refGrid * refGrid);
+    const arr = coarsenArrival(arrFine, refGrid, r, md, FLOOD_THRESHOLD_M);
+    const qa = encodeArrivalPlane(arr, run.duration);
+    push(
+      { case: run.case, kind: 'arrival', quant: 'linear', scale: run.duration, unit: 's' },
+      qa,
+      decodeArrivalPlane(qa, run.duration),
+      arr,
+      (k) => arr[k] >= 0,
+    );
+  }
+
+  const bin = Buffer.concat(chunks);
+  const manifest: ReferenceOverlayManifest = {
+    version: OVERLAY_VERSION,
+    preset: p.meta.id,
+    nx: n,
+    ny: p.meta.ny,
+    cellSize: p.meta.cellSize,
+    referenceGrid: refGrid,
+    refine: r,
+    bed: finest[0].bed,
+    durationSeconds: finest[0].duration,
+    arrivalThreshold: FLOOD_THRESHOLD_M,
+    resample: 'block-mean',
+    encoding: 'gzip',
+    binary: 'reference.bin',
+    sha256: crypto.createHash('sha256').update(bin).digest('hex'),
+    planes,
+    provenance: {
+      generatedAt: new Date().toISOString(),
+      gpu: finest[0].gpu,
+      host: finest[0].host,
+      runs: Object.fromEntries(
+        finest.map((x) => [runKey(x), { wallClockS: x.wallClockS, substeps: x.substeps, massError: x.stats.massError }]),
+      ),
+    },
+  };
+  fs.mkdirSync(destDir, { recursive: true });
+  fs.writeFileSync(path.join(destDir, 'reference.bin'), bin);
+  fs.writeFileSync(path.join(destDir, 'reference.json'), `${JSON.stringify(manifest, null, 1)}\n`);
+  console.log(`\nWrote ${path.join(destDir, 'reference.json')} + reference.bin (${(bin.byteLength / 1e6).toFixed(3)} MB)`);
+  for (const pl of planes) {
+    console.log(
+      `  ${pl.case} ${pl.kind}: ${(pl.length / 1e3).toFixed(0)} kB gzip of ${(pl.inflatedLength / 1e3).toFixed(0)} kB, ` +
+        `scale ${pl.scale}${pl.unit}, worst round-trip ${pl.quantMaxError.toFixed(4)} ${pl.unit}, ` +
+        `${((pl.nonZeroCells / pl.inflatedLength) * 100).toFixed(1)} % non-zero`,
+    );
+  }
+}
+
 function arg(name: string, dflt: string): string {
   const hit = process.argv.slice(2).find((a) => a.startsWith(`--${name}=`));
   return hit ? hit.slice(name.length + 3) : dflt;
@@ -1321,6 +1520,7 @@ async function main(): Promise<void> {
   const duration = Number(arg('minutes', '45')) * 60;
   const tick = Number(arg('tick', '1'));
   const sample = Number(arg('sample', '5'));
+  const arrival = flag('arrival');
   if (bed !== 'bilinear' && bed !== 'nearest') throw new Error(`--bed must be bilinear or nearest (got ${bed})`);
   for (const c of cases) if (c !== 'crest' && c !== 'rain') throw new Error(`--cases must be crest and/or rain (got ${c})`);
   fs.mkdirSync(path.join(outDir, 'runs'), { recursive: true });
@@ -1365,7 +1565,7 @@ async function main(): Promise<void> {
           `built in ${((performance.now() - tb) / 1000).toFixed(1)} s`,
       );
       for (const c of cases) {
-        const o: RunOptions = { case: c, grid: g, bed, duration, tick, sample };
+        const o: RunOptions = { case: c, grid: g, bed, duration, tick, sample, arrival };
         const res = await runOne(device, description, p, grid, o, outDir);
         runs.push(res);
         console.log(
@@ -1396,7 +1596,18 @@ async function main(): Promise<void> {
       {
         generatedAt: new Date().toISOString(),
         preset: { id: p.meta.id, nx: p.meta.nx, cellSize: p.meta.cellSize, bounds: p.meta.bounds },
-        settings: { grids, cases, bed, durationSeconds: duration, tick, sample, threshold: FLOOD_THRESHOLD_M, probeRadiusM: PROBE_RADIUS_M },
+        // Taken from the runs themselves, not from the CLI: `--compare-only` re-derives the report with whatever
+        // --minutes it was invoked with, and reading the flag here recorded 2700 s next to runs that were 1800 s.
+        settings: {
+          grids,
+          cases,
+          bed,
+          durationSeconds: runs.length ? [...new Set(runs.map((r) => r.duration))] : [duration],
+          tick: runs.length ? [...new Set(runs.map((r) => r.tick))] : [tick],
+          sample: runs.length ? [...new Set(runs.map((r) => r.sample))] : [sample],
+          threshold: FLOOD_THRESHOLD_M,
+          probeRadiusM: PROBE_RADIUS_M,
+        },
         runs,
         comparisons: comps,
       },
@@ -1406,6 +1617,9 @@ async function main(): Promise<void> {
   );
   fs.writeFileSync(path.join(outDir, 'results.md'), markdown(runs, comps, p));
   console.log(`\nWrote ${path.join(outDir, 'results.json')} and results.md`);
+  if (flag('export-overlay')) {
+    exportOverlay(outDir, p, runs, path.resolve(ROOT, arg('overlay-out', `public/presets/${p.meta.id}`)));
+  }
   for (const c of comps) {
     console.log(
       `  ${c.case} ${c.coarse}² vs ${c.fine}²: flooded ${headline(c).coarseKm2.toFixed(3)} vs ${headline(c).fineKm2.toFixed(3)} km² ` +
