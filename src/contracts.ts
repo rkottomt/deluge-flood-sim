@@ -61,6 +61,20 @@ export interface Shelter {
   gy: number;
 }
 
+/** A grid-aligned rectangle in cell coordinates (gx east, gy south from the north edge). */
+export interface GridRect {
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+}
+
+/** A finer aerial photo covering `rect` of the grid (src/data/imagery.ts, src/render/textures.ts). */
+export interface ImageryDetail {
+  image: ImageBitmap;
+  rect: GridRect;
+}
+
 export interface TerrainData {
   /** Short human name e.g. "Pittsburgh — Three Rivers". */
   name: string;
@@ -73,6 +87,11 @@ export interface TerrainData {
   bounds: GeoBounds;
   /** Aerial imagery covering exactly `bounds`, north-up. Any pixel size. Null if unavailable. */
   imagery: ImageBitmap | null;
+  /**
+   * Optional second, finer photo over part of the domain (the "detail inset": downtown, where close-ups happen).
+   * The renderer blends it over `imagery` inside `rect`. Null when the area has no inset.
+   */
+  imageryDetail?: ImageryDetail | null;
   roads: RoadNetwork | null;
   /** Attribution line(s) for the data shown on screen. */
   attribution: string;

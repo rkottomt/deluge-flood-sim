@@ -1,6 +1,7 @@
 /// <reference types="node" />
 /**
- * Bake real-world presets into public/presets/<id>/{meta.json, elevation.f32, imagery.jpg, roads.json}.
+ * Bake real-world presets into public/presets/<id>/{meta.json, elevation.f32, imagery.jpg, imagery-detail.jpg,
+ * roads.json}.
  *
  *   npx tsx scripts/bake-presets.ts            # all presets
  *   npx tsx scripts/bake-presets.ts johnstown  # one preset
@@ -13,15 +14,27 @@
  * pool level measured from the DEM → channel burn with smooth banks → sources placed on the channel spine at
  * the domain edges → initial fill seeds along the centerlines (verified: no water outside the channel) →
  * shelters snapped to high road nodes (verified above the maximum stage) → aerial imagery 4096² JPEG →
+ * close-up imagery inset for the middle of the domain (PresetDef.detail, another 4096² JPEG) →
  * TIGERweb roads → compact roads.json.
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import type { CameraPose, ScenarioPreset, Shelter, StageControl, StormCell, WaterSource } from '../src/contracts';
+import type { CameraPose, GridRect, ScenarioPreset, Shelter, StageControl, StormCell, WaterSource } from '../src/contracts';
 import { fetchDEM } from '../src/data/dem';
 import { geoToGrid, squareDomain } from '../src/data/geo';
 import { burnRivers, edgeRuns, edgeStageDiscAvoiding, findRiverEnds, growEdgeRun, flatThreshold, localRelief, type BurnResult, type RiverSpec } from '../src/data/hydro';
-import { fetchImageryBytes, IMAGERY_ATTRIBUTION, type ImagerySource, NAIP_ATTRIBUTION, NAIP_MAX_EXPORT } from '../src/data/imagery';
+import {
+  detailMercatorBBox,
+  detailMetersPerTexel,
+  detailRect,
+  DETAIL_SIZE,
+  DETAIL_TARGET_MPT,
+  fetchImageryBytes,
+  IMAGERY_ATTRIBUTION,
+  type ImagerySource,
+  NAIP_ATTRIBUTION,
+  NAIP_MAX_EXPORT,
+} from '../src/data/imagery';
 import { computeInitialWater } from '../src/data/initialWater';
 import { type PresetMeta, PRESETS, validatePresetMeta } from '../src/data/presets';
 import { buildRoadNetwork, encodeRoads, fetchTigerRoads, type RawRoad, ROADS_ATTRIBUTION_TIGER, roadStats } from '../src/data/roads';
@@ -50,6 +63,36 @@ const JOHNSTOWN_1889_INFLOW = Math.round(LAKE_CONEMAUGH_M3 / LAKE_CONEMAUGH_DRAI
  * 59,000). On May 31, 1889 the rivers were already running high after a night of heavy rain.
  */
 const STONYCREEK_TYPICAL_PEAK_CFS = 10600;
+/**
+ * Hurricane Helene, September 27, 2024 — USGS annual peak-flow records. Both gauges beat the 1916 flood that had
+ * stood for a century: French Broad River at Asheville (03451500) 113,000 ft³/s at 24.82 ft (1916: 110,000 at
+ * 23.10 ft); Swannanoa River at Biltmore (03451000) 60,800 ft³/s at 27.33 ft (1916: 23,000).
+ */
+const HELENE_FRENCH_BROAD_CFS = 113_000;
+const HELENE_SWANNANOA_CFS = 60_800;
+/**
+ * Hurricane Harvey — USGS 08074000 Buffalo Bayou at Houston (Shepherd Drive) annual peak: 32,600 ft³/s at 41.90 ft on
+ * August 28, 2017, the biggest since 40,000 ft³/s at 49.00 ft in December 1935, before the Addicks and Barker dams.
+ */
+const HARVEY_BUFFALO_BAYOU_CFS = 32_600;
+/**
+ * Harvey's documented peak hourly rainfall: 6.8 inches in one hour over southeastern Houston, from rain bands training
+ * over the same ground (NHC Tropical Cyclone Report AL092017) = 173 mm/hr. Houston rains at that rate rather than at
+ * Harvey's four-day average (~10 mm/hr) because the storm's worst hour is what a 30-minute scene can show — and
+ * because Buffalo Bayou here runs in a trench 12–14 m below the streets (measured:
+ * artifacts/more-cities/probe-transect.ts), so the bayou's own record flood fills that trench but never climbs into
+ * the city. In Harvey, Houston flooded from above.
+ */
+const HARVEY_PEAK_RAIN_MM_HR = 173;
+/**
+ * 2013 Front Range flood — USGS 06730200 Boulder Creek at North 75th St near Boulder annual peak: 8,400 ft³/s at
+ * 10.60 ft on September 13, 2013, four times the previous record of 2,050 ft³/s (2003). That gauge sits ~7 km east of
+ * the city, so this is the flood that had already crossed Boulder; the preset delivers it at the canyon mouth, where
+ * it came in.
+ */
+const BOULDER_2013_CFS = 8400;
+/** Boulder's record calendar day, 9.08 in on September 12, 2013 (NWS Boulder), as a mean rate: 230.6 mm / 24 h. */
+const BOULDER_2013_RAIN_MM_HR = 9.6;
 type LonLat = [number, number];
 
 interface RiverDef {
@@ -84,9 +127,22 @@ interface PresetDef {
    */
   confluenceHead?: { normal: number; crestFt: number; crest: number };
   shelters: Array<{ name: string; at: LonLat; /** search radius for a high road node, m */ search?: number }>;
+  /**
+   * Clearance (m) a shelter needs above the nearest channel's water surface where the preset has no stage slider.
+   * The default 20 m is generous mountain-valley headroom. Houston's whole domain lies within 20 m of Buffalo Bayou,
+   * so the default leaves no ground to stand on there; see that preset's note for the value it uses and why.
+   */
+  shelterMargin?: number;
   storms: Array<{ id: string; at: LonLat; radiusMeters: number; intensity: number }>;
   rainRate: number;
   camera: { at: LonLat; distance: number; yaw: number; pitch: number };
+  /**
+   * Close-up imagery inset: a second DETAIL_SIZE² NAIP export over a square of `sizeMeters` centred on `at` (the
+   * scenario camera target by default) — downtown, where judges zoom in. Leave it out where the base photo is
+   * already close to NAIP's own resolution (ellicott: 5 km over 4096² = 1.22 m/texel, see the note on the imagery
+   * section below); an inset there would add megabytes and no detail.
+   */
+  detail?: { at?: LonLat; sizeMeters: number };
   /**
    * One-click demo levee ("Build a levee"): a wall from high ground to high ground whose crest clears the scenario's
    * highest crest. The bake checks that both ends stand on ground at least `crest` high and that no segment needs a
@@ -159,6 +215,9 @@ const PRESET_DEFS: PresetDef[] = [
     storms: [],
     rainRate: 0,
     camera: { at: [-80.0005, 40.4418], distance: 4300, yaw: 0.62, pitch: 0.52 },
+    // 3 km over the Point: the Golden Triangle, both North Shore stadiums, the Strip's west end and the whole demo
+    // levee, i.e. everywhere the scripted cameras go. 0.73 m/texel, 2.7x the base photo.
+    detail: { at: [-80.005, 40.442], sizeMeters: 3000 },
     // The North Shore (both stadiums) behind a riverside floodwall from the bluff below Manchester to the bluff at the
     // 16th Street Bridge, ~50 m back from the channel. Crest 226.5 m = 1 m above the 46 ft record at the Point (the
     // Allegheny side stands ~0.3 m higher). Measured on the M4 (runFor, 25 sim-min at 46 ft): 0 wet cells behind it,
@@ -227,6 +286,8 @@ const PRESET_DEFS: PresetDef[] = [
     // 10–35 s of real time, all inside the frame and clear of the HUD and the side panel at 1470×956. (The old view, 3.4
     // km from a target 1.3 km further south-west, left the valley — where the flood shows first — off the top edge.)
     camera: { at: [-78.91033, 40.33043], distance: 4000, yaw: 0.62, pitch: 0.6 },
+    // 2.5 km over downtown Johnstown and the Stonycreek / Little Conemaugh confluence: 0.61 m/texel, 2.8x the base.
+    detail: { at: [-78.91033, 40.33043], sizeMeters: 2500 },
     // Sources: Coleman et al. (2016) and USGS peak-flow records (see the constants above); 1889 timeline and toll from
     // the National Park Service (Johnstown Flood National Memorial); 1977 from USGS Open-File Report 78-963.
     description: () =>
@@ -287,6 +348,291 @@ const PRESET_DEFS: PresetDef[] = [
       '1-in-1,000-year storms in 22 months. Here a storm cell peaking at 110 mm/hr parks over the 3.7 mi² ' +
       'watershed of the three branches and soaks it at about 3 inches an hour, the 2016 storm\'s rate over its two ' +
       'worst hours, while the Patapsco runs at its 2016 peak of 22,800 ft³/s. Try walls or a detention pond upstream.',
+  },
+  {
+    /*
+     * Asheville, NC — Hurricane Helene (September 27, 2024). Chosen for MECHANISM (an extreme tropical-remnant river
+     * flood in a steep valley, unlike Pittsburgh's slow navigation-pool rise) and for recognition: it is the most
+     * recent major US flood disaster. 8 km over the French Broad / Swannanoa confluence covers the River Arts
+     * District, Biltmore Village and downtown; measured relief 347 m, so there is real high ground for shelters.
+     * River centerlines traced from USGS NHD high-resolution flowlines (artifacts/more-cities/nhd_path.py) and
+     * clipped to the domain: the French Broad crosses it south → north, the Swannanoa comes in from the east and
+     * joins at cell (584, 714). DEM water surfaces sampled along those traces (probe-river.ts): French Broad
+     * 602.2 → 593.6 m, Swannanoa 606.1 → 599.4 m — both sloping, so no flat pool and no stage slider. At the gauge
+     * (35.60889, -82.57806) the DEM surface is ~594.9 m, which reads 2.0 ft on its 1,949.93 ft NAVD88 datum: exactly
+     * the French Broad's normal stage at Asheville, confirming the datum. Helene's 24.82 ft put the surface 7 m higher.
+     */
+    id: 'asheville',
+    center: { lat: 35.583, lon: -82.57 },
+    sizeMeters: 8000,
+    n: 1024,
+    rivers: [
+      {
+        name: 'French Broad River',
+        path: [
+          [-82.57979, 35.54717], [-82.58354, 35.55063], [-82.58815, 35.55316], [-82.59178, 35.55661], [-82.59291, 35.56106],
+          [-82.58977, 35.56454], [-82.58436, 35.56564], [-82.57914, 35.56468], [-82.5736, 35.56527], [-82.56833, 35.56713],
+          [-82.56374, 35.56901], [-82.56542, 35.57312], [-82.56866, 35.57674], [-82.56778, 35.58149], [-82.56866, 35.58595],
+          [-82.57194, 35.58968], [-82.57314, 35.59403], [-82.576, 35.59787], [-82.57739, 35.60203], [-82.58014, 35.60589],
+          [-82.57806, 35.60978], [-82.57693, 35.61417], [-82.57802, 35.61852], [-82.57818, 35.61882],
+        ],
+        depth: 3,
+        bankCells: 3,
+        snapRadius: 10,
+        maxHalfWidth: 200,
+        upstream: {
+          type: 'inflow',
+          discharge: Math.round(HELENE_FRENCH_BROAD_CFS * CFS),
+          label: `French Broad River — Helene's record crest (${HELENE_FRENCH_BROAD_CFS.toLocaleString('en-US')} ft³/s)`,
+        },
+      },
+      {
+        name: 'Swannanoa River',
+        path: [
+          [-82.52595, 35.57525], [-82.52898, 35.5727], [-82.53311, 35.57191], [-82.53726, 35.57093], [-82.54126, 35.56952],
+          [-82.54537, 35.56835], [-82.54836, 35.5658], [-82.55168, 35.56362], [-82.55602, 35.56413], [-82.56024, 35.56337],
+          [-82.56443, 35.56414], [-82.56334, 35.5672], [-82.56391, 35.56858],
+        ],
+        depth: 2.5,
+        bankCells: 2,
+        snapRadius: 8,
+        upstream: {
+          type: 'inflow',
+          discharge: Math.round(HELENE_SWANNANOA_CFS * CFS),
+          label: `Swannanoa River — Helene's record crest (${HELENE_SWANNANOA_CFS.toLocaleString('en-US')} ft³/s)`,
+        },
+      },
+    ],
+    shelters: [
+      { name: 'Pack Square (downtown Asheville)', at: [-82.5515, 35.5951], search: 300 },
+      { name: 'Beaucatcher Mountain', at: [-82.5385, 35.5905], search: 400 },
+      { name: 'Mission Hospital (Biltmore Ave)', at: [-82.5478, 35.5807], search: 300 },
+      { name: 'Montford ridge', at: [-82.5635, 35.599], search: 350 },
+      { name: 'Kenilworth', at: [-82.542, 35.578], search: 350 },
+    ],
+    storms: [],
+    rainRate: 0,
+    // Low over the French Broad just below the Swannanoa confluence, looking north-north-east up the valley: the
+    // confluence and Biltmore Village are in the foreground, the River Arts District mid-frame and downtown
+    // Asheville on the hill beyond — the three places Helene destroyed, in one frame.
+    camera: { at: [-82.566, 35.574], distance: 3200, yaw: 0.4, pitch: 0.5 },
+    description: () =>
+      'Asheville sits in a Blue Ridge valley where the Swannanoa River joins the French Broad. On September 27, ' +
+      "2024 Hurricane Helene's rain fell on ground already soaked by a storm two days before, and both rivers broke " +
+      'records that had stood since 1916: the French Broad crested at 24.82 ft at the Asheville gauge carrying ' +
+      '113,000 ft³/s, the Swannanoa at 27.33 ft and 60,800 ft³/s at Biltmore. The River Arts District was largely ' +
+      'destroyed, Biltmore Village went under, dozens of people died in Buncombe County, and washed-out mains left ' +
+      'the city without drinking water until November. Here both rivers run at those peaks — the French Broad from ' +
+      'the south, the Swannanoa from the east. The inflows never stop: remove them after an hour of simulated time ' +
+      'to let the valley drain.',
+  },
+  {
+    /*
+     * Nashville, TN — the May 2010 flood. Chosen for a mechanism the other presets cannot show: a single large river
+     * held as a navigation pool, rising 30 ft into a downtown, with a real gauge datum and three historic crests on
+     * the slider. Measured relief 111 m, so shelters sit on genuine hills. Centerline from USGS NHD flowlines: the
+     * river enters at the east edge, bends past downtown and leaves at the north edge.
+     *
+     * The domain — 6 km at (36.158273, -86.7830) — is the product of two measured constraints, neither obvious.
+     *
+     * The EAST edge: the Cheatham pool is only truly flat below the city. Sampled along the centerline
+     * (probe-river.ts), the DEM surface holds 119.48 m NAVD88 through downtown and then climbs to 120.2 m in the
+     * 2 km above it — a real backwater slope. An 8 km domain put that reach at the upstream edge, where the burn's
+     * 0.3 m flat tolerance excluded it, so the channel mask never reached the edge and the river had no upstream
+     * boundary at all. This east edge sits inside the flat reach.
+     *
+     * The NORTH edge: the Cumberland's big bend crosses the north side of a wider domain TWICE, and the second
+     * crossing is a separate arm that no traced centerline reaches — so it is not in the channel mask and gets no
+     * stage boundary, leaving an open edge at pool level that drains the raised river. Bed profiles along candidate
+     * north rows (probe-row.ts) show the low ground below the stage ceiling breaking into six runs at one latitude
+     * and a single river-only run at this one. Here the edge crosses the river once, so one disc covers it.
+     */
+    id: 'nashville',
+    center: { lat: 36.158273, lon: -86.783 },
+    sizeMeters: 6000,
+    n: 1024,
+    pool: { guess: 119.5 },
+    rivers: [
+      {
+        name: 'Cumberland River',
+        path: [
+          [-86.74976, 36.16056], [-86.75474, 36.15986], [-86.75952, 36.15926], [-86.76444, 36.15888], [-86.76901, 36.16033],
+          [-86.77294, 36.16273], [-86.77522, 36.16601], [-86.77839, 36.17182], [-86.78035, 36.17522], [-86.78163, 36.17962],
+          [-86.78224, 36.18511],
+        ],
+        depth: 6,
+        bankCells: 3,
+        maxHalfWidth: 400,
+        upstream: { type: 'stage', label: 'Cumberland River — upstream of downtown' },
+        downstream: { type: 'stage', label: 'Cumberland River — downstream toward Cheatham Lake' },
+      },
+    ],
+    stage: {
+      label: 'Cumberland River at Nashville (USGS 03431500)',
+      // USGS 03431500 gage datum: 367.45 ft above NAVD88 (NWIS expanded site file). NWS flood stage 40 ft. The
+      // May 3, 2010 crest of 51.86 ft is the highest since the Corps' dams were built; USGS measured that peak at
+      // 52.55 ft and 188,000 ft³/s. The 1937 (53.90 ft) and 1927 (56.20 ft, 203,000 ft³/s) crests predate the dams.
+      gaugeDatum: 367.45 * FT,
+      floodStageFt: 40,
+      marks: [
+        { label: '2010 flood', ft: 51.86 },
+        { label: '1937 flood', ft: 53.9 },
+        { label: '1927 record', ft: 56.2 },
+      ],
+      maxOffset: 11,
+    },
+    // One river, so the "confluence" head is simply the reach's water-surface drop: without it both boundaries sit
+    // at one level and nothing drives the pool. 0.15 m over the 4.9 km reach at pool, 0.5 m at the 2010 crest.
+    confluenceHead: { normal: 0.15, crestFt: 51.86, crest: 0.5 },
+    shelters: [
+      { name: 'Tennessee State Capitol', at: [-86.7844, 36.1659], search: 300 },
+      { name: 'Vanderbilt / Midtown', at: [-86.7996, 36.1477], search: 350 },
+      { name: 'Fisk University', at: [-86.8075, 36.168], search: 300 },
+      { name: 'Lockeland Springs (East Nashville)', at: [-86.753, 36.176], search: 350 },
+      { name: 'Rolling Mill Hill', at: [-86.772, 36.154], search: 300 },
+    ],
+    storms: [],
+    rainRate: 0,
+    // From East Nashville looking west across the Cumberland at the downtown skyline — the view every photograph of
+    // the 2010 flood was taken from. The stadium is on the near bank, Second Avenue and the riverfront on the far one.
+    camera: { at: [-86.7735, 36.1635], distance: 2100, yaw: -Math.PI / 2, pitch: 0.45 },
+    description: ({ normalLevel, gaugeDatum }) =>
+      'Downtown Nashville stands on the west bank of the Cumberland River, which crosses the city as a navigation ' +
+      'pool between Old Hickory Dam upstream and Cheatham Dam downstream. ' +
+      `The pool in this elevation model reads about ${(((normalLevel ?? 0) - (gaugeDatum ?? 0)) / FT).toFixed(1)} ft on the Nashville gauge; ` +
+      'flood stage is 40 ft. On May 1–2, 2010 a stalled front dropped 13.57 inches of rain on Nashville — double the ' +
+      'previous two-day record of 6.68 inches — and on May 3 the river crested at 51.86 ft, the highest since the ' +
+      'dams were built (USGS measured the peak at 52.55 ft and 188,000 ft³/s). Second Avenue, the Country Music ' +
+      'Hall of Fame, the Schermerhorn Symphony Center and the stadium all took water; 18 people died in Middle ' +
+      'Tennessee and damage passed $2 billion. Before the dams the river reached 53.90 ft in 1937 and a record ' +
+      '56.20 ft in 1927. Raise the river stage to replay those crests and watch the riverfront go under — then try ' +
+      'a wall along First Avenue.',
+  },
+  {
+    /*
+     * Houston, TX — Hurricane Harvey (August 2017). Chosen for RAINFALL RUNOFF on a dead-flat coastal city, the one
+     * mechanism the other presets do not have, and because Harvey is the flood most judges will name first. The
+     * honest physics here are unusual and worth stating: Buffalo Bayou through downtown is a trench 12–14 m below
+     * street level (transects at cells (584,515), (707,498), (311,522)), so even its record 32,600 ft³/s cannot
+     * climb out. Houston floods from above instead, so the forcing is rain at Harvey's documented peak hourly rate
+     * with the bayou already running full, which is what actually happened. Relief 29.5 m — the flattest domain in
+     * the set, and the reason it needs `shelterMargin`.
+     */
+    id: 'houston',
+    center: { lat: 29.7625, lon: -95.3855 },
+    sizeMeters: 8000,
+    n: 1024,
+    rivers: [
+      {
+        name: 'Buffalo Bayou',
+        path: [
+          [-95.42677, 29.75835], [-95.42451, 29.75732], [-95.42232, 29.75735], [-95.41971, 29.75911], [-95.41731, 29.75839],
+          [-95.41462, 29.75991], [-95.4132, 29.76222], [-95.40929, 29.76082], [-95.4054, 29.76091], [-95.40175, 29.76183],
+          [-95.39722, 29.76225], [-95.39265, 29.7625], [-95.38839, 29.76175], [-95.38472, 29.76178], [-95.38228, 29.76361],
+          [-95.37969, 29.76226], [-95.37628, 29.76102], [-95.37252, 29.76135], [-95.36973, 29.7635], [-95.36627, 29.76398],
+          [-95.36253, 29.7646], [-95.35861, 29.76484], [-95.35458, 29.7622], [-95.35387, 29.7647], [-95.35063, 29.76516],
+          [-95.34739, 29.76648], [-95.34661, 29.76263], [-95.34423, 29.7621],
+        ],
+        depth: 4,
+        bankCells: 2,
+        snapRadius: 12,
+        upstream: {
+          type: 'inflow',
+          discharge: Math.round(HARVEY_BUFFALO_BAYOU_CFS * CFS),
+          label: `Buffalo Bayou — Harvey's peak (${HARVEY_BUFFALO_BAYOU_CFS.toLocaleString('en-US')} ft³/s at Shepherd Dr)`,
+        },
+      },
+    ],
+    // Every point in this domain is within 20 m of the bayou's surface, so the default clearance leaves nowhere to
+    // stand. 6 m is above the sheet flood the scene produces on the streets (the bayou's own flood stays in its
+    // trench) and it picks out the only real high ground: the Heights, Memorial Park and the Midtown rise.
+    shelterMargin: 6,
+    shelters: [
+      { name: 'George R. Brown Convention Center', at: [-95.3565, 29.7525], search: 300 },
+      { name: 'Houston Heights', at: [-95.3985, 29.7905], search: 300 },
+      { name: 'Memorial Park (east)', at: [-95.4225, 29.7655], search: 350 },
+      { name: 'Rice Military', at: [-95.4045, 29.7655], search: 300 },
+      { name: 'Midtown / Fourth Ward', at: [-95.383, 29.7495], search: 300 },
+    ],
+    storms: [],
+    rainRate: HARVEY_PEAK_RAIN_MM_HR,
+    // Over Buffalo Bayou Park looking east-south-east down the bayou at the downtown skyline: the park trench fills
+    // in the foreground (the Harvey photograph everyone saw) with the towers behind it.
+    camera: { at: [-95.385, 29.762], distance: 2200, yaw: 1.45, pitch: 0.42 },
+    description: () =>
+      'Houston is built on a dead-flat coastal plain drained by slow bayous, and Buffalo Bayou runs in a deep trench ' +
+      'past downtown. Hurricane Harvey stalled over the city in August 2017 and dropped more than 40 inches of rain ' +
+      'in four days over much of Harris County — 60.58 inches at Nederland, a US tropical-cyclone record — with ' +
+      'bands that trained over the same ground long enough to put 6.8 inches on southeast Houston in a single hour. ' +
+      'Buffalo Bayou crested at 41.90 ft at the Shepherd Drive gauge on August 28 carrying 32,600 ft³/s, its biggest ' +
+      'flood since 1935, swollen by emergency releases from the Addicks and Barker reservoirs upstream. Here the ' +
+      "bayou runs at that peak while the city takes Harvey's worst hour of rain, 6.8 inches an hour: the bayou's own " +
+      'flood stays in its trench, 12 m below the streets, so with nowhere for the rain to drain the water rises in ' +
+      'the streets instead — which is how Houston actually flooded.',
+  },
+  {
+    /*
+     * Boulder, CO — the September 2013 Front Range flood. Chosen for the FLASH-FLOOD mechanism in steep terrain: a
+     * creek leaving a canyon onto the city, different again from Ellicott City's urban storm drain and from
+     * Johnstown's dam break. Boulder Creek is banked only ~1.5–3 m deep through town (transects: probe-transect.ts),
+     * so the record inflow leaves the channel within minutes. Centerline from USGS NHD flowlines: the creek enters
+     * inside Boulder Canyon at the west edge and leaves at the east edge.
+     *
+     * 5 km and maxHalfWidth 8, both measured (artifacts/more-cities/sweep-boulder.ts). Boulder Creek is at grade with
+     * its floodplain — unlike Johnstown's concrete channels or Ellicott's incised Patapsco — so filling it to the
+     * DEM's own water surface is delicate: an upstream seed's level sits above ground far downstream, and if the
+     * channel mask touches the low corridor toward Boulder Reservoir the initial fill escapes and drowns the domain.
+     * The sweep is sharply bimodal: 5 km with a mask capped at 8 cells (39 m) leaves 7 cells of water outside the
+     * channel out of 3,763; the 8 km domain, and the same domain with a 14-cell cap, leak 98 % of their wet cells.
+     * The tighter domain also frames the story better — canyon mouth, downtown and the CU campus at 4.88 m cells.
+     */
+    id: 'boulder',
+    center: { lat: 40.014, lon: -105.283 },
+    sizeMeters: 5000,
+    n: 1024,
+    rivers: [
+      {
+        name: 'Boulder Creek',
+        path: [
+          [-105.31218, 40.01529], [-105.31069, 40.01401], [-105.30886, 40.01274], [-105.30714, 40.01197], [-105.30413, 40.01218],
+          [-105.30114, 40.01232], [-105.3004, 40.01394], [-105.29768, 40.01309], [-105.29462, 40.01353], [-105.2915, 40.01377],
+          [-105.28831, 40.01361], [-105.28541, 40.01432], [-105.28241, 40.01433], [-105.27922, 40.01485], [-105.27626, 40.01371],
+          [-105.27359, 40.01241], [-105.27089, 40.01164], [-105.268, 40.01176], [-105.26524, 40.01095], [-105.26242, 40.01134],
+          [-105.25951, 40.01157], [-105.2567, 40.01092], [-105.25383, 40.01113],
+        ],
+        depth: 2,
+        bankCells: 2,
+        snapRadius: 8,
+        maxHalfWidth: 8,
+        upstream: {
+          type: 'inflow',
+          discharge: Math.round(BOULDER_2013_CFS * CFS),
+          label: `Boulder Creek — the 2013 flood out of Boulder Canyon (${BOULDER_2013_CFS.toLocaleString('en-US')} ft³/s)`,
+        },
+      },
+    ],
+    shelters: [
+      { name: 'Chautauqua Park', at: [-105.281, 40.0], search: 350 },
+      { name: 'Mount Sanitas trailhead', at: [-105.2955, 40.0215], search: 350 },
+      { name: 'University Hill', at: [-105.277, 40.006], search: 300 },
+      { name: 'Flagstaff Mountain (Flagstaff Rd)', at: [-105.296, 40.004], search: 500 },
+    ],
+    storms: [],
+    // The 2013 storm was extraordinary for duration, not intensity: Boulder's record calendar day, 9.08 in, averages
+    // 9.6 mm/hr. So the whole domain rains at that rate (it wets the foothills and adds runoff) while the creek
+    // carries the flood — rather than a high-intensity cell, which this event never had.
+    rainRate: BOULDER_2013_RAIN_MM_HR,
+    // Over Boulder Creek between the canyon mouth and downtown, looking west-north-west back up the creek: the flood
+    // comes out of the canyon toward the camera with the foothills behind it and downtown Boulder off to the right.
+    camera: { at: [-105.29, 40.0136], distance: 1800, yaw: -1.35, pitch: 0.45 },
+    description: () =>
+      'Boulder is built at the mouth of Boulder Canyon, where the creek leaves the Rockies and crosses the city past ' +
+      'downtown and the university. Between September 9 and 16, 2013 a stalled monsoon plume dropped 17.15 inches of ' +
+      "rain on Boulder County — 9.08 inches on September 12 alone, the wettest calendar day in the city's record — " +
+      'and the canyons flashed. Boulder Creek left town at 8,400 ft³/s at the 75th Street gauge, four times its ' +
+      'previous record of 2,050 ft³/s, and the flood closed every canyon road out of the city. Here that flood comes ' +
+      "out of the canyon at the west edge while the record day's rain falls on the foothills. Boulder Creek is banked " +
+      'only about 3 m deep through town, so it leaves its channel within minutes and runs down the streets beside it.',
   },
 ];
 
@@ -487,7 +833,9 @@ async function bake(def: PresetDef) {
       if (!cfg) continue;
       const end = ends.find((e) => e.river === ri && e.end === which);
       if (!end) throw new Error(`${def.id}: ${r.name} ${which} end does not reach the domain edge`);
-      const id = `${r.name.toLowerCase().replace(/[^a-z]+/g, '-').replace(/-river$/, '')}-${cfg.type}`;
+      const base = r.name.toLowerCase().replace(/[^a-z]+/g, '-').replace(/-river$/, '');
+      // A river with a boundary at BOTH ends needs two distinct ids (the app keys stage state by source id).
+      const id = `${base}-${r.upstream && r.downstream ? `${which}-` : ''}${cfg.type}`;
       if (cfg.type === 'inflow') {
         const p = inflowPlacement(burn, ri, which, end, N);
         sources.push({ id, type: 'inflow', gx: r2(p.gx), gy: r2(p.gy), radius: r1(p.radius), discharge: cfg.discharge, label: cfg.label });
@@ -536,7 +884,7 @@ async function bake(def: PresetDef) {
   };
   const shelters: Shelter[] = def.shelters.map((s) => {
     const p = toGrid(s.at);
-    const ceiling = stageCeiling ?? nearestWaterLevel(p.gx, p.gy) + 20;
+    const ceiling = stageCeiling ?? nearestWaterLevel(p.gx, p.gy) + (def.shelterMargin ?? 20);
     const searchCells = (s.search ?? 250) / cellSize;
     let best: { gx: number; gy: number; score: number } | null = null;
     for (let k = 0; k < roads.nodes.length / 2; k++) {
@@ -644,6 +992,33 @@ async function bake(def: PresetDef) {
     }
   });
 
+  /*
+   * The close-up inset (src/data/imagery.ts): a second DETAIL_SIZE² export over part of the domain, blended over
+   * the base photo by the terrain shader. Measured over downtown Pittsburgh (artifacts/detail-imagery): NAIP stops
+   * adding detail just under 1 m per texel, so an inset is only worth its bytes where the base photo is coarser
+   * than that, and never needs to be finer than DETAIL_TARGET_MPT.
+   */
+  let detailBytes: Uint8Array | null = null;
+  let detailGrid: GridRect | null = null;
+  if (def.detail) {
+    const baseMpt = def.sizeMeters / IMAGERY_SIZE;
+    const at = def.detail.at ?? def.camera.at;
+    const c = geoToGrid({ nx: N, ny: N, bounds }, at[0], at[1]);
+    const rect = detailRect(N, N, cellSize, { gx: c.gx, gy: c.gy }, def.detail.sizeMeters);
+    if (!rect) {
+      log(def.id, `  detail inset skipped: ${def.detail.sizeMeters} m does not fit inside the ${def.sizeMeters} m domain`);
+    } else {
+      const mpt = detailMetersPerTexel(rect, cellSize, DETAIL_SIZE);
+      log(def.id, `imagery detail: ${DETAIL_SIZE}² over ${r1((rect.x1 - rect.x0) * cellSize)} m at cells [${rect.x0},${rect.y0}]-[${rect.x1},${rect.y1}]`);
+      log(def.id, `  ${r3(mpt)} m/texel vs ${r3(baseMpt)} base (${r2(baseMpt / mpt)}x)${mpt < DETAIL_TARGET_MPT * 0.8 ? ' — finer than NAIP resolves, consider a larger square' : ''}`);
+      const detailKey = JSON.stringify({ ...JSON.parse(requestKey), detail: { rect, size: DETAIL_SIZE }, source: IMAGERY_SOURCE });
+      detailBytes = await cachedBytes(def.id, detailKey, `imagery-detail-${IMAGERY_SOURCE}-${DETAIL_SIZE}.jpg`, () =>
+        fetchImageryStitched(detailMercatorBBox(merc, N, N, rect), DETAIL_SIZE, IMAGERY_SOURCE),
+      );
+      detailGrid = rect;
+    }
+  }
+
   // ── Write
   const dir = path.join(OUT, def.id);
   fs.mkdirSync(dir, { recursive: true });
@@ -658,7 +1033,13 @@ async function bake(def: PresetDef) {
     bounds,
     attribution: `Elevation: USGS 3DEP · ${IMAGERY_SOURCE === 'naip' ? NAIP_ATTRIBUTION : IMAGERY_ATTRIBUTION} · ${ROADS_ATTRIBUTION_TIGER}`,
     scenario,
-    files: { elevation: 'elevation.f32', imagery: 'imagery.jpg', roads: 'roads.json' },
+    files: {
+      elevation: 'elevation.f32',
+      imagery: 'imagery.jpg',
+      roads: 'roads.json',
+      ...(detailGrid ? { imageryDetail: 'imagery-detail.jpg' } : {}),
+    },
+    ...(detailGrid ? { imageryDetail: detailGrid } : {}),
     bake: {
       bakedAt: new Date().toISOString(),
       demSource: dem.source,
@@ -676,8 +1057,12 @@ async function bake(def: PresetDef) {
   fs.writeFileSync(path.join(dir, 'meta.json'), JSON.stringify(meta, null, 1));
   fs.writeFileSync(path.join(dir, 'elevation.f32'), Buffer.from(elevation.buffer, elevation.byteOffset, elevation.byteLength));
   fs.writeFileSync(path.join(dir, 'imagery.jpg'), jpg);
+  if (detailBytes) fs.writeFileSync(path.join(dir, 'imagery-detail.jpg'), detailBytes);
+  else fs.rmSync(path.join(dir, 'imagery-detail.jpg'), { force: true });
   fs.writeFileSync(path.join(dir, 'roads.json'), JSON.stringify(encodeRoads(roads)));
-  const sizes = ['meta.json', 'elevation.f32', 'imagery.jpg', 'roads.json'].map((f) => `${f} ${(fs.statSync(path.join(dir, f)).size / 1e6).toFixed(2)} MB`);
+  const sizes = ['meta.json', 'elevation.f32', 'imagery.jpg', ...(detailBytes ? ['imagery-detail.jpg'] : []), 'roads.json'].map(
+    (f) => `${f} ${(fs.statSync(path.join(dir, f)).size / 1e6).toFixed(2)} MB`,
+  );
   log(def.id, `wrote ${sizes.join(', ')} in ${((performance.now() - t0) / 1000).toFixed(1)} s`);
 }
 

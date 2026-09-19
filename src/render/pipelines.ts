@@ -70,6 +70,8 @@ export async function createPipelines(device: GPUDevice, canvasFormat: GPUTextur
       { binding: 10, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
       // Land the user's walls keep dry (r8unorm, filtered): the terrain's green "protected" glow.
       { binding: 11, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
+      // Close-up imagery inset (rgba8unorm-srgb, filtered) — a 1x1 placeholder when the area has none.
+      { binding: 12, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
     ],
   });
   const overlayBGL = device.createBindGroupLayout({

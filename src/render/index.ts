@@ -11,6 +11,7 @@
 import type {
   FloodRenderer,
   FloodSolver,
+  GridRect,
   OverlayState,
   PickResult,
   RenderSettings,
@@ -39,6 +40,16 @@ export { OrbitController } from './camera';
 export type { RendererQuality, SimPressure } from './quality';
 
 const WATER_MODE_INDEX = { realistic: 0, depth: 1, maxDepth: 2, velocity: 3 } as const;
+/** Cells over which the detail-imagery inset fades into the base photo, so its rectangle never reads as an edge. */
+const DETAIL_FEATHER_CELLS = 8;
+/**
+ * Can this inset rectangle be drawn on this grid? The data layer validates the same rectangle against meta.json
+ * (src/data/imagery.ts), but the renderer is handed terrain from live areas and tests too, so it checks for itself
+ * rather than trusting the caller — a bad rectangle would stretch the photo over the wrong ground.
+ */
+function detailRectFits(r: GridRect, nx: number, ny: number): boolean {
+  return r.x0 >= 0 && r.y0 >= 0 && r.x1 > r.x0 && r.y1 > r.y0 && r.x1 <= nx && r.y1 <= ny;
+}
 
 export interface RendererOptions {
   /** Default 'auto': adaptive resolution targeting ≥ 48 fps sustained, idle frames capped at 30 fps. */
@@ -155,6 +166,10 @@ interface SceneGPU {
   miscTex: GPUTexture;
   imageryTex: GPUTexture;
   hasImagery: boolean;
+  /** Finer imagery over part of the grid (the close-up inset), and the cell rectangle it covers. */
+  detailTex: GPUTexture;
+  hasDetail: boolean;
+  detailRect: GridRect | null;
   terrainBG: GPUBindGroup;
   waterBG: GPUBindGroup;
   overlayBG: GPUBindGroup;
@@ -465,6 +480,25 @@ class DelugeRenderer implements DelugeRendererAPI {
         console.warn('[render] imagery upload failed, using hypsometric tint', e);
       }
     }
+    /*
+     * Close-up inset: a finer photo over part of the grid, blended over the base in the terrain shader. It is pure
+     * polish — an upload failure or a rectangle that does not fit this grid just leaves the base photo alone.
+     */
+    let detailTex = this.dummyImagery;
+    let hasDetail = false;
+    let detailRect: GridRect | null = null;
+    const wantDetail = hasImagery ? terrain.imageryDetail : null;
+    if (wantDetail && wantDetail.image.width > 0 && detailRectFits(wantDetail.rect, nx, ny)) {
+      try {
+        detailTex = createImageryTexture(device, wantDetail.image, 'imagery-detail');
+        hasDetail = true;
+        detailRect = wantDetail.rect;
+      } catch (e) {
+        console.warn('[render] detail imagery upload failed, using the base photo', e);
+      }
+    } else if (wantDetail) {
+      console.warn('[render] detail imagery ignored: rectangle does not fit this grid');
+    }
 
     const sceneEntries = (tex5: GPUTexture, samp7: GPUSampler): GPUBindGroupEntry[] => [
       { binding: 0, resource: { buffer: this.frameBuf } },
@@ -479,6 +513,7 @@ class DelugeRenderer implements DelugeRendererAPI {
       { binding: 9, resource: wallTex.createView() },
       { binding: 10, resource: normalWetTex.createView() },
       { binding: 11, resource: protectTex.createView() },
+      { binding: 12, resource: detailTex.createView() },
     ];
     const terrainBG = device.createBindGroup({ label: 'terrain', layout: this.P.sceneBGL, entries: sceneEntries(imageryTex, this.aniso) });
     const waterBG = device.createBindGroup({ label: 'water', layout: this.P.sceneBGL, entries: sceneEntries(this.rippleTex, this.repeat) });
@@ -551,6 +586,9 @@ class DelugeRenderer implements DelugeRendererAPI {
       miscTex,
       imageryTex,
       hasImagery,
+      detailTex,
+      hasDetail,
+      detailRect,
       terrainBG,
       waterBG,
       overlayBG,
@@ -658,6 +696,7 @@ class DelugeRenderer implements DelugeRendererAPI {
     s.normalWetTex.destroy();
     s.protectTex.destroy();
     if (s.hasImagery) s.imageryTex.destroy();
+    if (s.hasDetail) s.detailTex.destroy();
     s.roadVerts?.destroy();
     s.roadIndices?.destroy();
     s.roadStatus.destroy();
@@ -1360,6 +1399,16 @@ class DelugeRenderer implements DelugeRendererAPI {
     f[113] = 0;
     f[114] = 0;
     f[115] = 0;
+    // Detail-imagery inset: its rectangle in cells, then strength and the feather width that hides its edge.
+    const detail = s?.hasDetail && s.detailRect && settings.showImagery ? s.detailRect : null;
+    f[116] = detail?.x0 ?? 0;
+    f[117] = detail?.y0 ?? 0;
+    f[118] = detail?.x1 ?? 0;
+    f[119] = detail?.y1 ?? 0;
+    f[120] = detail ? 1 : 0;
+    f[121] = DETAIL_FEATHER_CELLS;
+    f[122] = 0;
+    f[123] = 0;
     this.device.queue.writeBuffer(this.frameBuf, 0, f);
 
     // Overlay uniforms.

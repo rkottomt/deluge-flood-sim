@@ -1,0 +1,189 @@
+{
+ "version": 1,
+ "id": "nashville",
+ "name": "Nashville — Cumberland River",
+ "subtitle": "May 2010 flood — raise the river past 51.86 ft",
+ "nx": 1024,
+ "ny": 1024,
+ "cellSize": 6.8359375,
+ "bounds": {
+  "west": -86.82694515039115,
+  "south": 36.134052660027926,
+  "east": -86.74905484960883,
+  "north": 36.196934728446635
+ },
+ "attribution": "Elevation: USGS 3DEP · Imagery: USDA NAIP via USGS The National Map · Roads: U.S. Census Bureau TIGER/Line",
+ "scenario": {
+  "description": "Downtown Nashville stands on the west bank of the Cumberland River, which crosses the city as a navigation pool between Old Hickory Dam upstream and Cheatham Dam downstream. The pool in this elevation model reads about 24.5 ft on the Nashville gauge; flood stage is 40 ft. On May 1–2, 2010 a stalled front dropped 13.57 inches of rain on Nashville — double the previous two-day record of 6.68 inches — and on May 3 the river crested at 51.86 ft, the highest since the dams were built (USGS measured the peak at 52.55 ft and 188,000 ft³/s). Second Avenue, the Country Music Hall of Fame, the Schermerhorn Symphony Center and the stadium all took water; 18 people died in Middle Tennessee and damage passed $2 billion. Before the dams the river reached 53.90 ft in 1937 and a record 56.20 ft in 1927. Raise the river stage to replay those crests and watch the riverfront go under — then try a wall along First Avenue.",
+  "sources": [
+   {
+    "id": "cumberland-upstream-stage",
+    "type": "stage",
+    "gx": 1079.19,
+    "gy": 629,
+    "radius": 88.01,
+    "level": 119.555,
+    "offsetScale": 1.02102,
+    "label": "Cumberland River — upstream of downtown"
+   },
+   {
+    "id": "cumberland-downstream-stage",
+    "type": "stage",
+    "gx": 360,
+    "gy": -785.6,
+    "radius": 818.58,
+    "level": 119.405,
+    "offsetScale": 0.97898,
+    "label": "Cumberland River — downstream toward Cheatham Lake"
+   }
+  ],
+  "storms": [],
+  "shelters": [
+   {
+    "name": "Tennessee State Capitol",
+    "gx": 549.81,
+    "gy": 504.93
+   },
+   {
+    "name": "Vanderbilt / Midtown",
+    "gx": 362.29,
+    "gy": 806.1
+   },
+   {
+    "name": "Fisk University",
+    "gx": 263.53,
+    "gy": 467.54
+   },
+   {
+    "name": "Lockeland Springs (East Nashville)",
+    "gx": 972.48,
+    "gy": 345.37
+   },
+   {
+    "name": "Rolling Mill Hill",
+    "gx": 727.43,
+    "gy": 693.01
+   }
+  ],
+  "rainRate": 0,
+  "stage": {
+   "label": "Cumberland River at Nashville (USGS 03431500)",
+   "gaugeDatum": 111.999,
+   "normalLevel": 119.48,
+   "floodStageFt": 40,
+   "marks": [
+    {
+     "label": "2010 flood",
+     "ft": 51.86
+    },
+    {
+     "label": "1937 flood",
+     "ft": 53.9
+    },
+    {
+     "label": "1927 record",
+     "ft": 56.2
+    }
+   ],
+   "maxOffset": 11
+  },
+  "initialFill": [
+   {
+    "seeds": [
+     {
+      "gx": 1013.5,
+      "gy": 592.5
+     },
+     {
+      "gx": 944.5,
+      "gy": 606.5
+     },
+     {
+      "gx": 860.5,
+      "gy": 619.5
+     },
+     {
+      "gx": 779.5,
+      "gy": 606.5
+     },
+     {
+      "gx": 703.5,
+      "gy": 548.5
+     },
+     {
+      "gx": 668.5,
+      "gy": 466.5
+     },
+     {
+      "gx": 632.5,
+      "gy": 392.5
+     },
+     {
+      "gx": 600.5,
+      "gy": 304.5
+     },
+     {
+      "gx": 592.5,
+      "gy": 222.5
+     },
+     {
+      "gx": 582.5,
+      "gy": 144.5
+     },
+     {
+      "gx": 574.5,
+      "gy": 68.5
+     }
+    ],
+    "level": 119.48
+   }
+  ],
+  "camera": {
+   "target": {
+    "gx": 702.6,
+    "gy": 544.6,
+    "elevation": 113.5
+   },
+   "distance": 2300,
+   "yaw": -1.571,
+   "pitch": 0.45
+  }
+ },
+ "files": {
+  "elevation": "elevation.f32",
+  "imagery": "imagery.jpg",
+  "roads": "roads.json"
+ },
+ "bake": {
+  "bakedAt": "2026-09-19T15:45:34.512Z",
+  "demSource": "usgs3dep",
+  "demRepairedCells": 0,
+  "center": {
+   "lat": 36.1655,
+   "lon": -86.788
+  },
+  "sizeMeters": 7000,
+  "burnedCells": 23868,
+  "rivers": [
+   {
+    "name": "Cumberland River",
+    "cells": 23868,
+    "depth": 6,
+    "surfaceMax": 119.48,
+    "surfaceMin": 119.48
+   }
+  ],
+  "initialWetCells": 23868,
+  "roads": {
+   "nodes": 4363,
+   "edges": 6582,
+   "km": 726.5980864042212,
+   "byClass": {
+    "highway": 222,
+    "major": 409,
+    "minor": 167,
+    "local": 5784
+   }
+  }
+ }
+}

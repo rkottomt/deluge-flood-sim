@@ -4,7 +4,7 @@
  */
 
 /** Byte size of the Frame uniform (must match FRAME_WGSL and writeFrameUniforms in index.ts). */
-export const FRAME_UNIFORM_SIZE = 464;
+export const FRAME_UNIFORM_SIZE = 496;
 
 export const FRAME_WGSL = /* wgsl */ `
 struct Frame {
@@ -36,6 +36,8 @@ struct Frame {
   wall: vec4f,        // x: any walls (wallTex valid), y: wall field range (cells), z: wall crest elevation origin (m), w: normal-water mask valid
   bands: array<vec4f, 8>, // rgb (HDR input that tone-maps to the legend colour) + upper threshold in .a
   protect: vec4f,     // x: protected-land glow strength 0..1 (protectTex valid when > 0), yzw: unused
+  detailRect: vec4f,  // detail-imagery inset, grid cells: x0, y0, x1, y1 (empty when detail.x == 0)
+  detail: vec4f,      // x: inset strength 0..1 (detailTex valid when > 0), y: feather width (cells), zw: unused
 }
 `;
 

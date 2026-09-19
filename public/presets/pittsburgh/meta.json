@@ -282,7 +282,14 @@
  "files": {
   "elevation": "elevation.f32",
   "imagery": "imagery.jpg",
-  "roads": "roads.json"
+  "roads": "roads.json",
+  "imageryDetail": "imagery-detail.jpg"
+ },
+ "imageryDetail": {
+  "x0": 157,
+  "y0": 348,
+  "x1": 541,
+  "y1": 732
  },
  "bake": {
   "bakedAt": "2026-09-17T10:58:49.521Z",
@@ -328,6 +335,11 @@
     "minor": 423,
     "local": 9980
    }
+  },
+  "imageryDetail": {
+   "sizeMeters": 3000,
+   "texels": 4096,
+   "metersPerTexel": 0.732
   }
  }
 }
