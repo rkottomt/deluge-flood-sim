@@ -2,6 +2,19 @@
  * OrbitController — damped orbit/pan/zoom camera with fly-to animation, mouse + touch input, terrain
  * clearance and reversed-Z infinite projection.
  *
+ * FEEL. Three things make the view read as a camera rather than as a slider:
+ *  • a critically damped SPRING instead of exponential decay. Exponential decay starts at its maximum speed and
+ *    slows from there, so every drag begins with a jerk; a critically damped spring accelerates into the move and
+ *    settles without overshoot, which is what a real head does. `damping` still means the same thing (bigger =
+ *    snappier) and the settle time is matched, so this is a feel change and not a responsiveness change.
+ *  • a QUINTIC fly-to ease. The cubic ease-in-out it replaces is only C1: acceleration jumps at both ends, and
+ *    that jump is visible as a kick at the start and a stop at the end of every Try-it beat. Quintic smootherstep
+ *    is C2 — it starts and ends with zero acceleration as well as zero speed. Rotation is also run a little
+ *    behind translation, so the camera swings into its new heading as it arrives instead of with it: a crane move.
+ *  • optional idle SWAY (off by default, see `sway`): a slow two-axis breath that stops the instant anything is
+ *    touched. It is applied to the live pose, so the render pacer keeps drawing while it runs — which is why it is
+ *    opt-in and why screenshots and the visual suite never see it.
+ *
  * Pose conventions (contracts.ts): yaw 0 looks north (−Z), increasing clockwise toward east (+X);
  * pitch is the angle below the horizon at which the camera looks down at the target (π/2 = top-down).
  */
@@ -68,7 +81,20 @@ const smooth = (e0: number, e1: number, x: number) => {
   const t = clamp((x - e0) / (e1 - e0), 0, 1);
   return t * t * (3 - 2 * t);
 };
-const easeInOutCubic = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
+/**
+ * Quintic smootherstep: zero velocity AND zero acceleration at both ends (C2). The cubic ease this replaces has
+ * an acceleration step at t=0 and t=1, which is the little kick you see at the start of a fly-to.
+ */
+const smootherstep = (t: number) => t * t * t * (t * (t * 6 - 15) + 10);
+/** How far behind the translation the rotation runs, as a fraction of the flight. */
+const FLY_ROTATION_LAG = 0.12;
+/** Idle time before the breath starts, and how long it takes to reach full amplitude / to stop. */
+const SWAY_DELAY_S = 2.5;
+const SWAY_RAMP_S = 2.0;
+/** Breath periods (s) and amplitudes (radians of yaw/pitch, fraction of distance). */
+const SWAY_YAW = 0.0032;
+const SWAY_PITCH = 0.0021;
+const SWAY_DIST = 0.0026;
 
 function sanitize(p: CameraPose, fallback: CameraPose): CameraPose {
   const ok = (x: number) => Number.isFinite(x);
@@ -104,8 +130,22 @@ interface DragState {
 
 export class OrbitController implements CameraController {
   leftDragOrbits = true;
-  /** Damping rate (1/s): higher = snappier. */
-  damping = 14;
+  /**
+   * Damping rate (1/s): higher = snappier. It is the natural frequency of the critically damped spring that
+   * chases the goal pose; 18 settles in about the same time as the exponential decay at 14 it replaces, but
+   * eases into the move instead of starting at full speed.
+   */
+  damping = 18;
+  /** Camera breathing while idle. Off by default: it keeps the render pacer awake and it is not deterministic. */
+  sway = false;
+
+  /** Seconds since the user last touched the view (drag, wheel, pinch, fly-to, programmatic pose). */
+  private idleFor = 0;
+  /** Current sway amplitude, 0..1, ramped so it can never start or stop with a jump. */
+  private swayAmp = 0;
+  private swayPhase = 0;
+  /** Velocity state of the pose spring (per-component, in each component's own units per second). */
+  private vel = { gx: 0, gy: 0, elevation: 0, logDistance: 0, yaw: 0, pitch: 0 };
 
   private cur: CameraPose;
   private goal: CameraPose;
@@ -276,15 +316,19 @@ export class OrbitController implements CameraController {
     return { view, proj, viewProj, invViewProj, eye, forward, right, up, near, fovY: CAMERA_FOV_Y, aspect };
   }
 
-  /** Advance damping / flight. Call once per frame before computing matrices. */
+  /** Advance damping / flight / breathing. Call once per frame before computing matrices. */
   update(dt: number): void {
     dt = clamp(Number.isFinite(dt) ? dt : 0, 0, 0.25);
     this.adoptExternalEdits();
+    let settled = false;
     if (this.flight) {
       const f = this.flight;
       f.t += dt;
       const u = clamp(f.t / f.duration, 0, 1);
-      const k = easeInOutCubic(u);
+      const k = smootherstep(u);
+      // Rotation trails the translation slightly, so the camera swings onto its new heading as it arrives rather
+      // than turning and moving in lockstep. Re-normalised so it still lands exactly on the target at u = 1.
+      const kr = smootherstep(clamp((u - FLY_ROTATION_LAG) / (1 - FLY_ROTATION_LAG), 0, 1));
       const a = f.from;
       const b = f.to;
       const p: CameraPose = {
@@ -294,26 +338,36 @@ export class OrbitController implements CameraController {
           elevation: a.target.elevation + (b.target.elevation - a.target.elevation) * k,
         },
         distance: Math.exp(Math.log(a.distance) + (Math.log(b.distance) - Math.log(a.distance)) * k) * (1 + f.arc * Math.sin(Math.PI * k)),
-        yaw: a.yaw + wrapAngle(b.yaw - a.yaw) * k,
-        pitch: a.pitch + (b.pitch - a.pitch) * k,
+        yaw: a.yaw + wrapAngle(b.yaw - a.yaw) * kr,
+        pitch: a.pitch + (b.pitch - a.pitch) * kr,
       };
       this.cur = p;
       this.goal = clonePose(p);
+      this.zeroVelocity();
+      this.idleFor = 0;
       if (u >= 1) {
         this.cur = clonePose(b);
         this.goal = clonePose(b);
         this.flight = null;
       }
     } else {
-      const a = 1 - Math.exp(-this.damping * dt);
       const c = this.cur;
       const g = this.goal;
-      c.target.gx += (g.target.gx - c.target.gx) * a;
-      c.target.gy += (g.target.gy - c.target.gy) * a;
-      c.target.elevation += (g.target.elevation - c.target.elevation) * a;
-      c.distance = Math.exp(Math.log(c.distance) + (Math.log(g.distance) - Math.log(c.distance)) * a);
-      c.yaw += wrapAngle(g.yaw - c.yaw) * a;
-      c.pitch += (g.pitch - c.pitch) * a;
+      const v = this.vel;
+      const spring = (cur: number, goal: number, vk: keyof typeof v): number => {
+        // Semi-implicit critically damped spring: stable at any dt, never overshoots.
+        const w = this.damping;
+        const d = 1 + w * dt;
+        v[vk] = (v[vk] + w * w * dt * (goal - cur)) / (d * d);
+        return cur + v[vk] * dt;
+      };
+      c.target.gx = spring(c.target.gx, g.target.gx, 'gx');
+      c.target.gy = spring(c.target.gy, g.target.gy, 'gy');
+      c.target.elevation = spring(c.target.elevation, g.target.elevation, 'elevation');
+      // Distance springs in log space: zooming a factor of two feels the same from 500 m and from 5 km.
+      c.distance = Math.exp(spring(Math.log(c.distance), Math.log(g.distance), 'logDistance'));
+      c.yaw = spring(c.yaw, c.yaw + wrapAngle(g.yaw - c.yaw), 'yaw');
+      c.pitch = spring(c.pitch, g.pitch, 'pitch');
       // Snap when converged so poses are stable (and screenshots deterministic).
       if (
         Math.abs(g.distance - c.distance) < 1e-4 * g.distance &&
@@ -324,11 +378,52 @@ export class OrbitController implements CameraController {
         Math.abs(g.target.elevation - c.target.elevation) < 1e-3
       ) {
         this.cur = clonePose(g);
+        this.zeroVelocity();
+        settled = true;
       }
     }
+    this.advanceSway(dt, settled);
     this.enforceClearance(this.cur);
     this.enforceClearance(this.goal);
     this.lastCur = clonePose(this.cur);
+  }
+
+  private zeroVelocity(): void {
+    const v = this.vel;
+    v.gx = v.gy = v.elevation = v.logDistance = v.yaw = v.pitch = 0;
+  }
+
+  /**
+   * Idle breathing. Two incommensurable periods on yaw and pitch (plus a slower one on distance) so the motion
+   * never repeats visibly, ramped in and out so it cannot start or stop with a step. It is deliberately applied to
+   * the live pose and not to the goal, so releasing a drag does not snap the view back.
+   */
+  private advanceSway(dt: number, settled: boolean): void {
+    const want = this.sway && settled && !this.drag && !this.pinch && !this.flight;
+    this.idleFor = want ? this.idleFor + dt : 0;
+    const target = want && this.idleFor > SWAY_DELAY_S ? 1 : 0;
+    // Ramps up over SWAY_RAMP_S, but falls to zero in a quarter of that: the moment a hand touches it, it stops.
+    const rate = target > this.swayAmp ? 1 / SWAY_RAMP_S : 4 / SWAY_RAMP_S;
+    this.swayAmp = clamp(this.swayAmp + Math.sign(target - this.swayAmp) * rate * dt, 0, 1);
+    if (this.swayAmp <= 0) {
+      this.swayPhase = 0;
+      return;
+    }
+    this.swayPhase += dt;
+    const t = this.swayPhase;
+    const a = this.swayAmp * this.swayAmp * (3 - 2 * this.swayAmp);
+    const c = this.cur;
+    const g = this.goal;
+    c.yaw = g.yaw + a * SWAY_YAW * Math.sin(t * 0.211);
+    c.pitch = clamp(g.pitch + a * SWAY_PITCH * Math.sin(t * 0.137 + 1.7), MIN_PITCH, MAX_PITCH);
+    c.distance = g.distance * (1 + a * SWAY_DIST * Math.sin(t * 0.091 + 0.6));
+  }
+
+  /** The user touched the view: stop breathing at once and restart the idle clock. */
+  noteInteraction(): void {
+    this.idleFor = 0;
+    this.swayAmp = 0;
+    this.swayPhase = 0;
   }
 
   /**
@@ -439,6 +534,7 @@ export class OrbitController implements CameraController {
   }
 
   private beginInteraction(): void {
+    this.noteInteraction();
     this.adoptExternalEdits();
     if (this.flight) {
       this.flight = null;

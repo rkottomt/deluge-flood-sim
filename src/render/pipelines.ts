@@ -28,7 +28,10 @@ export interface Pipelines {
   markersOpaque: GPURenderPipeline;
   markersBlend: GPURenderPipeline;
   rain: GPURenderPipeline;
+  /** Bloom chain: bright pass + downsample (modes 0/1). */
   bloom: GPURenderPipeline;
+  /** Bloom chain: tent upsample (mode 2), blended additively into the finer mip. */
+  bloomUp: GPURenderPipeline;
   tonemap: GPURenderPipeline;
   /** Sun-visibility / sky-visibility raster over the DEM (src/render/shadows.ts). */
   shadow: ShadowPipelines;
@@ -75,6 +78,9 @@ export async function createPipelines(device: GPUDevice, canvasFormat: GPUTextur
       { binding: 11, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
       // Sun shading (rgba8unorm, filtered): r = sun visibility, g = open-sky fraction, per DEM cell.
       { binding: 12, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
+      // Aerial imagery again, clamped/linear (the terrain pass reads it anisotropically at binding 5). The water
+      // pass needs it to colour what its reflection rays hit and to refract the ground under shallow water.
+      { binding: 13, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
     ],
   });
   const overlayBGL = device.createBindGroupLayout({
@@ -142,7 +148,7 @@ export async function createPipelines(device: GPUDevice, canvasFormat: GPUTextur
   };
 
   const R = (d: GPURenderPipelineDescriptor) => device.createRenderPipelineAsync(d);
-  const [sky, terrain, skirt, water, waterSkirt, ribbons, markersOpaque, markersBlend, rain, bloom, tonemap, prepCells, prepVerts, prepVtxBed, wetBase, wetDown, normalWater] =
+  const [sky, terrain, skirt, water, waterSkirt, ribbons, markersOpaque, markersBlend, rain, bloom, bloomUp, tonemap, prepCells, prepVerts, prepVtxBed, wetBase, wetDown, normalWater] =
     await Promise.all([
       R({
         label: 'sky',
@@ -232,6 +238,17 @@ export async function createPipelines(device: GPUDevice, canvasFormat: GPUTextur
         fragment: { module: bloomM, entryPoint: 'fsBloom', targets: [{ format: HDR_FORMAT }] },
       }),
       R({
+        label: 'bloom-up',
+        layout: 'auto',
+        vertex: { module: bloomM, entryPoint: 'vsFull' },
+        // Additive: each octave is summed into the finer mip it is upsampled onto.
+        fragment: {
+          module: bloomM,
+          entryPoint: 'fsBloom',
+          targets: [{ format: HDR_FORMAT, blend: { color: { srcFactor: 'one', dstFactor: 'one' }, alpha: { srcFactor: 'one', dstFactor: 'one' } } }],
+        },
+      }),
+      R({
         label: 'tonemap',
         layout: 'auto',
         vertex: { module: tonemapM, entryPoint: 'vsFull' },
@@ -246,5 +263,5 @@ export async function createPipelines(device: GPUDevice, canvasFormat: GPUTextur
     ]);
 
   const shadow = await shadowReady;
-  return { sceneBGL, overlayBGL, prepCells, prepVerts, prepVtxBed, wetBase, wetDown, normalWater, sky, terrain, skirt, water, waterSkirt, ribbons, markersOpaque, markersBlend, rain, bloom, tonemap, shadow };
+  return { sceneBGL, overlayBGL, prepCells, prepVerts, prepVtxBed, wetBase, wetDown, normalWater, sky, terrain, skirt, water, waterSkirt, ribbons, markersOpaque, markersBlend, rain, bloom, bloomUp, tonemap, shadow };
 }

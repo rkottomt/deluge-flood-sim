@@ -1,5 +1,5 @@
 /** Water surface shaders: photoreal floodwater and hazard colormaps. */
-import { COMMON_WGSL, FRAME_WGSL, LOD_WGSL, VTX_SAMPLE_WGSL, WALL_WGSL } from './common';
+import { COMMON_WGSL, FRAME_WGSL, LOD_WGSL, SUN_SHADING_WGSL, VTX_SAMPLE_WGSL, WALL_WGSL } from './common';
 
 export const WATER_WGSL = /* wgsl */ `
 ${FRAME_WGSL}
@@ -14,10 +14,123 @@ ${FRAME_WGSL}
 @group(0) @binding(8) var wetTex: texture_2d<f32>;
 @group(0) @binding(9) var wallTex: texture_2d<f32>;
 @group(0) @binding(10) var normalWetTex: texture_2d<f32>;
+@group(0) @binding(12) var sunTex: texture_2d<f32>;
+@group(0) @binding(13) var imageryTex: texture_2d<f32>;
 ${COMMON_WGSL}
 ${LOD_WGSL}
 ${VTX_SAMPLE_WGSL}
 ${WALL_WGSL}
+${SUN_SHADING_WGSL}
+
+/**
+ * The renderer's Cinematic tier (quality.ts). Only the 'cinematic' preset ever sets the detail-normal strength
+ * to 1 — the adaptive ladder tops out at 0.75 — so this is the same tier switch the terrain shader already reads
+ * for its fine detail octave, and it needs no room in the (full) frame uniform. Everything behind it is an effect
+ * the default tier cannot afford at 60 fps under a full Pittsburgh flood; the adaptive controller keeps working
+ * exactly as before, because nothing here ever raises a level.
+ */
+fn cinematicTier() -> bool {
+  return F.shade.y > 0.9;
+}
+
+/**
+ * ── Reflections of the world, not of the screen ────────────────────────────────────────────────
+ *
+ * The obvious implementation is a screen-space march, and here it is the wrong one. The whole scene is drawn in
+ * ONE 4x MSAA pass, so at the moment the water is shaded there is no resolved colour buffer to read and no
+ * sampleable depth to march through; adding them means splitting the pass, resolving colour and writing depth to
+ * a second target, every frame, for every pixel. And a grazing river reflection mostly wants geometry that is not
+ * on screen at all — the hillside behind the camera, the far bank past the frame edge — which is exactly where a
+ * screen-space march runs out of data and has to be faded away.
+ *
+ * So the ray is marched against the height field itself: one texel fetch per step of the same per-vertex texture
+ * the meshes are built from, geometric step growth (fine near the surface, where banks, levees and the near shore
+ * are, coarse far away), then a few bisections to land on the hit. It reflects what is behind the camera and
+ * beyond the frame edge, it costs no extra pass or render target, and where the ray leaves the terrain the caller
+ * simply keeps the sky reflection it already had — the fallback is the thing it was going to draw anyway.
+ *
+ * Only the terrain (bed, including any barrier built into it) occludes. Water is not a reflector of water, and
+ * leaving the flood plane out of the march is what stops a near-horizontal ray from hitting that plane a few
+ * metres downstream and mirroring the river back onto itself.
+ */
+struct ReflHit {
+  hit: f32,
+  uv: vec2f,
+  pos: vec3f,
+}
+
+fn bedHeightAt(g: vec2f) -> f32 {
+  return vtxAtGrid(g).r * F.exag;
+}
+
+fn marchReflection(p0: vec3f, dir: vec3f, step0: f32, steps: i32, refines: i32) -> ReflHit {
+  var o: ReflHit;
+  o.hit = 0.0;
+  o.uv = vec2f(0.0);
+  o.pos = p0;
+  var step = step0;
+  var t = step0;
+  var tPrev = 0.0;
+  for (var i = 0; i < steps; i++) {
+    let w = p0 + dir * t;
+    let g = worldToGrid(w);
+    // Off the diorama: there is nothing out there to reflect but sky.
+    if (any(g < vec2f(0.0)) || any(g > F.grid)) { return o; }
+    if (w.y < bedHeightAt(g)) {
+      var lo = tPrev;
+      var hi = t;
+      for (var k = 0; k < refines; k++) {
+        let mid = (lo + hi) * 0.5;
+        let wm = p0 + dir * mid;
+        if (wm.y < bedHeightAt(worldToGrid(wm))) { hi = mid; } else { lo = mid; }
+      }
+      let wh = p0 + dir * hi;
+      o.hit = 1.0;
+      o.uv = clamp(worldToGrid(wh) / F.grid, vec2f(0.0), vec2f(1.0));
+      o.pos = wh;
+      return o;
+    }
+    tPrev = t;
+    step *= 1.5;
+    t += step;
+  }
+  return o;
+}
+
+/**
+ * Ground colour at a grid uv, lit the way the terrain pass lights it — same albedo, same cast-shadow raster, same
+ * relighting of the photograph — so a reflected hillside is the colour of the hillside and not a guess at it.
+ */
+fn groundColorAt(uv: vec2f, lod: f32) -> vec3f {
+  var albedo = vec3f(0.17, 0.175, 0.15);
+  if (F.opts.x > 0.5) {
+    albedo = textureSampleLevel(imageryTex, linSamp, uv, lod).rgb;
+  }
+  let nrm = textureSampleLevel(normTex, linSamp, uv, 0.0);
+  let n = normalize(vec3f(-nrm.r * F.exag, 1.0, -nrm.g * F.exag));
+  var vis = vec2f(1.0);
+  if (F.light.w > 0.5) {
+    vis = sunShadingRaw(uv);
+  }
+  var ndl = max(dot(n, F.sunDir), 0.0);
+  var sunLit = vis.x;
+  if (F.opts.x > 0.5) {
+    ndl = mix(max(F.sunDir.y, 0.2), ndl, F.light.z) * F.shade.w;
+    sunLit = mix(1.0, vis.x, F.light.x);
+  }
+  let occ = mix(1.0, vis.y, F.light.y);
+  return albedo * (F.sunColor * (1.0 - F.opts.w * 0.75) * ndl * sunLit + skyAmbient(n) * (0.85 + 0.3 * F.shade.z) * occ);
+}
+
+/**
+ * Anisotropic chop. Real river chop is not isotropic noise: the current stretches the pattern out along itself and
+ * leaves crests running across it. Damping the along-flow component of the ripple SLOPE does both — the surface
+ * varies fast across the flow and slowly along it — and unlike stretching the texture coordinates it cannot swim
+ * or alias, because the sample point (and so the mip the hardware picks) never moves.
+ */
+fn crossFlow(slope: vec2f, dir: vec2f, alongDamp: f32) -> vec2f {
+  return slope - dir * (dot(slope, dir) * (1.0 - alongDamp));
+}
 
 struct WOut {
   @builtin(position) pos: vec4f,

@@ -1,0 +1,590 @@
+/**
+ * Extruded 3D buildings — the city the flood runs BETWEEN instead of over a photograph of one.
+ *
+ * WHAT THIS OWNS. Turning `TerrainData.buildings` (footprint rings + real heights, see src/data/buildings.ts) into
+ * one static vertex/index buffer, slicing it into spatial chunks that can be frustum-culled and truncated by
+ * distance, and drawing the selection. The shading lives in shaders/buildings.ts; the shadows buildings cast come
+ * from the sun-shading raster (shadows.ts), which takes their roof heights as part of the occluder height field.
+ *
+ * GEOMETRY. Each footprint gives one open ring. Walls are a quad per ring edge (4 vertices, 6 indices — no sharing,
+ * because a flat-shaded corner needs two different normals), roofs are the ring ear-clipped into a fan-free
+ * triangulation. Pittsburgh's 45 084 buildings hold 233 476 ring vertices, so the whole city is 1.17 M vertices /
+ * 610 k triangles / ~31 MB of GPU memory — about half the terrain mesh, built once at scene load.
+ *
+ * WINDING. Rings are normalised to CLOCKWISE in grid coordinates, which (grid +x → world +X east, grid +y → world
+ * +Z south, world +Y up — a right-handed frame) makes the roof's right-hand-rule normal point up and each wall's
+ * point out of the building. A triangle whose geometric normal faces the camera comes out CLOCKWISE in framebuffer
+ * coordinates under this projection, hence `frontFace: 'cw'` with back-face culling in pipelines.ts —
+ * tests/render/buildings.test.ts pins that with the real camera matrices rather than trusting the derivation.
+ *
+ * DRAPING. Footprint bases in the data are the 5th-percentile bare-earth elevation under the footprint, which is
+ * not enough on its own: the rendered terrain is a CDLOD surface that morphs, and a building planted exactly on
+ * the DEM shows daylight under its downhill wall. So the wall bottoms are sunk to the MINIMUM ground found around
+ * the footprint's perimeter, minus a margin — everything below ground is hidden anyway, and nothing can float.
+ *
+ * LOD. Buildings are stored in Morton order, so a contiguous slice of them is a contiguous patch of city. Chunks of
+ * ~384 are frustum-culled whole; inside a chunk the buildings are sorted tallest-first, so "draw only what is worth
+ * a few pixels from here" is a prefix of the chunk's index range. The vertex shader collapses a building's roof
+ * toward its floor over the last octave before that cut, so nothing pops — it sinks.
+ */
+
+import type { BuildingSet } from '../contracts';
+import { BUILDING_KINDS } from '../data/buildings';
+
+/** Buildings per chunk: the unit of frustum culling and of the distance cut. */
+export const BUILDING_CHUNK = 384;
+
+/**
+ * How far below the lowest ground under its perimeter a wall bottom is sunk (metres). Two cells' worth of CDLOD
+ * morph plus a margin; everything under the ground is hidden, so this is free insurance against floating.
+ */
+export const BASE_SINK_M = 2.5;
+
+/**
+ * A footprint on a slope must not end up buried: its roof is lifted, if needed, to this far above the 75th
+ * percentile of the ground around its perimeter (metres). Uses a quantile rather than the max so one clipped
+ * corner on a cliff cannot inflate a rowhouse into a tower.
+ */
+export const MIN_ROOF_CLEARANCE_M = 2.5;
+
+/** Longest ring edge that is sampled only at its ends when looking for the ground under a footprint (cells). */
+const EDGE_SAMPLE_CELLS = 1.5;
+
+/** Vertex stride in bytes: vec3f position (gx, elevation m, gy) + u32 packed attributes + f32 building height. */
+export const BUILDING_VERTEX_BYTES = 20;
+const VERTEX_FLOATS = BUILDING_VERTEX_BYTES / 4;
+
+/** Bit layout of the packed per-vertex attribute word (see shaders/buildings.ts, which unpacks it). */
+export const PACK = {
+  /** Horizontal normal, two snorm8s (0 for a roof vertex). */
+  nxShift: 0,
+  nzShift: 8,
+  /** 1 = this vertex belongs to the roof cap (normal is up). */
+  roofBit: 1 << 16,
+  /** 1 = this vertex sits on the roof plane (roof cap or wall top) and moves when the LOD fade collapses it. */
+  topBit: 1 << 17,
+  heightSourceShift: 18,
+  kindShift: 20,
+  seedShift: 24,
+} as const;
+
+export interface BuildingChunk {
+  /** Index of the first building of the chunk in the source BuildingSet order (diagnostics only). */
+  firstBuilding: number;
+  count: number;
+  /** First index of the chunk in the shared index buffer. */
+  firstIndex: number;
+  /** Total indices of the chunk (all its buildings). */
+  indexCount: number;
+  /**
+   * Roof heights of the chunk's buildings, DESCENDING, and the running index count after each of them: drawing
+   * the first m of them is `drawIndexed(prefix[m], 1, firstIndex)`. `prefix[0] = 0`, `prefix[count] = indexCount`.
+   */
+  heights: Float32Array;
+  prefix: Uint32Array;
+  /** Grid-space bounds (cells) and elevation bounds (metres, no exaggeration). */
+  gx0: number;
+  gy0: number;
+  gx1: number;
+  gy1: number;
+  yMin: number;
+  yMax: number;
+}
+
+export interface BuildingMesh {
+  /** Interleaved vertex data, BUILDING_VERTEX_BYTES per vertex. */
+  vertices: ArrayBuffer;
+  vertexCount: number;
+  indices: Uint32Array;
+  chunks: BuildingChunk[];
+  /** Buildings actually meshed (footprints that degenerated are dropped). */
+  buildingCount: number;
+  triangleCount: number;
+  /** Tallest roof above its floor, metres. */
+  maxHeight: number;
+}
+
+/** Twice the signed area of an open ring of interleaved coordinates; negative = clockwise in a y-down grid. */
+export function ringArea2(verts: ArrayLike<number>, start: number, n: number): number {
+  let a = 0;
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n;
+    const xi = verts[(start + i) * 2];
+    const yi = verts[(start + i) * 2 + 1];
+    const xj = verts[(start + j) * 2];
+    const yj = verts[(start + j) * 2 + 1];
+    a += xi * yj - xj * yi;
+  }
+  return a;
+}
+
+/**
+ * Ear clipping for one simple polygon, given CLOCKWISE in grid coordinates (see the winding note at the top).
+ * Writes `(n - 2) * 3` indices of ring-local vertex numbers into `out` and returns how many it wrote; a ring that
+ * cannot be triangulated (self-intersecting, or collapsed by the source quantisation) falls back to a fan, which
+ * is wrong for a concave footprint but never leaves a hole in the roof.
+ *
+ * `xs`/`ys` are the ring's coordinates, already un-interleaved by the caller (it has them anyway).
+ */
+export function earClip(xs: Float64Array, ys: Float64Array, n: number, out: Uint32Array, outOffset: number): number {
+  if (n < 3) return 0;
+  let o = outOffset;
+  if (n === 3) {
+    out[o++] = 0;
+    out[o++] = 1;
+    out[o++] = 2;
+    return 3;
+  }
+  // Doubly-linked ring of remaining vertices.
+  const next = new Uint32Array(n);
+  const prev = new Uint32Array(n);
+  for (let i = 0; i < n; i++) {
+    next[i] = (i + 1) % n;
+    prev[i] = (i + n - 1) % n;
+  }
+  // Clockwise in a y-down grid means the interior is on the left of each edge in "cross ≥ 0" terms below.
+  const convex = (a: number, b: number, c: number) =>
+    (xs[b] - xs[a]) * (ys[c] - ys[a]) - (ys[b] - ys[a]) * (xs[c] - xs[a]) <= 0;
+  const inside = (a: number, b: number, c: number, p: number) => {
+    const d1 = (xs[p] - xs[b]) * (ys[a] - ys[b]) - (xs[a] - xs[b]) * (ys[p] - ys[b]);
+    const d2 = (xs[p] - xs[c]) * (ys[b] - ys[c]) - (xs[b] - xs[c]) * (ys[p] - ys[c]);
+    const d3 = (xs[p] - xs[a]) * (ys[c] - ys[a]) - (xs[c] - xs[a]) * (ys[p] - ys[a]);
+    const neg = d1 < 0 || d2 < 0 || d3 < 0;
+    const pos = d1 > 0 || d2 > 0 || d3 > 0;
+    return !(neg && pos);
+  };
+
+  let remaining = n;
+  let cur = 0;
+  // Every vertex visited without clipping an ear means the ring is not simple: bail out to the fan.
+  let stall = 0;
+  while (remaining > 3 && stall <= remaining) {
+    const a = prev[cur];
+    const b = cur;
+    const c = next[cur];
+    let ear = convex(a, b, c);
+    if (ear) {
+      for (let p = next[c]; p !== a; p = next[p]) {
+        if (inside(a, b, c, p)) {
+          ear = false;
+          break;
+        }
+      }
+    }
+    if (ear) {
+      out[o++] = a;
+      out[o++] = b;
+      out[o++] = c;
+      next[a] = c;
+      prev[c] = a;
+      remaining--;
+      stall = 0;
+      cur = c;
+    } else {
+      stall++;
+      cur = next[cur];
+    }
+  }
+  if (remaining === 3) {
+    const a = cur;
+    const b = next[a];
+    const c = next[b];
+    out[o++] = a;
+    out[o++] = b;
+    out[o++] = c;
+    return o - outOffset;
+  }
+  // Degenerate ring: a fan is never a hole, and these are a handful of footprints out of tens of thousands.
+  o = outOffset;
+  for (let i = 1; i + 1 < n; i++) {
+    out[o++] = 0;
+    out[o++] = i;
+    out[o++] = i + 1;
+  }
+  return o - outOffset;
+}
+
+/** Deterministic per-building 8-bit variation seed (stable between runs, so screenshots compare). */
+export function buildingSeed(k: number, gx: number, gy: number): number {
+  let h = (k * 0x9e3779b1) >>> 0;
+  h ^= (Math.round(gx * 8) * 0x85ebca6b) >>> 0;
+  h = Math.imul(h ^ (h >>> 15), 0xc2b2ae35) >>> 0;
+  h ^= (Math.round(gy * 8) * 0x27d4eb2f) >>> 0;
+  h = Math.imul(h ^ (h >>> 13), 0x165667b1) >>> 0;
+  return (h ^ (h >>> 16)) & 0xff;
+}
+
+function snorm8(v: number): number {
+  return (Math.max(-127, Math.min(127, Math.round(v * 127))) + 256) & 0xff;
+}
+
+interface GroundSampler {
+  /** Lowest ground (m) in the cell containing (gx, gy) and its neighbours to the north-west. */
+  lo(gx: number, gy: number): number;
+}
+
+function groundSampler(ground: Float32Array, nx: number, ny: number): GroundSampler {
+  return {
+    lo(gx, gy) {
+      const i = Math.max(0, Math.min(nx - 1, Math.floor(gx)));
+      const j = Math.max(0, Math.min(ny - 1, Math.floor(gy)));
+      const i0 = Math.max(0, i - 1);
+      const j0 = Math.max(0, j - 1);
+      let m = Infinity;
+      for (let jj = j0; jj <= j; jj++) {
+        const row = jj * nx;
+        for (let ii = i0; ii <= i; ii++) {
+          const v = ground[row + ii];
+          if (v < m) m = v;
+        }
+      }
+      return Number.isFinite(m) ? m : 0;
+    },
+  };
+}
+
+/**
+ * Build the whole city's geometry. `ground` is the solver's bed (what is actually on screen), not the raw DEM, so
+ * that a hydro-conditioned river bank cannot leave a warehouse hanging over the water.
+ */
+export function buildBuildingMesh(set: BuildingSet, ground: Float32Array, nx: number, ny: number): BuildingMesh {
+  const count = set.count;
+  const totalRingVerts = set.offsets[count];
+  // Walls: 4 vertices / 6 indices per ring edge (one edge per ring vertex). Roof: one vertex per ring vertex,
+  // 3·(n−2) indices.
+  const maxVerts = totalRingVerts * 5;
+  const maxIndices = totalRingVerts * 9;
+  const vbuf = new ArrayBuffer(maxVerts * BUILDING_VERTEX_BYTES);
+  const vf = new Float32Array(vbuf);
+  const vu = new Uint32Array(vbuf);
+  const indices = new Uint32Array(maxIndices);
+  const sampler = groundSampler(ground, nx, ny);
+
+  const xs = new Float64Array(512);
+  const ys = new Float64Array(512);
+  const tri = new Uint32Array(3 * 512);
+  const perimeter: number[] = [];
+
+  let vCount = 0;
+  let iCount = 0;
+  let built = 0;
+  let maxHeight = 0;
+
+  // Per-built-building bookkeeping for the chunking pass below.
+  const bHeight = new Float32Array(count);
+  const bIndexFirst = new Uint32Array(count + 1);
+  const bGx0 = new Float32Array(count);
+  const bGy0 = new Float32Array(count);
+  const bGx1 = new Float32Array(count);
+  const bGy1 = new Float32Array(count);
+  const bYMin = new Float32Array(count);
+  const bYMax = new Float32Array(count);
+
+  for (let k = 0; k < count; k++) {
+    const a = set.offsets[k];
+    const b = set.offsets[k + 1];
+    let n = b - a;
+    if (n < 3 || n > xs.length) continue;
+
+    for (let i = 0; i < n; i++) {
+      xs[i] = set.verts[(a + i) * 2];
+      ys[i] = set.verts[(a + i) * 2 + 1];
+    }
+    // Drop repeated vertices: a duplicate makes a zero-length edge, which has no normal.
+    let m = 0;
+    for (let i = 0; i < n; i++) {
+      const j = (i + 1) % n;
+      if (Math.abs(xs[i] - xs[j]) < 1e-6 && Math.abs(ys[i] - ys[j]) < 1e-6) continue;
+      xs[m] = xs[i];
+      ys[m] = ys[i];
+      m++;
+    }
+    n = m;
+    if (n < 3) continue;
+
+    // Clockwise in grid coordinates: roof normal up, wall normals out (see the winding note at the top).
+    let area2 = 0;
+    for (let i = 0; i < n; i++) {
+      const j = (i + 1) % n;
+      area2 += xs[i] * ys[j] - xs[j] * ys[i];
+    }
+    if (area2 > 0) {
+      for (let i = 0, j = n - 1; i < j; i++, j--) {
+        const tx = xs[i];
+        const ty = ys[i];
+        xs[i] = xs[j];
+        ys[i] = ys[j];
+        xs[j] = tx;
+        ys[j] = ty;
+      }
+    }
+
+    // ── Ground under the perimeter ───────────────────────────────────────────────────────────
+    perimeter.length = 0;
+    let gx0 = Infinity;
+    let gy0 = Infinity;
+    let gx1 = -Infinity;
+    let gy1 = -Infinity;
+    for (let i = 0; i < n; i++) {
+      const j = (i + 1) % n;
+      const dx = xs[j] - xs[i];
+      const dy = ys[j] - ys[i];
+      const steps = Math.max(1, Math.min(64, Math.ceil(Math.hypot(dx, dy) / EDGE_SAMPLE_CELLS)));
+      for (let s = 0; s < steps; s++) {
+        const t = s / steps;
+        perimeter.push(sampler.lo(xs[i] + dx * t, ys[i] + dy * t));
+      }
+      if (xs[i] < gx0) gx0 = xs[i];
+      if (xs[i] > gx1) gx1 = xs[i];
+      if (ys[i] < gy0) gy0 = ys[i];
+      if (ys[i] > gy1) gy1 = ys[i];
+    }
+    perimeter.sort((p, q) => p - q);
+    const floorY = perimeter[0] - BASE_SINK_M;
+    const q75 = perimeter[Math.min(perimeter.length - 1, Math.floor(perimeter.length * 0.75))];
+    const height = Math.max(2, set.height[k]);
+    // Prefer the data's own base (the provenance behind "One Oxford Center is 188 m" is anchored to it) and only
+    // lift the roof when the slope would otherwise bury the building.
+    const roofY = Math.max(set.base[k] + height, q75 + MIN_ROOF_CLEARANCE_M, floorY + 2.5);
+    const h = roofY - floorY;
+    if (h > maxHeight) maxHeight = h;
+
+    const seed = buildingSeed(k, xs[0], ys[0]);
+    const kind = set.kind[k] & 0xf;
+    const src = set.heightSource[k] & 3;
+    const common = PACK.roofBit * 0 + (src << PACK.heightSourceShift) + (kind << PACK.kindShift) + (seed << PACK.seedShift);
+
+    const vStart = vCount;
+    const iStart = iCount;
+
+    // ── Walls ────────────────────────────────────────────────────────────────────────────────
+    for (let i = 0; i < n; i++) {
+      const j = (i + 1) % n;
+      const dx = xs[j] - xs[i];
+      const dy = ys[j] - ys[i];
+      const len = Math.hypot(dx, dy) || 1;
+      // Outward normal of a clockwise ring: rotate the edge direction by +90° in grid axes.
+      const onx = -dy / len;
+      const ony = dx / len;
+      const packBase = common + (snorm8(onx) << PACK.nxShift) + (snorm8(ony) << PACK.nzShift);
+      const base = vCount * VERTEX_FLOATS;
+      // P0 (i, floor), P1 (j, floor), P2 (j, roof), P3 (i, roof)
+      vf[base] = xs[i];
+      vf[base + 1] = floorY;
+      vf[base + 2] = ys[i];
+      vu[base + 3] = packBase;
+      vf[base + 4] = h;
+      vf[base + 5] = xs[j];
+      vf[base + 6] = floorY;
+      vf[base + 7] = ys[j];
+      vu[base + 8] = packBase;
+      vf[base + 9] = h;
+      vf[base + 10] = xs[j];
+      vf[base + 11] = roofY;
+      vf[base + 12] = ys[j];
+      vu[base + 13] = packBase | PACK.topBit;
+      vf[base + 14] = h;
+      vf[base + 15] = xs[i];
+      vf[base + 16] = roofY;
+      vf[base + 17] = ys[i];
+      vu[base + 18] = packBase | PACK.topBit;
+      vf[base + 19] = h;
+      indices[iCount] = vCount;
+      indices[iCount + 1] = vCount + 1;
+      indices[iCount + 2] = vCount + 2;
+      indices[iCount + 3] = vCount;
+      indices[iCount + 4] = vCount + 2;
+      indices[iCount + 5] = vCount + 3;
+      vCount += 4;
+      iCount += 6;
+    }
+
+    // ── Roof ─────────────────────────────────────────────────────────────────────────────────
+    const roofBase = vCount;
+    const roofPack = common | PACK.roofBit | PACK.topBit;
+    for (let i = 0; i < n; i++) {
+      const o = (vCount + i) * VERTEX_FLOATS;
+      vf[o] = xs[i];
+      vf[o + 1] = roofY;
+      vf[o + 2] = ys[i];
+      vu[o + 3] = roofPack;
+      vf[o + 4] = h;
+    }
+    vCount += n;
+    const wrote = earClip(xs, ys, n, tri, 0);
+    for (let i = 0; i < wrote; i++) indices[iCount + i] = roofBase + tri[i];
+    iCount += wrote;
+
+    bHeight[built] = h;
+    bIndexFirst[built] = iStart;
+    bGx0[built] = gx0;
+    bGy0[built] = gy0;
+    bGx1[built] = gx1;
+    bGy1[built] = gy1;
+    bYMin[built] = floorY;
+    bYMax[built] = roofY;
+    built++;
+    void vStart;
+  }
+  bIndexFirst[built] = iCount;
+
+  // ── Chunking ───────────────────────────────────────────────────────────────────────────────
+  // Buildings arrive in Morton order, so a contiguous run is a contiguous patch of city. Inside a chunk the
+  // buildings are reordered tallest-first (and their index ranges copied into place) so that the distance cut is a
+  // prefix of the chunk.
+  const chunks: BuildingChunk[] = [];
+  const reordered = new Uint32Array(iCount);
+  let outIndex = 0;
+  const order: number[] = [];
+  for (let c0 = 0; c0 < built; c0 += BUILDING_CHUNK) {
+    const c1 = Math.min(built, c0 + BUILDING_CHUNK);
+    const nc = c1 - c0;
+    order.length = 0;
+    for (let i = c0; i < c1; i++) order.push(i);
+    order.sort((p, q) => bHeight[q] - bHeight[p]);
+    const heights = new Float32Array(nc);
+    const prefix = new Uint32Array(nc + 1);
+    const firstIndex = outIndex;
+    let gx0 = Infinity;
+    let gy0 = Infinity;
+    let gx1 = -Infinity;
+    let gy1 = -Infinity;
+    let yMin = Infinity;
+    let yMax = -Infinity;
+    for (let t = 0; t < nc; t++) {
+      const bi = order[t];
+      const from = bIndexFirst[bi];
+      const to = bIndexFirst[bi + 1];
+      reordered.set(indices.subarray(from, to), outIndex);
+      outIndex += to - from;
+      heights[t] = bHeight[bi];
+      prefix[t + 1] = outIndex - firstIndex;
+      if (bGx0[bi] < gx0) gx0 = bGx0[bi];
+      if (bGy0[bi] < gy0) gy0 = bGy0[bi];
+      if (bGx1[bi] > gx1) gx1 = bGx1[bi];
+      if (bGy1[bi] > gy1) gy1 = bGy1[bi];
+      if (bYMin[bi] < yMin) yMin = bYMin[bi];
+      if (bYMax[bi] > yMax) yMax = bYMax[bi];
+    }
+    chunks.push({
+      firstBuilding: c0,
+      count: nc,
+      firstIndex,
+      indexCount: outIndex - firstIndex,
+      heights,
+      prefix,
+      gx0,
+      gy0,
+      gx1,
+      gy1,
+      yMin,
+      yMax,
+    });
+  }
+
+  return {
+    vertices: vbuf.slice(0, vCount * BUILDING_VERTEX_BYTES),
+    vertexCount: vCount,
+    indices: reordered.subarray(0, outIndex),
+    chunks,
+    buildingCount: built,
+    triangleCount: outIndex / 3,
+    maxHeight,
+  };
+}
+
+// ────────────────────────────────────────────────────────────────────────────────────────────
+// Per-frame selection
+// ────────────────────────────────────────────────────────────────────────────────────────────
+
+export interface BuildingDraw {
+  firstIndex: number;
+  indexCount: number;
+}
+
+export interface BuildingSelection {
+  draws: BuildingDraw[];
+  buildings: number;
+  indices: number;
+}
+
+/**
+ * The smallest roof height (metres) still worth drawing at `dist` metres, given that a building must cover at least
+ * `minPx` pixels of screen height. `pixelScale` is the world size of one pixel at unit distance (Frame.elev.w).
+ */
+export function lodMinHeight(dist: number, pixelScale: number, minPx: number, exaggeration: number): number {
+  return (minPx * Math.max(dist, 1) * pixelScale) / Math.max(exaggeration, 0.01);
+}
+
+/** Number of leading entries of a DESCENDING array that are >= v (binary search). */
+export function countAtLeast(sorted: Float32Array, v: number): number {
+  let lo = 0;
+  let hi = sorted.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (sorted[mid] >= v) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
+/**
+ * Frustum-cull the chunks and truncate each to the buildings worth drawing from here, merging the runs that come
+ * out adjacent in the index buffer so a full city is a handful of draw calls rather than a hundred.
+ */
+export function selectBuildings(
+  chunks: readonly BuildingChunk[],
+  eye: readonly [number, number, number],
+  planes: Float64Array,
+  nx: number,
+  ny: number,
+  cellSize: number,
+  exaggeration: number,
+  pixelScale: number,
+  minPx: number,
+  out: BuildingDraw[],
+): BuildingSelection {
+  out.length = 0;
+  let buildings = 0;
+  let indices = 0;
+  const hx = (nx * cellSize) / 2;
+  const hz = (ny * cellSize) / 2;
+  for (const c of chunks) {
+    const x0 = c.gx0 * cellSize - hx;
+    const x1 = c.gx1 * cellSize - hx;
+    const z0 = c.gy0 * cellSize - hz;
+    const z1 = c.gy1 * cellSize - hz;
+    const y0 = c.yMin * exaggeration;
+    const y1 = c.yMax * exaggeration;
+    let visible = true;
+    for (let p = 0; p < 6 && visible; p++) {
+      const a = planes[p * 4];
+      const b = planes[p * 4 + 1];
+      const cc = planes[p * 4 + 2];
+      const d = planes[p * 4 + 3];
+      // Farthest corner along the plane normal: outside means the whole box is outside.
+      const fx = a >= 0 ? x1 : x0;
+      const fy = b >= 0 ? y1 : y0;
+      const fz = cc >= 0 ? z1 : z0;
+      if (a * fx + b * fy + cc * fz + d < 0) visible = false;
+    }
+    if (!visible) continue;
+    const dx = Math.max(x0 - eye[0], 0, eye[0] - x1);
+    const dy = Math.max(y0 - eye[1], 0, eye[1] - y1);
+    const dz = Math.max(z0 - eye[2], 0, eye[2] - z1);
+    const dist = Math.hypot(dx, dy, dz);
+    const minH = lodMinHeight(dist, pixelScale, minPx, exaggeration);
+    const m = countAtLeast(c.heights, minH);
+    if (m === 0) continue;
+    const n = c.prefix[m];
+    buildings += m;
+    indices += n;
+    const last = out.length > 0 ? out[out.length - 1] : null;
+    if (last && last.firstIndex + last.indexCount === c.firstIndex) last.indexCount += n;
+    else out.push({ firstIndex: c.firstIndex, indexCount: n });
+  }
+  return { draws: out, buildings, indices };
+}
+
+/** Human-readable class names in the order `BuildingSet.kind` indexes them (re-exported for the shader comments). */
+export const BUILDING_KIND_NAMES: readonly string[] = BUILDING_KINDS;

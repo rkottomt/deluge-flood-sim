@@ -5,8 +5,8 @@
  *   compute  prep: solver bed/barrier/state → derived vertex + filterable surface textures
  *   pass 1   MSAA 4× HDR (rgba16float, depth32float reversed-Z):
  *            sky → terrain → skirt → opaque markers → water → water skirt → roads/route/ring → translucent markers → rain
- *   pass 2-4 bloom (bright pass + separable blur at ¼ res)
- *   pass 5   ACES tonemap + dither → canvas
+ *   pass 2-n bloom mip chain (soft-knee bright pass at ¼ res, then down/up octaves — shaders/post.ts)
+ *   pass n+1 depth of field (Cinematic only) → ACES + filmic grade → vignette → dither → canvas
  */
 import type {
   FloodRenderer,
@@ -45,6 +45,7 @@ import { AdaptiveQuality, QUALITY_PRESETS, targetSize, type QualityPreset, type 
 import { GpuTimer } from './gpuTimer';
 import { WallField, WALL_FIELD_RADIUS, type Rect } from './wallField';
 import { BASE_EXPOSURE, hazardInput } from './tonemap';
+import { BLOOM_MIPS, BLOOM_PARAMS, BLOOM_UPSAMPLE_RADIUS } from './shaders/post';
 import { footprintRadius, stormWeight } from '../sim/forcing';
 
 export { DEPTH_BANDS, MAX_DEPTH_BANDS, NORMAL_WATER_LEGEND, VELOCITY_BANDS, bandsForMode } from './legend';
@@ -58,6 +59,34 @@ const WATER_MODE_INDEX = { realistic: 0, depth: 1, maxDepth: 2, velocity: 3 } as
 const EDIT_RELIEF_M = 40;
 /** Ceiling on how far downsun that rebuild reaches, so a sun near the horizon cannot ask for the whole grid. */
 const SHADOW_EDIT_MAX_CELLS = 220;
+
+/**
+ * Post / camera options that are not on the quality ladder: either they are too expensive for the default tier
+ * (depth of field) or they are a presentation choice rather than a quality one (sway, chrome). All default OFF, so
+ * an untouched renderer looks and costs exactly as it did.
+ */
+export interface CinematicSettings {
+  /**
+   * Depth of field for hero shots, as the widest circle of confusion in CSS pixels (0 = off). The host turns it
+   * off while the user is interacting (see `interacting`), so it never costs anything during a drag.
+   */
+  dof: number;
+  /** Relative distance (as a fraction of the focus distance) over which the blur opens to `dof`. */
+  dofSpread: number;
+  /** Chromatic aberration at the frame corner, in CSS pixels (0 = off). Forced off in the hazard modes. */
+  chromaticAberration: number;
+  /** Vignette strength at the corner; the default is the renderer's own. */
+  vignette: number;
+  /** Bloom strength multiplier (1 = the tuned default). */
+  bloom: number;
+  /** Camera breathing while idle (see OrbitController.sway). */
+  sway: boolean;
+  /**
+   * Presentation mode: a hint the UI reads to hide its chrome for clean hero images. The renderer itself only
+   * stores and broadcasts it — the keybinding and the actual hiding belong to the UI/app layer.
+   */
+  presentation: boolean;
+}
 
 export interface RendererOptions {
   /** Default 'auto': adaptive resolution targeting ≥ 48 fps sustained, idle frames capped at 30 fps. */
@@ -118,6 +147,18 @@ export interface DelugeRendererAPI extends FloodRenderer {
    * initial water is replaced later. The hazard maps colour only land outside this mask.
    */
   captureNormalWater(): void;
+  /** Post / camera options that are off by default (depth of field, aberration, sway, presentation mode). */
+  readonly cinematic: Readonly<CinematicSettings>;
+  /** Change any of them; omitted fields keep their current value. */
+  setCinematic(opts: Partial<CinematicSettings>): void;
+  /**
+   * Tell the renderer the user is manipulating the view right now. Depth of field is suspended while this is true
+   * (it is a hero-shot effect, and a blur that follows a drag just reads as lag), and camera breathing stops.
+   * The renderer clears the flag by itself a moment after the last call, so the host can simply call it on input.
+   */
+  setInteracting(active: boolean): void;
+  /** Subscribe to presentation-mode changes (the UI hides its chrome on this). Returns an unsubscribe function. */
+  onPresentationChange(fn: (on: boolean) => void): () => void;
   /** Where the sun is and how hard the terrain shading is pushed (src/render/atmosphere.ts). */
   readonly lighting: Readonly<LightingSettings>;
   /**
@@ -302,10 +343,31 @@ class DelugeRenderer implements DelugeRendererAPI {
   private msaaColor: GPUTexture | null = null;
   private msaaDepth: GPUTexture | null = null;
   private hdr: GPUTexture | null = null;
-  private bloomA: GPUTexture | null = null;
-  private bloomB: GPUTexture | null = null;
-  private bloomBGs: GPUBindGroup[] = [];
+  /** Bloom chain: one texture with BLOOM_MIPS levels, level 0 at quarter resolution. */
+  private bloomTex: GPUTexture | null = null;
+  /** Bind groups: [0] bright pass, [1..M-1] downsamples, [M..] upsamples (finest last). */
+  private bloomDownBGs: GPUBindGroup[] = [];
+  private bloomUpBGs: GPUBindGroup[] = [];
+  private bloomViews: GPUTextureView[] = [];
   private tonemapBG: GPUBindGroup | null = null;
+  /**
+   * Whether the depth attachment is stored and bound for depth of field. Storing 4x depth32float costs real
+   * bandwidth every frame (and on this GPU gives up a memoryless attachment), so it is only done while DOF is on:
+   * the flag is part of the render-target key, so toggling DOF reallocates the depth texture.
+   */
+  private depthReadable = false;
+  private cine: CinematicSettings = {
+    dof: 0,
+    dofSpread: 0.85,
+    chromaticAberration: 0,
+    vignette: 0.24,
+    bloom: 1,
+    sway: false,
+    presentation: false,
+  };
+  private presentationSubs = new Set<(on: boolean) => void>();
+  /** performance.now() until which the user counts as interacting (depth of field stays suspended). */
+  private interactingUntil = 0;
 
   // Overlays
   private overlays: OverlayState | null = null;
@@ -358,8 +420,11 @@ class DelugeRenderer implements DelugeRendererAPI {
 
     this.frameBuf = device.createBuffer({ label: 'frame', size: FRAME_UNIFORM_SIZE, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     this.overlayBuf = device.createBuffer({ label: 'overlay', size: OVERLAY_UNIFORM_SIZE, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-    this.postBuf = device.createBuffer({ label: 'post', size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-    this.bloomBufs = [0, 1, 2].map((i) => device.createBuffer({ label: `bloom${i}`, size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST }));
+    this.postBuf = device.createBuffer({ label: 'post', size: 48, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    // One 16-byte uniform per chain pass: bright pass + (BLOOM_MIPS-1) downsamples + (BLOOM_MIPS-1) upsamples.
+    this.bloomBufs = Array.from({ length: 2 * BLOOM_MIPS - 1 }, (_, i) =>
+      device.createBuffer({ label: `bloom${i}`, size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST }),
+    );
     this.linClamp = device.createSampler({ minFilter: 'linear', magFilter: 'linear', addressModeU: 'clamp-to-edge', addressModeV: 'clamp-to-edge' });
     this.aniso = device.createSampler({
       minFilter: 'linear',
@@ -531,6 +596,7 @@ class DelugeRenderer implements DelugeRendererAPI {
       { binding: 10, resource: normalWetTex.createView() },
       { binding: 11, resource: protectTex.createView() },
       { binding: 12, resource: sun.texture.createView() },
+      { binding: 13, resource: imageryTex.createView() },
     ];
     const terrainBG = device.createBindGroup({ label: 'terrain', layout: this.P.sceneBGL, entries: sceneEntries(imageryTex, this.aniso) });
     const waterBG = device.createBindGroup({ label: 'water', layout: this.P.sceneBGL, entries: sceneEntries(this.rippleTex, this.repeat) });
@@ -954,6 +1020,54 @@ class DelugeRenderer implements DelugeRendererAPI {
     if (this.scene) this.scene.sunDirty = 'all';
   }
 
+  // ── Cinematic post / presentation ───────────────────────────────────────────────────────
+
+  get cinematic(): Readonly<CinematicSettings> {
+    return this.cine;
+  }
+
+  setCinematic(opts: Partial<CinematicSettings>): void {
+    const was = this.cine.presentation;
+    const next = { ...this.cine, ...opts };
+    next.dof = Math.max(0, Number.isFinite(next.dof) ? next.dof : 0);
+    next.dofSpread = Math.max(0.05, Number.isFinite(next.dofSpread) ? next.dofSpread : 0.85);
+    next.chromaticAberration = Math.max(0, Number.isFinite(next.chromaticAberration) ? next.chromaticAberration : 0);
+    next.vignette = clamp(Number.isFinite(next.vignette) ? next.vignette : 0.24, 0, 0.8);
+    next.bloom = clamp(Number.isFinite(next.bloom) ? next.bloom : 1, 0, 4);
+    this.cine = next;
+    this.camera.sway = next.sway;
+    // Depth of field changes what the depth attachment has to do, which is a render-target decision.
+    if (this.depthReadable !== this.dofRadiusPx() > 0) this.needsResize = true;
+    if (was !== next.presentation) for (const fn of this.presentationSubs) fn(next.presentation);
+  }
+
+  onPresentationChange(fn: (on: boolean) => void): () => void {
+    this.presentationSubs.add(fn);
+    return () => this.presentationSubs.delete(fn);
+  }
+
+  setInteracting(active: boolean): void {
+    const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    // A short tail, so DOF does not flicker back on between the frames of a drag or a wheel burst.
+    this.interactingUntil = active ? now + 350 : 0;
+    if (active) this.camera.noteInteraction();
+  }
+
+  /**
+   * Depth-of-field radius in CSS pixels for this frame: 0 unless it is switched on AND the user is not currently
+   * moving the view. Blurring while someone drags reads as lag, not as photography.
+   */
+  private dofRadiusPx(): number {
+    if (!(this.cine.dof > 0)) return 0;
+    const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    return now < this.interactingUntil ? 0 : this.cine.dof;
+  }
+
+  /** Chromatic aberration for this frame. Always 0 in a hazard mode: those colours are data to be read. */
+  private caPx(mode: string): number {
+    return mode === 'realistic' ? this.cine.chromaticAberration : 0;
+  }
+
   setQuality(quality: RendererQuality): void {
     if (!(quality in QUALITY_PRESETS) && quality !== 'auto') return;
     if (quality === this.qualityMode) return;
@@ -974,10 +1088,12 @@ class DelugeRenderer implements DelugeRendererAPI {
     const [w, h] = targetSize(cssW, cssH, dpr, preset.maxDpr, preset.maxPixels, this.device.limits.maxTextureDimension2D);
     this.stats.renderScale = Math.sqrt((w * h) / Math.max(1, cssW * cssH));
     this.stats.autoLevel = this.qualityMode === 'auto' ? this.adaptive.level : -1;
-    if (w === this.width && h === this.height && this.msaaColor) {
+    const wantDepth = this.dofRadiusPx() > 0;
+    if (w === this.width && h === this.height && this.msaaColor && wantDepth === this.depthReadable) {
       this.needsResize = false;
       return;
     }
+    this.depthReadable = wantDepth;
     this.width = w;
     this.height = h;
     this.stats.width = w;
@@ -987,37 +1103,58 @@ class DelugeRenderer implements DelugeRendererAPI {
     this.msaaColor?.destroy();
     this.msaaDepth?.destroy();
     this.hdr?.destroy();
-    this.bloomA?.destroy();
-    this.bloomB?.destroy();
+    this.bloomTex?.destroy();
     const d = this.device;
     const RA = GPUTextureUsage.RENDER_ATTACHMENT;
+    const TB = GPUTextureUsage.TEXTURE_BINDING;
     this.msaaColor = d.createTexture({ label: 'msaa-color', size: [w, h], format: HDR_FORMAT, sampleCount: MSAA, usage: RA });
-    this.msaaDepth = d.createTexture({ label: 'msaa-depth', size: [w, h], format: DEPTH_FORMAT, sampleCount: MSAA, usage: RA });
-    this.hdr = d.createTexture({ label: 'hdr', size: [w, h], format: HDR_FORMAT, usage: RA | GPUTextureUsage.TEXTURE_BINDING });
+    this.msaaDepth = d.createTexture({ label: 'msaa-depth', size: [w, h], format: DEPTH_FORMAT, sampleCount: MSAA, usage: wantDepth ? RA | TB : RA });
+    this.hdr = d.createTexture({ label: 'hdr', size: [w, h], format: HDR_FORMAT, usage: RA | TB });
+    // Bloom chain: mip 0 at quarter resolution, halving from there. Levels whose coarsest side would be a single
+    // texel are dropped — their tent upsample has nothing left to say.
     const bw = Math.max(1, Math.floor(w / 4));
     const bh = Math.max(1, Math.floor(h / 4));
-    this.bloomA = d.createTexture({ label: 'bloomA', size: [bw, bh], format: HDR_FORMAT, usage: RA | GPUTextureUsage.TEXTURE_BINDING });
-    this.bloomB = d.createTexture({ label: 'bloomB', size: [bw, bh], format: HDR_FORMAT, usage: RA | GPUTextureUsage.TEXTURE_BINDING });
-    const bloomBG = (src: GPUTexture, buf: GPUBuffer) =>
+    const mips = Math.max(1, Math.min(BLOOM_MIPS, 1 + Math.floor(Math.log2(Math.max(1, Math.min(bw, bh) / 8)))));
+    this.bloomTex = d.createTexture({ label: 'bloom', size: [bw, bh], format: HDR_FORMAT, mipLevelCount: mips, usage: RA | TB });
+    this.bloomViews = Array.from({ length: mips }, (_, i) =>
+      this.bloomTex!.createView({ label: `bloom-mip${i}`, baseMipLevel: i, mipLevelCount: 1 }),
+    );
+    const bloomBG = (pipeline: GPURenderPipeline, src: GPUTextureView, buf: GPUBuffer) =>
       d.createBindGroup({
-        layout: this.P.bloom.getBindGroupLayout(0),
+        layout: pipeline.getBindGroupLayout(0),
         entries: [
           { binding: 0, resource: { buffer: buf } },
-          { binding: 1, resource: src.createView() },
+          { binding: 1, resource: src },
           { binding: 2, resource: this.linClamp },
         ],
       });
-    this.bloomBGs = [bloomBG(this.hdr, this.bloomBufs[0]), bloomBG(this.bloomA, this.bloomBufs[1]), bloomBG(this.bloomB, this.bloomBufs[2])];
-    this.device.queue.writeBuffer(this.bloomBufs[0], 0, new Float32Array([0, 0, 2.2, 0]));
-    this.device.queue.writeBuffer(this.bloomBufs[1], 0, new Float32Array([1, 0, 0, 1]));
-    this.device.queue.writeBuffer(this.bloomBufs[2], 0, new Float32Array([0, 1, 0, 1]));
+    const q = d.queue;
+    const T = BLOOM_PARAMS.threshold;
+    const K = BLOOM_PARAMS.knee;
+    // [0] bright pass from the HDR frame; [i] downsample mip i-1 → mip i.
+    this.bloomDownBGs = [bloomBG(this.P.bloom, this.hdr.createView(), this.bloomBufs[0])];
+    q.writeBuffer(this.bloomBufs[0], 0, new Float32Array([T, K, 0, 0]));
+    for (let i = 1; i < mips; i++) {
+      this.bloomDownBGs.push(bloomBG(this.P.bloom, this.bloomViews[i - 1], this.bloomBufs[i]));
+      q.writeBuffer(this.bloomBufs[i], 0, new Float32Array([T, K, 1, 0]));
+    }
+    // Upsamples, coarsest first: mip i+1 → mip i, added in.
+    this.bloomUpBGs = [];
+    for (let i = mips - 2; i >= 0; i--) {
+      const bi = mips + (mips - 2 - i);
+      this.bloomUpBGs.push(bloomBG(this.P.bloomUp, this.bloomViews[i + 1], this.bloomBufs[bi]));
+      q.writeBuffer(this.bloomBufs[bi], 0, new Float32Array([T, K, 2, BLOOM_UPSAMPLE_RADIUS]));
+    }
     this.tonemapBG = d.createBindGroup({
       layout: this.P.tonemap.getBindGroupLayout(0),
       entries: [
         { binding: 0, resource: { buffer: this.postBuf } },
         { binding: 1, resource: this.hdr.createView() },
-        { binding: 2, resource: this.bloomA.createView() },
+        { binding: 2, resource: this.bloomViews[0] },
         { binding: 3, resource: this.linClamp },
+        // Without DOF the depth texture is never sampled, but the bind group still needs an entry of the right
+        // type; the attachment is simply not stored, so what it holds is last frame's discarded contents.
+        { binding: 4, resource: this.msaaDepth.createView() },
       ],
     });
     this.needsResize = false;
@@ -1289,12 +1426,20 @@ class DelugeRenderer implements DelugeRendererAPI {
       this.stats.shadowCells = s.sun.lastCells;
     }
 
+    // Depth of field needs the depth buffer after the pass; everywhere else the attachment is discarded on store,
+    // which is what lets it stay in tile memory on this GPU.
+    const dofRadius = this.depthReadable ? this.dofRadiusPx() : 0;
     const pass = enc.beginRenderPass({
       label: 'main',
       colorAttachments: [
         { view: this.msaaColor!.createView(), resolveTarget: this.hdr!.createView(), loadOp: 'clear', storeOp: 'discard', clearValue: [0, 0, 0, 1] },
       ],
-      depthStencilAttachment: { view: this.msaaDepth!.createView(), depthClearValue: 0, depthLoadOp: 'clear', depthStoreOp: 'discard' },
+      depthStencilAttachment: {
+        view: this.msaaDepth!.createView(),
+        depthClearValue: 0,
+        depthLoadOp: 'clear',
+        depthStoreOp: dofRadius > 0 ? 'store' : 'discard',
+      },
       timestampWrites: this.timer.writes('main'),
     });
     if (!s && !this.debugSkip.has('sky')) {
@@ -1370,25 +1515,46 @@ class DelugeRenderer implements DelugeRendererAPI {
     }
     pass.end();
 
-    // Bloom: bright-pass ¼-res downsample, then horizontal + vertical blur.
-    if (preset.bloom && !this.debugSkip.has('bloom')) {
-      const bloomPass = (target: GPUTexture, bg: GPUBindGroup, timed: boolean) => {
+    // Bloom mip chain: soft-knee bright pass into mip 0, downsample to the coarsest level, then tent-upsample back
+    // up, adding each octave into the finer one. Every level after the first is a quarter of the pixels of the one
+    // before, so the whole chain costs about what the old single ¼-res blur did.
+    const bloomOn = preset.bloom && !this.debugSkip.has('bloom');
+    if (bloomOn) {
+      const chainPass = (view: GPUTextureView, pipeline: GPURenderPipeline, bg: GPUBindGroup, add: boolean) => {
         const p = enc.beginRenderPass({
-          colorAttachments: [{ view: target.createView(), loadOp: 'clear', storeOp: 'store', clearValue: [0, 0, 0, 1] }],
-          timestampWrites: timed ? this.timer.writes('post') : undefined,
+          colorAttachments: [{ view, loadOp: add ? 'load' : 'clear', storeOp: 'store', clearValue: [0, 0, 0, 1] }],
         });
-        p.setPipeline(this.P.bloom);
+        p.setPipeline(pipeline);
         p.setBindGroup(0, bg);
         p.draw(3);
         p.end();
       };
-      bloomPass(this.bloomA!, this.bloomBGs[0], false);
-      bloomPass(this.bloomB!, this.bloomBGs[1], false);
-      bloomPass(this.bloomA!, this.bloomBGs[2], false);
+      for (let i = 0; i < this.bloomDownBGs.length; i++) chainPass(this.bloomViews[i], this.P.bloom, this.bloomDownBGs[i], false);
+      const mips = this.bloomViews.length;
+      for (let k = 0; k < this.bloomUpBGs.length; k++) chainPass(this.bloomViews[mips - 2 - k], this.P.bloomUp, this.bloomUpBGs[k], true);
     }
 
     const srgbOut = this.format.endsWith('-srgb') ? 0 : 1;
-    d.queue.writeBuffer(this.postBuf, 0, new Float32Array([this.exposure(), srgbOut, 0.3, preset.bloom ? 1 : 0]));
+    const cssH = Math.max(1, this.canvas.clientHeight || this.height);
+    const pxPerCss = this.height / cssH;
+    d.queue.writeBuffer(
+      this.postBuf,
+      0,
+      new Float32Array([
+        this.exposure(),
+        srgbOut,
+        Math.max(0, this.cine.vignette),
+        bloomOn ? Math.max(0, this.cine.bloom) : 0,
+        this.caPx(settings.waterMode) * pxPerCss,
+        dofRadius * pxPerCss,
+        Math.max(1, this.camera.pose.distance),
+        Math.max(0.05, this.cine.dofSpread),
+        matrices.aspect,
+        matrices.near,
+        0,
+        0,
+      ]),
+    );
     const tp = enc.beginRenderPass({
       label: 'tonemap',
       colorAttachments: [{ view: this.ctx.getCurrentTexture().createView(), loadOp: 'clear', storeOp: 'store', clearValue: [0, 0, 0, 1] }],
@@ -1621,7 +1787,7 @@ class DelugeRenderer implements DelugeRendererAPI {
     this.mesh = null;
     this.patchIndex.destroy();
     this.nodeBuf.destroy();
-    for (const t of [this.msaaColor, this.msaaDepth, this.hdr, this.bloomA, this.bloomB, this.rippleTex, this.dummyImagery]) t?.destroy();
+    for (const t of [this.msaaColor, this.msaaDepth, this.hdr, this.bloomTex, this.rippleTex, this.dummyImagery]) t?.destroy();
     for (const b of [this.frameBuf, this.overlayBuf, this.postBuf, ...this.bloomBufs]) b.destroy();
     for (const b of [this.dynRibbons, this.dynRibbonIdx, this.markerOpaqueV, this.markerOpaqueI, this.markerBlendV, this.markerBlendI]) b.destroy();
     this.timer.destroy();
