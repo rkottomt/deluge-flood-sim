@@ -4,6 +4,7 @@ import { TERRAIN_WGSL } from './shaders/terrain';
 import { WATER_WGSL } from './shaders/water';
 import { MARKER_WGSL, RIBBON_WGSL } from './shaders/overlay';
 import { BLOOM_WGSL, RAIN_WGSL, SKY_WGSL, TONEMAP_WGSL } from './shaders/post';
+import { createShadowPipelines, type ShadowPipelines } from './shadows';
 
 export const HDR_FORMAT: GPUTextureFormat = 'rgba16float';
 export const DEPTH_FORMAT: GPUTextureFormat = 'depth32float';
@@ -29,6 +30,8 @@ export interface Pipelines {
   rain: GPURenderPipeline;
   bloom: GPURenderPipeline;
   tonemap: GPURenderPipeline;
+  /** Sun-visibility / sky-visibility raster over the DEM (src/render/shadows.ts). */
+  shadow: ShadowPipelines;
 }
 
 const PREMULT: GPUBlendState = {
@@ -70,6 +73,8 @@ export async function createPipelines(device: GPUDevice, canvasFormat: GPUTextur
       { binding: 10, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
       // Land the user's walls keep dry (r8unorm, filtered): the terrain's green "protected" glow.
       { binding: 11, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
+      // Sun shading (rgba8unorm, filtered): r = sun visibility, g = open-sky fraction, per DEM cell.
+      { binding: 12, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
     ],
   });
   const overlayBGL = device.createBindGroupLayout({
@@ -83,6 +88,8 @@ export async function createPipelines(device: GPUDevice, canvasFormat: GPUTextur
   });
   const sceneLayout = device.createPipelineLayout({ bindGroupLayouts: [sceneBGL] });
   const overlayLayout = device.createPipelineLayout({ bindGroupLayouts: [overlayBGL] });
+
+  const shadowReady = createShadowPipelines(device, (code, label) => checkedModule(device, code, label));
 
   const [prepCellsM, prepVertsM, prepVtxBedM, wetBaseM, wetDownM, normalWaterM, terrainM, waterM, ribbonM, markerM, skyM, rainM, bloomM, tonemapM] = await Promise.all([
     checkedModule(device, PREP_WGSL + PREP_CELLS_WGSL, 'prep-cells'),
@@ -238,5 +245,6 @@ export async function createPipelines(device: GPUDevice, canvasFormat: GPUTextur
       device.createComputePipelineAsync({ label: 'normal-water', layout: 'auto', compute: { module: normalWaterM, entryPoint: 'normalWater' } }),
     ]);
 
-  return { sceneBGL, overlayBGL, prepCells, prepVerts, prepVtxBed, wetBase, wetDown, normalWater, sky, terrain, skirt, water, waterSkirt, ribbons, markersOpaque, markersBlend, rain, bloom, tonemap };
+  const shadow = await shadowReady;
+  return { sceneBGL, overlayBGL, prepCells, prepVerts, prepVtxBed, wetBase, wetDown, normalWater, sky, terrain, skirt, water, waterSkirt, ribbons, markersOpaque, markersBlend, rain, bloom, tonemap, shadow };
 }

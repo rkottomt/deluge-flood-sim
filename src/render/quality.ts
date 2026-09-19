@@ -7,7 +7,7 @@
  * frames are capped at 30 fps, and derived water textures are only rebuilt when the solver state changed.
  */
 
-export type RendererQuality = 'auto' | 'high' | 'balanced' | 'low';
+export type RendererQuality = 'auto' | 'cinematic' | 'high' | 'balanced' | 'low';
 
 export interface QualityPreset {
   /** Device-pixel-ratio cap. */
@@ -23,12 +23,28 @@ export interface QualityPreset {
   rainDrops: number;
   /** CDLOD target: on-screen size of a terrain/water quad in pixels (larger = coarser, cheaper). */
   lodQuadPixels: number;
+  /**
+   * Radius, in DEM cells, of the filter over the sun-shading raster (src/render/shadows.ts). 0 = bilinear only.
+   * The raster's own penumbra does the physical softening; this only hides the cell grid up close, and the
+   * shader widens it by itself where one pixel covers more than a cell.
+   */
+  shadowFilterCells: number;
+  /** Strength of the sub-DEM detail normals on close-up terrain (0 = off). */
+  detailNormals: number;
+  /** Which sun-shading raster to build (see SHADOW_QUALITY in shadows.ts). Costs load time, not frame time. */
+  shadows: 'low' | 'standard' | 'cinematic';
 }
 
+/**
+ * 'cinematic' is the hero-screenshot tier: everything the default cannot afford to hold 60 fps under a full
+ * Pittsburgh flood with hurricane rain. It is never selected automatically — the adaptive controller works the
+ * AUTO_LADDER below and can always step down under load.
+ */
 export const QUALITY_PRESETS: Record<Exclude<RendererQuality, 'auto'>, QualityPreset> = {
-  high: { maxDpr: 2, maxPixels: 2560 * 1600, bloom: true, prepInterval: 1, idleFps: 60, rainDrops: 16000, lodQuadPixels: 3 },
-  balanced: { maxDpr: 1.5, maxPixels: 1920 * 1200, bloom: true, prepInterval: 2, idleFps: 30, rainDrops: 12000, lodQuadPixels: 4 },
-  low: { maxDpr: 1, maxPixels: 1440 * 900, bloom: false, prepInterval: 2, idleFps: 30, rainDrops: 6000, lodQuadPixels: 5 },
+  cinematic: { maxDpr: 2, maxPixels: 2560 * 1600, bloom: true, prepInterval: 1, idleFps: 60, rainDrops: 22000, lodQuadPixels: 2.5, shadowFilterCells: 1.1, detailNormals: 1, shadows: 'cinematic' },
+  high: { maxDpr: 2, maxPixels: 2560 * 1600, bloom: true, prepInterval: 1, idleFps: 60, rainDrops: 16000, lodQuadPixels: 3, shadowFilterCells: 0.8, detailNormals: 0.75, shadows: 'standard' },
+  balanced: { maxDpr: 1.5, maxPixels: 1920 * 1200, bloom: true, prepInterval: 2, idleFps: 30, rainDrops: 12000, lodQuadPixels: 4, shadowFilterCells: 0.7, detailNormals: 0.6, shadows: 'standard' },
+  low: { maxDpr: 1, maxPixels: 1440 * 900, bloom: false, prepInterval: 2, idleFps: 30, rainDrops: 6000, lodQuadPixels: 5, shadowFilterCells: 0, detailNormals: 0, shadows: 'low' },
 };
 
 /**
@@ -40,12 +56,12 @@ export const QUALITY_PRESETS: Record<Exclude<RendererQuality, 'auto'>, QualityPr
  * no visible difference (the imagery carries the detail and shorelines are resolved per fragment).
  */
 export const AUTO_LADDER: QualityPreset[] = [
-  { maxDpr: 2, maxPixels: 2560 * 1600, bloom: true, prepInterval: 1, idleFps: 30, rainDrops: 16000, lodQuadPixels: 3 },
-  { maxDpr: 1.5, maxPixels: 1920 * 1200, bloom: true, prepInterval: 2, idleFps: 30, rainDrops: 14000, lodQuadPixels: 4 },
-  { maxDpr: 1.25, maxPixels: 1680 * 1050, bloom: true, prepInterval: 2, idleFps: 30, rainDrops: 12000, lodQuadPixels: 4.5 },
-  { maxDpr: 1, maxPixels: 1600 * 1000, bloom: true, prepInterval: 2, idleFps: 30, rainDrops: 10000, lodQuadPixels: 5 },
-  { maxDpr: 1, maxPixels: 1440 * 900, bloom: false, prepInterval: 2, idleFps: 30, rainDrops: 8000, lodQuadPixels: 6 },
-  { maxDpr: 0.8, maxPixels: 1280 * 800, bloom: false, prepInterval: 3, idleFps: 30, rainDrops: 6000, lodQuadPixels: 7 },
+  { maxDpr: 2, maxPixels: 2560 * 1600, bloom: true, prepInterval: 1, idleFps: 30, rainDrops: 16000, lodQuadPixels: 3, shadowFilterCells: 0.8, detailNormals: 0.75, shadows: 'standard' },
+  { maxDpr: 1.5, maxPixels: 1920 * 1200, bloom: true, prepInterval: 2, idleFps: 30, rainDrops: 14000, lodQuadPixels: 4, shadowFilterCells: 0.8, detailNormals: 0.75, shadows: 'standard' },
+  { maxDpr: 1.25, maxPixels: 1680 * 1050, bloom: true, prepInterval: 2, idleFps: 30, rainDrops: 12000, lodQuadPixels: 4.5, shadowFilterCells: 0.7, detailNormals: 0.6, shadows: 'standard' },
+  { maxDpr: 1, maxPixels: 1600 * 1000, bloom: true, prepInterval: 2, idleFps: 30, rainDrops: 10000, lodQuadPixels: 5, shadowFilterCells: 0.7, detailNormals: 0.6, shadows: 'standard' },
+  { maxDpr: 1, maxPixels: 1440 * 900, bloom: false, prepInterval: 2, idleFps: 30, rainDrops: 8000, lodQuadPixels: 6, shadowFilterCells: 0, detailNormals: 0.4, shadows: 'standard' },
+  { maxDpr: 0.8, maxPixels: 1280 * 800, bloom: false, prepInterval: 3, idleFps: 30, rainDrops: 6000, lodQuadPixels: 7, shadowFilterCells: 0, detailNormals: 0, shadows: 'low' },
 ];
 const AUTO_START_LEVEL = 1;
 

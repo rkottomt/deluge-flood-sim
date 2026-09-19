@@ -12,7 +12,7 @@
   "east": -79.9427848808986,
   "north": 40.479923006456275
  },
- "attribution": "Elevation: USGS 3DEP · Imagery: USDA NAIP via USGS The National Map · Roads: U.S. Census Bureau TIGER/Line",
+ "attribution": "Elevation: USGS 3DEP · Imagery: USDA NAIP via USGS The National Map · Roads: U.S. Census Bureau TIGER/Line · Buildings © OpenStreetMap contributors (ODbL)",
  "scenario": {
   "description": "Downtown Pittsburgh sits on the Point, where the Allegheny and Monongahela rivers meet to form the Ohio. Normal pool here is about 16.0 ft on the Point gauge; flood stage is 22 ft, and by 25 ft the Parkway \"bathtub\" through downtown is closed by flooding. On March 18, 1936 — the St. Patrick's Day flood — snowmelt and heavy rain drove the river to a record 46 ft and flooded most of the Golden Triangle. The remnants of Agnes crested at 35.8 ft in June 1972 and Hurricane Ivan at 31 ft in September 2004. Raise the river stage to replay those crests and watch the Strip District, the North Shore stadiums and downtown go under — then try a levee.",
   "sources": [
@@ -282,7 +282,8 @@
  "files": {
   "elevation": "elevation.f32",
   "imagery": "imagery.jpg",
-  "roads": "roads.json"
+  "roads": "roads.json",
+  "buildings": "buildings.json"
  },
  "bake": {
   "bakedAt": "2026-09-17T10:58:49.521Z",
@@ -328,6 +329,104 @@
     "minor": 423,
     "local": 9980
    }
+  },
+  "buildings": {
+   "bakedAt": "2026-09-19T15:38:27.606Z",
+   "source": "OpenStreetMap API 0.6 /map (ODbL 1.0)",
+   "tiles": 20,
+   "microsoftFootprintsAdded": 0,
+   "parsed": 48408,
+   "kept": 45084,
+   "droppedTiny": 2697,
+   "droppedOutside": 12,
+   "droppedInWater": 12,
+   "duplicates": 603,
+   "measured": 1376,
+   "levels": 1279,
+   "estimated": 42429,
+   "remote": 0,
+   "vertices": 233479,
+   "tallest": [
+    {
+     "name": "U.S. Steel Tower",
+     "height": 256.3,
+     "source": "measured"
+    },
+    {
+     "name": "BNY Mellon Center",
+     "height": 221,
+     "source": "measured"
+    },
+    {
+     "name": "Fifth Avenue Place",
+     "height": 206,
+     "source": "measured"
+    },
+    {
+     "name": "One Oxford Center",
+     "height": 187.5,
+     "source": "measured"
+    },
+    {
+     "name": "Gulf Tower",
+     "height": 177.5,
+     "source": "measured"
+    },
+    {
+     "name": "Cathedral of Learning",
+     "height": 167.1,
+     "source": "levels"
+    },
+    {
+     "name": "One PPG Place",
+     "height": 166,
+     "source": "measured"
+    },
+    {
+     "name": "Tower at PNC Plaza",
+     "height": 166,
+     "source": "measured"
+    },
+    {
+     "name": "William Penn Place",
+     "height": 163.1,
+     "source": "levels"
+    },
+    {
+     "name": "Grant Building",
+     "height": 159.2,
+     "source": "levels"
+    },
+    {
+     "name": "K&L Gates Center",
+     "height": 156,
+     "source": "measured"
+    },
+    {
+     "name": "Koppers Tower",
+     "height": 145,
+     "source": "measured"
+    },
+    {
+     "name": "Two PNC Plaza",
+     "height": 139,
+     "source": "measured"
+    },
+    {
+     "name": "EQT Plaza",
+     "height": 131,
+     "source": "measured"
+    },
+    {
+     "name": "One PNC Plaza",
+     "height": 129,
+     "source": "measured"
+    }
+   ],
+   "medianHeight": 6.8,
+   "maxHeight": 256.3,
+   "bytes": 2096859,
+   "cellsBuiltOn": 143606
   }
  }
 }

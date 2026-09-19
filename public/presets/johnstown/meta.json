@@ -12,7 +12,7 @@
   "east": -78.87375663713932,
   "north": 40.361433710823334
  },
- "attribution": "Elevation: USGS 3DEP · Imagery: USDA NAIP via USGS The National Map · Roads: U.S. Census Bureau TIGER/Line",
+ "attribution": "Elevation: USGS 3DEP · Imagery: USDA NAIP via USGS The National Map · Roads: U.S. Census Bureau TIGER/Line · Buildings © OpenStreetMap contributors & Microsoft ML Building Footprints (ODbL)",
  "scenario": {
   "description": "Johnstown fills a narrow valley where the Little Conemaugh and Stonycreek rivers join to form the Conemaugh. On May 31, 1889, after a night of heavy rain, the South Fork Dam on a branch of the Little Conemaugh 14 miles upstream gave way, and 57 minutes later its lake struck the city as a wall of water and debris that killed 2,209 people. Here that flood comes down the valley into today's city: about 3,730 m³/s (132,000 ft³/s), Lake Conemaugh's 14.5 million m³ spread over the roughly 65 minutes it took to drain (the breach itself peaked at 7,200–9,000 m³/s), while the Stonycreek runs at a typical yearly flood peak. The inflow never stops: remove it after an hour of simulated time to let the valley drain. After the 1936 flood (25 deaths) the Army Corps of Engineers built the concrete channels you see here to carry that flood; in July 1977 up to 12 inches of rain in eight hours and seven failed dams still killed at least 78 people.",
   "sources": [
@@ -1381,7 +1381,8 @@
  "files": {
   "elevation": "elevation.f32",
   "imagery": "imagery.jpg",
-  "roads": "roads.json"
+  "roads": "roads.json",
+  "buildings": "buildings.json"
  },
  "bake": {
   "bakedAt": "2026-09-17T10:12:57.637Z",
@@ -1427,6 +1428,104 @@
     "minor": 19,
     "local": 4449
    }
+  },
+  "buildings": {
+   "bakedAt": "2026-09-19T15:38:28.185Z",
+   "source": "OpenStreetMap API 0.6 /map (ODbL 1.0)",
+   "tiles": 20,
+   "microsoftFootprintsAdded": 15979,
+   "parsed": 16769,
+   "kept": 16274,
+   "droppedTiny": 478,
+   "droppedOutside": 1,
+   "droppedInWater": 0,
+   "duplicates": 16,
+   "measured": 0,
+   "levels": 1,
+   "estimated": 4103,
+   "remote": 12170,
+   "vertices": 82710,
+   "tallest": [
+    {
+     "name": "Fichtner Field",
+     "height": 32,
+     "source": "estimated"
+    },
+    {
+     "name": "Point Stadium",
+     "height": 32,
+     "source": "estimated"
+    },
+    {
+     "name": "CamTran",
+     "height": 26,
+     "source": "estimated"
+    },
+    {
+     "name": "Crown American Associates Corporation Office",
+     "height": 26,
+     "source": "estimated"
+    },
+    {
+     "name": "(unnamed other)",
+     "height": 21.4,
+     "source": "remote"
+    },
+    {
+     "name": "(unnamed other)",
+     "height": 20,
+     "source": "estimated"
+    },
+    {
+     "name": "Memorial Medical Center",
+     "height": 20,
+     "source": "estimated"
+    },
+    {
+     "name": "(unnamed other)",
+     "height": 20,
+     "source": "estimated"
+    },
+    {
+     "name": "Duke Lifepoint",
+     "height": 20,
+     "source": "estimated"
+    },
+    {
+     "name": "(unnamed other)",
+     "height": 20,
+     "source": "estimated"
+    },
+    {
+     "name": "(unnamed civic)",
+     "height": 20,
+     "source": "estimated"
+    },
+    {
+     "name": "(unnamed other)",
+     "height": 20,
+     "source": "estimated"
+    },
+    {
+     "name": "R.C. Bosserman Industrial & Rehabilitation Cent…",
+     "height": 20,
+     "source": "estimated"
+    },
+    {
+     "name": "(unnamed other)",
+     "height": 18,
+     "source": "remote"
+    },
+    {
+     "name": "(unnamed stadium)",
+     "height": 18,
+     "source": "estimated"
+    }
+   ],
+   "medianHeight": 4.5,
+   "maxHeight": 32,
+   "bytes": 772270,
+   "cellsBuiltOn": 62178
   }
  }
 }

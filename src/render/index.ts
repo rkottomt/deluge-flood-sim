@@ -27,7 +27,20 @@ import { FRAME_UNIFORM_SIZE } from './shaders/common';
 import { OVERLAY_UNIFORM_SIZE } from './shaders/overlay';
 import { createImageryTexture, createRippleTexture, createSolidTexture } from './textures';
 import { clamp } from './math';
-import { cloudDeckHalfThickness, hazeBoost, OVERCAST_MAX, overcastFor, type CloudDeck } from './atmosphere';
+import {
+  cloudDeckHalfThickness,
+  hazeBoost,
+  lightingPreset,
+  OVERCAST_MAX,
+  overcastFor,
+  imageryRelightFactor,
+  skyColors,
+  sunDirection,
+  sunLowness,
+  type CloudDeck,
+  type LightingSettings,
+} from './atmosphere';
+import { expandForShadow, SHADOW_QUALITY, shadowReachCells, SunShading, type CellRect } from './shadows';
 import { AdaptiveQuality, QUALITY_PRESETS, targetSize, type QualityPreset, type RendererQuality, type SimPressure } from './quality';
 import { GpuTimer } from './gpuTimer';
 import { WallField, WALL_FIELD_RADIUS, type Rect } from './wallField';
@@ -36,9 +49,15 @@ import { footprintRadius, stormWeight } from '../sim/forcing';
 
 export { DEPTH_BANDS, MAX_DEPTH_BANDS, NORMAL_WATER_LEGEND, VELOCITY_BANDS, bandsForMode } from './legend';
 export { OrbitController } from './camera';
+export { LIGHTING_PRESETS, type LightingPreset, type LightingSettings } from './atmosphere';
 export type { RendererQuality, SimPressure } from './quality';
 
 const WATER_MODE_INDEX = { realistic: 0, depth: 1, maxDepth: 2, velocity: 3 } as const;
+
+/** Tallest thing a brush can add or remove, for sizing the sun-shading rebuild after an edit (metres). */
+const EDIT_RELIEF_M = 40;
+/** Ceiling on how far downsun that rebuild reaches, so a sun near the horizon cannot ask for the whole grid. */
+const SHADOW_EDIT_MAX_CELLS = 220;
 
 export interface RendererOptions {
   /** Default 'auto': adaptive resolution targeting ≥ 48 fps sustained, idle frames capped at 30 fps. */
@@ -63,6 +82,13 @@ export interface RendererStats {
   /** Current 'auto' ladder step (0 = best); -1 for fixed presets. */
   autoLevel: number;
   gpuTimingAvailable: boolean;
+  /**
+   * Wall-clock ms to drain the queue after the last full sun-shading build was submitted (src/render/shadows.ts):
+   * the load-time cost of the terrain's cast shadows and sky occlusion. 0 until one has been measured.
+   */
+  shadowBuildMs: number;
+  /** Cells rebuilt by the last sun-shading build (the whole grid at load, an edit's neighbourhood after that). */
+  shadowCells: number;
 }
 
 /** FloodRenderer plus the (non-contract) quality knob and statistics. */
@@ -92,6 +118,15 @@ export interface DelugeRendererAPI extends FloodRenderer {
    * initial water is replaced later. The hazard maps colour only land outside this mask.
    */
   captureNormalWater(): void;
+  /** Where the sun is and how hard the terrain shading is pushed (src/render/atmosphere.ts). */
+  readonly lighting: Readonly<LightingSettings>;
+  /**
+   * Change the lighting. Pass a preset name ('daylight' — the default, matching the shadows already in the USGS
+   * imagery; 'goldenHour' — a low evening sun for hero shots; 'morning'), individual fields, or both: the preset is
+   * applied first and the fields override it. The sun-shading raster is rebuilt on the next frame (see
+   * stats.shadowBuildMs for what that costs), so this is a scene-level control, not something to animate per frame.
+   */
+  setLighting(opts: { preset?: string } & Partial<LightingSettings>): void;
   readonly stats: Readonly<RendererStats>;
 }
 
@@ -183,6 +218,10 @@ interface SceneGPU {
   /** Land kept dry by walls (r8unorm, 255 = protected); only sampled while `protectOn`. */
   protectTex: GPUTexture;
   protectOn: boolean;
+  /** Sun visibility + sky visibility over the DEM (src/render/shadows.ts). */
+  sun: SunShading;
+  /** Terrain rectangle whose lighting an edit invalidated, or null; 'all' forces a full rebuild. */
+  sunDirty: CellRect | 'all' | null;
 }
 
 interface MeshBuffers {
@@ -207,6 +246,8 @@ class DelugeRenderer implements DelugeRendererAPI {
     renderScale: 1,
     autoLevel: -1,
     gpuTimingAvailable: false,
+    shadowBuildMs: 0,
+    shadowCells: 0,
   };
 
   private qualityMode: RendererQuality = 'auto';
@@ -216,7 +257,11 @@ class DelugeRenderer implements DelugeRendererAPI {
   private lastDrawAt = 0;
   private lastSignature = '';
   private overlayVersion = 0;
-  /** Developer toggles for profiling (e.g. 'terrain', 'water', 'roads', 'markers', 'sky', 'bloom', 'prep'). */
+  /**
+   * Developer toggles for profiling (e.g. 'terrain', 'water', 'roads', 'markers', 'sky', 'bloom', 'prep', and for
+   * the lighting work: 'shadows' — skip the sun-shading raster and its lookup — and 'detail' — skip the sub-DEM
+   * detail normals). The last two exist so the cost of each addition can be measured against the same frame.
+   */
   readonly debugSkip = new Set<string>();
   private prevRenderCallDrew = false;
   /** Solver state key (see stateKey) the derived textures were last built from. */
@@ -285,6 +330,10 @@ class DelugeRenderer implements DelugeRendererAPI {
   private editEpoch = 0;
   /** Sky overcast (0..0.92) of the current frame (also drives exposure). */
   private overcast = 0;
+  private lightingSettings: LightingSettings = lightingPreset('daylight');
+  private lightingKey = 'daylight';
+  /** Sun-shading quality the current raster was built at (a change rebuilds it). */
+  private sunShadowsBuiltAt: 'low' | 'standard' | 'cinematic' | null = null;
   private hazardCache = new Map<string, number[]>();
   private lastFrameMs = 0;
   private frameCounter = 0;
@@ -455,6 +504,8 @@ class DelugeRenderer implements DelugeRendererAPI {
       usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
     });
 
+    const sun = new SunShading(device, this.P.shadow, nx, ny, solver.cellSize);
+
     let imageryTex = this.dummyImagery;
     let hasImagery = false;
     if (terrain.imagery && terrain.imagery.width > 0 && terrain.imagery.height > 0) {
@@ -479,6 +530,7 @@ class DelugeRenderer implements DelugeRendererAPI {
       { binding: 9, resource: wallTex.createView() },
       { binding: 10, resource: normalWetTex.createView() },
       { binding: 11, resource: protectTex.createView() },
+      { binding: 12, resource: sun.texture.createView() },
     ];
     const terrainBG = device.createBindGroup({ label: 'terrain', layout: this.P.sceneBGL, entries: sceneEntries(imageryTex, this.aniso) });
     const waterBG = device.createBindGroup({ label: 'water', layout: this.P.sceneBGL, entries: sceneEntries(this.rippleTex, this.repeat) });
@@ -573,6 +625,8 @@ class DelugeRenderer implements DelugeRendererAPI {
       normalWetValid: false,
       protectTex,
       protectOn: false,
+      sun,
+      sunDirty: 'all',
     };
     this.protectFade = 0;
     this.markerKey = '';
@@ -607,16 +661,37 @@ class DelugeRenderer implements DelugeRendererAPI {
   }
 
   /** Recompute the wall field where the barrier changed and upload the changed rectangle. */
-  private uploadWallField(s: SceneGPU): boolean {
+  /** Recompute the wall field where the barrier changed and upload it; returns the rectangle, or null. */
+  private uploadWallField(s: SceneGPU): Rect | null {
     const patch = s.wallField.update();
-    if (!patch) return false;
+    if (!patch) return null;
     const rect = patch.rect;
     const w = rect.x1 - rect.x0;
     const h = rect.y1 - rect.y0;
-    if (w <= 0 || h <= 0) return true;
+    if (w <= 0 || h <= 0) return rect;
     const data = s.wallField.packHalf(patch, s.groundMin);
     this.device.queue.writeTexture({ texture: s.wallTex, origin: { x: rect.x0, y: rect.y0 } }, data, { bytesPerRow: w * 8 }, { width: w, height: h });
-    return true;
+    return rect;
+  }
+
+  /** Union an edited rectangle into the region whose sun shading has to be recomputed. */
+  private markSunDirty(s: SceneGPU, rect: CellRect | 'all' | null): void {
+    if (!rect) return;
+    if (rect === 'all' || s.sunDirty === 'all') {
+      s.sunDirty = 'all';
+      return;
+    }
+    // Whole cells: the rectangle ends up in an Int32Array of dispatch bounds, and a brush cursor's rect is not.
+    const r = { x0: Math.floor(rect.x0), y0: Math.floor(rect.y0), x1: Math.ceil(rect.x1), y1: Math.ceil(rect.y1) };
+    const d = s.sunDirty;
+    if (!d) {
+      s.sunDirty = r;
+      return;
+    }
+    d.x0 = Math.min(d.x0, r.x0);
+    d.y0 = Math.min(d.y0, r.y0);
+    d.x1 = Math.max(d.x1, r.x1);
+    d.y1 = Math.max(d.y1, r.y1);
   }
 
   /**
@@ -640,9 +715,16 @@ class DelugeRenderer implements DelugeRendererAPI {
     this.hotRects = this.hotRects.filter((h) => h.ttl > 0);
     wf.scanSome();
     const edited = wf.consumeEdits();
-    if (this.uploadWallField(s) || edited) {
+    const wallRect = this.uploadWallField(s);
+    if (wallRect || edited) {
       this.forcePrep = true;
       this.editEpoch++;
+      // The sun shading has to follow the terrain. A wall patch says exactly where the barrier moved; a ground edit
+      // (the dig / raise brushes) is always under the cursor. With neither, fall back to the whole grid rather than
+      // leave a stale shadow on screen.
+      if (wallRect) this.markSunDirty(s, wallRect);
+      if (cur) this.markSunDirty(s, { x0: cur.gx - cur.radius - 3, y0: cur.gy - cur.radius - 3, x1: cur.gx + cur.radius + 3, y1: cur.gy + cur.radius + 3 });
+      if (!wallRect && !cur) this.markSunDirty(s, 'all');
     }
   }
 
@@ -665,6 +747,8 @@ class DelugeRenderer implements DelugeRendererAPI {
     s.prepCache.clear();
     s.cellTex.destroy();
     s.vtxBedTex.destroy();
+    s.sun.destroy();
+    this.sunShadowsBuiltAt = null;
     this.scene = null;
   }
 
@@ -846,6 +930,30 @@ class DelugeRenderer implements DelugeRendererAPI {
     this.editEpoch++;
   }
 
+  get lighting(): Readonly<LightingSettings> {
+    return this.lightingSettings;
+  }
+
+  setLighting(opts: { preset?: string } & Partial<LightingSettings>): void {
+    const base = opts.preset !== undefined ? lightingPreset(opts.preset) : { ...this.lightingSettings };
+    const pick = (v: number | undefined, fallback: number, lo: number, hi: number) =>
+      clamp(Number.isFinite(v) ? (v as number) : fallback, lo, hi);
+    const next: LightingSettings = {
+      // Azimuth wraps; everything else is a strength or an angle above the horizon.
+      azimuthDeg: ((pick(opts.azimuthDeg, base.azimuthDeg, -1e6, 1e6) % 360) + 360) % 360,
+      elevationDeg: pick(opts.elevationDeg, base.elevationDeg, -5, 89),
+      shadowStrength: pick(opts.shadowStrength, base.shadowStrength, 0, 1),
+      aoStrength: pick(opts.aoStrength, base.aoStrength, 0, 1),
+      reliefStrength: pick(opts.reliefStrength, base.reliefStrength, 0, 1),
+    };
+    const key = `${next.azimuthDeg}|${next.elevationDeg}|${next.shadowStrength}|${next.aoStrength}|${next.reliefStrength}`;
+    if (key === this.lightingKey) return;
+    this.lightingKey = key;
+    this.lightingSettings = next;
+    // The raster is a function of the terrain and the sun, so moving the sun invalidates all of it.
+    if (this.scene) this.scene.sunDirty = 'all';
+  }
+
   setQuality(quality: RendererQuality): void {
     if (!(quality in QUALITY_PRESETS) && quality !== 'auto') return;
     if (quality === this.qualityMode) return;
@@ -986,6 +1094,7 @@ class DelugeRenderer implements DelugeRendererAPI {
       settings.rainRate > 0.2,
       this.overlayVersion,
       this.editEpoch,
+      this.lightingKey,
       // While the protected-land glow fades in or out, every frame differs.
       this.protectFade > 0 && this.protectFade < 1 ? this.protectFade : s?.protectOn ? 1 : 0,
       s ? this.stateKey(s.solver) : 0,
@@ -1149,6 +1258,37 @@ class DelugeRenderer implements DelugeRendererAPI {
       }
     }
 
+    // Sun shading (src/render/shadows.ts): cast shadows and sky occlusion over the DEM. Built once when a scene
+    // loads and afterwards only over what an edit changed, so a frame that touches nothing encodes nothing here.
+    let fullShadowBuild = false;
+    if (s && !this.debugSkip.has('shadows') && this.sunShadowsBuiltAt !== preset.shadows) {
+      // A different tier wants a differently-solved raster, and the old one is not a subset of the new one.
+      s.sunDirty = 'all';
+    }
+    if (s && s.sunDirty && !this.debugSkip.has('shadows')) {
+      const want = preset.shadows;
+      const q = SHADOW_QUALITY[want];
+      const dir = sunDirection(this.lightingSettings.azimuthDeg, this.lightingSettings.elevationDeg);
+      let rects: { height: CellRect; vis: CellRect } | undefined;
+      if (s.sunDirty !== 'all') {
+        const rect = s.sunDirty;
+        const horiz = Math.hypot(dir[0], dir[2]);
+        // Nothing a brush can build or dig is more than a few tens of metres tall, and that is all that bounds how
+        // far the change can throw a shadow.
+        const reach = shadowReachCells(EDIT_RELIEF_M, dir[1], horiz, s.terrain.cellSize, SHADOW_EDIT_MAX_CELLS);
+        rects = {
+          height: { x0: Math.max(0, rect.x0), y0: Math.max(0, rect.y0), x1: Math.min(s.nx, rect.x1), y1: Math.min(s.ny, rect.y1) },
+          vis: expandForShadow(rect, [dir[0] / (horiz || 1), dir[2] / (horiz || 1)], reach, q.aoRadius + 2, s.nx, s.ny),
+        };
+      } else {
+        fullShadowBuild = true;
+      }
+      s.sun.build(enc, s.solver.bedTexture, s.solver.barrierTexture, { dir }, q, rects);
+      this.sunShadowsBuiltAt = want;
+      s.sunDirty = null;
+      this.stats.shadowCells = s.sun.lastCells;
+    }
+
     const pass = enc.beginRenderPass({
       label: 'main',
       colorAttachments: [
@@ -1260,8 +1400,19 @@ class DelugeRenderer implements DelugeRendererAPI {
     tp.end();
 
     const timed = this.timer.resolve(enc);
+    const shadowStart = fullShadowBuild ? (typeof performance !== 'undefined' ? performance.now() : Date.now()) : 0;
     d.queue.submit([enc.finish()]);
     if (timed) this.timer.collect();
+    if (fullShadowBuild) {
+      // Upper bound: the whole frame's queue has to drain, not just the build. Precise per-pass numbers come from
+      // tests/render/shadows.test.ts, which submits the build on its own.
+      void d.queue
+        .onSubmittedWorkDone()
+        .then(() => {
+          this.stats.shadowBuildMs = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - shadowStart;
+        })
+        .catch(() => {});
+    }
 
     const st = this.stats;
     st.framesDrawn++;
@@ -1276,6 +1427,7 @@ class DelugeRenderer implements DelugeRendererAPI {
   private writeFrameUniforms(settings: RenderSettings): CameraMatrices {
     const f = this.frameData;
     const s = this.scene;
+    const preset = this.preset();
     const cssW = Math.max(1, this.canvas.clientWidth || this.width);
     const cssH = Math.max(1, this.canvas.clientHeight || this.height);
     this.camera.aspect = cssW / cssH;
@@ -1290,26 +1442,27 @@ class DelugeRenderer implements DelugeRendererAPI {
     const rain = Math.max(0, settings.rainRate || 0);
     const overcast = this.computeOvercast(rain, m.eye[1]);
     this.overcast = overcast;
-    // Late-morning sun from the south-south-east, 40° high: consistent with the shadows baked into typical
-    // (mid-morning) satellite imagery, so hillshading and photo shadows agree.
-    const az = (155 * Math.PI) / 180;
-    const el = (40 * Math.PI) / 180;
-    f[36] = Math.cos(el) * Math.sin(az);
-    f[37] = Math.sin(el);
-    f[38] = -Math.cos(el) * Math.cos(az);
+    // Where the sun is, and what colour the air makes it and the sky (src/render/atmosphere.ts). The default is a
+    // late-morning sun from the south-south-east, 40° high: consistent with the shadows baked into typical
+    // (mid-morning) USGS imagery, so the cast shadows land where the photograph's own shadows already are.
+    const light = this.lightingSettings;
+    const dir = sunDirection(light.azimuthDeg, light.elevationDeg);
+    const sky = skyColors(light.elevationDeg);
+    f[36] = dir[0];
+    f[37] = dir[1];
+    f[38] = dir[2];
     f[39] = this.exaggeration;
-    const sunI = 3.1;
-    f[40] = 1.0 * sunI;
-    f[41] = 0.93 * sunI;
-    f[42] = 0.8 * sunI;
+    f[40] = sky.sun[0];
+    f[41] = sky.sun[1];
+    f[42] = sky.sun[2];
     f[43] = s?.terrain.cellSize ?? 8;
-    f[44] = 0.15;
-    f[45] = 0.33;
-    f[46] = 0.78;
+    f[44] = sky.zenith[0];
+    f[45] = sky.zenith[1];
+    f[46] = sky.zenith[2];
     f[47] = rain;
-    f[48] = 0.66;
-    f[49] = 0.78;
-    f[50] = 0.94;
+    f[48] = sky.horizon[0];
+    f[49] = sky.horizon[1];
+    f[50] = sky.horizon[2];
     const domain = s ? Math.max(s.nx, s.ny) * s.terrain.cellSize : 8000;
     f[51] = (1 / (domain * 2.6)) * hazeBoost(overcast);
     f[52] = s?.nx ?? 1;
@@ -1360,6 +1513,21 @@ class DelugeRenderer implements DelugeRendererAPI {
     f[113] = 0;
     f[114] = 0;
     f[115] = 0;
+    // Sky and shading. skyWarmth is the single number the low-sun look hangs off: the warm horizon band, the wider
+    // sun aureole, the lit cloud bases and the warm ground bounce all scale with it, so they can never disagree.
+    const warmth = sunLowness(light.elevationDeg);
+    f[116] = sky.sunTint[0];
+    f[117] = sky.sunTint[1];
+    f[118] = sky.sunTint[2];
+    f[119] = warmth;
+    f[120] = light.shadowStrength;
+    f[121] = light.aoStrength;
+    f[122] = light.reliefStrength;
+    f[123] = s?.sun.valid && !this.debugSkip.has('shadows') ? 1 : 0;
+    f[124] = preset.shadowFilterCells;
+    f[125] = this.debugSkip.has('detail') ? 0 : preset.detailNormals;
+    f[126] = warmth;
+    f[127] = imageryRelightFactor(light.elevationDeg);
     this.device.queue.writeBuffer(this.frameBuf, 0, f);
 
     // Overlay uniforms.
@@ -1408,7 +1576,12 @@ class DelugeRenderer implements DelugeRendererAPI {
   }
 
   private exposure(): number {
-    return BASE_EXPOSURE * (1 + (this.overcast / OVERCAST_MAX) * 0.35);
+    // A low sun sends less light down; most of that is already handled where it belongs (imageryRelightFactor,
+    // which keeps photo-textured ground at its reference illumination), so this is only the last touch of
+    // adaptation. The hazard bands are solved against this same number (hazardInputs below), so the legend
+    // colours stay exact whatever the lighting does.
+    const low = 1 + sunLowness(this.lightingSettings.elevationDeg) * 0.3;
+    return BASE_EXPOSURE * (1 + (this.overcast / OVERCAST_MAX) * 0.35) * low;
   }
 
   /** HDR shader inputs (rgb per band) whose tone-mapped colours are the legend colours at this frame's exposure. */

@@ -44,4 +44,17 @@ export { cleanPlaceLabel, coordinateName, isCoordinateName, linkPlaceLabel, with
 export { generateSandbox } from './sandbox';
 export { cellSizeFor, squareDomain, isLikelyUS } from './geo';
 export { IMAGERY_ATTRIBUTION } from './imagery';
+export {
+  BUILDING_KINDS,
+  BUILDINGS_ATTRIBUTION_OSM,
+  buildingStats,
+  decodeBuildings,
+  HEIGHT_SOURCES,
+  pointInRing,
+  rasterizeBuildingHeights,
+  validateCompactBuildings,
+  type BuildingHeightSource,
+  type BuildingKind,
+  type CompactBuildings,
+} from './buildings';
 export type { GeoBounds };
