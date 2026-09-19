@@ -139,6 +139,22 @@ fn vsRibbon(v: RIn) -> ROut {
   return o;
 }
 
+/**
+ * How far the overlay palette is carried toward the scene's own light.
+ *
+ * Ribbons are UI drawn on the world rather than surfaces in it, so they are deliberately at a fixed brightness:
+ * a flooded road has to read the same wherever it is. That is right under the midday sun the palette was chosen
+ * for and wrong under a low one — the key light dims and warms, and a pure-red dashed road becomes the brightest,
+ * most saturated thing in the frame, pulling the eye off the flood it is there to annotate. F.skyWarmth is 0 with
+ * the sun high and 1 with it on the horizon, and it is EXACTLY 0 at the default sun (atmosphere.ts asserts
+ * sunLowness(40) === 0), so the shipped daylight look is untouched and only the low-sun presets change.
+ */
+fn overlayLight(amount: f32) -> vec3f {
+  // Unit-length tint of the key light, scaled so a neutral sun leaves the colour alone.
+  let warm = normalize(F.sunColor + vec3f(1e-4)) * 1.732;
+  return mix(vec3f(1.0), warm * 0.74, clamp(F.skyWarmth * amount, 0.0, 1.0));
+}
+
 /** Anti-aliased dash (on for 62 % of each unit period) at dash coordinate x with screen-space width fw. */
 fn dashPattern(x: f32, fw: f32) -> f32 {
   let f = fract(x);
@@ -165,13 +181,13 @@ fn fsRibbon(in: ROut) -> @location(0) vec4f {
       let body = 1.0 - smoothstep(1.0 - aw * 0.8, 1.0 + aw * 0.3, a);
       let dash = mix(dashPattern(in.along / dashLen, dashFw), dashPattern(in.along / (2.0 * dashLen), dashFw * 0.5), dashMix);
       let alpha = in.color.a * body * mix(dash, 0.6, smoothstep(0.3, 0.6, dashFw)) * (1.0 - haze * 0.7);
-      return vec4f(in.color.rgb * alpha, alpha);
+      return vec4f(in.color.rgb * overlayLight(1.0) * alpha, alpha);
     }
     // Road: bright core with a dark casing for contrast over imagery (the casing fades when the ribbon is only a
     // couple of pixels wide, where it would just darken the line).
     let body = 1.0 - smoothstep(1.0 - aw * 1.5, 1.0, a);
     let casing = smoothstep(0.55 - aw, 0.7 + aw, a) * (1.0 - smoothstep(0.35, 0.8, aw));
-    let rgb = mix(in.color.rgb * 1.15, in.color.rgb * 0.12, casing * 0.8);
+    let rgb = mix(in.color.rgb * 1.15, in.color.rgb * 0.12, casing * 0.8) * overlayLight(1.0);
     let alpha = in.color.a * body * (1.0 - haze * 0.7);
     return vec4f(rgb * alpha, alpha);
   }
@@ -186,7 +202,9 @@ fn fsRibbon(in: ROut) -> @location(0) vec4f {
     let on = select(smoothstep(0.0, 0.1, chevron) * (1.0 - smoothstep(0.45, 0.55, chevron)), 1.0, blocked);
     let pulse = select(1.0, 0.45 + 0.55 * (0.5 + 0.5 * sin(F.time * 5.5)), blocked);
     let coreCol = mix(in.color.rgb * 1.2, vec3f(2.2) + in.color.rgb * 3.0, on);
-    let rgb = (coreCol * core + in.color.rgb * halo * 1.6) * pulse * (1.0 - haze * 0.5);
+    // Half strength: the route is the one overlay a presenter wants to dominate, so it is allowed to stay ahead
+    // of the light rather than follow it all the way down.
+    let rgb = (coreCol * core + in.color.rgb * halo * 1.6) * pulse * (1.0 - haze * 0.5) * overlayLight(0.5);
     let alpha = min(1.0, core * 0.9 + halo * 0.25);
     return vec4f(rgb, alpha);
   }

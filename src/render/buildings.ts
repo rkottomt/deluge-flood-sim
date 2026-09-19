@@ -84,6 +84,18 @@ export function shadowOccluderHeights(raster: Float32Array, cellSize: number): F
   return any ? out : null;
 }
 
+/**
+ * Winding the buildings pipeline culls by (src/render/pipelines.ts).
+ *
+ * buildBuildingMesh emits every face with its right-hand-rule normal pointing OUT of the box. WebGPU decides
+ * facing from the signed area in FRAMEBUFFER space, whose y axis points DOWN, and that flip turns those faces
+ * counter-clockwise there. It lives here, next to the code that does the winding, because getting it backwards is
+ * silent and total: it culls exactly the faces that should be visible, and the whole city renders as open-topped
+ * boxes with no roofs at all — which is how it shipped into this branch. tests/render/buildings.test.ts asserts
+ * the rule against this constant, over a footprint of each orientation.
+ */
+export const BUILDING_FRONT_FACE: GPUFrontFace = 'ccw';
+
 /** Vertex stride in bytes: vec3f position (gx, elevation m, gy) + u32 packed attributes + f32 building height. */
 export const BUILDING_VERTEX_BYTES = 20;
 const VERTEX_FLOATS = BUILDING_VERTEX_BYTES / 4;

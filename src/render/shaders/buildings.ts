@@ -281,6 +281,7 @@ fn fsBuilding(in: VOut) -> @location(0) vec4f {
     let evened = img * clamp(0.175 / lum, 0.55, 2.2);
     let trust = B.style.y * B.misc.x * (1.0 - smoothstep(B.misc.y * 0.6, B.misc.y, bh));
     albedo = mix(mix(proc, evened, 0.3), img, trust);
+
     photoTrust = trust;
     gloss = 0.05;
   } else {

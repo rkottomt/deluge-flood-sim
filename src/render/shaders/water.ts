@@ -457,7 +457,17 @@ fn fsWater(in: WOut) -> @location(0) vec4f {
   let shadowVis = mix(mix(1.0, vis.x, F.light.x), 1.0, lift * 0.35);
   let skyOcc = mix(mix(1.0, vis.y, F.light.y), 1.0, lift * 0.8);
   let sunVis = (1.0 - F.opts.w * 0.85) * shadowVis;
-  let lightIn = F.sunColor * max(F.sunDir.y, 0.0) * sunVis + skyAmbient(n) * skyOcc;
+  // ONE exposure convention, shared with the terrain and the buildings. The scene is held at the illumination the
+  // aerial photograph was taken under (F.shade.w, imageryRelightFactor in atmosphere.ts): moving the sun is
+  // allowed to change the light's colour, the relief and where the shadows fall, but not how bright noon is. The
+  // ground and the facades already did this; the water did not, so dropping the sun to 11 degrees divided the
+  // flood by three while leaving the photograph underneath at midday — and the flood, the one surface the whole
+  // demo is about, went almost black at golden hour while the city around it stayed bright.
+  //
+  // Diffuse only. The specular below is a real highlight off a real surface, and a low sun genuinely does lay a
+  // long bright glitter path down a river: scaling that with the exposure would erase the best thing about the
+  // light. F.shade.w is exactly 1 at the default sun, so the shipped daylight look is untouched.
+  let lightIn = F.sunColor * max(F.sunDir.y, 0.0) * sunVis * F.shade.w + skyAmbient(n) * skyOcc;
   let nv = max(dot(n, V), 0.0);
   let fres = 0.02 + 0.98 * pow(1.0 - nv, 5.0);
   var R = reflect(-V, n);
@@ -560,7 +570,8 @@ fn fsWater(in: WOut) -> @location(0) vec4f {
   let shoreFoam = (1.0 - smoothstep(0.0, 0.18, thick)) * (0.25 + 0.75 * smoothstep(0.2, 1.2, speed)) * 0.7;
   let foamAmt = clamp(s.a * 0.8 + shoreFoam + misc.a * 0.8, 0.0, 0.92) * select(1.0, 0.0, in.skirt > 0.5);
   let foamMask = smoothstep(1.1 - foamAmt, 1.3 - foamAmt * 0.7, foamNoise) * foamAmt;
-  let foamCol = vec3f(0.62, 0.59, 0.53) * (skyAmbient(n) * skyOcc + F.sunColor * max(dot(n, F.sunDir), 0.0) * sunVis);
+  // Same exposure convention as the body above, so foam does not go grey when the flood does not.
+  let foamCol = vec3f(0.62, 0.59, 0.53) * (skyAmbient(n) * skyOcc + F.sunColor * max(dot(n, F.sunDir), 0.0) * sunVis * F.shade.w);
   rgb = mix(rgb, foamCol, foamMask * 0.75);
   alpha = mix(alpha, 1.0, foamMask * 0.75);
 

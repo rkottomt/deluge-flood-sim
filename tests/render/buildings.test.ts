@@ -13,6 +13,7 @@ import assert from 'node:assert/strict';
 import {
   BASE_SINK_M,
   BUILDING_CHUNK,
+  BUILDING_FRONT_FACE,
   BUILDING_VERTEX_BYTES,
   MIN_ROOF_CLEARANCE_M,
   PACK,
@@ -255,7 +256,7 @@ test('chunks slice the index buffer into prefixes ordered tallest-first', () => 
 
 // ── Winding vs. the pipeline ────────────────────────────────────────────────────────────────────
 
-test("an outward-facing face is front-facing under frontFace 'cw' — which is why the pipeline uses it", () => {
+test('an outward-facing face is front-facing under BUILDING_FRONT_FACE, for either ring orientation', () => {
   const nx = 64;
   const ny = 64;
   const env: CameraEnvironment = {
@@ -269,7 +270,14 @@ test("an outward-facing face is front-facing under frontFace 'cw' — which is w
     pickWorld: () => null,
   };
   const cam = new OrbitController(env);
-  const mesh = buildBuildingMesh(makeSet([[30, 30, 30, 34, 34, 34, 34, 30]], [25], [0]), flatGround(nx, ny, 0), nx, ny);
+  // BOTH ring orientations. The builder normalises a footprint's winding from its own shoelace sign, and in the
+  // real Pittsburgh set 42,850 of 45,084 rings take the reversing branch — which no test reached before, so an
+  // inverted convention could pass here and still lose every roof in the city.
+  const ccwRing = [30, 30, 30, 34, 34, 34, 34, 30];
+  const cwRing = [50, 30, 54, 30, 54, 34, 50, 34];
+  assert.ok(ringArea2(Float32Array.from(ccwRing), 0, 4) <= 0, 'first ring must take the kept branch');
+  assert.ok(ringArea2(Float32Array.from(cwRing), 0, 4) > 0, 'second ring must take the reversing branch');
+  const mesh = buildBuildingMesh(makeSet([ccwRing, cwRing], [25, 18], [0, 0]), flatGround(nx, ny, 0), nx, ny);
   const exag = 1.5;
   const world = (k: number) => {
     const v = vertexAt(mesh, k);
@@ -277,13 +285,18 @@ test("an outward-facing face is front-facing under frontFace 'cw' — which is w
   };
 
   // Look at the box from several directions. WebGPU decides facing from the signed area in FRAMEBUFFER space,
-  // where y points down, and calls a negative area front when frontFace is 'cw'. Every triangle whose outward
-  // normal is turned toward the camera must land on that side of the test, or back-face culling removes exactly
-  // the faces that should be visible.
+  // whose y axis points DOWN — so a triangle that looks clockwise on screen has a POSITIVE signed area by the
+  // cross product below, and that is what frontFace 'cw' selects. Every triangle whose outward normal is turned
+  // toward the camera must come out on the front side of BUILDING_FRONT_FACE, or back-face culling removes
+  // exactly the faces that should be visible: with the sense inverted, every roof cap in the city disappears and
+  // the buildings render as open-topped boxes, which is how this shipped before the constant existed.
+  const frontIsPositiveArea = BUILDING_FRONT_FACE === 'cw';
   let front = 0;
   let back = 0;
   for (const yaw of [0, Math.PI / 2, Math.PI, (3 * Math.PI) / 2, 0.7]) {
-    for (const pitch of [0.15, 0.6, 1.2]) {
+    // Includes a near-nadir pitch: looking down is the view that shows a missing roof, and the one the demo's
+    // top-down hazard beat uses.
+    for (const pitch of [0.15, 0.6, 1.2, 1.5]) {
       cam.pose = { target: { gx: 32, gy: 32, elevation: 12 }, distance: 400, yaw, pitch };
       const m = cam.matrices(1.5);
       for (let t = 0; t < mesh.indices.length; t += 3) {
@@ -303,10 +316,10 @@ test("an outward-facing face is front-facing under frontFace 'cw' — which is w
         const area = (c[1][0] - c[0][0]) * (c[2][1] - c[0][1]) - (c[1][1] - c[0][1]) * (c[2][0] - c[0][0]);
         if (Math.abs(area) < 1e-9 || Math.abs(facing) < 1e-6) continue;
         if (facing > 0) {
-          assert.ok(area < 0, `a face turned toward the camera was not 'cw' front (yaw ${yaw}, pitch ${pitch})`);
+          assert.equal(area > 0, frontIsPositiveArea, `a face turned toward the camera would be culled (yaw ${yaw}, pitch ${pitch})`);
           front++;
         } else {
-          assert.ok(area > 0, `a face turned away from the camera was not culled (yaw ${yaw}, pitch ${pitch})`);
+          assert.equal(area > 0, !frontIsPositiveArea, `a face turned away from the camera would be drawn (yaw ${yaw}, pitch ${pitch})`);
           back++;
         }
       }

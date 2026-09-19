@@ -4,7 +4,7 @@ import { TERRAIN_WGSL } from './shaders/terrain';
 import { WATER_WGSL } from './shaders/water';
 import { MARKER_WGSL, RIBBON_WGSL } from './shaders/overlay';
 import { BUILDINGS_WGSL } from './shaders/buildings';
-import { BUILDING_VERTEX_BYTES } from './buildings';
+import { BUILDING_FRONT_FACE, BUILDING_VERTEX_BYTES } from './buildings';
 import { BLOOM_WGSL, RAIN_WGSL, SKY_WGSL, TONEMAP_WGSL } from './shaders/post';
 import { createShadowPipelines, type ShadowPipelines } from './shadows';
 
@@ -265,9 +265,9 @@ export async function createPipelines(device: GPUDevice, canvasFormat: GPUTextur
         layout: buildingLayout,
         vertex: { module: buildingM, entryPoint: 'vsBuilding', buffers: [buildingVertexLayout] },
         fragment: { module: buildingM, entryPoint: 'fsBuilding', targets: hdrOpaque },
-        // Rings are wound so that an outward-facing face comes out clockwise in framebuffer space (see the winding
-        // note in buildings.ts); culling the other half of every box halves the city's rasterisation.
-        primitive: { topology: 'triangle-list', cullMode: 'back', frontFace: 'cw' },
+        // Culling the away-facing half of every box halves the city's rasterisation. Which half that is comes from
+        // BUILDING_FRONT_FACE, next to the code that does the winding — see the note there for why it is 'ccw'.
+        primitive: { topology: 'triangle-list', cullMode: 'back', frontFace: BUILDING_FRONT_FACE },
         depthStencil: depthWrite,
         multisample: msaa,
       }),

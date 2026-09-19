@@ -37,7 +37,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
-import type { GeoBounds } from '../src/contracts';
+import type { BuildingSet, GeoBounds } from '../src/contracts';
 import {
   buildBuildingSet,
   BUILDING_KINDS,
@@ -45,6 +45,7 @@ import {
   BUILDINGS_ATTRIBUTION_OSM_MS,
   buildingStats,
   encodeBuildings,
+  HEIGHT_SOURCES,
   parseHeightMeters,
   parseLevels,
   parseMSBuildings,
@@ -66,6 +67,9 @@ const REFRESH = process.argv.includes('--refresh');
 const DRY = process.argv.includes('--dry');
 const FIT = process.argv.includes('--fit');
 const FILL = process.argv.includes('--fill') ? true : process.argv.includes('--no-fill') ? false : null;
+/** Lidar path (see the block comment above HS_LIDAR): dump footprints for the sampler / apply the sampled roofs. */
+const LIDAR_EXPORT = argValue('lidar-export');
+const LIDAR_APPLY = argValue('lidar');
 
 /** Below this many OSM buildings per km^2, fill the gaps from the Microsoft footprints. */
 const MS_FILL_DENSITY = 150;
@@ -208,6 +212,177 @@ async function msBuildings(id: string, bounds: GeoBounds): Promise<RawBuilding[]
   return out;
 }
 
+
+// ──────────────────────────────────────────────────────────────────────────────────────────────
+// LIDAR PATH — roof heights MEASURED from USGS 3DEP point clouds
+// ──────────────────────────────────────────────────────────────────────────────────────────────
+/**
+ * Two modes, used as a pair, that replace guessed heights with roof heights measured from lidar. The heavy lifting
+ * (400 M points of 3DEP) happens outside this script; see artifacts/gfx-lidar/README.md.
+ *
+ *   npx tsx scripts/bake-buildings.ts pittsburgh --lidar-export=artifacts/gfx-lidar/pittsburgh-footprints.json
+ *   …sample the DSM over those footprints (artifacts/gfx-lidar/sample-roofs.py, run on a big box)…
+ *   npx tsx scripts/bake-buildings.ts pittsburgh --lidar=artifacts/gfx-lidar/pittsburgh-roofs.json
+ *
+ * WHY THE SAMPLER RETURNS A ROOF *ELEVATION*, NOT A HEIGHT: buildBuildingSet plants every footprint on `base`, the
+ * BASE_QUANTILE (5th percentile) of the bare-earth DEM under it, and `height` is measured up from there. The number
+ * that makes the rendered roof land where the lidar actually saw it is therefore `roofElevation - base`, computed here
+ * against the very base this bake just chose. A pre-subtracted height would double-count the slope under every
+ * hillside building in Pittsburgh — which is most of them.
+ *
+ * CRS: no reprojection anywhere. The usgs-lidar-public EPT builds for PA_WesternPA_1/2_2019 are published in
+ * EPSG:3857, and the preset grid is linear in EPSG:3857 (src/data/geo.ts), so the sampler rasterises the point cloud
+ * on a grid that is exactly 8x the preset grid and indexes it directly. Vertically both sides are NAVD88 metres; the
+ * measured lidar-ground-vs-elevation.f32 residual is recorded in artifacts/gfx-lidar/ rather than assumed to be zero.
+ *
+ * PROVENANCE: a lidar roof is recorded as heightSource 3 'remote' — "measured remotely rather than surveyed", which is
+ * exactly what a lidar roof is, and the only free slot in the 2-bit field the renderer unpacks (src/render/buildings.ts
+ * masks `heightSource & 3`, and contracts.ts documents 4 values). Widening that field to separate 'lidar' from the
+ * Microsoft stereo-imagery heights needs src/contracts.ts, src/data/buildings.ts and src/render/buildings.ts to change
+ * together; until then the exact split is written into meta.json's bake block and public/presets/SOURCES.txt.
+ */
+/** heightSource code used for a lidar-measured roof. */
+const HS_LIDAR = 3;
+/** A lidar roof this far below its base is a mis-sample (footprint over water, DEM/DSM disagreement) — keep OSM. */
+const LIDAR_MIN_HEIGHT = 2;
+/** Nothing in these domains is taller than this; above it, suspect a noise return — keep OSM. */
+const LIDAR_MAX_HEIGHT = 300;
+
+/** Shoelace twice-area of an open ring of interleaved coords (mirrors the private helper in src/data/buildings.ts). */
+function ringArea2Of(ring: ArrayLike<number>): number {
+  let a = 0;
+  const n = ring.length / 2;
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n;
+    a += ring[i * 2] * ring[j * 2 + 1] - ring[j * 2] * ring[i * 2 + 1];
+  }
+  return a;
+}
+
+/**
+ * The key buildBuildingSet already dedups footprints on — quantised centroid plus rounded area — recomputed from the
+ * finished BuildingSet. Stable across re-bakes and independent of the Morton ordering, so the exported footprints and
+ * the sampled roofs line up without either side depending on an array position.
+ */
+function footprintKey(set: BuildingSet, k: number, cellSize: number): string {
+  const a = set.offsets[k];
+  const e = set.offsets[k + 1];
+  const ring = set.verts.subarray(a * 2, e * 2);
+  let sx = 0;
+  let sy = 0;
+  for (let i = 0; i < ring.length; i += 2) {
+    sx += ring[i];
+    sy += ring[i + 1];
+  }
+  const n = ring.length / 2;
+  const area = (Math.abs(ringArea2Of(ring)) / 2) * cellSize * cellSize;
+  return `${Math.round((sx / n) * 8)},${Math.round((sy / n) * 8)},${Math.round(area)}`;
+}
+
+/** Recount the height-provenance fields of a report from the set, after the lidar pass has rewritten some of them. */
+function recountProvenance(set: BuildingSet, report: { measured: number; levels: number; estimated: number; remote: number }): void {
+  report.measured = 0;
+  report.levels = 0;
+  report.estimated = 0;
+  report.remote = 0;
+  for (let k = 0; k < set.count; k++) {
+    const s = set.heightSource[k] & 3;
+    if (s === 0) report.measured++;
+    else if (s === 1) report.levels++;
+    else if (s === 2) report.estimated++;
+    else report.remote++;
+  }
+}
+
+/** Footprints in grid coordinates for the sampler, plus the base and the height the OSM path arrived at. */
+function writeLidarExport(id: string, file: string, set: BuildingSet, grid: { nx: number; ny: number; cellSize: number; bounds: GeoBounds }): void {
+  const buildings = [];
+  for (let k = 0; k < set.count; k++) {
+    const a = set.offsets[k];
+    const e = set.offsets[k + 1];
+    const ring: number[] = [];
+    for (let i = a; i < e; i++) ring.push(round4(set.verts[i * 2]), round4(set.verts[i * 2 + 1]));
+    buildings.push({
+      key: footprintKey(set, k, grid.cellSize),
+      ring,
+      base: round4(set.base[k]),
+      osmHeight: round4(set.height[k]),
+      osmSource: set.heightSource[k] & 3,
+      name: set.names[k],
+    });
+  }
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(
+    file,
+    JSON.stringify({
+      preset: id,
+      nx: grid.nx,
+      ny: grid.ny,
+      cellSize: grid.cellSize,
+      bounds: grid.bounds,
+      note: 'ring coords are GRID cells: x east from the west edge, y south from the north edge. base/osmHeight in metres.',
+      buildings,
+    }),
+  );
+  log(id, `lidar export: ${buildings.length} footprints -> ${path.relative(ROOT, file)}`);
+}
+
+const round4 = (x: number) => Math.round(x * 1e4) / 1e4;
+
+interface LidarRoofFile {
+  preset: string;
+  /** Footprint key -> measured roof elevation in metres (same vertical datum as elevation.f32) and sample count. */
+  roofs: Record<string, [z: number, n: number]>;
+}
+
+/** Overwrite heights with lidar roof elevations where the sample is trustworthy; keep the OSM value where it is not. */
+function applyLidarRoofs(
+  id: string,
+  file: string,
+  set: BuildingSet,
+  cellSize: number,
+): { applied: number; missing: number; rejected: number; deltas: number[] } {
+  const doc = JSON.parse(fs.readFileSync(file, 'utf8')) as LidarRoofFile;
+  if (doc.preset !== id) throw new Error(`lidar roof file is for "${doc.preset}", not "${id}"`);
+  let applied = 0;
+  let missing = 0;
+  let rejected = 0;
+  const deltas: number[] = [];
+  for (let k = 0; k < set.count; k++) {
+    const r = doc.roofs[footprintKey(set, k, cellSize)];
+    if (!r) {
+      missing++;
+      continue;
+    }
+    const h = r[0] - set.base[k];
+    if (!(h >= LIDAR_MIN_HEIGHT) || h > LIDAR_MAX_HEIGHT) {
+      rejected++;
+      continue;
+    }
+    // Only compare against heights that were themselves real numbers, not the estimated mass.
+    const was = set.heightSource[k] & 3;
+    if (was === 0 || was === 1) deltas.push(h - set.height[k]);
+    set.height[k] = h;
+    set.heightSource[k] = HS_LIDAR;
+    applied++;
+  }
+  log(id, `lidar: ${applied} roofs measured, ${missing} footprints not sampled, ${rejected} rejected as implausible`);
+  return { applied, missing, rejected, deltas };
+}
+
+/** Re-derive report.tallest after the lidar pass rewrote heights (mirrors the top-15 buildBuildingSet computes). */
+function recountTallest(
+  set: BuildingSet,
+  report: { tallest: Array<{ name: string; height: number; source: string }> },
+): void {
+  const order = Array.from({ length: set.count }, (_, k) => k).sort((a, b) => set.height[b] - set.height[a]);
+  report.tallest = order.slice(0, 15).map((k) => ({
+    name: set.names[k] ?? `(unnamed ${BUILDING_KINDS[set.kind[k]]})`,
+    height: Math.round(set.height[k] * 10) / 10,
+    source: HEIGHT_SOURCES[set.heightSource[k] & 3],
+  }));
+}
+
 async function bake(id: string): Promise<void> {
   const dir = path.join(OUT, id);
   const metaFile = path.join(dir, 'meta.json');
@@ -277,6 +452,19 @@ async function bake(id: string): Promise<void> {
     });
   }
   const { set, report } = built;
+
+  // ── lidar path ─────────────────────────────────────────────────────────────────────────────
+  if (LIDAR_EXPORT) {
+    writeLidarExport(id, path.resolve(ROOT, LIDAR_EXPORT), set, { nx, ny, cellSize, bounds });
+    return;
+  }
+  let lidar: { applied: number; missing: number; rejected: number; deltas: number[] } | null = null;
+  if (LIDAR_APPLY) {
+    lidar = applyLidarRoofs(id, path.resolve(ROOT, LIDAR_APPLY), set, cellSize);
+    recountProvenance(set, report);
+    recountTallest(set, report);
+  }
+
   const stats = buildingStats(set);
   log(
     id,
@@ -336,6 +524,17 @@ async function bake(id: string): Promise<void> {
       source: 'OpenStreetMap API 0.6 /map (ODbL 1.0)',
       tiles: ts.length,
       microsoftFootprintsAdded: msAdded,
+      ...(lidar
+        ? {
+            lidar: {
+              source: 'USGS 3DEP via AWS Open Data s3://usgs-lidar-public (EPT), PA_WesternPA_1_2019 + PA_WesternPA_2_2019',
+              licence: 'public domain (USGS)',
+              measured: lidar.applied,
+              notSampled: lidar.missing,
+              rejected: lidar.rejected,
+            },
+          }
+        : {}),
       ...report,
       medianHeight: Math.round(stats.medianHeight * 10) / 10,
       maxHeight: Math.round(stats.maxHeight * 10) / 10,
