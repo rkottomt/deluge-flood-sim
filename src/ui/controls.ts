@@ -140,7 +140,7 @@ export function slider(o: SliderOptions): Slider {
       });
     // Lay labels out against their real rendered widths (only when the track width changes).
     let lastWidth = -1;
-    const ro = new ResizeObserver(() => {
+    const relayout = () => {
       const w = container.clientWidth;
       if (w === lastWidth || w === 0) return;
       lastWidth = w;
@@ -154,10 +154,27 @@ export function slider(o: SliderOptions): Slider {
         toggleClass(items[i].el, 'dl-tick-alt', p.row === 1);
         alt ||= p.row === 1;
       });
+      // Staggering makes `container` taller, and `container` is what the observer watches. Doing that inside the
+      // callback resizes an observed element during delivery, which is exactly what "ResizeObserver loop completed
+      // with undelivered notifications" reports — Nashville's three bunched gauge marks (51.9 / 53.9 / 56.2 ft) are
+      // the first ticks in the app that need two rows, and they raised it on every load. The height change is real
+      // and wanted; only the timing was wrong, so it happens on the next frame instead, outside the delivery.
       toggleClass(container, 'dl-ticks-staggered', alt);
+    };
+    let pending = 0;
+    const ro = new ResizeObserver(() => {
+      if (pending) return;
+      pending = requestAnimationFrame(() => {
+        pending = 0;
+        relayout();
+      });
     });
     ro.observe(container);
-    disposers.push(() => ro.disconnect());
+    disposers.push(() => {
+      ro.disconnect();
+      if (pending) cancelAnimationFrame(pending);
+      pending = 0;
+    });
   }
 
   const head = h(
