@@ -148,17 +148,10 @@
  "files": {
   "elevation": "elevation.f32",
   "imagery": "imagery.jpg",
-  "roads": "roads.json",
-  "imageryDetail": "imagery-detail.jpg"
- },
- "imageryDetail": {
-  "x0": 444,
-  "y0": 199,
-  "x1": 871,
-  "y1": 626
+  "roads": "roads.json"
  },
  "bake": {
-  "bakedAt": "2026-09-19T18:03:33.304Z",
+  "bakedAt": "2026-09-19T18:11:09.909Z",
   "demSource": "usgs3dep",
   "demRepairedCells": 0,
   "center": {

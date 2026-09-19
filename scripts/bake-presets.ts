@@ -499,9 +499,12 @@ const PRESET_DEFS: PresetDef[] = [
     // From East Nashville looking west across the Cumberland at the downtown skyline — the view every photograph of
     // the 2010 flood was taken from. The stadium is on the near bank, Second Avenue and the riverfront on the far one.
     camera: { at: [-86.7735, 36.1635], distance: 2100, yaw: -Math.PI / 2, pitch: 0.45 },
-    // 6 km domain = 1.46 m/texel, still coarser than NAIP resolves: inset the riverfront, the stadium and Second
-    // Avenue, which is the whole frame this scenario opens on.
-    detail: { sizeMeters: 2500 },
+    /*
+     * No inset here, though at 1.46 m/texel the base photo is coarser than NAIP resolves and one was baked and
+     * measured (2.4x, 3.8 MB). public/presets is served from a public static host under a 90 MB budget
+     * (tests/data/presets.test.ts), and five insets put it at 91.5 MB — so the bytes go to the four domains with
+     * the worst blur (1.71-1.95 m/texel) and Nashville, the mildest of the five, keeps its base photo.
+     */
     description: ({ normalLevel, gaugeDatum }) =>
       'Downtown Nashville stands on the west bank of the Cumberland River, which crosses the city as a navigation ' +
       'pool between Old Hickory Dam upstream and Cheatham Dam downstream. ' +

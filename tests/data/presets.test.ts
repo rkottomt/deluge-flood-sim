@@ -463,17 +463,37 @@ test('boulder: the 2013 flood comes out of the canyon', { skip: !fs.existsSync(p
 });
 
 test(`public/presets stays inside its ${PRESETS_BUDGET_MB} MB budget`, () => {
-  let total = 0;
-  const walk = (dir: string) => {
+  /*
+   * Two axes grow this directory independently — new city presets and close-up imagery insets — so when it goes
+   * over, the message has to say WHICH files did it, or whoever reads the failure has to go measure by hand.
+   */
+  const sizeOf = (dir: string): number => {
+    let total = 0;
     for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
       const p = path.join(dir, e.name);
-      if (e.isDirectory()) walk(p);
-      else total += fs.statSync(p).size;
+      total += e.isDirectory() ? sizeOf(p) : fs.statSync(p).size;
     }
+    return total;
   };
-  walk(ROOT);
-  const mb = total / 1e6;
-  assert.ok(mb < PRESETS_BUDGET_MB, `public/presets is ${mb.toFixed(1)} MB (budget ${PRESETS_BUDGET_MB} MB)`);
+  const rows = fs
+    .readdirSync(ROOT, { withFileTypes: true })
+    .filter((e) => e.isDirectory())
+    .map((e) => {
+      const dir = path.join(ROOT, e.name);
+      const detail = path.join(dir, 'imagery-detail.jpg');
+      const inset = fs.existsSync(detail) ? fs.statSync(detail).size : 0;
+      return { id: e.name, total: sizeOf(dir), inset };
+    })
+    .sort((a, b) => b.total - a.total);
+  const mb = (bytes: number) => (bytes / 1e6).toFixed(1);
+  const total = rows.reduce((n, r) => n + r.total, 0);
+  const breakdown = rows.map((r) => `${r.id} ${mb(r.total)}${r.inset ? ` (inset ${mb(r.inset)})` : ''}`).join(', ');
+  const insets = rows.reduce((n, r) => n + r.inset, 0);
+  assert.ok(
+    total / 1e6 < PRESETS_BUDGET_MB,
+    `public/presets is ${mb(total)} MB (budget ${PRESETS_BUDGET_MB} MB) — ${breakdown}; ` +
+      `close-up insets account for ${mb(insets)} MB of it, and dropping the largest would save ${mb(rows.reduce((n, r) => Math.max(n, r.inset), 0))} MB`,
+  );
 });
 
 test('sandbox: valid scenario, connected roads, reachable high shelters', () => {
