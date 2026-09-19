@@ -29,7 +29,6 @@
  */
 
 import type { BuildingSet } from '../contracts';
-import { BUILDING_KINDS } from '../data/buildings';
 import { BUILDING_UNIFORM_SIZE, IMAGERY_ROOF_FADE } from './shaders/buildings';
 
 const BUILDING_UNIFORM_FLOATS = BUILDING_UNIFORM_SIZE / 4;
@@ -321,6 +320,7 @@ export function buildBuildingMesh(set: BuildingSet, ground: Float32Array, nx: nu
     let n = b - a;
     if (n < 3 || n > xs.length) continue;
 
+    const area2 = ringArea2(set.verts, a, n);
     for (let i = 0; i < n; i++) {
       xs[i] = set.verts[(a + i) * 2];
       ys[i] = set.verts[(a + i) * 2 + 1];
@@ -338,11 +338,7 @@ export function buildBuildingMesh(set: BuildingSet, ground: Float32Array, nx: nu
     if (n < 3) continue;
 
     // Clockwise in grid coordinates: roof normal up, wall normals out (see the winding note at the top).
-    let area2 = 0;
-    for (let i = 0; i < n; i++) {
-      const j = (i + 1) % n;
-      area2 += xs[i] * ys[j] - xs[j] * ys[i];
-    }
+    // Dropping zero-length edges cannot change the sign, so the source ring's own shoelace decides it.
     if (area2 > 0) {
       for (let i = 0, j = n - 1; i < j; i++, j--) {
         const tx = xs[i];
@@ -620,9 +616,6 @@ export function selectBuildings(
   return { draws: out, buildings, indices };
 }
 
-/** Human-readable class names in the order `BuildingSet.kind` indexes them (re-exported for the shader comments). */
-export const BUILDING_KIND_NAMES: readonly string[] = BUILDING_KINDS;
-
 // ────────────────────────────────────────────────────────────────────────────────────────────
 // GPU layer
 // ────────────────────────────────────────────────────────────────────────────────────────────
@@ -689,14 +682,18 @@ export const DEFAULT_BUILDING_STYLE: BuildingStyle = {
 /** Multiplier on `minPx` over which a building grows from nothing to full height (see the vertex shader). */
 export const LOD_FADE_RANGE = 2.4;
 
+/** The scene textures the building pass reads; the renderer owns them all (see setScene in index.ts). */
 export interface BuildingTextures {
   frame: GPUBuffer;
+  /** Sun-shading raster: r = sun visibility, g = open-sky fraction, at the top of each cell. */
   sun: GPUTextureView;
   imagery: GPUTextureView;
+  /** Per-vertex (bed, water surface, mean depth, wet) — the same field the water mesh is built from. */
   vtx: GPUTextureView;
+  /** Per-cell (barrier, max depth, …): the high-water mark on a facade comes from here. */
   misc: GPUTextureView;
-  linear: GPUSampler;
-  imagery_: GPUSampler;
+  linearSampler: GPUSampler;
+  imagerySampler: GPUSampler;
 }
 
 /**
@@ -710,7 +707,12 @@ export class BuildingLayer {
   readonly buildingCount: number;
   readonly triangleCount: number;
   readonly vertexCount: number;
-  /** Roof height above ground per cell (r32float), for SunShading.buildingHeights. Null when the raster is absent. */
+  /**
+   * Roof height above ground per cell (r32float) for the passes that march the city as a height field: the
+   * sun-shading raster's occluders and the water pass's skyline reflection. NOT the raw footprint raster —
+   * anything the grid cannot resolve has been faded out of it (`shadowOccluderHeights`), so a block of 7 m
+   * rowhouses is absent while a tower is exact. Null when the scene has no buildings tall enough to matter.
+   */
   readonly heightTexture: GPUTexture | null;
   private uniform: GPUBuffer;
   private bindGroup: GPUBindGroup;
@@ -764,8 +766,8 @@ export class BuildingLayer {
         { binding: 3, resource: tex.imagery },
         { binding: 4, resource: tex.vtx },
         { binding: 5, resource: tex.misc },
-        { binding: 6, resource: tex.linear },
-        { binding: 7, resource: tex.imagery_ },
+        { binding: 6, resource: tex.linearSampler },
+        { binding: 7, resource: tex.imagerySampler },
       ],
     });
   }

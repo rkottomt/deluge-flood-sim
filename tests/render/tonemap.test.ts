@@ -17,6 +17,7 @@ import {
   BLOOM_KNEE,
   BLOOM_THRESHOLD,
   bloomContribution,
+  BLOOM_MIX,
   CROSSTALK_LO,
   GRADE_CONTRAST,
   GRADE_GAIN,
@@ -28,6 +29,8 @@ import {
   linearToSrgb,
   POST_SATURATION,
   postProcess,
+  VIGNETTE_INNER,
+  VIGNETTE_OUTER,
   type RGB,
 } from '../../src/render/tonemap';
 import { cssToLinear, DEPTH_BANDS, MAX_DEPTH_BANDS, NORMAL_WATER_LEGEND, VELOCITY_BANDS } from '../../src/render/legend';
@@ -60,7 +63,7 @@ test('the WGSL tone mapper is generated from these constants, not a copy of them
   assert.ok(TONEMAP_WGSL.includes(`vec3f(${ACES_IN[0]}, ${ACES_IN[1]}, ${ACES_IN[2]})`), 'ACES input matrix');
   assert.ok(TONEMAP_WGSL.includes(`vec3f(${ACES_OUT[0]}, ${ACES_OUT[1]}, ${ACES_OUT[2]})`), 'ACES output matrix');
   // Grade: crosstalk onset, contrast, pivot, saturation restore and the split tone all reach the shader.
-  for (const n of [CROSSTALK_LO, GRADE_CONTRAST, GRADE_PIVOT, POST_SATURATION]) {
+  for (const n of [CROSSTALK_LO, GRADE_CONTRAST, GRADE_PIVOT, POST_SATURATION, BLOOM_MIX, VIGNETTE_INNER, VIGNETTE_OUTER]) {
     assert.ok(TONEMAP_WGSL.includes(String(n)), `constant ${n} missing from the WGSL`);
   }
   // The WGSL writes whole numbers as "1.0", so compare through the same formatting the generator uses.

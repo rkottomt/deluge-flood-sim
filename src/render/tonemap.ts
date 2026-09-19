@@ -43,6 +43,19 @@ export const HAZARD_MAX_PEAK = 2.1;
  * edge is what blurs into a halo ring. See BLOOM_WGSL.
  */
 export const BLOOM_KNEE = 1.0;
+/**
+ * How much of the bloom chain's summed octaves is added back to the frame. Low because the chain sums five
+ * octaves: each one carries roughly the energy the old single blur did, so the same visible glow needs about a
+ * fifth of the old mix.
+ */
+export const BLOOM_MIX = 0.055;
+/**
+ * Vignette falloff, as lens radius (0 at the centre, 1 at a corner): nothing until VIGNETTE_INNER, then a smooth
+ * ramp. The old falloff was a parabola from the centre out, which tinted the middle of the frame where the hazard
+ * map has to be read; this leaves the centre and the short edges alone and does its work in the corners.
+ */
+export const VIGNETTE_INNER = 0.55;
+export const VIGNETTE_OUTER = 1.15;
 /** Crosstalk: how far a colour is pulled toward its peak channel once it is well above CROSSTALK_LO. */
 export const CROSSTALK = 0.5;
 /** Crosstalk onset, on exposure-scaled light. Equal to BLOOM_THRESHOLD on purpose (see the module note). */

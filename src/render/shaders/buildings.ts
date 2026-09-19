@@ -253,7 +253,7 @@ fn fsBuilding(in: VOut) -> @location(0) vec4f {
   let view = viewVec / max(dist, 1e-3);
   let pxM = max(dist * F.elev.w, 1e-4);
   // Two detail fades, because the two features have different periods and therefore alias at different distances:
-  // floor bands repeat every 3.85 m, mullions every 1.55 m. Both are gone well before they reach a pixel.
+  // floor bands repeat every ~4 m, mullions every ~1.5 m. Both are gone well before they reach a pixel.
   let bandFade = (1.0 - smoothstep(0.22, 0.80, pxM)) * B.style.x;
   let mullFade = (1.0 - smoothstep(0.09, 0.32, pxM)) * B.style.x;
   let detail = max(bandFade, mullFade);
@@ -283,10 +283,9 @@ fn fsBuilding(in: VOut) -> @location(0) vec4f {
       let storey = 3.4 + 0.9 * fract(seed * 5.0);
       let band = abs(fract(elevM / storey) - 0.5) * 2.0;
       let mull = abs(fract(along / (1.35 + 0.5 * fract(seed * 13.0))) - 0.5) * 2.0;
-      // The glazing is darker than the spandrel between floors; mullions and floor edges catch the light. Kept
-      // deliberately quiet — at this scale the job is to break the flatness, not to draw windows.
-      // A crisp-ish split rather than a sine: the glazing is a band, the spandrel between floors is a band, and
-      // the line where they meet is what the eye reads as a storey.
+      // The glazing is darker than the spandrel between floors, and the mullions and floor edges catch the light.
+      // A split rather than a sine — the line where the two meet is what the eye reads as a storey — and kept
+      // deliberately quiet: at this scale the job is to break the flatness, not to draw windows.
       let glass = (1.0 - smoothstep(0.28, 0.46, band)) * bandFade;
       let frame = smoothstep(0.80, 0.97, mull) * mullFade + smoothstep(0.80, 0.96, band) * bandFade;
       let tint = mix(vec3f(0.115, 0.115, 0.120), vec3f(0.070, 0.085, 0.100), smoothstep(12.0, 55.0, bh));

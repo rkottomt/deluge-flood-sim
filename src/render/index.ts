@@ -92,7 +92,7 @@ export interface CinematicSettings {
 }
 
 /** What the 'cinematic' quality tier switches on by itself. Tuned on the demo machine at 1470x956 @ DPR 2. */
-export const CINEMATIC_DEFAULTS = { dof: 5, chromaticAberration: 2.2 } as const;
+export const CINEMATIC_DEFAULTS = { dof: 5, chromaticAberration: 1.1 } as const;
 /** Time constant for easing the depth-of-field radius in and out, seconds. */
 const DOF_FADE_TAU = 0.11;
 
@@ -713,8 +713,8 @@ class DelugeRenderer implements DelugeRendererAPI {
         imagery: imageryTex.createView(),
         vtx: vtxTex.createView(),
         misc: miscTex.createView(),
-        linear: this.linClamp,
-        imagery_: this.aniso,
+        linearSampler: this.linClamp,
+        imagerySampler: this.aniso,
       });
     } catch (e) {
       console.warn('[render] buildings unavailable', e);

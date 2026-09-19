@@ -302,6 +302,39 @@ adaptive resolution controller keeps frame time on target; the app also tells it
 time (§8), so it does not spend on pixels what the flood needs in substeps. Terrain and water are CDLOD meshes of
 32×32-quad patches sized to ~4 px per quad by default: vertex work was half of the renderer's GPU time.
 
+### 6.1 The city (`src/render/buildings.ts`)
+
+The DEM is bare earth, so without this the flood runs *over* a photograph of a city. `TerrainData.buildings` (§5)
+is meshed once at scene load into one static buffer: a quad per footprint edge for the walls, an ear-clipped cap
+for the roof — Pittsburgh's 45 084 buildings are 1.17 M vertices and 610 k triangles, about half the terrain mesh.
+Wall bottoms are sunk below the **lowest** ground found around the footprint's perimeter (the CDLOD surface morphs,
+so planting a building exactly on the DEM shows daylight under its downhill wall), and a roof that a slope would
+otherwise bury is lifted clear. Vertical exaggeration is applied to buildings exactly as to the terrain, so a
+256 m tower and the 150 m hill behind it keep their real ratio.
+
+*Lighting.* Roof heights are added to the height field the sun-shading raster is solved over (§6, `shaders/shadow.ts`),
+so the city casts real shadows across the streets and the flood — and receives them — for no per-frame cost at all.
+Only buildings the raster can resolve get in: below about two DEM cells (16 m here) a block of rowhouses fuses into
+one slab and every facade inside it comes out in shadow, so those are carried by their own N·L instead. Roofs take
+their colour from the aerial photograph at their own grid position (near-nadir imagery *is* the roof), with its
+baked-in shading levelled out first, and fall back to a procedural membrane above 34 m where relief displacement
+puts a tower's roof tens of metres from its footprint. Facades are a per-class, per-seed palette — Pittsburgh brick,
+pale limestone, Cor-Ten bronze, dark curtain wall — with floor bands and mullions that appear up close and fade out
+before they can alias.
+
+*Water.* The waterline is read from the same per-vertex texture the water mesh is built from, so it lands exactly
+where the water pass draws its surface: a dark wet band above it, moving foam at the contact line (with a
+screen-space minimum width, or it vanishes at 300 m), a stain at the high-water mark, and Beer–Lambert attenuation
+below it — past about two metres the wall is dropped outright and the water owns the pixel. Buildings do **not**
+take part in the physics: they are not in the solver's barrier field, and the NWS validation numbers in §9 were
+measured without any such coupling.
+
+*Cost.* Buildings are stored in Morton order, so a contiguous slice is a contiguous patch of city: chunks of 384
+are frustum-culled whole, and inside a chunk they are sorted tallest-first so "only what is worth a few pixels from
+here" is a prefix of its index range. The vertex shader collapses a building's roof toward its floor over the last
+octave before that cut, so nothing pops — it sinks. The cut is a quality-ladder knob (`buildingMinPx`), so the
+adaptive controller thins the city on the way down and the cinematic tier draws all of it.
+
 ## 7. Evacuation routing
 
 Each road edge is sampled about once per cell. On every readback (≤ 4 Hz) an edge is dry, wet (≥ 5 cm: passable at 30 %

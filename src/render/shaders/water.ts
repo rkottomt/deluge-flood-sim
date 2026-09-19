@@ -515,8 +515,8 @@ fn fsWater(in: WOut) -> @location(0) vec4f {
   let deep = smoothstep(0.8, 6.0, thick);
   // Advected slicks / sediment plumes: low-frequency brightness variation that makes the current visible from afar.
   // Two incommensurate scales so the tiling never lines up.
-  let slick = ((rM.w - 0.5) * 0.6 + (slickFar - 0.5) * 0.8 + (rA.w - 0.5) * 0.3 * detailFade) * 0.55;
-  let riverSed = mix(vec3f(0.115, 0.088, 0.054), vec3f(0.032, 0.040, 0.027), deep);
+  let slick = ((rM.w - 0.5) * 0.7 + (slickFar - 0.5) * 0.9 + (rA.w - 0.5) * 0.3 * detailFade) * 0.82;
+  let riverSed = mix(vec3f(0.115, 0.088, 0.054), vec3f(0.046, 0.053, 0.038), deep);
   // Slightly lighter and cooler than the imagery's khaki roofs and bare ground, so flood extent reads from far away.
   let floodSed = mix(vec3f(0.205, 0.178, 0.128), vec3f(0.140, 0.128, 0.098), smoothstep(0.5, 5.0, thick));
   let sediment = mix(riverSed, floodSed, floodMix) * (1.0 + slick * mix(0.6, 1.0, turbulence));

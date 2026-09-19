@@ -4,6 +4,7 @@ import {
   ACES_IN,
   ACES_OUT,
   BLOOM_KNEE,
+  BLOOM_MIX,
   BLOOM_THRESHOLD,
   CROSSTALK,
   CROSSTALK_HI,
@@ -13,6 +14,8 @@ import {
   GRADE_GAMMA,
   GRADE_PIVOT,
   POST_SATURATION,
+  VIGNETTE_INNER,
+  VIGNETTE_OUTER,
 } from '../tonemap';
 
 const wgslF = (x: number) => (Number.isInteger(x) ? `${x}.0` : `${x}`);
@@ -71,6 +74,12 @@ const dofDisc = () => {
 
 /** Sharp band around the focus distance, as a fraction of it, before the circle of confusion starts to open. */
 export const DOF_DEADBAND = 0.1;
+
+/**
+ * Lens radius (0 centre, 1 corner) at which chromatic aberration starts. Deliberately far out: the point of the
+ * effect is that the corners of the frame feel like glass, and anything a judge has to READ lives well inside it.
+ */
+export const CA_ONSET = 0.86;
 
 export const TONEMAP_WGSL = /* wgsl */ `
 struct Post {
@@ -187,7 +196,7 @@ fn fsTonemap(in: FsOut) -> @location(0) vec4f {
   // Chromatic aberration, confined to the outer edge of the frame: the red and blue channels are resolved a
   // fraction of a pixel further out / further in along the lens radius. It never reaches the readable centre.
   if (P.ca > 0.0) {
-    let caPx = P.ca * smoothstep(0.78, 1.0, r);
+    let caPx = P.ca * smoothstep(${wgslF(CA_ONSET)}, 1.0, r);
     if (caPx >= 0.5) {
       let dir = normalize(select(vec2f(1.0, 0.0), uv - 0.5, length(uv - 0.5) > 1e-6));
       let o = vec2i(round(dir * caPx));
@@ -195,7 +204,7 @@ fn fsTonemap(in: FsOut) -> @location(0) vec4f {
       hdr.b = scene(px - o, size).b;
     }
   }
-  hdr += textureSampleLevel(bloomTex, linSamp, uv, 0.0).rgb * ${wgslF(0.055)} * P.bloom;
+  hdr += textureSampleLevel(bloomTex, linSamp, uv, 0.0).rgb * ${wgslF(BLOOM_MIX)} * P.bloom;
   // Guard against NaN/inf from any pass.
   if (!(dot(hdr, vec3f(1.0)) < 1e7)) { hdr = vec3f(0.0); }
 
@@ -205,7 +214,7 @@ fn fsTonemap(in: FsOut) -> @location(0) vec4f {
   // Split tone: cool shadows, warm highlights, at a few parts in 255. The ground is real aerial photography.
   c = clamp(pow(c, ${vec3(GRADE_GAMMA)}) * ${vec3(GRADE_GAIN)}, vec3f(0.0), vec3f(1.0));
 
-  c *= 1.0 - P.vignette * smoothstep(0.55, 1.15, r);
+  c *= 1.0 - P.vignette * smoothstep(${wgslF(VIGNETTE_INNER)}, ${wgslF(VIGNETTE_OUTER)}, r);
   if (P.srgbOut > 0.5) { c = toSrgb(c); }
   // Dither to kill 8-bit banding in the sky gradient.
   c += (ign(in.pos.xy) - 0.5) / 255.0;
