@@ -1050,6 +1050,12 @@ function markdown(runs: RunResult[], comps: Comparison[], p: Preset): string {
       }
     }
     L.push('');
+    L.push(
+      'A ratio below 1 means the coarser grid happened to land closer — a total area is a difference of two large ' +
+        'numbers and cancels, so it can agree while the water sits in different places. The IoU shortfall and the ' +
+        'depth percentiles are the ones to read for placement; they behave consistently.',
+    );
+    L.push('');
   }
   L.push('## Definitions');
   L.push('');

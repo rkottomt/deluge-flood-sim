@@ -104,7 +104,8 @@ that rises in simulated time instead of dam-breaking along every bank.
 
 ### Validation
 
-From `npm test` (the solver tests run on a real GPU through Dawn):
+From `npm test` (the solver tests run on a real GPU through Dawn); the grid-convergence rows from
+`npx tsx scripts/reference-run.ts`, also on the real GPU:
 
 | Check | Result |
 | --- | --- |
@@ -116,8 +117,20 @@ From `npm test` (the solver tests run on a real GPU through Dawn):
 | Rain on a tilted plane at steady state ([boundary](tests/sim/boundary.test.ts)) | outflow / rain = 1.000 |
 | Channels at 0–60° to the grid ([channel](tests/sim/channel.test.ts)) | depth within 6 % of Manning's normal depth (0.98–1.05) |
 | GPU (Float32, parallel) vs Float64 CPU reference, 5 cases × 400 steps ([reference](tests/sim/reference.test.ts)) | max \|Δh\| ≤ 4.3·10⁻⁵ m |
+| Grid convergence, 1936 crest: the 1024² demo grid vs a 4096² run of the same solver, 16× the cells, 30 sim-min ([reference-run](scripts/reference-run.ts)) | flooded area −0.92 %, flood-extent IoU 98.0 %, max-depth RMSE 0.29 m (median 6 cm), landmark arrivals within 2.2 % |
+| The same under 100 mm/hr rain ([reference-run](scripts/reference-run.ts)) | flooded area −0.55 %, flood-extent IoU 78.2 %, max-depth RMSE 0.22 m (median 5 cm) |
 
 In the running app the HUD's mass-balance error stays below 0.001 % at the 1936 crest, with or without hurricane rain.
+
+**The flood is not an artefact of the cell size.** The same solver on the same scenario at 7.81, 3.91 and 1.95 m cells
+(34 minutes of GPU time on this laptop — the 4096² reference run needed no rented GPU) agrees to about 1 % in flooded
+area, and halving the cell size halves the error. It converges *less* well where you would expect: rain puts water in
+noticeably different places at 7.8 m (78 % overlap against the reference, against 98 % for the river crest), the worst
+1 % of flooded cells differ by more than 1.3 m — those are flood-margin and street-width flow paths — and the area with
+*any* water (1 cm) under rain does not converge at all. What this does and does not prove, in detail:
+[ARCHITECTURE.md §9.1](ARCHITECTURE.md#91-grid-convergence-the-demo-grid-against-a-16-finer-reference). Short version:
+it bounds the solver's discretisation error; it says nothing about whether a 7.8 m bare-earth DEM is the right terrain,
+and nothing about accuracy against the real flood.
 
 **Checked against the National Weather Service.** NWS impact statements for the Point gauge (PTTP1), against Deluge
 holding each stage for 15 simulated minutes:
