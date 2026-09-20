@@ -1,7 +1,6 @@
 import type { AppActions, PresetInfo } from '../contracts';
 import { listPresets } from '../data';
 import type { App } from './App';
-import { APP_CONFIG } from './defaults';
 import { errorMessage } from './errors';
 import { cloneScenarioLists } from './stage';
 
@@ -89,23 +88,6 @@ export function createActions(app: App): AppActions {
     cameraTopDown() {
       app.renderer?.camera.topDown();
       app.requestRender();
-    },
-
-    setStabilityDemo(on) {
-      const sim = store.get().sim;
-      if (on) {
-        if (sim.stabilityMode !== 'naive') app.preDemoCfl = sim.cfl;
-        app.stabilityDemo = true;
-        store.set({ sim: { ...sim, stabilityMode: 'naive', cfl: APP_CONFIG.stabilityDemoCfl } });
-        // Clear any previous blow-up notice so the next explosion is announced again.
-        app.driver.rearmBlowupNotice();
-        return;
-      }
-      app.stabilityDemo = false;
-      const cfl = app.preDemoCfl > 0 && app.preDemoCfl <= 1 ? app.preDemoCfl : APP_CONFIG.robustCfl;
-      store.set({ sim: { ...sim, stabilityMode: 'robust', cfl } });
-      // NaN/inf state from the naive scheme must be wiped; reset() rewrites every state texture.
-      resetWater();
     },
   };
 }

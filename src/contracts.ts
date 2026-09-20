@@ -258,9 +258,10 @@ export interface SimParams {
    * 'robust' (default): semi-implicit friction, positivity-preserving flux limiter, velocity/Froude cap,
    *   CFL-adaptive dt.
    * 'naive': explicit friction, no flux limiter, no velocity cap, and dt computed with the user's cfl
-   *   even if > 1. Exists ONLY for the in-app "why is this hard?" stability demo — it should visibly
-   *   blow up (checkerboarding / spikes) within seconds. The solver must survive NaNs produced in this
-   *   mode (reset() fully recovers).
+   *   even if > 1 — the textbook scheme, which visibly blows up (checkerboarding / spikes) within
+   *   seconds. It is an internal reference mode with no UI: the solver suites (tests/sim) compare it
+   *   against 'robust' to prove the safeguards do the work. The solver must survive NaNs produced in
+   *   this mode (reset() fully recovers).
    */
   stabilityMode: 'robust' | 'naive';
 }
@@ -773,8 +774,6 @@ export interface AppActions {
   restoreScenario(): void;
   cameraFrameAll(): void;
   cameraTopDown(): void;
-  /** Toggle the stability demo: sets sim.stabilityMode='naive' & cfl=1.8, or restores robust + resets water. */
-  setStabilityDemo(on: boolean): void;
 }
 
 export interface ToolControllerDeps {

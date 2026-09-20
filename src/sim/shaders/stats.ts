@@ -12,7 +12,7 @@
  * the CPU adds both in Float64. A plain Float32 running sum rounds every small value added to a large total the same
  * way every readback: a stage disc's inflow (~100 m of depth per window) summed with its cells' rain (~1e-3 m) drifted
  * massError by ~1e-5 per sim-hour in tests/sim/conservation.test.ts.
- * Non-finite values (possible only in 'naive' mode) are detected from the IEEE-754 bit pattern — not with
+ * Non-finite values (produced only by the 'naive' reference mode) are detected from the IEEE-754 bit pattern — not with
  * `x != x`, which an optimizing shader compiler may fold away — counted, and excluded from sums and maxima.
  */
 import { ACC_PER_CELL, SIM_WGSL, SNAP_WGSL } from './common';

@@ -4,7 +4,7 @@
  * console-logging actions.
  *
  * URL params (for screenshots): ?panel=help|how|picker  ?loading=1  ?error=1  ?tool=<ToolId>
- *   ?route=ok|blocked|none|cycle  ?naive=1  ?paused=1  ?stage=<ft>  ?rain=<mm/hr>  ?mode=<WaterViewMode>
+ *   ?route=ok|blocked|none|cycle  ?diverged=1  ?paused=1  ?stage=<ft>  ?rain=<mm/hr>  ?mode=<WaterViewMode>
  *   ?closed=1 (panel collapsed)  ?probe=x,y (css px)  ?scroll=<px> (how-it-works body)  ?lowfx=1|0 (force glass mode)
  */
 import { createStore } from '../src/app/store';
@@ -342,12 +342,6 @@ const actions: AppActions = {
   },
   cameraFrameAll: () => camera.frameAll(),
   cameraTopDown: () => camera.topDown(),
-  setStabilityDemo: (on) => {
-    console.log('[action] setStabilityDemo', on);
-    const sim = store.get().sim;
-    store.set({ sim: { ...sim, stabilityMode: on ? 'naive' : 'robust', cfl: on ? 1.8 : 0.7 } });
-    if (!on) simTime = 0;
-  },
 };
 
 // ─── Mount ──────────────────────────────────────────────────────────────────────────────────────
@@ -358,7 +352,12 @@ mountUI(root, store, actions);
 (window as unknown as Record<string, unknown>).__ui = (root as unknown as { __delugeUI: unknown }).__delugeUI;
 
 // ─── Fake stats at 5 Hz ─────────────────────────────────────────────────────────────────────────
-let naiveSince = 0;
+/**
+ * ?diverged=1: let the fake statistics run away until they are non-finite, which is how the HUD's defensive
+ * presentation ("Diverged", "∞", "numbers no longer physical") gets exercised without a real solver.
+ */
+let fakeDiverge = false;
+let divergeSince = 0;
 let routeMode = params.get('route') ?? 'cycle';
 let routeFlip = 0;
 setInterval(() => {
@@ -372,11 +371,10 @@ setInterval(() => {
   const flooded = Math.max(0, (level - 217) * 0.42e6) + s.sim.rainRate * 3000 + Math.min(simTime, 3600) * 20;
   const volume = 5.8e6 + flooded * 1.7 + simTime * 40;
   peakVolume = Math.max(peakVolume, volume);
-  const naive = s.sim.stabilityMode === 'naive';
-  if (naive && !naiveSince) naiveSince = performance.now();
-  if (!naive) naiveSince = 0;
-  const blow = naive ? Math.pow(10, (performance.now() - naiveSince) / 700) : 1;
-  const massError = naive ? (blow > 1e12 ? NaN : 3e-5 * blow) : 2.1e-5 + Math.random() * 1.2e-5;
+  if (fakeDiverge && !divergeSince) divergeSince = performance.now();
+  if (!fakeDiverge) divergeSince = 0;
+  const blow = fakeDiverge ? Math.pow(10, (performance.now() - divergeSince) / 700) : 1;
+  const massError = fakeDiverge ? (blow > 1e12 ? NaN : 3e-5 * blow) : 2.1e-5 + Math.random() * 1.2e-5;
   store.set({
     fps: 58 + Math.random() * 4,
     stepInfo: {
@@ -387,15 +385,15 @@ setInterval(() => {
     },
     stats: {
       simTime,
-      maxDepth: Math.max(0, level - 204) + (naive ? blow * 0.1 : 0),
-      maxSpeed: 1.8 + s.sim.rainRate * 0.01 + Math.random() * 0.2 + (naive ? blow : 0),
+      maxDepth: Math.max(0, level - 204) + (fakeDiverge ? blow * 0.1 : 0),
+      maxSpeed: 1.8 + s.sim.rainRate * 0.01 + Math.random() * 0.2 + (fakeDiverge ? blow : 0),
       volume,
       wetArea: 3.2e6 + flooded,
       floodedArea: flooded,
       volumeIn: simTime * 400,
       volumeOut: simTime * 350,
       massError,
-      courant: naive ? 1.8 : 0.68 + Math.random() * 0.03,
+      courant: fakeDiverge ? 1.8 : 0.68 + Math.random() * 0.03,
     },
   });
 
@@ -557,7 +555,7 @@ if (tool) {
   btn?.click();
 }
 if (params.get('paused')) store.set({ paused: true });
-if (params.get('naive')) actions.setStabilityDemo(true);
+if (params.get('diverged')) fakeDiverge = true;
 if (params.get('stage')) {
   const ft = Number(params.get('stage'));
   store.set({ stageOffset: ft * 0.3048 + scenario.stage!.gaugeDatum - scenario.stage!.normalLevel });

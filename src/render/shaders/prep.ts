@@ -43,7 +43,7 @@ fn bed(p: vec2i) -> f32 {
   return textureLoad(bedTex, cl(p), 0).r;
 }
 /**
- * Numerically blown-up cell (the naive stability-demo scheme): non-finite values, or values no flood can reach
+ * Numerically blown-up cell: non-finite values, or values no flood can reach
  * (robust mode caps speeds at 15 m/s and never produces negative depth). NaN fails every comparison, so the tests
  * are written as "not within range".
  */

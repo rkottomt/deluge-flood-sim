@@ -124,7 +124,7 @@ export function createTopBar(ctx: UIContext, opts: { onTogglePanel(): void; isPa
     {
       type: 'button',
       class: 'dl-btn dl-btn-accent dl-how-btn',
-      'data-tip': 'The math, the GPU pipeline — and a button to break it',
+      'data-tip': 'The equations, the stability work and the GPU pipeline',
       'data-tip-side': 'bottom',
       onclick: () => ctx.setPanel('howItWorks', true),
     },
@@ -188,7 +188,7 @@ export function createTopBar(ctx: UIContext, opts: { onTogglePanel(): void; isPa
   );
   // A new requested speed starts a new measurement.
   bind(
-    (s) => `${s.sim.timeScale}|${s.paused}|${s.terrainName}|${s.sim.stabilityMode}`,
+    (s) => `${s.sim.timeScale}|${s.paused}|${s.terrainName}`,
     () => {
       estimator.reset();
       achieved = null;

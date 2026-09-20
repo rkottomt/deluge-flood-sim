@@ -34,7 +34,8 @@
  *      rounding included, is booked, so the mass balance is exact.
  *   4. Well-balanced face depth/slope: a lake at rest on rough terrain stays at rest.
  *   (+ de Almeida θ-smoothing and a velocity/Froude cap as safety nets.)
- *   'naive' mode removes 2–4 and the margins and lets C > 1 — it blows up, which is the point of the demo.
+ *   'naive' mode removes 2–4 and the margins and lets C > 1 — it blows up; the solver suites compare the two
+ *   to show the safeguards are what keeps the robust path stable (tests/sim/robustness.test.ts).
  */
 import {
   DEFAULT_SIM_PARAMS,
@@ -715,7 +716,7 @@ export class GpuFloodSolver implements FloodSolver {
   /**
    * Advance realSeconds × timeScale of simulated time. Every substep uses the CFL timestep; requested time that
    * does not fill a whole substep is carried to the next frame (so at timeScale 1, ~one substep per 0.4 s of
-   * sim instead of one per frame — up to ~25× less GPU work — and naive mode really runs at the user's Courant
+   * sim instead of one per frame — up to ~25× less GPU work — and naive mode really runs at the requested Courant
    * number at any time scale). If the substep cap (maxSubstepsPerFrame ∩ GPU budget) cannot keep up, the backlog
    * beyond one substep is dropped and `throttled` is reported: sim speed degrades, frame rate does not.
    */
@@ -926,8 +927,7 @@ export class GpuFloodSolver implements FloodSolver {
    *
    * The per-cell maximum comes from the latest asynchronous readback, i.e. it is up to a few hundred ms stale.
    * Robust mode inflates it by safety margins and by what we KNOW is coming (stage sources, water brush, bores
-   * released by sources, rain running off dry ground) and clamps Cr to robustCflMax. Naive mode uses the raw depth, no speed term, and trusts the user's Cr (the demo
-   * sets 1.8).
+   * released by sources, rain running off dry ground) and clamps Cr to robustCflMax. Naive mode uses the raw depth, no speed term, and trusts the requested Cr.
    */
   computeDt(): number {
     const o = this.options;

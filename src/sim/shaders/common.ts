@@ -128,7 +128,7 @@ fn bflux(h: f32, i: i32, j: i32, di: i32, dj: i32) -> f32 {
  * float math (Metal folds it to d, hiding the rounding), while round() is opaque to them.
  * The grid is kept ≥ 2^-126 (a normal float): Apple GPUs flush subnormals to zero, and d / 0 then made NaN for
  * d ≈ 1e-35. The powers of two are built from bits (exact) and applied by multiplication. Non-finite values stay
- * non-finite (naive mode must still visibly blow up).
+ * non-finite (the naive reference mode must still visibly blow up).
  */
 export const SNAP_WGSL = /* wgsl */ `
 fn ulpExp(m: f32) -> i32 {

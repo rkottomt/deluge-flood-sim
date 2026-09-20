@@ -1,6 +1,6 @@
 /**
  * Pure helpers for the statistics readouts: an honest achieved-speed estimate and a "the solution has
- * diverged" test for the stability demo.
+ * diverged" test that keeps non-physical numbers out of the HUD's readouts.
  */
 import type { SimStats } from '../contracts';
 

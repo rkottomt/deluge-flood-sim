@@ -1,15 +1,14 @@
 /**
- * Loading overlay, error & notice toasts, stability-demo banner, and the WebGPU-unsupported screen.
+ * Loading overlay, error & notice toasts, and the WebGPU-unsupported screen.
  */
 import { h, setText, toggleClass, type UIContext } from './dom';
 import { icon, logoMark } from './icons';
 import { bridgeFor, type Notice } from './bridge';
-import { BREAK_TIME_SCALE, stopBreakDemo } from './stabilityDemo';
 
 const TIPS = [
   'Tip: press ? any time for shortcuts and a 30-second tour.',
   'Tip: drag a wall (2) across a street and watch the water reroute.',
-  'Tip: “How it works” has a button that deliberately breaks the solver.',
+  'Tip: “How it works” has the equations, the stability work and the GPU pipeline.',
   'Tip: plan an evacuation (8) — the route re-plans as roads flood.',
   'Tip: the mass-balance error in the HUD proves no water is created or lost.',
 ];
@@ -88,38 +87,12 @@ export function createLoadingOverlay(ctx: UIContext): HTMLElement {
 export interface Notices {
   /** Top-center column: getting-started strip, error toast, notices. */
   top: HTMLElement;
-  /** Bottom-center column: stability-demo banner, evacuation route chip. */
+  /** Bottom-center column: the evacuation route chip. */
   bottom: HTMLElement;
 }
 
 export function createNotices(ctx: UIContext, extra: { top?: HTMLElement[]; bottom?: HTMLElement[] } = {}): Notices {
   const { bind, store } = ctx;
-
-  // Stability demo banner. It sits at the bottom: the blow-up starts where rivers enter the map, which in most
-  // framings is the top of the screen.
-  const banner = h(
-    'div',
-    { class: 'dl-naive-banner', role: 'status' },
-    h('span', { class: 'dl-naive-icon' }, icon('bolt', 16)),
-    h(
-      'span',
-      { class: 'dl-naive-text' },
-      h('span', { class: 'dl-naive-line' }, h('b', null, 'Stability demo'), ' — naive explicit solver at Courant 1.8', h('span', { class: 'dl-naive-slow' }), '.'),
-      h('span', { class: 'dl-naive-legend' }, h('i', { class: 'dl-naive-swatch', 'aria-hidden': 'true' }), 'Magenta speckle = depth ∞ or NaN, spreading from one small splash mid-view'),
-    ),
-    h(
-      'button',
-      { type: 'button', class: 'dl-btn dl-btn-ok dl-btn-sm', onclick: () => stopBreakDemo(ctx) },
-      icon('shield', 14),
-      h('span', null, 'Restore robust solver'),
-    ),
-  );
-  const slowText = banner.querySelector('.dl-naive-slow') as HTMLElement;
-  bind((s) => s.sim.stabilityMode === 'naive', (on) => toggleClass(banner, 'dl-show', on));
-  bind(
-    (s) => s.sim.timeScale === BREAK_TIME_SCALE,
-    (slow) => setText(slowText, slow ? `, slowed to ${BREAK_TIME_SCALE}× to watch it start` : ''),
-  );
 
   // Error toast (real failures only; limits and guidance use the notice toast below).
   const toastMsg = h('p', { class: 'dl-toast-msg' });
@@ -196,7 +169,7 @@ export function createNotices(ctx: UIContext, extra: { top?: HTMLElement[]; bott
 
   return {
     top: h('div', { class: 'dl-notices' }, ...(extra.top ?? []), toast, notice),
-    bottom: h('div', { class: 'dl-notices-bottom' }, ...(extra.bottom ?? []), banner),
+    bottom: h('div', { class: 'dl-notices-bottom' }, ...(extra.bottom ?? [])),
   };
 }
 

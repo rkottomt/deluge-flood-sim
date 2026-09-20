@@ -55,7 +55,7 @@
  * The water still moves (continuity uses the full dt), mass is still exactly conserved, still water still
  * stays still (S = 0 ⇒ q = 0), and whenever the global CFL estimate is valid the guard is inactive (dt_m = dt).
  *
- * 'naive' mode (stability demo) uses explicit friction, no smoothing, no guard and no cap.
+ * 'naive' mode (the textbook reference scheme) uses explicit friction, no smoothing, no guard and no cap.
  */
 import { HELPERS_WGSL, SIM_WGSL } from './common';
 

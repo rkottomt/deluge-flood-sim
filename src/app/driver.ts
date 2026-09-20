@@ -120,11 +120,6 @@ export class FrameDriver {
     this.app.runner.onReset();
   }
 
-  /** Announce the next numerical blow-up again (stability demo re-enabled). */
-  rearmBlowupNotice(): void {
-    this.blowupNotified = false;
-  }
-
   /**
    * One frame. Returns true if it was rendered at full rate (for the FPS meter).
    * `frameMs` is the raw interval since the previous frame (feeds the substep governor).
@@ -260,11 +255,12 @@ export class FrameDriver {
   }
 
   /**
-   * In the stability demo, log when the naive scheme has visibly exploded (once per activation). The UI shows
-   * it to the user (demo banner + NaN/unstable HUD); an error toast would make an intended demo look broken.
+   * Log once per scene (or per reset) if the solver ever produces values no flood can reach. The robust scheme is
+   * not supposed to get here — the HUD and renderer already refuse to present non-finite state — so this is a
+   * diagnostic breadcrumb, not an error toast.
    */
   private detectBlowup(stats: SimStats): void {
-    if (this.blowupNotified || this.app.store.get().sim.stabilityMode !== 'naive') return;
+    if (this.blowupNotified) return;
     const exploded =
       !Number.isFinite(stats.maxSpeed) ||
       !Number.isFinite(stats.maxDepth) ||
@@ -274,8 +270,8 @@ export class FrameDriver {
     this.blowupNotified = true;
     const speed = Number.isFinite(stats.maxSpeed) ? `${stats.maxSpeed.toExponential(1)} m/s` : String(stats.maxSpeed);
     console.info(
-      `[deluge] stability demo: the naive explicit scheme diverged at sim t=${stats.simTime.toFixed(1)} s ` +
-        `(max speed ${speed}); restoring the robust solver resets the water.`,
+      `[deluge] the solver produced non-physical values at sim t=${stats.simTime.toFixed(1)} s ` +
+        `(max speed ${speed}); resetting the water rewrites every state texture.`,
     );
   }
 

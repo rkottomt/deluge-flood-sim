@@ -43,7 +43,6 @@ const code = (f: string) =>
 const ALLOWED = new Map<string, string>([
   ['src/ui/dom.ts', 'trustedMarkup(): the one parser, named so call sites are reviewable'],
   ['src/ui/topbar.ts', 'play/pause icon swap: iconMarkup() of a literal icon name'],
-  ['src/ui/howItWorks.ts', 'the equation typography and the Break-it card: constant markup and iconMarkup()'],
   ['src/app/unsupported.ts', 'the fallback screen skeleton; its dynamic text goes through textContent'],
 ]);
 

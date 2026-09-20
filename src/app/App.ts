@@ -85,9 +85,6 @@ export class App {
   tools: ToolController | null = null;
   probe: ProbeSampler | null = null;
 
-  /** Stability demo ("Break it") state; the CFL to restore when it is switched off. */
-  stabilityDemo = false;
-  preDemoCfl: number = APP_CONFIG.robustCfl;
 
   /** Resolves when the first scene is on screen; rejects if startup fails (main.ts hands it to the debug API). */
   readonly ready: Promise<void>;
@@ -210,11 +207,7 @@ export class App {
       renderer,
       router: this.router,
       stage: this.stage,
-      // The old solver is destroyed right after this: that is when a stability demo on it ends. Exiting any earlier
-      // (at load start) would leave its NaN water on screen without the demo banner and its Restore button if the
-      // load then fails or is superseded; the new solver is created afterwards, so it starts robust.
       onSceneCleared: () => {
-        this.exitStabilityDemoQuietly();
         this.crest.onSceneChanged();
         this.setStageNow(0);
         this.evac.reset();
@@ -252,11 +245,10 @@ export class App {
     this.installResizeHandling();
     this.installActivityTracking();
     this.store.subscribe((s, prev) => {
-      if (s.sim.stabilityMode !== prev.sim.stabilityMode) this.stabilityDemo = s.sim.stabilityMode === 'naive';
-      // Heavier frames ahead (rain starting: streaks, ripples, a wet map; a solver switch resets the water): make room
-      // on the GPU before the queue backs up.
+      // Heavier frames ahead (rain starting: streaks, ripples, a wet map): make room on the GPU before the queue
+      // backs up.
       const rainStarts = (s.sim.rainRate > 0.2 && !(prev.sim.rainRate > 0.2)) || s.storms.length > prev.storms.length;
-      if (rainStarts || s.sim.stabilityMode !== prev.sim.stabilityMode) this.braceBudget();
+      if (rainStarts) this.braceBudget();
     });
     this.loop.start();
   }
@@ -547,7 +539,7 @@ export class App {
     if (!scene || !snap) return null;
     const { solver, terrain } = scene;
     if (snap.nx !== solver.nx || snap.ny !== solver.ny) return null;
-    // A blown-up or naive solver's water (stability demo) says nothing about the walls: keep the last physical answer.
+    // Non-physical water (non-finite depths) says nothing about the walls: keep the last physical answer.
     if (this.store.get().sim.stabilityMode !== 'robust' || !snapshotIsPhysical(snap)) return null;
     return {
       nx: solver.nx,
@@ -703,15 +695,6 @@ export class App {
     console.info(
       `[deluge] loaded “${scene.terrain.name}” ${scene.terrain.nx}×${scene.terrain.ny} @ ${scene.terrain.cellSize.toFixed(2)} m`,
     );
-  }
-
-  /** The scene running the stability demo is being destroyed: the next solver always starts robust. */
-  private exitStabilityDemoQuietly(): void {
-    const sim = this.store.get().sim;
-    if (sim.stabilityMode !== 'naive') return;
-    const cfl = this.preDemoCfl > 0 && this.preDemoCfl <= 1 ? this.preDemoCfl : APP_CONFIG.robustCfl;
-    this.stabilityDemo = false;
-    this.store.set({ sim: { ...sim, stabilityMode: 'robust', cfl } });
   }
 
   private frame(realDt: number, now: number, frameMs: number): boolean {

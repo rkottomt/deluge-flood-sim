@@ -21,7 +21,6 @@ import { createLocationPicker } from './locationPicker';
 import { installKeyboard } from './keyboard';
 import { createWelcome } from './welcome';
 import { createRouteChip } from './routeChip';
-import { installBreakDemoRestore } from './stabilityDemo';
 import { selectTool } from './toolDefs';
 
 export { createToolController } from './tools';
@@ -79,7 +78,6 @@ export function mountUI(root: HTMLElement, store: Store, actions: AppActions): v
   const how = createHowItWorks(ctx);
   const picker = createLocationPicker(ctx);
 
-  installBreakDemoRestore(ctx);
   installSceneReset(ctx);
 
   const layer = h('div', { class: 'dl-layer' }, topbar.el, toolbar, options, hud, panel.el, notices.top, notices.bottom, probe.el);

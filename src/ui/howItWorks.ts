@@ -1,16 +1,15 @@
 /**
  * "How it works" — the explainer for visitors. Plain language first, then the shallow-water equations typeset
  * in HTML/CSS, the four stability ingredients, the per-substep GPU pipeline diagram (two compute passes, as
- * dispatched by src/sim/Solver.ts), data sources, and the "Break it" stability-demo toggle.
+ * dispatched by src/sim/Solver.ts), and the data sources.
  *
  * Keep the text in sync with src/sim: the scheme (shaders/momentum.ts — local inertial + upwind advection,
  * θ-smoothing, semi-implicit friction), the Courant limit (constants.ts robustCflMax, √θ) and the passes.
  */
 import { h, trustedMarkup, setText, toggleClass, type UIContext } from './dom';
-import { icon, iconMarkup } from './icons';
+import { icon } from './icons';
 import { createModal, type Modal } from './modal';
 import { fmtNum, formatSubsteps, siParts } from './format';
-import { BREAK_TIME_SCALE, startBreakDemo, stopBreakDemo } from './stabilityDemo';
 
 // ─── Tiny math typesetting helpers (static, trusted markup) ─────────────────────────────────────
 const v = (s: string) => `<i class="m-v">${s}</i>`;
@@ -50,7 +49,7 @@ const eta = v('η');
 const qNew = sup(v('q'), rm('new'));
 
 export function createHowItWorks(ctx: UIContext): Modal {
-  const { store, bind } = ctx;
+  const { bind } = ctx;
 
   // ── Section nav ──
   const sections: Array<[string, string]> = [
@@ -59,7 +58,6 @@ export function createHowItWorks(ctx: UIContext): Modal {
     ['stability', 'Why it’s hard'],
     ['pipeline', 'GPU pipeline'],
     ['data', 'Data'],
-    ['break', 'Break it'],
   ];
   let modal: Modal;
   const chips = new Map<string, HTMLButtonElement>();
@@ -71,7 +69,7 @@ export function createHowItWorks(ctx: UIContext): Modal {
         'button',
         {
           type: 'button',
-          class: `dl-how-chip${id === 'break' ? ' dl-how-chip-danger' : ''}`,
+          class: 'dl-how-chip',
           onclick: () => {
             // scroll-margin-top on the sections keeps titles clear of this sticky nav.
             modal.body.querySelector<HTMLElement>(`[data-how="${id}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -213,9 +211,7 @@ export function createHowItWorks(ctx: UIContext): Modal {
     h(
       'p',
       null,
-      'One explicit update has to survive 6 m-deep river channels, centimetre-thin films on steep streets and walls one cell wide — in 32-bit floats, on a million cells at once, many times per frame. The textbook version blows up here within about ten steps (',
-      h('b', null, 'Break it'),
-      ' below shows it failing). Four ingredients keep Deluge stable and exact — every cubic metre is booked, so the HUD’s mass error stays below 0.01 %:',
+      'One explicit update has to survive 6 m-deep river channels, centimetre-thin films on steep streets and walls one cell wide — in 32-bit floats, on a million cells at once, many times per frame. The textbook version blows up here within about ten steps. Four ingredients keep Deluge stable and exact — every cubic metre is booked, so the HUD’s mass error stays below 0.01 %:',
     ),
     h(
       'div',
@@ -403,59 +399,6 @@ export function createHowItWorks(ctx: UIContext): Modal {
     ),
   );
 
-  // ── 6. Break it ──
-  const breakBtn = h('button', { type: 'button', class: 'dl-break-btn' });
-  const breakState = h('div', { class: 'dl-break-state' });
-  let closeTimer = 0;
-  breakBtn.addEventListener('click', () => {
-    const naive = store.get().sim.stabilityMode === 'naive';
-    if (naive) {
-      stopBreakDemo(ctx);
-      return;
-    }
-    // The point is to watch it happen: start the (slowed) demo and get the dialog out of the way.
-    startBreakDemo(ctx);
-    clearTimeout(closeTimer);
-    closeTimer = window.setTimeout(() => ctx.setPanel('howItWorks', false), 450);
-  });
-  bind(
-    (s) => s.sim.stabilityMode === 'naive',
-    (naive) => {
-      breakBtn.innerHTML = naive ? `${iconMarkup('shield', 18)}<span>Restore the robust solver</span>` : `${iconMarkup('bolt', 18)}<span>Break it</span>`;
-      toggleClass(breakBtn, 'dl-restore', naive);
-      toggleClass(breakCard, 'dl-broken', naive);
-      breakState.innerHTML = naive
-        ? `<span class="dl-dot dl-dot-danger"></span> Naive solver running — close this dialog and watch the water.`
-        : `<span class="dl-dot dl-dot-ok"></span> Robust solver running.`;
-    },
-  );
-  const breakCard = h(
-    'section',
-    { class: 'dl-how-sec dl-break', 'data-how': 'break' },
-    h('div', { class: 'dl-how-kicker' }, '06 · See for yourself'),
-    h('h3', { class: 'dl-how-title' }, 'Break it'),
-    h(
-      'p',
-      null,
-      'This switches to a textbook explicit scheme: ',
-      h('b', null, 'explicit friction, no flux limiter, no smoothing, no velocity cap'),
-      ', and a Courant number of ',
-      h('b', null, '1.8'),
-      ' — beyond its stability limit of 1. Until it blows up the clock slows to ',
-      h('b', null, `${BREAK_TIME_SCALE}×`),
-      ' (each step is about 1.3 simulated seconds) so you can see it start; then your speed returns.',
-    ),
-    h(
-      'ul',
-      { class: 'dl-break-list' },
-      h('li', null, 'For the first few steps nothing looks wrong — the error starts far too small to see.'),
-      h('li', null, 'It grows several-fold with every step wherever water moves. The demo drops one small splash into the water nearest the middle of your view, so it starts there: the surface jitters cell by cell, then depths spike to thousands of meters.'),
-      h('li', null, 'Within about ten steps the numbers overflow. Those cells turn to magenta noise (depth ∞ / NaN) that spreads from there, and the HUD reports the solution has diverged.'),
-    ),
-    h('p', null, 'This dialog closes so you can watch. Switch back from the red banner at the bottom — the water resets and the robust solver recovers instantly.'),
-    h('div', { class: 'dl-break-actions' }, breakBtn, breakState),
-  );
-
   modal = createModal({
     id: 'how',
     title: 'How Deluge works',
@@ -464,7 +407,7 @@ export function createHowItWorks(ctx: UIContext): Modal {
     className: 'dl-how',
     headerExtra: undefined,
     onRequestClose: () => ctx.setPanel('howItWorks', false),
-    body: [nav, plain, equations, stability, pipeline, data, breakCard],
+    body: [nav, plain, equations, stability, pipeline, data],
   });
 
   // Scroll-spy: highlight the chip of the section currently under the nav (rAF-throttled, passive).

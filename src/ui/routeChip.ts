@@ -56,7 +56,7 @@ export function createRouteChip(ctx: UIContext, opts: { reveal(): void }): HTMLE
   function render(route: RouteResult | null, s: AppState) {
     // Hidden during the stability demo: routing ignores the blown-up depths (src/app/evac.ts), so the chip would only
     // repeat a stale verdict as a second red alarm under the demo banner. It comes back with the robust solver.
-    const show = !!s.evacStart && !!s.terrainName && !s.loading && s.sim.stabilityMode !== 'naive';
+    const show = !!s.evacStart && !!s.terrainName && !s.loading;
     // A new start point is a new plan, not a re-plan.
     if (s.evacStart !== lastStart) {
       lastStart = s.evacStart;
@@ -105,7 +105,7 @@ export function createRouteChip(ctx: UIContext, opts: { reveal(): void }): HTMLE
   }
 
   bind(
-    (s) => [s.route, s.evacStart, s.shelters.length, !!s.loading, s.terrainName, s.sim.stabilityMode] as const,
+    (s) => [s.route, s.evacStart, s.shelters.length, !!s.loading, s.terrainName] as const,
     (_k, s) => render(s.route, s),
     (a, b) => a.every((x, i) => Object.is(x, b[i])),
   );

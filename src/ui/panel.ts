@@ -36,7 +36,6 @@ import { bandsForMode, NORMAL_WATER_LEGEND, showsNormalWater } from '../render/l
 import { selectTool } from './toolDefs';
 import { blockedAdvice, routeDetail } from './routeText';
 import { MAX_SOURCES, MAX_STORMS } from './tools';
-import { startBreakDemo, stopBreakDemo } from './stabilityDemo';
 import { formatStage, hasGauge, stageSub, weatherBadge } from './stageText';
 
 export interface Panel {
@@ -452,10 +451,8 @@ export function createPanel(ctx: UIContext): Panel {
   function renderEvac(route: RouteResult | null, s: AppState) {
     const state = route?.state ?? 'none';
     evacCard.dataset.state = state;
-    // While the stability demo runs, routing is frozen on the last physical flood (src/app/evac.ts).
-    const paused = s.sim.stabilityMode === 'naive' && state !== 'none';
-    evacBadge.dataset.sev = paused ? 'calm' : state === 'ok' ? 'ok' : state === 'blocked' ? 'danger' : 'calm';
-    setText(evacBadge, paused ? 'Paused' : state === 'ok' ? 'Route OK' : state === 'blocked' ? 'Blocked' : s.evacStart ? 'Waiting' : 'Not set');
+    evacBadge.dataset.sev = state === 'ok' ? 'ok' : state === 'blocked' ? 'danger' : 'calm';
+    setText(evacBadge, state === 'ok' ? 'Route OK' : state === 'blocked' ? 'Blocked' : s.evacStart ? 'Waiting' : 'Not set');
     if (state === 'ok' && route) {
       evacCard.replaceChildren(
         h('div', { class: 'dl-evac-top' }, icon('check', 18), h('span', null, 'Safe route found')),
@@ -491,7 +488,7 @@ export function createPanel(ctx: UIContext): Panel {
     }
   }
   bind(
-    (s) => [s.route, s.evacStart, s.shelters.length, s.sim.stabilityMode] as const,
+    (s) => [s.route, s.evacStart, s.shelters.length] as const,
     ([route], s) => renderEvac(route, s),
     (a, b) => shallowArrayEq(a, b),
   );
@@ -693,20 +690,7 @@ export function createPanel(ctx: UIContext): Panel {
   });
   bind((s) => s.sim.maxSubstepsPerFrame, (v) => substeps.set(v));
 
-  const breakIt = toggleSwitch('Stability demo (naive solver)', (on) => (on ? startBreakDemo(ctx) : stopBreakDemo(ctx)), {
-    icon: 'bolt',
-    tip: 'Switch to a textbook explicit scheme and watch it blow up',
-  });
-  breakIt.el.classList.add('dl-switch-danger');
-  bind(
-    (s) => [s.sim.stabilityMode, s.sim.cfl] as const,
-    ([mode, c]) => {
-      breakIt.set(mode === 'naive');
-      cfl.set(c);
-      cfl.setDisabled(mode === 'naive');
-    },
-    (a, b) => shallowArrayEq(a, b),
-  );
+  bind((s) => s.sim.cfl, (c) => cfl.set(c));
 
   const gpu = h('div', { class: 'dl-gpu' }, icon('gpu', 14), h('span'));
   bind((s) => s.gpuInfo, (v) => setText(gpu.lastChild as HTMLElement, v || 'GPU: unknown'));
@@ -721,7 +705,6 @@ export function createPanel(ctx: UIContext): Panel {
       boundary.el,
       cfl.el,
       substeps.el,
-      breakIt.el,
       h(
         'div',
         { class: 'dl-row dl-row-2' },

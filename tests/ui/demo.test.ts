@@ -1,7 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { StageControl } from '../../src/contracts';
-import { breakSplash, nearestWet, BREAK_SPLASH } from '../../src/ui/stabilityDemo';
 import { suggestedWallHeight, wallPreviewText, wallVerdict, checkWall, WALL_MAX, type WallStatus } from '../../src/ui/wallCheck';
 import { formatStage, hasGauge, raiseStepText, stageSub, weatherBadge } from '../../src/ui/stageText';
 import { RainGauge, speedShortfall } from '../../src/ui/stats';
@@ -21,32 +20,6 @@ const PGH: StageControl = {
 };
 /** Live areas: the detected surface is both datum and normal level, no flood stage, no marks. */
 const LIVE: StageControl = { label: 'Water level (detected surface 1.5 m)', gaugeDatum: 1.5, normalLevel: 1.5, maxOffset: 10 };
-
-test('break demo: the splash lands in the water nearest the view centre, sized to the view', () => {
-  const nx = 64;
-  const ny = 64;
-  const depth = new Float32Array(nx * ny);
-  // A river along column 40.
-  for (let j = 0; j < ny; j++) depth[j * nx + 40] = 5;
-  const w = nearestWet(depth, nx, ny, 30.2, 20.5, 20, 1, 1)!;
-  assert.deepEqual(w, { gx: 40.5, gy: 20.5 });
-  assert.equal(nearestWet(depth, nx, ny, 10, 20, 20, 1, 1), null, 'out of reach');
-  assert.equal(nearestWet(depth, nx, ny, 30, 20, 20, 6, 1), null, 'too shallow');
-
-  const grid = { nx, ny, cellSize: 10 };
-  // distance 2000 m → search 500 m = 50 cells, radius 40 m = 4 cells.
-  const s = breakSplash({ target: { gx: 30, gy: 20, elevation: 0 }, distance: 2000 }, grid, depth)!;
-  assert.equal(s.kind, 'water');
-  assert.equal(s.gx, 40.5);
-  assert.equal(s.radius, 4);
-  assert.equal(s.amount, BREAK_SPLASH.depth);
-  // No water known: the view centre itself.
-  const dry = breakSplash({ target: { gx: 30, gy: 20, elevation: 0 }, distance: 20000 }, grid, null)!;
-  assert.deepEqual([dry.gx, dry.gy, dry.radius], [30, 20, BREAK_SPLASH.maxCells]);
-  // Looking off the map, or no camera: no splash.
-  assert.equal(breakSplash({ target: { gx: -5, gy: 20, elevation: 0 }, distance: 100 }, grid, depth), null);
-  assert.equal(breakSplash(null, grid, depth), null);
-});
 
 test('wall verdict describes the walls already built; the cursor check is worded as a preview', () => {
   assert.equal(wallVerdict(null, 2), null);

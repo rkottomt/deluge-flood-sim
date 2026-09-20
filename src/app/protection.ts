@@ -344,7 +344,7 @@ export interface ProtectionSink {
 
 /**
  * Runs the analysis on solver readbacks at most once per `intervalMs`, only while walls exist (a scan of the barrier
- * field is all it costs otherwise). Readbacks from a diverged or naive solver (stability demo) are skipped, so the
+ * field is all it costs otherwise). Readbacks from a diverged or non-robust solver are skipped, so the
  * last physical answer stays up.
  */
 export class ProtectionController {

@@ -56,7 +56,6 @@ export interface DelugeDebugExtras {
   setAdaptiveBudget(on: boolean): void;
   selectTool(tool: ToolId): void;
   resetWater(): void;
-  isStabilityDemo(): boolean;
   getFps(): number;
   getFrameCount(): number;
   getSimClock(): number;
@@ -191,7 +190,6 @@ export function createDebugApi(app: App, ready: Promise<void>): DelugeDebug {
     },
     selectTool: (tool) => store.set({ tool }),
     resetWater: () => actions.resetWater(),
-    isStabilityDemo: () => store.get().sim.stabilityMode === 'naive',
     getFps: () => app.loop?.fps ?? 0,
     getFrameCount: () => app.driver?.frameCount ?? 0,
     getSimClock: () => app.driver?.simClock ?? 0,

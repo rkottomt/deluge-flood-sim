@@ -323,7 +323,7 @@ async function main() {
     const lines = [
       `<b>${scene.name}</b>  ${scene.nx}×${scene.ny} @ ${scene.cellSize.toFixed(2)} m`,
       `${description}${timestampQuery ? ' (timestamps)' : ''}`,
-      `mode ${naive ? '<span class="bad">NAIVE (stability demo)</span>' : '<span class="ok">robust</span>'}  cfl ${solver.params.cfl}  ${solver.params.boundary}  rain ${solver.params.rainRate} mm/h`,
+      `mode ${naive ? '<span class="bad">NAIVE (reference scheme)</span>' : '<span class="ok">robust</span>'}  cfl ${solver.params.cfl}  ${solver.params.boundary}  rain ${solver.params.rainRate} mm/h`,
       `fps ${(avg > 0 ? 1000 / avg : 0).toFixed(0)}  ${paused ? 'PAUSED' : `×${solver.params.timeScale}`}  substeps ${lastInfo.substeps}${lastInfo.throttled ? ' (throttled)' : ''}  dt ${lastInfo.dt.toFixed(3)} s`,
       `gpu ${solver.gpuMsPerSubstep.toFixed(3)} ms/substep  budget ${solver.gpuBudgetMs} ms  readback ${solver.readbackDiagnostics.processMs.toFixed(2)} ms`,
     ];

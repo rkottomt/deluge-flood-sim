@@ -31,11 +31,11 @@ export class EvacController {
   }
 
   /**
-   * A new snapshot arrived; it is processed now or on a later tick (rate limit). Readbacks from the stability demo's
-   * naive solver, and any diverged readback (NaN / infinite depths), are ignored, so the road status and route keep
-   * describing the last physical flood. Otherwise the blow-up's oscillating and NaN depths read as dry roads and the
-   * route card announces "Re-planned — safe route" straight through the flood while the map shows magenta noise.
-   * Restoring the robust solver resets the water, and the next readback updates everything again.
+   * A new snapshot arrived; it is processed now or on a later tick (rate limit). Any non-physical readback (NaN /
+   * infinite depths, or a solver not running the robust scheme) is ignored, so the road status and route keep
+   * describing the last physical flood. Otherwise a blow-up's oscillating and NaN depths read as dry roads and the
+   * route card would announce "Re-planned — safe route" straight through the flood. Once physical readbacks resume
+   * (a water reset rewrites every state texture), the next one updates everything again.
    */
   onSnapshot(snap: SimSnapshot, now: number): void {
     if (this.store.get().sim.stabilityMode === 'naive' || !snapshotIsPhysical(snap)) {

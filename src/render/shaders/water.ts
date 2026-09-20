@@ -379,7 +379,7 @@ fn fsWater(in: WOut) -> @location(0) vec4f {
   // Numerical blow-up (stability demo): the prep pass marks non-finite cells with foam = 8 and raises them into a field
   // of spikes. Paint them as hot, flickering magenta "garbage" (HDR, so it blooms) — visible from any distance, in every
   // view mode. Fully blown fragments skip the water shading below: the spikes multiply overdraw, and shading them all
-  // pushed "Break it" frames past 40 ms. (Cells on the edge of the blow-up blend at the end of the shader.)
+  // pushed frames full of blown-up cells past 40 ms. (Cells on the edge of the blow-up blend at the end of the shader.)
   let blown = smoothstep(2.0, 6.0, s.a);
   if (blown >= 0.999) {
     let cellId = floor(in.grid);

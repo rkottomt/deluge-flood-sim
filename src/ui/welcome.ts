@@ -3,11 +3,11 @@
  * demo moments as one-click actions, derived from the loaded scenario:
  *
  *   1 raise the rivers to the record crest (or play the flood fast)   2 plan an evacuation   3 build a levee
- *   4 hurricane rain   5 break the solver
+ *   4 hurricane rain
  *
  * Evacuate comes before the levee: building the demo levee replays the rise, so a planned route visibly re-plans as
- * streets flood. Each step shows a check once done, and the ones with an obvious inverse (rivers, levee, rain,
- * solver) toggle back. Under the buttons a status line follows the river while it rises and says how much land the
+ * streets flood. Each step shows a check once done, and the ones with an obvious inverse (rivers, levee, rain)
+ * toggle back. Under the buttons a status line follows the river while it rises and says how much land the
  * walls keep dry. The strip stays available while the user explores (after the first click its heading folds away
  * to keep the map clear) and goes away for good only when closed.
  */
@@ -19,7 +19,6 @@ import { clamp, M_PER_FT, offsetForFt, stageFt, stageRangeFt } from './scales';
 import { fmtNum } from './format';
 import { bridgeFor, postNotice } from './bridge';
 import { suggestEvacStarts } from './evacSuggest';
-import { startBreakDemo, stopBreakDemo } from './stabilityDemo';
 import { formatStage, hasGauge, raiseStepText } from './stageText';
 import { leveeLength, planLevee, raiseAlong } from './levee';
 import { keptStatus } from './wallCheck';
@@ -268,18 +267,6 @@ export function createWelcome(ctx: UIContext): HTMLElement {
         });
       },
     },
-    {
-      id: 'break',
-      icon: 'bolt',
-      label: (s) => (s.sim.stabilityMode === 'naive' ? 'Restore solver' : 'Break it'),
-      tip: (s) =>
-        s.sim.stabilityMode === 'naive'
-          ? 'Back to the robust scheme — the water resets'
-          : 'Swap in a textbook explicit scheme and watch it blow up (How it works explains why)',
-      done: (s) => s.sim.stabilityMode === 'naive',
-      active: (s) => s.sim.stabilityMode === 'naive',
-      run: () => (store.get().sim.stabilityMode === 'naive' ? stopBreakDemo(ctx) : startBreakDemo(ctx)),
-    },
   ];
 
   /**
@@ -295,7 +282,7 @@ export function createWelcome(ctx: UIContext): HTMLElement {
     if (!scene?.buildWalls || !solver || !ctrl) return;
     leveeBusy = true;
     const terrainName = s0.terrainName;
-    const stale = () => store.get().terrainName !== terrainName || store.get().sim.stabilityMode !== 'robust';
+    const stale = () => store.get().terrainName !== terrainName;
     try {
       const flooded = s0.stageOffsetApplied > 0.3 || (s0.stats?.floodedArea ?? 0) > 50_000;
       const crest = dramaticStage(ctrl);
@@ -350,7 +337,7 @@ export function createWelcome(ctx: UIContext): HTMLElement {
       'button',
       {
         type: 'button',
-        class: `dl-try-step${step.id === 'break' ? ' dl-try-danger' : ''}`,
+        class: 'dl-try-step',
         'data-step': step.id,
         'data-tip-side': 'bottom',
         'data-tip-key': step.key ?? null,
@@ -497,7 +484,7 @@ export function createWelcome(ctx: UIContext): HTMLElement {
   );
   bind(
     (s) =>
-      `${!!s.terrainName}|${!!s.loading}|${s.scenario === null}|${s.stageOffset}|${s.stageOffsetApplied}|${s.sim.rainRate}|${s.sim.timeScale}|${s.paused}|${s.sim.stabilityMode}|${!!s.evacStart}|${s.storms.length}|${s.sources.length}|${stormFloodBase !== null ? Math.round((s.stats?.floodedArea ?? 0) / 1000) : ''}`,
+      `${!!s.terrainName}|${!!s.loading}|${s.scenario === null}|${s.stageOffset}|${s.stageOffsetApplied}|${s.sim.rainRate}|${s.sim.timeScale}|${s.paused}|${!!s.evacStart}|${s.storms.length}|${s.sources.length}|${stormFloodBase !== null ? Math.round((s.stats?.floodedArea ?? 0) / 1000) : ''}`,
     (_k, s) => sync(s),
   );
   // A new scene starts the checklist over (the dismissal sticks).

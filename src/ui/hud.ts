@@ -173,7 +173,7 @@ export function createHud(ctx: UIContext, achievedSpeed: () => number | null): H
       const c = s.stats?.courant;
       if (c === undefined) return 'calm';
       if (!Number.isFinite(c) || c > 1) return 'danger';
-      // Naive mode runs at 1.8 on purpose; robust mode's limit with θ-smoothing is √0.8 ≈ 0.89.
+      // The robust scheme's limit with θ-smoothing is √0.8 ≈ 0.89.
       return c > 0.89 ? 'warn' : 'calm';
     },
     (sev) => (dCo.el.dataset.sev = sev),
@@ -203,8 +203,6 @@ export function createHud(ctx: UIContext, achievedSpeed: () => number | null): H
     },
   );
 
-  const naive = h('div', { class: 'dl-hud-naive' }, icon('bolt', 13), h('span', null, 'Naive solver — expect instability'));
-  bind((s) => s.sim.stabilityMode === 'naive', (on) => (naive.hidden = !on));
 
   const collapseBtn = h(
     'button',
@@ -217,7 +215,6 @@ export function createHud(ctx: UIContext, achievedSpeed: () => number | null): H
     { class: 'dl-hud dl-glass', 'aria-label': 'Simulation statistics' },
     h('div', { class: 'dl-hud-head' }, h('span', { class: 'dl-hud-title' }, h('span', { class: 'dl-live-dot' }), 'Live solver'), gpu, collapseBtn),
     h('div', { class: 'dl-hud-body' }, h('div', { class: 'dl-hud-big' }, area.el, volume.el), h('div', { class: 'dl-hud-grid' }, depth.el, speed.el, mass.el, simSpeed.el), h('div', { class: 'dl-hud-diag' }, dDt.el, dSub.el, dCo.el, dFps.el)),
-    naive,
     probeLine,
   );
   const setCollapsed = (c: boolean) => {

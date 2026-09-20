@@ -31,9 +31,6 @@ export const APP_CONFIG = {
   routeIntervalMs: 250,
   /** Smoothing factor of the frame-time exponential moving average. */
   fpsEmaAlpha: 0.08,
-  /** Stability demo ("Break it") settings. */
-  stabilityDemoCfl: 1.8,
-  robustCfl: 0.7,
   /** Sim speed used by the debug API's runFor(). */
   runForTimeScale: 3600,
   /** Default grid resolution for ?live= areas. */

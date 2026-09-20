@@ -41,7 +41,6 @@ export function createHelp(ctx: UIContext): Modal {
     ['Build a levee', ['On Pittsburgh, ', h('b', null, 'Build a levee'), ' in the Try-it strip raises a floodwall along the North Shore and replays the 1936 rise: the land it keeps dry turns green. Or press ', kbd('2'), ' and drag your own wall across a low gap, tying both ends into high ground. The tool card checks the height against the flood (red = overtopped); water finds its way around open ends.']],
     ['Get people out', ['Press ', kbd('8'), ' and click a house (or use ', h('b', null, 'Evacuate'), ' in the Try-it strip). The route to the nearest dry shelter re-plans as roads flood — or turns red.']],
     ['See the hazard', ['Press ', kbd('V'), ' to step through ', h('b', null, 'Depth'), ', ', h('b', null, 'Max depth'), ' and ', h('b', null, 'Speed'), ' maps (or scroll the side panel to ', h('b', null, 'View'), '). Press ', kbd('0'), ' and hover to probe any spot.']],
-    ['Break the math', ['Hit ', h('b', null, 'Break it'), ' in the Try-it strip (or in ', h('b', null, 'How it works'), ') to see why a stable GPU solver is hard.']],
   ];
 
   const tour = h(

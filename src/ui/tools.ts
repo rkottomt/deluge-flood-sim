@@ -510,7 +510,7 @@ export function createToolController(canvas: HTMLCanvasElement, deps: ToolContro
     if (snap) wallScan.lastSim = snap.simTime;
 
     const settled = !!snap && snap.simTime >= wallScan.settleUntil;
-    // Depths from a blown-up solver (stability demo) say nothing about the wall.
+    // Depths from a blown-up solver say nothing about the wall.
     const physical = s.sim.stabilityMode === 'robust';
     // The options card shows this same scan, so the card and the notices below always agree.
     bridge.setWallStatus({
