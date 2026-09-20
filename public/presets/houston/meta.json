@@ -12,7 +12,7 @@
   "east": -95.34410729973756,
   "north": 29.798426166651232
  },
- "attribution": "Elevation: USGS 3DEP · Imagery: USDA NAIP via USGS The National Map · Roads: U.S. Census Bureau TIGER/Line",
+ "attribution": "Elevation: USGS 3DEP · Imagery: USDA NAIP via USGS The National Map · Roads: U.S. Census Bureau TIGER/Line · Buildings © OpenStreetMap contributors (ODbL)",
  "scenario": {
   "description": "Houston is built on a dead-flat coastal plain drained by slow bayous, and Buffalo Bayou runs in a deep trench past downtown. Hurricane Harvey stalled over the city in August 2017 and dropped more than 40 inches of rain in four days over much of Harris County — 60.58 inches at Nederland, a US tropical-cyclone record — with bands that trained over the same ground long enough to put 6.8 inches on southeast Houston in a single hour. Buffalo Bayou crested at 41.90 ft at the Shepherd Drive gauge on August 28 carrying 32,600 ft³/s, its biggest flood since 1935, swollen by emergency releases from the Addicks and Barker reservoirs upstream. Here the bayou runs at that peak while the city takes Harvey's worst hour of rain, 6.8 inches an hour: the bayou's own flood stays in its trench, 12 m below the streets, so with nowhere for the rain to drain the water rises in the streets instead — which is how Houston actually flooded.",
   "sources": [
@@ -688,7 +688,8 @@
   "elevation": "elevation.f32",
   "imagery": "imagery.jpg",
   "roads": "roads.json",
-  "imageryDetail": "imagery-detail.jpg"
+  "imageryDetail": "imagery-detail.jpg",
+  "buildings": "buildings.json"
  },
  "imageryDetail": {
   "x0": 326,
@@ -726,6 +727,105 @@
     "minor": 661,
     "local": 9305
    }
+  },
+  "buildings": {
+   "bakedAt": "2026-09-20T07:48:33.204Z",
+   "source": "OpenStreetMap API 0.6 /map (ODbL 1.0)",
+   "tiles": 20,
+   "microsoftFootprintsAdded": 0,
+   "heightProfile": "us",
+   "parsed": 50706,
+   "kept": 49467,
+   "droppedTiny": 506,
+   "droppedOutside": 19,
+   "droppedInWater": 0,
+   "duplicates": 714,
+   "measured": 171,
+   "levels": 546,
+   "estimated": 48750,
+   "remote": 0,
+   "vertices": 263152,
+   "tallest": [
+    {
+     "name": "JPMorgan Chase Tower",
+     "height": 305,
+     "source": "measured"
+    },
+    {
+     "name": "Wells Fargo Plaza",
+     "height": 302,
+     "source": "measured"
+    },
+    {
+     "name": "TC Energy Center",
+     "height": 238,
+     "source": "measured"
+    },
+    {
+     "name": "Heritage Plaza",
+     "height": 235,
+     "source": "measured"
+    },
+    {
+     "name": "Enterprise Plaza",
+     "height": 230,
+     "source": "measured"
+    },
+    {
+     "name": "609 Main",
+     "height": 230,
+     "source": "measured"
+    },
+    {
+     "name": "CenterPoint Energy Plaza",
+     "height": 225.9,
+     "source": "measured"
+    },
+    {
+     "name": "Fulbright Tower",
+     "height": 221,
+     "source": "measured"
+    },
+    {
+     "name": "One Shell Plaza",
+     "height": 218,
+     "source": "measured"
+    },
+    {
+     "name": "1400 Smith Street",
+     "height": 211,
+     "source": "measured"
+    },
+    {
+     "name": "Three Allen Center",
+     "height": 209,
+     "source": "measured"
+    },
+    {
+     "name": "1 Houston Center",
+     "height": 207,
+     "source": "measured"
+    },
+    {
+     "name": "(unnamed other)",
+     "height": 206.6,
+     "source": "levels"
+    },
+    {
+     "name": "First City Tower",
+     "height": 202,
+     "source": "measured"
+    },
+    {
+     "name": "(unnamed other)",
+     "height": 198.7,
+     "source": "measured"
+    }
+   ],
+   "medianHeight": 8.5,
+   "maxHeight": 305,
+   "bytes": 2282472,
+   "cellsBuiltOn": 237670
   }
  }
 }
