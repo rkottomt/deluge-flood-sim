@@ -255,20 +255,66 @@ function rowMax(src: Float32Array, out: Float32Array, off: number, stride: numbe
 }
 
 /**
+ * Copy `z` into a (nx+2r)×(ny+2r) buffer, padding the border by CONTINUING THE EDGE GRADIENT — the pad cell r steps
+ * out is `edge + r·(edge − inward neighbour)`.
+ *
+ * This is not a nicety. A window truncated at the border takes its minimum from ground that is only on the inward
+ * side, so on a slope the opening comes back BELOW the surface at the upslope edge and the threshold reads that as an
+ * object: measured on a uniform 0.30 slope over a 256² grid, the unpadded filter flagged the last five columns of the
+ * high edge, 1.95 % of the domain, and cut up to the full 12 m maxDrop out of ground that is a perfect plane.
+ * Extrapolating the gradient makes the opening exact on a plane at the border as well as in the middle, which is the
+ * invariant the whole filter rests on; mirror or replicate padding does not (both fold the slope over and leave a
+ * ridge at the fold, which the opening then shaves by slope·r).
+ */
+function padExtrapolated(z: Float32Array, nx: number, ny: number, r: number): { p: Float32Array; W: number; H: number } {
+  const W = nx + 2 * r;
+  const H = ny + 2 * r;
+  const p = new Float32Array(W * H);
+  // Rows of the source, extended left and right.
+  for (let j = 0; j < ny; j++) {
+    const src = j * nx;
+    const dst = (j + r) * W + r;
+    for (let i = 0; i < nx; i++) p[dst + i] = z[src + i];
+    const gL = nx > 1 ? z[src] - z[src + 1] : 0;
+    const gR = nx > 1 ? z[src + nx - 1] - z[src + nx - 2] : 0;
+    for (let t = 1; t <= r; t++) {
+      p[dst - t] = z[src] + t * gL;
+      p[dst + nx - 1 + t] = z[src + nx - 1] + t * gR;
+    }
+  }
+  // Then the same upwards and downwards, using the padded rows just written (so the corners are extrapolated too).
+  for (let x = 0; x < W; x++) {
+    const top = r * W + x;
+    const bot = (r + ny - 1) * W + x;
+    const gT = ny > 1 ? p[top] - p[top + W] : 0;
+    const gB = ny > 1 ? p[bot] - p[bot - W] : 0;
+    for (let t = 1; t <= r; t++) {
+      p[top - t * W] = p[top] + t * gT;
+      p[bot + t * W] = p[bot] + t * gB;
+    }
+  }
+  return { p, W, H };
+}
+
+/**
  * Grey-scale morphological opening with a (2r+1)² flat square: erosion then dilation, each separable into a row and a
  * column pass. A flat structuring element makes opening exact on planar ground — a uniform slope, however steep, comes
  * back unchanged — so what the threshold below sees is convexity (a building, a canopy patch, a sharp ridge), not
- * slope. That is the property the whole filter rests on.
+ * slope. That is the property the whole filter rests on, and it holds at the domain border only because the input is
+ * padded first (`padExtrapolated`).
  */
 export function morphologicalOpening(z: Float32Array, nx: number, ny: number, r: number): Float32Array {
-  const idx = new Int32Array(Math.max(nx, ny) + 2 * r + 2);
-  const a = new Float32Array(z.length);
-  const b = new Float32Array(z.length);
-  for (let j = 0; j < ny; j++) rowMin(z, a, j * nx, 1, nx, r, idx);
-  for (let i = 0; i < nx; i++) rowMin(a, b, i, nx, ny, r, idx);
-  for (let j = 0; j < ny; j++) rowMax(b, a, j * nx, 1, nx, r, idx);
-  for (let i = 0; i < nx; i++) rowMax(a, b, i, nx, ny, r, idx);
-  return b;
+  const { p, W, H } = padExtrapolated(z, nx, ny, r);
+  const idx = new Int32Array(Math.max(W, H) + 2 * r + 2);
+  const a = new Float32Array(p.length);
+  const b = new Float32Array(p.length);
+  for (let j = 0; j < H; j++) rowMin(p, a, j * W, 1, W, r, idx);
+  for (let i = 0; i < W; i++) rowMin(a, b, i, W, H, r, idx);
+  for (let j = 0; j < H; j++) rowMax(b, a, j * W, 1, W, r, idx);
+  for (let i = 0; i < W; i++) rowMax(a, b, i, W, H, r, idx);
+  const out = new Float32Array(z.length);
+  for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) out[j * nx + i] = b[(j + r) * W + (i + r)];
+  return out;
 }
 
 export interface BareEarthOptions {
@@ -309,6 +355,16 @@ export interface BareEarthOptions {
  * cached DEM — otherwise a re-bake silently keeps the old terrain).
  */
 export const BARE_EARTH_DEFAULTS = { maxObjectMeters: 120, slopeTolerance: 0.1, baseThreshold: 1, maxDrop: 12, slopeGate: 0.364 } as const;
+
+/**
+ * Bumped whenever the filter's OUTPUT changes for unchanged parameters, so a cached bake is refiltered rather than
+ * silently kept (scripts/bake-presets.ts puts it in the DEM cache key next to the parameters).
+ *   1 — progressive morphological filter with the slope gate.
+ *   2 — the opening pads its input by extrapolating the edge gradient, which stopped the border strip of a sloping
+ *       domain being flagged as objects (up to the full maxDrop cut out of a plane; Boulder's flagged share fell from
+ *       1.4 % to 0.7 % with its residual against 3DEP unchanged at 3.02 m MAE).
+ */
+export const BARE_EARTH_ALGO_VERSION = 2;
 
 export interface BareEarthResult {
   ground: Float32Array;

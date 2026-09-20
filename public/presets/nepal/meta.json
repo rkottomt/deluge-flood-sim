@@ -29,11 +29,6 @@
   "storms": [],
   "shelters": [
    {
-    "name": "Shree Neelkanta Higher Secondary School",
-    "gx": 381.52,
-    "gy": 565.5
-   },
-   {
     "name": "Shree Sundaradevi Pra Vi",
     "gx": 408.24,
     "gy": 722.11
@@ -44,7 +39,7 @@
     "gy": 603.75
    },
    {
-    "name": "Kalika Community Hospital (Uttargaya)",
+    "name": "Kalika Community Hospital",
     "gx": 470.41,
     "gy": 97.1
    }
@@ -69,7 +64,7 @@
   "roads": "roads.json"
  },
  "bake": {
-  "bakedAt": "2026-09-20T01:15:20.531Z",
+  "bakedAt": "2026-09-20T02:39:30.815Z",
   "demSource": "copernicus",
   "demRepairedCells": 0,
   "demTiles": [
@@ -77,7 +72,7 @@
    "Copernicus_DSM_COG_10_N28_00_E085_00_DEM"
   ],
   "bareEarth": {
-   "flaggedPercent": 2.52,
+   "flaggedPercent": 2.45,
    "meanDropM": 3.53,
    "maxDropM": 12
   },

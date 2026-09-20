@@ -26,7 +26,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { CameraPose, GridRect, ScenarioPreset, Shelter, StageControl, StormCell, WaterSource } from '../src/contracts';
 import { type DEMSource, demAttribution, fetchDEM } from '../src/data/dem';
-import { bareEarthFromSurface, BARE_EARTH_DEFAULTS, type BareEarthOptions, fetchCopernicusDEM } from '../src/data/demGlobal';
+import { bareEarthFromSurface, BARE_EARTH_ALGO_VERSION, BARE_EARTH_DEFAULTS, type BareEarthOptions, fetchCopernicusDEM } from '../src/data/demGlobal';
 import { geoToGrid, squareDomain } from '../src/data/geo';
 import { burnRivers, edgeRuns, edgeStageDiscAvoiding, findRiverEnds, growEdgeRun, flatThreshold, localRelief, seaBoundaryDiscs, type BurnResult, type RiverSpec } from '../src/data/hydro';
 import {
@@ -978,12 +978,16 @@ const PRESET_DEFS: PresetDef[] = [
      * Real, named, and measured on this DEM — every position is the OSM node in the extracts this preset ships with,
      * NOT the coordinates in the research brief: several of those turned out to name a different node (the brief's
      * "Neelkanta" point is 600 m from the school's own OSM node, and its "Barahi" and "Karki Manakamana" points are
-     * over a kilometre away from theirs). Heights above the 601 m channel at Betrawati: +56, +173, +321, +195 m.
-     * Nothing on the valley floor qualifies, which is the honest answer here — Shree Ramchandra Ni Ma Vi sits at
-     * 616 m, fifteen metres above the channel, and is not a refuge from this.
+     * over a kilometre away from theirs). Heights above the 601 m channel at Betrawati: +114, +328, +165 m.
+     *
+     * THREE, NOT FOUR. Shree Neelkanta Higher Secondary School, the school nearest the Betrawati bazaar, was in this
+     * list and is not any more: the highest road node within 200 m of it stands 656.1 m, which is 31.3 m above the
+     * Salankhu channel beside it and BELOW the 33 m of clearance this preset demands (`shelterMargin` + the bake's own
+     * 3 m buffer). Lowering the bar to keep a convenient shelter would be the one dishonest edit available here, so
+     * the school is out and the valley floor has three refuges instead of four. Shree Ramchandra Ni Ma Vi, at 616 m,
+     * is fifteen metres above the channel and was never a candidate.
      */
     shelters: [
-      { name: 'Shree Neelkanta Higher Secondary School', at: [85.17849, 27.98388], search: 200 },
       { name: 'Shree Sundaradevi Pra Vi', at: [85.17697, 27.97627], search: 200 },
       { name: 'Shree Sivalaya Ni Ma Vi', at: [85.19131, 27.98355], search: 200 },
       { name: 'Kalika Community Hospital', at: [85.18091, 28.02053], search: 250 },
@@ -1096,7 +1100,7 @@ async function bake(def: PresetDef) {
     center: def.center,
     sizeMeters: def.sizeMeters,
     n: N,
-    ...(def.global ? { bareEarth: { ...BARE_EARTH_DEFAULTS, ...def.global.bareEarth } } : {}),
+    ...(def.global ? { bareEarth: { ...BARE_EARTH_DEFAULTS, ...def.global.bareEarth }, bareEarthAlgo: BARE_EARTH_ALGO_VERSION } : {}),
   });
   type DemInfo = { source: DEMSource; filled: number; tiles?: string[]; bareEarth?: Record<string, number> };
   let demInfo: DemInfo = { source: 'usgs3dep', filled: 0 };

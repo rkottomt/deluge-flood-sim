@@ -25,7 +25,19 @@ import { generateSandbox } from '../../src/data/sandbox';
 
 const ROOT = path.resolve(import.meta.dirname, '../../public/presets');
 const FT = 0.3048;
-const BAKED = ['pittsburgh', 'johnstown', 'ellicott', 'asheville', 'nashville', 'houston', 'boulder', 'ftmyers'];
+/*
+ * The US presets: 3DEP lidar elevation, NAIP imagery, TIGER roads.
+ */
+const BAKED_US = ['pittsburgh', 'johnstown', 'ellicott', 'asheville', 'nashville', 'houston', 'boulder', 'ftmyers'];
+/*
+ * Presets baked from the global data path (src/data/demGlobal.ts): Copernicus GLO-30 elevation put through the
+ * DSM → bare-earth filter, OSM roads, and NO baked photo — there is no worldwide orthoimagery this repo may
+ * redistribute (public/presets/SOURCES.txt). They go through every structural check below; only the
+ * imagery-and-agency assertions differ, and `isGlobal` marks where.
+ */
+const BAKED_GLOBAL = ['nepal'];
+const BAKED = [...BAKED_US, ...BAKED_GLOBAL];
+const isGlobal = (id: string) => BAKED_GLOBAL.includes(id);
 /*
  * public/presets is served from a public static host, so the whole directory has a size budget (MB).
  *
@@ -57,7 +69,8 @@ interface Loaded {
   meta: PresetMeta;
   elevation: Float32Array;
   roads: RoadNetwork;
-  jpg: Buffer;
+  /** null on a global preset, which ships hypsometric relief instead of a photo. */
+  jpg: Buffer | null;
   h0: Float32Array;
 }
 const cache = new Map<string, Loaded>();
@@ -69,7 +82,7 @@ function load(id: string): Loaded {
   const buf = fs.readFileSync(path.join(dir, meta.files.elevation));
   const elevation = decodeElevation(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer, meta.nx, meta.ny);
   const roads = decodeRoads(JSON.parse(fs.readFileSync(path.join(dir, meta.files.roads!), 'utf8')) as CompactRoads);
-  const jpg = fs.readFileSync(path.join(dir, meta.files.imagery!));
+  const jpg = meta.files.imagery ? fs.readFileSync(path.join(dir, meta.files.imagery)) : null;
   const h0 = computeInitialWater({ nx: meta.nx, ny: meta.ny, elevation }, meta.scenario);
   const l = { meta, elevation, roads, jpg, h0 };
   cache.set(id, l);
@@ -208,13 +221,34 @@ function stoppedShort(src: WaterSource & { type: 'stage' }, edge: DomainEdge, t:
   return false;
 }
 
+/**
+ * Lowest bed within `r` cells of (gx, gy) — the local low a shelter has to stand above when nothing in the domain
+ * is wet to measure against.
+ */
+function lowestNear(elevation: Float32Array, nx: number, ny: number, gx: number, gy: number, r: number): number {
+  let lo = Infinity;
+  const i0 = Math.floor(gx);
+  const j0 = Math.floor(gy);
+  for (let j = Math.max(0, j0 - r); j <= Math.min(ny - 1, j0 + r); j++) {
+    for (let i = Math.max(0, i0 - r); i <= Math.min(nx - 1, i0 + r); i++) lo = Math.min(lo, elevation[j * nx + i]);
+  }
+  return lo;
+}
+
+/**
+ * `dryStart`: the preset deliberately starts with every channel empty (see the nepal test below for why). The
+ * invariants that reference the initial water surface have no reference then, so they are replaced rather than
+ * skipped — an inflow must still sit in a channel at the domain edge, and a shelter must still be local high ground.
+ */
 function checkScenario(
   label: string,
   t: Pick<TerrainData, 'nx' | 'ny' | 'cellSize' | 'elevation'> & { roads: RoadNetwork | null },
   s: ScenarioPreset,
   h0: Float32Array,
+  opts: { dryStart?: boolean } = {},
 ) {
   const { nx, ny, elevation } = t;
+  const dry = opts.dryStart === true;
   // Sources: on water that starts full, with most of the footprint wet.
   for (const src of s.sources) {
     if (src.type === 'stage') {
@@ -225,6 +259,39 @@ function checkScenario(
       continue;
     }
     const k = Math.floor(src.gy) * nx + Math.floor(src.gx);
+    if (dry) {
+      /*
+       * Nothing is wet to land on, so the geometry has to carry the check: the inflow must sit in the burned channel
+       * (its bed below the banks on both sides, measured across the valley) and within a few cells of the domain
+       * edge, which is what makes it a boundary condition rather than water appearing inside the model.
+       */
+      const edgeDist = Math.min(src.gx, nx - src.gx, src.gy, ny - src.gy);
+      assert.ok(edgeDist < 16, `${label}: dry-start inflow ${src.id} is ${edgeDist.toFixed(0)} cells from the domain edge`);
+      const R = Math.max(8, Math.ceil(src.radius) * 2);
+      const bed = elevation[k];
+      const i0 = Math.floor(src.gx);
+      const j0 = Math.floor(src.gy);
+      const left = i0 - R >= 0 ? elevation[j0 * nx + (i0 - R)] : Infinity;
+      const right = i0 + R < nx ? elevation[j0 * nx + (i0 + R)] : Infinity;
+      assert.ok(Math.min(left, right) > bed + 1, `${label}: inflow ${src.id} at ${bed.toFixed(1)} m is not in a channel (banks ${left.toFixed(1)}/${right.toFixed(1)} m)`);
+      /*
+       * On the channel floor, within a metre of the thalweg: findRiverEnds places an inflow at the WIDEST cell that
+       * fits its footprint rather than the deepest, so the centre can sit a few decimetres above the lowest burned
+       * cell beside it (here 722.1 m against 721.3 m, in a channel burned 4 m deep). A metre of slack accepts that
+       * and still fails a footprint that has climbed onto a shelf or a bank.
+       */
+      const floor = lowestNear(elevation, nx, ny, src.gx, src.gy, Math.ceil(src.radius));
+      assert.ok(bed <= floor + 1, `${label}: inflow ${src.id} bed ${bed.toFixed(1)} m is ${(bed - floor).toFixed(1)} m above the channel floor beside it`);
+      /*
+       * And the channel must fall AWAY from it into the domain. This is the check that matters for a dry start: with
+       * no water to show the way, an inflow on a reverse slope would pond at the boundary instead of running down the
+       * valley, and nothing else here would notice.
+       */
+      const inward = edgeDist === src.gy ? [0, 1] : edgeDist === ny - src.gy ? [0, -1] : edgeDist === src.gx ? [1, 0] : [-1, 0];
+      const downstream = lowestNear(elevation, nx, ny, src.gx + inward[0] * 64, src.gy + inward[1] * 64, 16);
+      assert.ok(downstream < bed - 1, `${label}: inflow ${src.id} at ${bed.toFixed(1)} m does not drain inward (bed ${downstream.toFixed(1)} m, 64 cells in)`);
+      continue;
+    }
     assert.ok(h0[k] > 0.5, `${label}: source ${src.id} center depth ${h0[k].toFixed(2)} m — not on a full river`);
     let cells = 0;
     let wet = 0;
@@ -263,7 +330,8 @@ function checkScenario(
     if (h0[k] > 0.01) wet++;
     maxDepth = Math.max(maxDepth, h0[k]);
   }
-  assert.ok(wet > 0, `${label}: rivers start empty`);
+  if (dry) assert.equal(wet, 0, `${label}: a dry-start preset must start with no water at all`);
+  else assert.ok(wet > 0, `${label}: rivers start empty`);
   /*
    * "Confined" means different things for a river and for an estuary. A river domain that starts with more than
    * 15 % of its cells wet has almost certainly leaked its fill out over the floodplain — that is the bake bug this
@@ -299,7 +367,13 @@ function checkScenario(
     const z = elevAt(elevation, nx, sh.gx, sh.gy);
     assert.equal(h0[Math.floor(sh.gy) * nx + Math.floor(sh.gx)], 0, `${label}: shelter ${sh.name} starts wet`);
     if (ceiling !== null) assert.ok(z > ceiling + 2, `${label}: shelter ${sh.name} at ${z.toFixed(1)} m is not above max stage ${ceiling.toFixed(1)} m`);
-    else {
+    else if (dry) {
+      // No water yet: high ground means high RELATIVE TO ITS OWN VALLEY, which is the useful sense anyway. 256 cells
+      // is 2 km here, so the comparison is against the valley floor beside the shelter, not the far end of an 8 km
+      // domain that falls 167 m end to end.
+      const lo = lowestNear(elevation, nx, ny, sh.gx, sh.gy, 256);
+      assert.ok(z > lo + 10, `${label}: shelter ${sh.name} at ${z.toFixed(1)} m is only ${(z - lo).toFixed(1)} m above its valley floor`);
+    } else {
       // No stage control: well above the lowest water surface in the domain.
       let minWater = Infinity;
       for (let k = 0; k < h0.length; k++) if (h0[k] > 0.01) minWater = Math.min(minWater, elevation[k] + h0[k]);
@@ -351,14 +425,32 @@ for (const id of BAKED) {
      */
     assert.ok(lo > -100 && hi < 4500 && hi - lo > 15, `elevation range ${lo}…${hi}`);
     assert.ok(Math.abs(cellSizeFor(meta.bounds, meta.nx) / meta.cellSize - 1) < 2e-3, 'cellSize matches bounds');
-    const size = jpegSize(jpg);
-    // 4096² (the Esri export limit): ≤ 2 m per texel on every preset, sharp at close camera distances.
-    assert.equal(size.width, 4096);
-    assert.equal(size.height, 4096);
-    assert.ok((meta.nx * meta.cellSize) / size.width <= 2, 'imagery ≤ 2 m per texel');
-    assert.match(meta.attribution, /USGS 3DEP/);
-    // Committed imagery must be redistributable: USDA NAIP (public domain), not Esri exports.
-    assert.match(meta.attribution, /USDA NAIP/);
+    if (isGlobal(id)) {
+      /*
+       * A global preset has no baked photo on purpose: Sentinel-2 L2A would be redistributable but is not composed
+       * here, and the cloudless mosaics that would be easy (EOX s2cloudless 2018+) are CC BY-NC-SA. Rather than
+       * leave that unstated, meta.files.imagery is null, the attribution says which shading the app is showing,
+       * and the elevation credits Copernicus and admits the bare-earth filtering.
+       */
+      assert.equal(meta.files.imagery, null, 'no baked photo');
+      assert.equal(jpg, null);
+      assert.match(meta.attribution, /Copernicus DEM GLO-30/);
+      assert.match(meta.attribution, /bare-earth filtered/);
+      assert.match(meta.attribution, /no aerial imagery/);
+      assert.match(meta.attribution, /OpenStreetMap contributors \(ODbL\)/);
+      assert.doesNotMatch(meta.attribution, /USGS 3DEP|USDA NAIP/, 'no US agency credited on a global domain');
+      // The surface-model caveat is not allowed to live only in a doc: it has to be on screen with the scenario.
+      assert.match(meta.scenario.description, /surface model/);
+    } else {
+      const size = jpegSize(jpg!);
+      // 4096² (the Esri export limit): ≤ 2 m per texel on every preset, sharp at close camera distances.
+      assert.equal(size.width, 4096);
+      assert.equal(size.height, 4096);
+      assert.ok((meta.nx * meta.cellSize) / size.width <= 2, 'imagery ≤ 2 m per texel');
+      assert.match(meta.attribution, /USGS 3DEP/);
+      // Committed imagery must be redistributable: USDA NAIP (public domain), not Esri exports.
+      assert.match(meta.attribution, /USDA NAIP/);
+    }
     assert.doesNotMatch(meta.attribution, /Esri/);
     assert.ok(meta.scenario.description.length > 200);
     const info = listPresets().find((p) => p.id === id);
@@ -367,11 +459,17 @@ for (const id of BAKED) {
 
   test(`baked preset "${id}": sources on full rivers, shelters on high ground, confined initial water`, { skip: !present && 'not baked' }, () => {
     const { meta, elevation, roads, h0 } = load(id);
-    checkScenario(id, { nx: meta.nx, ny: meta.ny, cellSize: meta.cellSize, elevation, roads }, meta.scenario, h0);
+    const dryStart = meta.scenario.initialFill.length === 0;
+    checkScenario(id, { nx: meta.nx, ny: meta.ny, cellSize: meta.cellSize, elevation, roads }, meta.scenario, h0, { dryStart });
     const wet = h0.reduce((a, v) => a + (v > 0.01 ? 1 : 0), 0);
     const baked = meta.bake?.initialWetCells;
     if (typeof baked === 'number') assert.ok(Math.abs(wet - baked) <= baked * 0.01, `wet cells ${wet} vs baked ${baked}`);
-    assert.ok(roads.edges.length > 500, 'real road network');
+    /*
+     * A floor on "the road parse really ran", not a target. 8 km of the Trishuli valley holds 202 km of road in 464
+     * edges — the Pasang Lhamu Highway and village lanes, drawn as long polylines — against >500 edges in any of the
+     * US city domains, so the rural floor is lower on purpose.
+     */
+    assert.ok(roads.edges.length > (isGlobal(id) ? 300 : 500), `real road network (${roads.edges.length} edges)`);
   });
 }
 
@@ -407,7 +505,7 @@ for (const id of BAKED) {
     const size = jpegSize(jpgDetail);
     assert.equal(size.width, size.height);
     const mpt = detailMetersPerTexel(rect, meta.cellSize, size.width);
-    const base = (meta.nx * meta.cellSize) / jpegSize(load(id).jpg).width;
+    const base = (meta.nx * meta.cellSize) / jpegSize(load(id).jpg!).width;
     assert.ok(base / mpt >= 1.5, `inset resolves ${(base / mpt).toFixed(2)}x finer than the base photo`);
     // NAIP stops adding detail below ~1 m per texel (artifacts/detail-imagery), so a finer inset is wasted bytes.
     assert.ok(mpt >= DETAIL_TARGET_MPT * 0.7, `${mpt.toFixed(3)} m/texel is not wastefully fine`);
@@ -523,6 +621,72 @@ test('boulder: the 2013 flood comes out of the canyon', { skip: !fs.existsSync(p
   const bc = rivers.find((r) => r.name === 'Boulder Creek')!;
   assert.ok(bc.surfaceMax - bc.surfaceMin > 80, `Boulder Creek drops ${bc.surfaceMax - bc.surfaceMin} m`);
   assert.ok(creek.gx < 40, `inflow at gx ${creek.gx} is not on the west (canyon) edge`);
+});
+
+/*
+ * Nepal is the one preset built on a modelled hydrograph rather than a gauge record, because the gauges upstream were
+ * destroyed — so this test is mostly about HONESTY, not hydraulics. Every number on screen has to be the published
+ * one (DHM's 20 million m³, the Betrawati gauge's 3.55 m last reading and its 4.1/5.0 m thresholds), the inflow has to
+ * be LABELLED a scenario, the surface-model and dry-start caveats have to be in the text a visitor reads, and no
+ * casualty count may appear anywhere near simulation output.
+ */
+test('nepal: a labelled scenario hydrograph, sourced numbers, and the caveats on screen', { skip: !fs.existsSync(path.join(ROOT, 'nepal/meta.json')) }, () => {
+  const { meta } = load('nepal');
+  const s = meta.scenario;
+
+  // 20 million m³ over 30 minutes = 11,111 m³/s, rounded to a hundred. Not presented as a peak anywhere.
+  const surge = s.sources.find((x) => x.type === 'inflow')!;
+  assert.equal(s.sources.length, 1, 'one forcing: the wave from upstream');
+  assert.equal(surge.type === 'inflow' && surge.discharge, 11100);
+  assert.equal(s.stage, null, 'a stage slider would raise the whole reach at once — the opposite of this event');
+  assert.equal(s.rainRate, 0);
+  assert.equal(s.storms.length, 0);
+  // The label is what the UI puts beside the number, so the disclaimer has to live there and not only in prose.
+  assert.match(surge.label!, /scenario/i);
+  assert.match(surge.label!, /not a measured peak/);
+  assert.match(surge.label!, /20 million m³ over 30 minutes/);
+
+  // Published figures, exactly as published.
+  assert.match(s.description, /20 million m³/);
+  assert.match(s.description, /11,100 m³\/s/);
+  assert.match(s.description, /3\.55 m/, 'the gauge\u2019s last reading');
+  assert.match(s.description, /warning level 4\.1 m, danger level 5 m/);
+  assert.match(s.description, /an average rather than a measured peak/);
+  // Caveats a visitor must not have to dig for.
+  assert.match(s.description, /surface model with canopy and buildings/);
+  assert.match(s.description, /rivers start dry/);
+  assert.match(s.description, /no aerial photograph/);
+  assert.match(s.description, /do not read street-level depths/);
+  // No casualty or missing-persons figure anywhere in what the app shows: this model cannot produce one.
+  const shown = `${meta.name} ${meta.subtitle} ${s.description} ${s.sources.map((x) => x.label ?? '').join(' ')}`;
+  assert.doesNotMatch(shown, /\b(dead|death|deaths|killed|casualt\w*|missing|bodies|swept away [0-9])/i, shown);
+
+  // Two-tile Copernicus mosaic across 28° N — the reason this domain was chosen — and the filter's own numbers.
+  const bake = meta.bake as { demSource?: string; demTiles?: string[]; bareEarth?: Record<string, number>; prefill?: string; initialWetCells?: number };
+  assert.equal(bake.demSource, 'copernicus');
+  assert.deepEqual(bake.demTiles, ['Copernicus_DSM_COG_10_N27_00_E085_00_DEM', 'Copernicus_DSM_COG_10_N28_00_E085_00_DEM']);
+  assert.ok(meta.bounds.south < 28 && meta.bounds.north > 28, 'the domain straddles the tile seam');
+  assert.ok(bake.bareEarth && bake.bareEarth.flaggedPercent > 0.5 && bake.bareEarth.flaggedPercent < 15, `filter flagged ${bake.bareEarth?.flaggedPercent} %`);
+  // The dry start is a recorded decision, not an accident of the fill step.
+  assert.equal(bake.prefill, 'none');
+  assert.equal(bake.initialWetCells, 0);
+
+  // The wave enters at the north edge and the valley falls away south: 167 m across the domain.
+  assert.ok(surge.gy < 16, `inflow at gy ${surge.gy} is not on the north edge`);
+  const rivers = (bake as { rivers?: Array<{ name: string; surfaceMax: number; surfaceMin: number }> }).rivers ?? [];
+  const trishuli = rivers.find((r) => r.name === 'Trishuli')!;
+  assert.ok(trishuli.surfaceMax - trishuli.surfaceMin > 150, `the Trishuli falls ${(trishuli.surfaceMax - trishuli.surfaceMin).toFixed(0)} m`);
+  // Camera on the Phalakhu confluence, where the bridge stood.
+  assert.ok(s.camera, 'the framing is part of the story here');
+  assert.ok(Math.hypot(s.camera!.target.gx - 489, s.camera!.target.gy - 757) < 40, 'framed on the Betrawati bridge crossing');
+  /*
+   * Real named places on real high ground, each named for its own OSM node — and THREE of them, not four: the school
+   * nearest the bazaar stands 31.3 m above the channel beside it against this preset's 33 m bar, so the bake refuses
+   * it (scripts/bake-presets.ts). This count is asserted so that bar cannot be quietly lowered to get it back.
+   */
+  assert.equal(s.shelters.length, 3);
+  for (const sh of s.shelters) assert.match(sh.name, /^(Shree|Kalika)/, sh.name);
+  assert.doesNotMatch(s.shelters.map((sh) => sh.name).join(' '), /Neelkanta/);
 });
 
 test(`public/presets stays inside its ${PRESETS_BUDGET_MB} MB budget`, () => {

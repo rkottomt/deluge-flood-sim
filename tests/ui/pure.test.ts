@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import * as f from '../../src/ui/format';
 import * as sc from '../../src/ui/scales';
 import * as geo from '../../src/data/geo';
-import type { StageControl } from '../../src/contracts';
+import type { RouteDiagnosis, StageControl } from '../../src/contracts';
 
 const T = '\u00a0';
 
@@ -147,6 +147,64 @@ test('evacuation card text is laid out from the router\'s structured result (no 
   assert.equal(blockedAdvice({ advice: 'every shelter is flooded. Shelter in place on higher floors.' }), 'Every shelter is flooded. Shelter in place on higher floors.');
   assert.match(blockedAdvice({ advice: '' }), /Shelter in place/);
   assert.match(blockedAdvice(undefined), /Shelter in place/);
+});
+
+test('a blocked evacuation card names the reason, quotes the router\'s numbers, and says when the way out closed', async () => {
+  const { blockedText, blockedSummary, closureText } = await import('../../src/ui/routeText');
+  const diagnosis = (over: Partial<RouteDiagnosis>): RouteDiagnosis => ({
+    startDepth: 0,
+    shelters: 4,
+    dryShelters: 4,
+    startRoads: 6,
+    startRoadsUsable: 6,
+    cutRoute: null,
+    ...over,
+  });
+
+  // cut-off, the flat-coast case: the drive that exists on a dry network, and how much of it is under water now.
+  const cutOff = {
+    reason: 'cut-off' as const,
+    advice: 'every road to a shelter is flooded. Shelter in place on higher floors.',
+    diagnosis: diagnosis({ cutRoute: { lengthMeters: 6180, etaSeconds: 430, shelterName: 'Canal Street — east Fort Myers', floodedMeters: 2870 } }),
+    closure: null,
+  };
+  assert.equal(
+    blockedText(cutOff).reason,
+    `Every road to a shelter is under water: 2.9${T}km of the 6.2${T}km drive to Canal Street — east Fort Myers is flooded.`,
+  );
+  assert.equal(blockedText(cutOff).action, 'Shelter in place on higher floors.');
+  assert.equal(blockedText(cutOff).closure, '');
+  assert.equal(blockedSummary(cutOff), 'Every road to a shelter is under water');
+
+  // A start the road data never connected to a shelter is a different sentence: no flood claim is made about it.
+  const noRoute = { ...cutOff, diagnosis: diagnosis({ cutRoute: null }) };
+  assert.equal(blockedText(noRoute).reason, 'No road in this area connects the start to a shelter.');
+  assert.equal(blockedSummary(noRoute), 'No road connects this start to a shelter');
+
+  // The house itself, and the streets at its door, each say so in their own words.
+  const flooded = { reason: 'start-flooded' as const, advice: 'the start is under water.', diagnosis: diagnosis({ startDepth: 0.64 }), closure: null };
+  assert.match(blockedText(flooded).reason, /^The start itself is under 0\.6 m of water/);
+  assert.equal(blockedSummary(flooded), 'Start is under 0.6 m of water');
+  const doorstep = { reason: 'start-roads-flooded' as const, advice: 'x', diagnosis: diagnosis({ startRoads: 3, startRoadsUsable: 0 }), closure: null };
+  assert.equal(blockedText(doorstep).reason, 'All 3 roads near the start are under water.');
+  assert.equal(blockedText({ ...doorstep, diagnosis: diagnosis({ startRoads: 1, startRoadsUsable: 0 }) }).reason, 'The only road near the start is under water.');
+  const shelters = { reason: 'shelters-flooded' as const, advice: 'x', diagnosis: diagnosis({ dryShelters: 0 }), closure: null };
+  assert.equal(blockedText(shelters).reason, 'All 4 shelters are under water themselves.');
+  assert.equal(blockedText({ ...shelters, diagnosis: diagnosis({ shelters: 1, dryShelters: 0 }) }).reason, 'The shelter is under water itself.');
+
+  // Without a diagnosis (a router that fills in nothing) the card still reads as a sentence, not as an empty line.
+  assert.match(blockedText({ reason: 'cut-off', advice: 'every road to a shelter is flooded. Shelter in place on higher floors.' }).reason, /^Every road to a shelter is flooded\.$/);
+  assert.match(blockedText(null).reason, /Every road to a shelter is flooded/);
+  assert.match(blockedSummary(null), /Every road to a shelter is flooded/);
+
+  // The closure: the sim clock the top bar shows, how long the start had a way out, and the route that was lost.
+  const closure = { simTime: 170, openSeconds: 180, lengthMeters: 6010, etaSeconds: 430, shelterName: 'Canal Street' };
+  assert.equal(closureText({ closure }), `Last route closed at T+00:02:50, 3${T}min after it was planned — 6.0${T}km, 7${T}min to Canal Street.`);
+  assert.equal(blockedText({ ...cutOff, closure }).closure, closureText({ closure }));
+  // A route that closed the moment it was planned claims no warning time, and an unnamed shelter no name.
+  assert.equal(closureText({ closure: { ...closure, openSeconds: 0.4, shelterName: '' } }), `Last route closed at T+00:02:50 — 6.0${T}km, 7${T}min.`);
+  assert.equal(closureText({ closure: null }), '');
+  assert.equal(closureText(null), '');
 });
 
 test('astronomical values from a blown-up solver stay short', () => {
