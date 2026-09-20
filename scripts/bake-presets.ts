@@ -873,6 +873,16 @@ const PRESET_DEFS: PresetDef[] = [
      * Linhart Ave and Hanson St as the surge takes McGregor, and loses its last street before the gauge reaches
      * Ian's 12.92 ft. Of 1,473 streets in this domain only 14 both re-plan and then close within 1.3 km of the
      * scenario's framing; this is the one with the largest re-plan (6.0 km → 4.2 km).
+     *
+     * THERE IS NO SECOND BEAT HERE, and that is the finding rather than a gap. Sampling every ordinary street node
+     * at 60 m spacing gives 1,684 starts; raised to Ian's crest, 1,208 never change their drive at all (their ground
+     * is above the surge), 442 lose their last route, and only 16 in the whole domain re-plan onto a way out that
+     * survives — 1 %, against 17 % on Pittsburgh's hills (artifacts/demo-beats/ftm-distribution.ts). A flat coast
+     * has no high ground to detour onto, so no home here stays dry and merely cut off the way Market Square does:
+     * `evacCutOff` is deliberately absent, and what this preset measures instead is warning time. Live on the GPU
+     * from this pin (artifacts/demo-beats/ftm-timeline.json): 6.0 km along McGregor at the tide, 4.2 km inland as
+     * the surge takes it, 4.5 km with water on the road at T+3:01, and at T+3:19 the last route closes — 3 min 19 s
+     * of warning, which the route card states with the clock reading from the top bar.
      */
     evacStart: { at: [-81.8829, 26.6298], label: 'McGregor Blvd, Fort Myers riverfront' },
     shelters: [
@@ -904,7 +914,12 @@ const PRESET_DEFS: PresetDef[] = [
       'were left in the streets of the River District. ' +
       'Raise the surge and watch the water come in from the river mouth rather than fall from the sky: the ' +
       'elevation model is USGS 3DEP lidar at 7.8 m cells, so the streets are resolved but individual buildings ' +
-      'and seawalls are not.',
+      'and seawalls are not. ' +
+      'Evacuation here is about warning time, not detours, and that is a measurement rather than a mood: sampling ' +
+      'the street network at 60 m spacing gives 1,684 starts, and as the surge rises to Ian\u2019s crest 442 of them ' +
+      'lose their last route to a shelter while only 16 find another way out that survives it — flat ground has no ' +
+      'high ground to re-plan onto. Put the evacuation pin down BEFORE you raise the surge: the card then names the ' +
+      'moment the last road out closed and how long there had been one.',
   },
   {
     /*

@@ -279,6 +279,11 @@
    }
   },
   "evacStart": {
+   "gx": 423.5,
+   "gy": 557.6,
+   "label": "Smithfield St at Oliver Ave, downtown Pittsburgh"
+  },
+  "evacCutOff": {
    "gx": 371.7,
    "gy": 569.2,
    "label": "Market Square, downtown Pittsburgh"

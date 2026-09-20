@@ -52,7 +52,8 @@
    "distance": 5000,
    "yaw": 0.12,
    "pitch": 0.72
-  }
+  },
+  "defaultView": "depth"
  },
  "files": {
   "elevation": "elevation.f32",
