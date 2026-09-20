@@ -416,10 +416,13 @@ function installRuntime() {
     async warmTo(target) {
       let guard = 0;
       const t0 = performance.now();
-      while (filmClock < target - 0.5 && guard++ < 3000) {
-        if (this.stepSim(Math.min(40, target - filmClock)) <= 0) break;
-        if (guard % 4 === 0) await new Promise((r) => requestAnimationFrame(r));
-        if (performance.now() - t0 > 120000) break;
+      let idle = 0;
+      while (filmClock < target - 0.5 && guard++ < 4000) {
+        // A step that advances nothing means the substep cap / GPU backlog is saturated: give the GPU a frame,
+        // don't give up (that used to leave a shot starting hundreds of sim-seconds early).
+        if (this.stepSim(Math.min(40, target - filmClock)) <= 0) { if (++idle > 300) break; } else idle = 0;
+        await new Promise((r) => requestAnimationFrame(r));
+        if (performance.now() - t0 > 180000) break;
       }
       this.warmInfo = { calls: guard, ms: Math.round(performance.now() - t0), clock: filmClock };
       await d.waitFrames(3);
@@ -440,9 +443,12 @@ async function renderShot(shot, opt) {
   const browser = await chromium.launch({
     headless: true,
     channel: 'chromium',
-    args: ['--enable-unsafe-webgpu', '--enable-gpu', '--ignore-gpu-blocklist', '--disable-frame-rate-limit'],
+    // Exactly the flags scripts/shot.mjs uses to reach the real Metal GPU. Do NOT add --disable-frame-rate-limit:
+    // in this headless build it starves requestAnimationFrame and a 120 ms frame becomes 3-5 s.
+    args: ['--enable-unsafe-webgpu', '--enable-gpu', '--ignore-gpu-blocklist'],
   });
-  const log = (m) => console.log(`[${shot.id}] ${m}`);
+  const log = (m) => console.log(`[${shot.id}] ${((Date.now() - t0) / 1000).toFixed(1)}s ${m}`);
+  log('browser launched');
   let errors = [];
   try {
     const page = await browser.newPage({ viewport: { width: warmW, height: warmH }, deviceScaleFactor: 1 });
