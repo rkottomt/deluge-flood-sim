@@ -277,6 +277,11 @@
     "yaw": 0.1,
     "pitch": 0.68
    }
+  },
+  "evacStart": {
+   "gx": 371.7,
+   "gy": 569.2,
+   "label": "Market Square, downtown Pittsburgh"
   }
  },
  "files": {

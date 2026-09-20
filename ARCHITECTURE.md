@@ -289,7 +289,7 @@ Monongahela and Ohio cross the domain edge.
 * **Roads:** US Census TIGER/Line via TIGERweb, fallback OpenStreetMap; noded into a graph in grid coordinates.
 * **Presets** (`public/presets/<id>/`: `meta.json`, `elevation.f32`, `imagery.jpg`, `roads.json`, and
   `imagery-detail.jpg` where the base photo is too coarse) are baked by `npx tsx scripts/bake-presets.ts` and work
-  fully offline. Seven cities plus a procedural sandbox:
+  fully offline. Eight cities plus a procedural sandbox:
 
   | Preset | Domain / cell | Scenario forcing | Photo | Road edges |
   | --- | --- | --- | --- | --- |
@@ -300,16 +300,37 @@ Monongahela and Ohio cross the domain edge.
   | `nashville` | 6.0 km / 5.86 m | Cumberland stage control: 2010 (51.86 ft), 1937 (53.90), 1927 record (56.20) | 1.46 | 5,410 |
   | `houston` | 8.0 km / 7.81 m | Harvey 2017: 173 mm/hr over the whole domain, bayou at its 923 m³/s peak | 1.95 + inset 0.73 | 10,529 |
   | `boulder` | 5.0 km / 4.88 m | 2013 Front Range flood: 238 m³/s out of Boulder Canyon | 1.22 | 1,749 |
+  | `ftmyers` | 8.0 km / 7.81 m | Hurricane Ian 2022 storm surge: a tidal stage on three sea boundaries, 4.5 → 12.9 ft | 1.95 | 3,252 |
 
   River centrelines for the four 2024/2025 additions are traced from USGS NHD high-resolution flowlines; peak
   discharges, stages and gauge datums come from the USGS annual peak-flow files and NWIS site file. Everything in
   `public/presets` is public-domain U.S. government data, recorded per city in `public/presets/SOURCES.txt`.
+
+  `ftmyers` is the first COASTAL domain and the first without a river forcing it: a storm surge is a still-water rise,
+  so `seaBoundaryDiscs` (`src/data/hydro.ts`) puts a stage disc on every crossing of every domain edge by the estuary
+  — three of the four edges here, because the domain corner falls in the middle of the river mouth — and the slider
+  raises all of them together. Its tidal datums and the 12.92 ft record are NOAA CO-OPS station 8725520; the pool
+  level is MEASURED from the DEM's own flat estuary surface (-0.28 m NAVD88, essentially MLLW — the lidar was flown
+  near low tide) rather than assumed.
 * **Deploy budget.** `public/presets` is served from a public static host, so `tests/data/presets.test.ts` caps the
-  whole directory at 90 MB and each preset at 25 MB. It currently stands at 87.7 MB — Pittsburgh is the largest single
-  city at 14.7 MB. Nashville qualifies for an inset on the texel-density rule and one was baked and measured
-  (0.611 m/texel, 2.4×, 3.80 MB), but five insets came to 91.5 MB, so it was dropped rather than raising the ceiling;
-  the export is cached in `artifacts/bake-cache`, so re-adding it costs one bake if the budget ever moves. With
-  2.3 MB of headroom, the next city will need either a smaller base photo or a deliberate decision to raise the cap.
+  whole directory at **120 MB** and each preset at 25 MB. It currently stands at **97.2 MB across eight presets** —
+  Asheville is the largest single city at 15.9 MB, Fort Myers the smallest at 9.5 MB, and close-up insets account for
+  16.5 MB of the total.
+
+  The two caps guard different things, which is why they moved differently. **The per-preset cap is the one a visitor
+  feels**: presets load one at a time, so what anyone downloads is bounded by the largest single preset (15.9 MB), not
+  by the directory. That cap stays at 25 MB. **The directory cap is a host-and-repo cost.** GitHub Pages publishes
+  sites up to 1 GB and recommends the source repository stay under 1 GB, with a soft 100 GB/month of bandwidth
+  ([GitHub Pages limits](https://docs.github.com/en/pages/getting-started-with-github-pages/github-pages-limits), read
+  2026-09-19); at 120 MB the published site is 12 % of that limit and the largest single file is a 6.2 MB JPEG. What
+  keeps the cap finite at all is git history: JPEG and Float32 blobs do not delta-compress, so each preset costs about
+  its own size again forever, and the repository is already 189 MB of worktree plus 132 MB of `.git`.
+
+  Raising 90 → 120 MB buys roughly one more full preset (~10 MB) **plus** room to restore **one** of the two insets
+  dropped for space — Nashville's is exported and cached in `artifacts/bake-cache` (0.611 m/texel, 2.4×, 3.80 MB), and
+  Fort Myers qualifies on the texel-density rule at 1.95 m/texel. It is not room for both a second new preset and both
+  insets; the bake after next needs this argument made again. If the number ever has to come down instead, the lever
+  is the insets: the test's failure message names each preset's inset size and the largest one to drop.
 * **Live areas** are cancellable. A download that stalls mid-transfer fails after 20 s without data, and the elevation
   has a 90 s overall deadline (the error then says the service can't be reached). Dead venue wifi often leaves requests
   hanging instead of failing: while no elevation has arrived, the loader checks every 9 s that the data hosts answer at

@@ -127,6 +127,12 @@ export interface ScenarioPreset {
   /** Suggested camera framing. */
   camera?: CameraPose;
   /**
+   * Extension: where the scenario's evacuation story starts — a home the demo puts the evacuation pin on, chosen so
+   * the route to a shelter re-plans as the flood rises rather than merely existing or merely failing (see
+   * artifacts/evac-story). The user can move the pin anywhere; this is only the opening position.
+   */
+  evacStart?: { gx: number; gy: number; label?: string };
+  /**
    * Extension: a levee the "Build a levee" demo raises in one click. It is tied into high ground at both ends and every
    * segment reaches `crest`, so it holds the scenario's most dramatic flood (see src/ui/levee.ts).
    */
@@ -499,6 +505,47 @@ export interface RouteResult {
    * is flooded. Shelter in place on higher floors."); 'none': the same as `message`; 'ok': ''.
    */
   advice?: string;
+  /** 'blocked': the numbers behind `reason` (src/routing fills it in). null for 'ok' and for 'none'. */
+  diagnosis?: RouteDiagnosis | null;
+  /**
+   * 'blocked': the moment this start's last way out closed, when it had one earlier in the run. Set by the app
+   * (src/app/evac.ts), which watches the route over simulated time; the router only ever sees one flood field, so
+   * it never sets this. null while a route exists and for a start that never had one.
+   */
+  closure?: RouteClosure | null;
+}
+
+/**
+ * Why a 'blocked' route is blocked, in numbers rather than a sentence, so a UI can quote them and a measurement can
+ * group starts without parsing prose. Everything is measured from the flood field of the last updateFlood.
+ */
+export interface RouteDiagnosis {
+  /** Flood depth at the start point, m. */
+  startDepth: number;
+  /** Valid shelters considered, and how many of them are above water themselves. */
+  shelters: number;
+  dryShelters: number;
+  /** Roads the start can snap to within the router's snap radius, and how many of those are passable. */
+  startRoads: number;
+  startRoadsUsable: number;
+  /**
+   * The route the flood cut: the drive that would exist with every flooded road passable — the polyline a 'blocked'
+   * result carries, and its dry-road travel time — plus how much of it is under water now. null when this start
+   * reaches no shelter even on a dry network: a gap in the road data rather than a flood.
+   */
+  cutRoute: { lengthMeters: number; etaSeconds: number; shelterName: string; floodedMeters: number } | null;
+}
+
+/** The simulated moment a start's last route to a shelter closed, and the route that was cut (RouteResult.closure). */
+export interface RouteClosure {
+  /** Simulation clock when the last route closed, s. */
+  simTime: number;
+  /** Simulated seconds the start had a route: from the first one planned for it to the moment it closed. */
+  openSeconds: number;
+  /** The last route that existed, as it was published. */
+  lengthMeters: number;
+  etaSeconds: number;
+  shelterName: string;
 }
 
 /** Why RouteResult has no route ('none' and 'blocked' states). */

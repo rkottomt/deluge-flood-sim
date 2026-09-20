@@ -5,10 +5,16 @@
  * else 1/3 arc-second ≈ 10 m), resampled server-side to exactly our mercator grid, delivered as a Float32
  * TIFF and decoded with `geotiff`. Fallback: AWS Terrarium tiles (global, ~30 m in the US), stitched and
  * bilinearly resampled onto the same grid.
+ *
+ * OUTSIDE THE US 3DEP has no data and answers with a plane of zeros, so `fetchDEM` asks Copernicus DEM GLO-30 first
+ * (src/data/demGlobal.ts): real 30 m posting instead of Terrarium's re-encoded tiles, at the price of being a SURFACE
+ * model — so the global branch runs the bare-earth filter over it and says so in the attribution. Terrarium stays as
+ * the last resort everywhere.
  */
 import { fromArrayBuffer } from 'geotiff';
 import type { ProgressFn } from '../contracts';
-import { EARTH_RADIUS, type MercatorBBox, mercatorToLonLat, mercatorToTile } from './geo';
+import { bareEarthFromSurface, COPERNICUS_DEM_ATTRIBUTION, fetchCopernicusDEM } from './demGlobal';
+import { EARTH_RADIUS, isLikelyUS, type MercatorBBox, mercatorToLonLat, mercatorToTile } from './geo';
 import { ELEVATION_UNREACHABLE_MESSAGE, fetchBytes, isNetworkFailure, mapLimit, MB } from './net';
 import { decodePNG } from './png';
 
@@ -446,13 +452,31 @@ export function isEmptyZeroPlane(elev: Float32Array): boolean {
   return zeros >= elev.length * 0.5 && other <= elev.length * 0.001;
 }
 
+/** Which service a DEM came from (reported to the UI, which credits it). */
+export type DEMSource = 'usgs3dep' | 'copernicus' | 'terrarium';
+
+/** Short service name for progress messages and the live scenario text. */
+export const DEM_SOURCE_NAMES: Record<DEMSource, string> = {
+  usgs3dep: 'USGS 3DEP',
+  copernicus: 'Copernicus GLO-30',
+  terrarium: 'Terrarium',
+};
+
+/** Attribution line for a DEM source. */
+export function demAttribution(source: DEMSource): string {
+  if (source === 'usgs3dep') return 'Elevation: USGS 3DEP';
+  if (source === 'copernicus') return `${COPERNICUS_DEM_ATTRIBUTION}, bare-earth filtered`;
+  return 'Elevation: Mapzen Terrarium (AWS Open Data)';
+}
+
 /** Shown when no elevation source has land for the requested area. */
 export const NO_LAND_MESSAGE = 'This area is open water or outside elevation coverage — pick a place on land.';
 
 /**
- * Fetch the best available DEM for a mercator bbox: USGS 3DEP, falling back to Terrarium if 3DEP fails, is mostly
- * no-data, or is an empty zero plane (outside coverage). No-data is always filled. `source` reports which service
- * was used. Throws NO_LAND_MESSAGE when the Terrarium fallback finds only open water (or nothing).
+ * Fetch the best available DEM for a mercator bbox: USGS 3DEP inside its coverage, Copernicus GLO-30 (bare-earth
+ * filtered) outside it, and Terrarium if the first choice fails, is mostly no-data, or is an empty zero plane.
+ * No-data is always filled. `source` reports which service was used. Throws NO_LAND_MESSAGE when the Terrarium
+ * fallback finds only open water (or nothing).
  */
 export async function fetchDEM(
   m: MercatorBBox,
@@ -461,26 +485,44 @@ export async function fetchDEM(
   cellSize: number,
   onProgress?: ProgressFn,
   signal?: AbortSignal,
-): Promise<{ elevation: Float32Array; source: 'usgs3dep' | 'terrarium'; filled: number }> {
+): Promise<{ elevation: Float32Array; source: DEMSource; filled: number }> {
   let elevation: Float32Array | null = null;
   let filled = 0;
   let depUnreachable = false;
-  try {
-    elevation = await fetch3DEP(m, nx, ny, onProgress, signal);
-    if (noDataFraction(elevation) > 0.5) {
-      elevation = null;
-    } else {
-      // Clamp repair first: a small, entirely below-sea-level US box can come back as a 0 plane at some pixel sizes.
-      filled += await repairZeroClamp(elevation, m, nx, ny, cellSize, onProgress, signal);
-      if (isEmptyZeroPlane(elevation)) elevation = null;
+  // Outside 3DEP coverage, ask Copernicus instead: 3DEP would cost a round trip and answer with a plane of zeros.
+  const centre = mercatorToLonLat((m.xmin + m.xmax) / 2, (m.ymin + m.ymax) / 2);
+  const global = !isLikelyUS(centre.lat, centre.lon);
+  if (global) {
+    try {
+      const g = await fetchCopernicusDEM(m, nx, ny, onProgress, signal);
+      // GLO-30 is a surface model: canopy and buildings are in the terrain unless this runs (src/data/demGlobal.ts).
+      const bare = bareEarthFromSurface(g.elevation, nx, ny, { cellSize });
+      onProgress?.(`Elevation decoded (Copernicus GLO-30; ${(bare.removedFraction * 100).toFixed(1)} % of cells filtered as surface features)`, 1);
+      return { elevation: bare.ground, source: 'copernicus', filled: g.filled };
+    } catch (e) {
+      if (signal?.aborted) throw e;
+      depUnreachable = isNetworkFailure(e);
+      console.warn('[data] Copernicus GLO-30 failed, falling back to Terrarium tiles:', e);
+      onProgress?.('Copernicus DEM unavailable — using Terrarium tiles', 0);
     }
-    if (!elevation) onProgress?.('USGS 3DEP has no coverage here — using Terrarium tiles', 0);
-  } catch (e) {
-    if (signal?.aborted) throw e;
-    depUnreachable = isNetworkFailure(e);
-    console.warn('[data] USGS 3DEP failed, falling back to Terrarium tiles:', e);
-    onProgress?.('USGS 3DEP unavailable — using Terrarium tiles', 0);
-    elevation = null;
+  } else {
+    try {
+      elevation = await fetch3DEP(m, nx, ny, onProgress, signal);
+      if (noDataFraction(elevation) > 0.5) {
+        elevation = null;
+      } else {
+        // Clamp repair first: a small, entirely below-sea-level US box can come back as a 0 plane at some pixel sizes.
+        filled += await repairZeroClamp(elevation, m, nx, ny, cellSize, onProgress, signal);
+        if (isEmptyZeroPlane(elevation)) elevation = null;
+      }
+      if (!elevation) onProgress?.('USGS 3DEP has no coverage here — using Terrarium tiles', 0);
+    } catch (e) {
+      if (signal?.aborted) throw e;
+      depUnreachable = isNetworkFailure(e);
+      console.warn('[data] USGS 3DEP failed, falling back to Terrarium tiles:', e);
+      onProgress?.('USGS 3DEP unavailable — using Terrarium tiles', 0);
+      elevation = null;
+    }
   }
   if (elevation) {
     filled += cleanDEM(elevation, nx, ny);
@@ -493,7 +535,13 @@ export async function fetchDEM(
   } catch (e) {
     // Both services unreachable: say so plainly (the UI shows its offline help for this message).
     if (e instanceof ElevationUnreachableError && depUnreachable) throw new Error(ELEVATION_UNREACHABLE_MESSAGE);
-    if (e instanceof ElevationUnreachableError) throw new Error('USGS 3DEP has no data here and the Terrarium elevation tiles can’t be reached — check the network.');
+    if (e instanceof ElevationUnreachableError) {
+      throw new Error(
+        global
+          ? 'The Copernicus elevation tiles and the Terrarium ones can’t be reached — check the network.'
+          : 'USGS 3DEP has no data here and the Terrarium elevation tiles can’t be reached — check the network.',
+      );
+    }
     throw e;
   }
   // Deep ocean lies below the no-data floor; shallow seas and lake beds are valid but hold no land to flood.

@@ -143,6 +143,11 @@
    "distance": 2100,
    "yaw": -1.571,
    "pitch": 0.45
+  },
+  "evacStart": {
+   "gx": 888.4,
+   "gy": 460.2,
+   "label": "Davidson St, East Nashville"
   }
  },
  "files": {

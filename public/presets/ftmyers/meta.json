@@ -1,0 +1,203 @@
+{
+ "version": 1,
+ "id": "ftmyers",
+ "name": "Fort Myers — Caloosahatchee",
+ "subtitle": "Hurricane Ian, 2022 — the Gulf's storm surge up a tidal river",
+ "nx": 1024,
+ "ny": 1024,
+ "cellSize": 7.8125,
+ "bounds": {
+  "west": -81.91219739311907,
+  "south": 26.596061740216594,
+  "east": -81.83180260688094,
+  "north": 26.667926959419905
+ },
+ "attribution": "Elevation: USGS 3DEP · Imagery: USDA NAIP via USGS The National Map · Roads: U.S. Census Bureau TIGER/Line",
+ "scenario": {
+  "description": "Fort Myers stands on the south bank of the Caloosahatchee, a tidal estuary two kilometres wide that opens into San Carlos Bay and the Gulf of Mexico. A third of this domain lies below mean higher high water, so the flood here does not come down the river — it comes in from the sea. The estuary in this elevation model reads about 4.5 ft on the Fort Myers gauge (NOAA 8725520), close to low tide; mean higher high water is 5.68 ft. Hurricane Ian came ashore on Sanibel and Cayo Costa on September 28, 2022 as a category 4 hurricane and drove the Gulf up the Caloosahatchee: at 22:18 GMT the gauge read 12.92 ft — 2.29 m above NAVD88 — the highest water level in its record. Downtown Fort Myers, three metres above the datum, went under, and boats were left in the streets of the River District. Raise the surge and watch the water come in from the river mouth rather than fall from the sky: the elevation model is USGS 3DEP lidar at 7.8 m cells, so the streets are resolved but individual buildings and seawalls are not.",
+  "sources": [
+   {
+    "id": "sea-north-0",
+    "type": "stage",
+    "gx": 714.5,
+    "gy": -747.14,
+    "radius": 780.12,
+    "level": -0.28,
+    "label": "Gulf tide at Fort Myers — storm surge (NOAA 8725520)"
+   },
+   {
+    "id": "sea-south-1",
+    "type": "stage",
+    "gx": 110,
+    "gy": 1202.25,
+    "radius": 211.18,
+    "level": -0.28,
+    "label": "Gulf tide at Fort Myers — storm surge (NOAA 8725520)"
+   },
+   {
+    "id": "sea-west-2",
+    "type": "stage",
+    "gx": -1127.29,
+    "gy": 755,
+    "radius": 1160.27,
+    "level": -0.28,
+    "label": "Gulf tide at Fort Myers — storm surge (NOAA 8725520)"
+   }
+  ],
+  "storms": [],
+  "shelters": [
+   {
+    "name": "Canal Street — east Fort Myers",
+    "gx": 817.97,
+    "gy": 640.68
+   },
+   {
+    "name": "Veronica S. Shoemaker Boulevard",
+    "gx": 921.58,
+    "gy": 585.52
+   },
+   {
+    "name": "Aldermans Walk",
+    "gx": 1001.28,
+    "gy": 830.96
+   },
+   {
+    "name": "Ironbridge Boulevard",
+    "gx": 914.34,
+    "gy": 754.85
+   }
+  ],
+  "rainRate": 0,
+  "stage": {
+   "label": "Caloosahatchee River at Fort Myers (NOAA 8725520)",
+   "gaugeDatum": -1.646,
+   "normalLevel": -0.28,
+   "marks": [
+    {
+     "label": "Mean higher high water",
+     "ft": 5.68
+    },
+    {
+     "label": "Hurricane Ian (record)",
+     "ft": 12.92
+    }
+   ],
+   "maxOffset": 2.8
+  },
+  "initialFill": [
+   {
+    "seeds": [
+     {
+      "gx": 689.5,
+      "gy": 0.5
+     },
+     {
+      "gx": 621.5,
+      "gy": 77.5
+     },
+     {
+      "gx": 529.5,
+      "gy": 155.5
+     },
+     {
+      "gx": 461.5,
+      "gy": 195.5
+     },
+     {
+      "gx": 369.5,
+      "gy": 281.5
+     },
+     {
+      "gx": 303.5,
+      "gy": 346.5
+     },
+     {
+      "gx": 242.5,
+      "gy": 426.5
+     },
+     {
+      "gx": 181.5,
+      "gy": 506.5
+     },
+     {
+      "gx": 155.5,
+      "gy": 574.5
+     },
+     {
+      "gx": 137.5,
+      "gy": 654.5
+     },
+     {
+      "gx": 122.5,
+      "gy": 734.5
+     },
+     {
+      "gx": 126.5,
+      "gy": 814.5
+     },
+     {
+      "gx": 113.5,
+      "gy": 898.5
+     },
+     {
+      "gx": 98.5,
+      "gy": 986.5
+     }
+    ],
+    "level": -0.28
+   }
+  ],
+  "camera": {
+   "target": {
+    "gx": 422.8,
+    "gy": 369.5,
+    "elevation": -4.3
+   },
+   "distance": 2400,
+   "yaw": 1.45,
+   "pitch": 0.42
+  },
+  "evacStart": {
+   "gx": 373.2,
+   "gy": 543.3,
+   "label": "McGregor Blvd, Fort Myers riverfront"
+  }
+ },
+ "files": {
+  "elevation": "elevation.f32",
+  "imagery": "imagery.jpg",
+  "roads": "roads.json"
+ },
+ "bake": {
+  "bakedAt": "2026-09-20T00:11:20.656Z",
+  "demSource": "usgs3dep",
+  "demRepairedCells": 350498,
+  "center": {
+   "lat": 26.632,
+   "lon": -81.872
+  },
+  "sizeMeters": 8000,
+  "burnedCells": 346060,
+  "rivers": [
+   {
+    "name": "Caloosahatchee River",
+    "cells": 346060,
+    "depth": 4,
+    "surfaceMax": -0.28,
+    "surfaceMin": -0.28
+   }
+  ],
+  "initialWetCells": 346060,
+  "roads": {
+   "nodes": 2236,
+   "edges": 3252,
+   "km": 464.582557630117,
+   "byClass": {
+    "highway": 11,
+    "major": 442,
+    "minor": 33,
+    "local": 2766
+   }
+  }
+ }
+}

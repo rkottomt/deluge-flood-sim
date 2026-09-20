@@ -101,7 +101,7 @@ export function buildLiveScenario(
   const sizeKm = (nx * cellSize) / 1000;
   const fmt1 = (v: number) => (Math.round(v * 10) / 10).toString();
   const description =
-    `${name}: ${sizeKm.toFixed(1)} km × ${sizeKm.toFixed(1)} km of live ${demSource === 'usgs3dep' ? 'USGS 3DEP' : 'Terrarium'} ` +
+    `${name}: ${sizeKm.toFixed(1)} km × ${sizeKm.toFixed(1)} km of live ${demSource === 'usgs3dep' ? 'USGS 3DEP' : demSource === 'copernicus' ? 'Copernicus GLO-30' : 'Terrarium'} ` +
     `elevation at ${cellSize.toFixed(1)} m per cell` +
     (bodies.length ? `, with ${bodies.length} water surface${bodies.length === 1 ? '' : 's'} detected and pre-filled` : '') +
     '. ' +

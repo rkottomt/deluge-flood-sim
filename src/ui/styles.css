@@ -1777,6 +1777,20 @@
   color: #ffd2d4;
   font-size: 12.5px;
 }
+/* Why, then the moment the last way out closed, then what to do: three lines, tight, the closure the loudest. */
+.dl-evac[data-state='blocked'] .dl-evac-msg + .dl-evac-msg {
+  margin-top: 8px;
+}
+.dl-evac[data-state='blocked'] .dl-evac-closed {
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 120, 126, 0.32);
+  color: #fff;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+.dl-evac[data-state='blocked'] .dl-evac-action {
+  font-weight: 650;
+}
 .dl-road-legend {
   display: flex;
   flex-wrap: wrap;

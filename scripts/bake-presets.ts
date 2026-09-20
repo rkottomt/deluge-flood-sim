@@ -10,6 +10,11 @@
  *   National Map): Esri's World Imagery item says the layer is not intended for exporting imagery for offline use
  *   outside ArcGIS apps. NAIP is also orthorectified, so buildings and TIGER roads line up (see src/data/imagery.ts).
  *
+ * NON-US ("global") PRESETS take the same steps with different sources (PresetDef.global): Copernicus DEM GLO-30 read
+ * straight from the COGs and put through the DSM → bare-earth filter (src/data/demGlobal.ts), roads from OSM API XML
+ * downloaded ahead of time (artifacts/nepal-build/fetch-osm.mjs), and no baked photo — there is no global orthoimagery
+ * this repo may redistribute, so the renderer's hypsometric tint is the ground texture and the scenario text says so.
+ *
  * Steps per preset: USGS 3DEP DEM (1024²) → no-data/seam repair → river centerlines from waypoints →
  * pool level measured from the DEM → channel burn with smooth banks → sources placed on the channel spine at
  * the domain edges → initial fill seeds along the centerlines (verified: no water outside the channel) →
@@ -20,9 +25,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { CameraPose, GridRect, ScenarioPreset, Shelter, StageControl, StormCell, WaterSource } from '../src/contracts';
-import { fetchDEM } from '../src/data/dem';
+import { type DEMSource, demAttribution, fetchDEM } from '../src/data/dem';
+import { bareEarthFromSurface, BARE_EARTH_DEFAULTS, type BareEarthOptions, fetchCopernicusDEM } from '../src/data/demGlobal';
 import { geoToGrid, squareDomain } from '../src/data/geo';
-import { burnRivers, edgeRuns, edgeStageDiscAvoiding, findRiverEnds, growEdgeRun, flatThreshold, localRelief, type BurnResult, type RiverSpec } from '../src/data/hydro';
+import { burnRivers, edgeRuns, edgeStageDiscAvoiding, findRiverEnds, growEdgeRun, flatThreshold, localRelief, seaBoundaryDiscs, type BurnResult, type RiverSpec } from '../src/data/hydro';
 import {
   detailMercatorBBox,
   detailMetersPerTexel,
@@ -37,7 +43,16 @@ import {
 } from '../src/data/imagery';
 import { computeInitialWater } from '../src/data/initialWater';
 import { type PresetMeta, PRESETS, validatePresetMeta } from '../src/data/presets';
-import { buildRoadNetwork, encodeRoads, fetchTigerRoads, type RawRoad, ROADS_ATTRIBUTION_TIGER, roadStats } from '../src/data/roads';
+import {
+  buildRoadNetwork,
+  encodeRoads,
+  fetchTigerRoads,
+  parseOSMXml,
+  type RawRoad,
+  ROADS_ATTRIBUTION_OSM,
+  ROADS_ATTRIBUTION_TIGER,
+  roadStats,
+} from '../src/data/roads';
 import { makeGeoToGrid } from '../src/data/geo';
 
 const FT = 0.3048;
@@ -93,6 +108,55 @@ const HARVEY_PEAK_RAIN_MM_HR = 173;
 const BOULDER_2013_CFS = 8400;
 /** Boulder's record calendar day, 9.08 in on September 12, 2013 (NWS Boulder), as a mean rate: 230.6 mm / 24 h. */
 const BOULDER_2013_RAIN_MM_HR = 9.6;
+
+/*
+ * Fort Myers, FL — Hurricane Ian's storm surge, 28 September 2022.
+ *
+ * NOAA tide station 8725520 (Fort Myers, Caloosahatchee River) datums, 1983-2001 epoch, in feet ABOVE STATION DATUM
+ * (api.tidesandcurrents.noaa.gov/mdapi/prod/webapi/stations/8725520/datums.json): MHHW 5.68, MSL 4.99, MLLW 4.36,
+ * NAVD88 5.40. The station datum therefore sits 5.40 ft = 1.646 m BELOW NAVD88, so this gauge's feet convert
+ * straight to NAVD88 and the app's stage readout is the real gauge reading.
+ *
+ * The station's record water level is 12.923 ft = 2.293 m NAVD88, set by Ian at 22:18 GMT on 2022-09-28 (verified
+ * against the 6-minute water_level series for 2022-09-28/29 on the NAVD datum).
+ */
+const FTMYERS_GAUGE_DATUM = -5.4 * FT; // m NAVD88
+const FTMYERS_MHHW_FT = 5.68;
+const FTMYERS_MHHW_NAVD88 = (FTMYERS_MHHW_FT - 5.4) * FT; // +0.085 m
+const IAN_PEAK_FT = 12.92; // 2.293 m NAVD88 — the station record
+/**
+ * Betrawati, Nepal — the Bhote Koshi / Trishuli debris flood of 26 August 2026.
+ *
+ * Shortly after 08:37 NPT rock and glacier ice broke from the north face of Langtang Lirung and fell about 1,200 m into
+ * the Lhende Khola; the flood ran down the Bhote Koshi into the Trishuli, reached Betrawati about 09:20 — roughly four
+ * minutes after the first SMS alerts went out — and destroyed the bridge over the Phalakhu Khola that carried the only
+ * road into Rasuwa district. ICIMOD's analysis is a rock-and-ice SLOPE FAILURE, not a glacial lake outburst, and it
+ * happened on the Nepali side; neither claim may be softened into the other.
+ *
+ * WHAT IS MEASURED AND WHAT IS NOT. Nepal's DHM Flood Forecasting Division reported about 20 million m³ of excess water
+ * down the Bhote Koshi–Trishuli–Narayani system (technical report, 27 August 2026), and a peak of 5,850 m³/s at Devghat
+ * 168 km downstream — the only published peak discharge anywhere on the river. Nothing was measured at Betrawati: the
+ * gauge there (DHM station 447, warning level 4.1 m, danger level 5.0 m) last read 3.55 m at 09:20 and was then swept
+ * away, as were the three other automatic stations in the corridor. So the inflow below is the reported VOLUME divided
+ * by the 30 minutes this scenario releases it over — the same construction as Johnstown's lake, and it must carry the
+ * same label: an average, not a peak. The alternative arithmetic is in public/presets/SOURCES.txt (20 Mm³ over an hour
+ * is 5,600 m³/s, close to the measured Devghat peak); 30 minutes is the aggressive end and is chosen because at
+ * Betrawati the surge had travelled only 56 km and ICIMOD timed it still moving at ~20 m/s.
+ *
+ * WHAT THE SIMULATION CANNOT DO. The channel falls 163 m in the 6.5 km of this domain (2.5 %), where the flow is
+ * supercritical and the local-inertial scheme is outside the regime it was validated in — and the real event was a
+ * sediment-laden debris flood that ran hundreds of metres up the valley walls. The solver's flood speeds cap at 15 m/s
+ * against the ~20 m/s ICIMOD measured between Rasuwagadhi and Betrawati. This is a clear-water flood of comparable
+ * volume on the real terrain: which ground goes under, in what order, and what that does to the roads.
+ */
+const BHOTE_KOSHI_EXCESS_M3 = 2.0e7;
+const BHOTE_KOSHI_RELEASE_S = 30 * 60;
+const TRISHULI_SURGE_INFLOW = Math.round(BHOTE_KOSHI_EXCESS_M3 / BHOTE_KOSHI_RELEASE_S / 100) * 100;
+/** DHM station 447 (Trishuli at Betrawati) thresholds and its last reading, m on the gauge. Read from DHM's own page. */
+const BETRAWATI_WARNING_M = 4.1;
+const BETRAWATI_DANGER_M = 5.0;
+const BETRAWATI_LAST_READING_M = 3.55;
+
 type LonLat = [number, number];
 
 interface RiverDef {
@@ -119,6 +183,23 @@ interface PresetDef {
   pool?: { guess: number };
   stage?: Omit<StageControl, 'normalLevel'> & { normalLevel?: number };
   /**
+   * COASTAL domains: hold every edge crossing of the open water at the stage level, instead of the two discs a
+   * river's `upstream`/`downstream` ends give. A tidal estuary is cut by more than two edges (Fort Myers: north,
+   * west and south at once) and every uncovered boundary cell drains it — see seaBoundaryDiscs. The slider then
+   * raises the whole sea surface together, which is what a storm surge is: a still-water rise, not a discharge, so
+   * a `sea` preset takes no `confluenceHead`.
+   */
+  sea?: {
+    /** Label for the boundary sources, e.g. the tide gauge and the event. */
+    label: string;
+    /**
+     * Elevation (m, DEM datum) up to which a crossing may grow beyond the at-rest waterline: the cross-section wet
+     * at MEAN HIGHER HIGH WATER, not at the top of the surge slider. See seaBoundaryDiscs for why the surge ceiling
+     * cannot be used on flat coastal ground.
+     */
+    growCeiling: number;
+  };
+  /**
    * Water-surface drop (m) from the upstream stage boundaries to the downstream one, at normal pool and at a named
    * crest. Half of it is added above the gauge level at upstream boundaries and half taken off at the downstream
    * one, so the gauge (at the confluence) still reads the slider's stage; in between it grows linearly with the
@@ -127,6 +208,13 @@ interface PresetDef {
    */
   confluenceHead?: { normal: number; crestFt: number; crest: number };
   shelters: Array<{ name: string; at: LonLat; /** search radius for a high road node, m */ search?: number }>;
+  /**
+   * Where the scenario's evacuation story starts: the home the "Evacuate" demo step puts the pin on, chosen on
+   * evidence — a start whose route to a shelter re-plans as the flood rises and then loses its last road, rather
+   * than one that merely works or merely fails (artifacts/evac-story ranks every street in the domain). Snapped to
+   * the nearest ordinary street node, never a highway ramp or a bridge deck.
+   */
+  evacStart?: { at: LonLat; label: string };
   /**
    * Clearance (m) a shelter needs above the nearest channel's water surface where the preset has no stage slider.
    * The default 20 m is generous mountain-valley headroom. Houston's whole domain lies within 20 m of Buffalo Bayou,
@@ -149,6 +237,23 @@ interface PresetDef {
    * wall taller than the wall tool builds (10 m).
    */
   levee?: { name: string; crest: number; path: LonLat[]; camera: { at: LonLat; distance: number; yaw: number; pitch: number } };
+  /**
+   * OUTSIDE THE US: elevation from Copernicus GLO-30 + the bare-earth filter, roads from cached OSM XML, no baked
+   * photo. 3DEP, NAIP and TIGERweb all stop at the border, and the elevation model stops being bare earth — which is
+   * why this carries its own provenance rather than reusing the US strings.
+   */
+  global?: {
+    /** OSM API 0.6 `map` XML extracts covering the domain, repo-relative (see artifacts/nepal-build/fetch-osm.mjs). */
+    osmXml: string[];
+    /** Overrides for the bare-earth filter; anything omitted uses the validated defaults in src/data/demGlobal.ts. */
+    bareEarth?: Partial<Omit<BareEarthOptions, 'cellSize'>>;
+    /**
+     * `none` ships no imagery.jpg: Sentinel-2 L2A is the only globally open source (10 m, and composing it is a
+     * separate job), EOX s2cloudless 2018+ is CC BY-NC-SA and may not be redistributed, and Esri World Imagery is
+     * live-only by its own terms. The renderer already falls back to a hypsometric tint with slope shading.
+     */
+    imagery: 'none';
+  };
   description: (ctx: { normalLevel: number | null; gaugeDatum: number | null }) => string;
 }
 
@@ -205,6 +310,13 @@ const PRESET_DEFS: PresetDef[] = [
     // ±4 cm of the gauge reading): ±0.075 m at normal pool gives ~300–650 m³/s at 0.25 m/s, close to the rivers'
     // mean flows; ±0.2 m at 46 ft gives Allegheny 3,560, Monongahela 2,950 and Ohio 3,070 m³/s with no fast jets.
     confluenceHead: { normal: 0.15, crestFt: 46, crest: 0.4 },
+    /*
+     * Market Square downtown, 226.2 m — a metre above the 1936 crest, so the story is the roads, not the house. Its
+     * route re-plans five times on the way to 46 ft (Mount Washington over the Fort Pitt Bridge → longer ways round
+     * → the Hill District) and is cut off entirely at 44.5 ft. The best of 3,248 streets in the domain by that
+     * measure (artifacts/evac-story/pickStart.ts).
+     */
+    evacStart: { at: [-80.00294, 40.43999], label: 'Market Square, downtown Pittsburgh' },
     shelters: [
       { name: 'Cathedral of Learning (Pitt, Oakland)', at: [-79.95319, 40.4443], search: 250 },
       { name: 'Mount Washington — Grandview Ave', at: [-80.0105, 40.4362], search: 350 },
@@ -487,6 +599,9 @@ const PRESET_DEFS: PresetDef[] = [
     // One river, so the "confluence" head is simply the reach's water-surface drop: without it both boundaries sit
     // at one level and nothing drives the pool. 0.15 m over the 4.9 km reach at pool, 0.5 m at the 2010 crest.
     confluenceHead: { normal: 0.15, crestFt: 51.86, crest: 0.5 },
+    // Davidson St in East Nashville, across the river from downtown: Rolling Mill Hill → Lockeland Springs as the
+    // Cumberland rises, then cut off at 51.5 ft — before the 1927 record the slider reaches.
+    evacStart: { at: [-86.75846, 36.161], label: 'Davidson St, East Nashville' },
     shelters: [
       { name: 'Tennessee State Capitol', at: [-86.7844, 36.1659], search: 300 },
       { name: 'Vanderbilt / Midtown', at: [-86.7996, 36.1477], search: 350 },
@@ -501,9 +616,10 @@ const PRESET_DEFS: PresetDef[] = [
     camera: { at: [-86.7735, 36.1635], distance: 2100, yaw: -Math.PI / 2, pitch: 0.45 },
     /*
      * No inset here, though at 1.46 m/texel the base photo is coarser than NAIP resolves and one was baked and
-     * measured (2.4x, 3.8 MB). public/presets is served from a public static host under a 90 MB budget
-     * (tests/data/presets.test.ts), and five insets put it at 91.5 MB — so the bytes go to the four domains with
-     * the worst blur (1.71-1.95 m/texel) and Nashville, the mildest of the five, keeps its base photo.
+     * measured (2.4x, 3.8 MB): the bytes went to the four domains with the worst blur (1.71-1.95 m/texel) and
+     * Nashville, the mildest of the five, keeps its base photo. The directory budget has since moved to 120 MB
+     * (tests/data/presets.test.ts explains why), which leaves room for ONE of this inset and Fort Myers'; the
+     * export is cached in artifacts/bake-cache, so re-adding it costs one bake.
      */
     description: ({ normalLevel, gaugeDatum }) =>
       'Downtown Nashville stands on the west bank of the Cumberland River, which crosses the city as a navigation ' +
@@ -646,6 +762,246 @@ const PRESET_DEFS: PresetDef[] = [
       "out of the canyon at the west edge while the record day's rain falls on the foothills. Boulder Creek is banked " +
       'only about 3 m deep through town, so it leaves its channel within minutes and runs down the streets beside it.',
   },
+  {
+    /*
+     * Fort Myers, FL — Hurricane Ian, 28 September 2022. Chosen for COASTAL STORM SURGE, the one mechanism none of
+     * the other presets has: the forcing is not a discharge but the sea itself standing higher, pushed up a tidal
+     * estuary. It is also the Florida flood judges name first, and it is the best-instrumented one — NOAA 8725520 is
+     * inside this frame (26.6478, -81.8714), and its record is Ian's.
+     *
+     * The domain (8 km, 7.81 m cells) is framed on the probe in artifacts/florida-build/probe-layout.ts: the
+     * Caloosahatchee runs diagonally from the north edge (cells 496..928) down to the west edge (486..1023) and the
+     * south edge (0..217) — it leaves through THREE edges, because the domain corner falls in the middle of the
+     * river mouth. That is why this preset uses `sea` rather than a river's upstream/downstream pair: two discs
+     * cannot cover three crossings, and an uncovered crossing drains the estuary off the edge at rest.
+     *
+     * Fort Myers is on the SOUTH bank (ground 4-5 m NAVD88, rising to 13 m); Cape Coral is the low 1-3 m ground to
+     * the north-west. 35 % of the domain is below MHHW. The DEM's own flat river surface measures about -0.28 m
+     * NAVD88, essentially MLLW (-0.317 m) — the lidar was flown near low tide — and the bake measures it rather
+     * than assuming it.
+     *
+     * There is NO confluenceHead: a surge is a still-water rise, so every boundary sits at one level and nothing
+     * drives the estuary at rest, which is correct for a tidal river. The slider raises all three boundaries
+     * together and the water advances inland from the shoreline as a front.
+     */
+    id: 'ftmyers',
+    center: { lat: 26.632, lon: -81.872 },
+    sizeMeters: 8000,
+    n: 1024,
+    pool: { guess: -0.28 },
+    rivers: [
+      {
+        name: 'Caloosahatchee River',
+        // Centerline down the middle of the estuary, north edge -> south-west, read off the layout probe. No
+        // upstream/downstream source: `sea` places the boundary discs on every crossing instead.
+        path: [
+          [-81.8576, 26.6675], [-81.8657, 26.6608], [-81.8751, 26.6548], [-81.8852, 26.6474], [-81.8934, 26.6400],
+          [-81.8984, 26.6341], [-81.9009, 26.6237], [-81.9028, 26.6103], [-81.9040, 26.5969],
+        ],
+        depth: 4,
+        bankCells: 3,
+        maxHalfWidth: 260,
+        snapRadius: 8,
+      },
+    ],
+    stage: {
+      label: 'Caloosahatchee River at Fort Myers (NOAA 8725520)',
+      gaugeDatum: FTMYERS_GAUGE_DATUM,
+      marks: [
+        { label: 'Mean higher high water', ft: FTMYERS_MHHW_FT },
+        { label: 'Hurricane Ian (record)', ft: IAN_PEAK_FT },
+      ],
+      // Ian's 12.92 ft is 2.57 m above the measured low-tide pool; 2.8 m of slider clears it with headroom.
+      maxOffset: 2.8,
+    },
+    sea: {
+      label: 'Gulf tide at Fort Myers — storm surge (NOAA 8725520)',
+      // Crossings grow only over ground below MEAN HIGHER HIGH WATER (+0.085 m NAVD88): the tidal flat that is wet
+      // anyway at the top of the tide. Growing to the surge ceiling would run away across this flat domain.
+      growCeiling: FTMYERS_MHHW_NAVD88,
+    },
+    /*
+     * High ground, from the layout probe, with each point's street confirmed by OSM reverse geocoding. Downtown Fort
+     * Myers itself is only ~3 m NAVD88 and sits BELOW the top of this slider, so it is not a shelter — which is the
+     * honest answer for a riverfront that flooded.
+     */
+    /*
+     * McGregor Blvd on the riverfront, 1.6 m NAVD88: the route out starts along the river, is pushed inland onto
+     * Linhart Ave and Hanson St as the surge takes McGregor, and loses its last street before the gauge reaches
+     * Ian's 12.92 ft. Of 1,473 streets in this domain only 14 both re-plan and then close within 1.3 km of the
+     * scenario's framing; this is the one with the largest re-plan (6.0 km → 4.2 km).
+     */
+    evacStart: { at: [-81.8829, 26.6298], label: 'McGregor Blvd, Fort Myers riverfront' },
+    shelters: [
+      { name: 'Canal Street — east Fort Myers', at: [-81.85194, 26.62558], search: 800 },
+      { name: 'Veronica S. Shoemaker Boulevard', at: [-81.83938, 26.62747], search: 350 },
+      { name: 'Aldermans Walk', at: [-81.8338, 26.6107], search: 400 },
+      { name: 'Ironbridge Boulevard', at: [-81.84103, 26.61561], search: 600 },
+    ],
+    storms: [],
+    rainRate: 0,
+    // Over the middle of the estuary looking south-east at the downtown Fort Myers riverfront: the surge comes up
+    // the river from the right of frame and climbs the near bank.
+    camera: { at: [-81.879, 26.642], distance: 2400, yaw: 1.45, pitch: 0.42 },
+    /*
+     * No close-up inset, though at 1.95 m/texel this domain has the same blur Houston's inset was baked for: this
+     * eighth preset ships base imagery only. The directory budget has since been settled at 120 MB
+     * (tests/data/presets.test.ts carries the argument), which leaves ~13 MB over the current 97.2 MB — enough for
+     * ONE more preset OR one of the two deferred insets (this one and Nashville's), not both.
+     */
+    description: ({ normalLevel, gaugeDatum }) =>
+      'Fort Myers stands on the south bank of the Caloosahatchee, a tidal estuary two kilometres wide that opens ' +
+      'into San Carlos Bay and the Gulf of Mexico. A third of this domain lies below mean higher high water, so the ' +
+      'flood here does not come down the river — it comes in from the sea. ' +
+      `The estuary in this elevation model reads about ${(((normalLevel ?? 0) - (gaugeDatum ?? 0)) / FT).toFixed(1)} ft ` +
+      `on the Fort Myers gauge (NOAA 8725520), close to low tide; mean higher high water is ${FTMYERS_MHHW_FT} ft. ` +
+      'Hurricane Ian came ashore on Sanibel and Cayo Costa on September 28, 2022 as a category 4 hurricane and drove ' +
+      `the Gulf up the Caloosahatchee: at 22:18 GMT the gauge read ${IAN_PEAK_FT} ft — 2.29 m above NAVD88 — the ` +
+      'highest water level in its record. Downtown Fort Myers, three metres above the datum, went under, and boats ' +
+      'were left in the streets of the River District. ' +
+      'Raise the surge and watch the water come in from the river mouth rather than fall from the sky: the ' +
+      'elevation model is USGS 3DEP lidar at 7.8 m cells, so the streets are resolved but individual buildings ' +
+      'and seawalls are not.',
+  },
+  {
+    /*
+     * Betrawati — 8 km square centred 27.9900 N, 85.1860 E, 7.81 m cells, the same grid as Pittsburgh and Asheville.
+     * Chosen because the evacuation story is geometric here: the Pasang Lhamu Highway runs along the valley floor at
+     * 605–625 m, metres above a channel at 601 m, and the only way out of the water is UP — the Trishuli, the Salankhu
+     * Khola and the Phalakhu Khola all meet inside the box, with 1,900 m of relief around them (measured on this DEM:
+     * 560 → 2,494 m; the research brief's 1,144 m figure was low, see artifacts/nepal-build/out-layout-8000.txt).
+     *
+     * The box crosses 28.0 N, so the elevation is a two-tile Copernicus mosaic — which is the point: any non-US domain
+     * can straddle a tile line, and the seam here is measurably invisible (artifacts/nepal-build, `validate-global.ts
+     * seam`: the row holding 28.0 N differs from its neighbour by 2.39 m of mean |Δz| against a domain median of
+     * 2.77 m, i.e. less than the terrain's own roughness).
+     *
+     * NO STAGE CONTROL and no pool. What defines this event is a wave arriving from upstream while the reach below is
+     * still normal; a stage slider raises the whole channel at once, which would tell the opposite story. Forced by one
+     * inflow at the north edge, as Johnstown is.
+     */
+    id: 'nepal',
+    center: { lat: 27.99, lon: 85.186 },
+    sizeMeters: 8000,
+    n: 1024,
+    global: {
+      osmXml: [
+        'artifacts/nepal-build/osm-betrawati-q0.xml',
+        'artifacts/nepal-build/osm-betrawati-q1.xml',
+        'artifacts/nepal-build/osm-betrawati-q2.xml',
+        'artifacts/nepal-build/osm-betrawati-q3.xml',
+      ],
+      imagery: 'none',
+    },
+    rivers: [
+      {
+        /*
+         * Traced from OSM ways 343007937 + 343007938 + 27033466 ("Trishuli Ganga River"), simplified to 25 m and
+         * extended to the channel the DEM shows on the north edge — OSM's mapping stops 70 m short of it, and an
+         * inflow has to sit on a river that crosses the boundary (artifacts/nepal-build/extract-rivers.ts). Surface
+         * heights along the trace, from the DSM over water: 726 → 691 → 661 → 630 → 615 → 600 → 563 m.
+         */
+        name: 'Trishuli',
+        path: [
+          [85.1889, 28.02596], [85.18787, 28.02529], [85.18668, 28.0242], [85.18604, 28.02236], [85.18619, 28.02075],
+          [85.18748, 28.01932], [85.18729, 28.01625], [85.18563, 28.01517], [85.18423, 28.01286], [85.18369, 28.01109],
+          [85.18362, 28.00704], [85.18427, 28.00476], [85.18378, 28.0018], [85.18617, 27.99683], [85.18228, 27.99324],
+          [85.18286, 27.99001], [85.18247, 27.98949], [85.18047, 27.9886], [85.1801, 27.98772], [85.18054, 27.9844],
+          [85.18038, 27.98116], [85.18153, 27.97869], [85.18246, 27.97497], [85.18442, 27.97211], [85.18434, 27.97138],
+          [85.1838, 27.97065], [85.1829, 27.97025], [85.17911, 27.96928], [85.17821, 27.96852], [85.17626, 27.96494],
+          [85.16976, 27.96263], [85.16709, 27.95703], [85.16194, 27.95484], [85.16255, 27.95317], [85.1626, 27.94903],
+        ],
+        depth: 4,
+        bankCells: 3,
+        snapRadius: 10,
+        maxHalfWidth: 40,
+        upstream: {
+          type: 'inflow',
+          discharge: TRISHULI_SURGE_INFLOW,
+          label: `Trishuli — scenario surge: ${(BHOTE_KOSHI_EXCESS_M3 / 1e6).toFixed(0)} million m³ over 30 minutes (DHM reported volume, not a measured peak)`,
+        },
+      },
+      {
+        /*
+         * OSM way 298744777. The two tributaries deliberately START INSIDE the domain rather than at its edge: no
+         * monsoon discharge for either is published that I could tie to a gauge, and a wet channel touching an open
+         * boundary with no inflow simply drains out of it. Inventing a baseflow number would be worse than a channel
+         * that begins 300 m in.
+         */
+        name: 'Salankhu Khola',
+        path: [
+          [85.14812, 27.98943], [85.14889, 27.98864], [85.15075, 27.98905], [85.15374, 27.98728], [85.15741, 27.98833],
+          [85.15856, 27.98799], [85.15936, 27.98659], [85.16032, 27.98563], [85.16157, 27.98612], [85.16205, 27.98591],
+          [85.16224, 27.98479], [85.16277, 27.98426], [85.16661, 27.98273], [85.16777, 27.98282], [85.16932, 27.98194],
+          [85.17342, 27.98218], [85.17663, 27.98304], [85.17929, 27.98228], [85.18027, 27.98166],
+        ],
+        depth: 1.5,
+        bankCells: 2,
+        snapRadius: 8,
+        maxHalfWidth: 15,
+      },
+      {
+        /*
+         * OSM way 300686595, tagged "Falaakhu River" — the Phalakhu Khola, the channel the destroyed Betrawati bridge
+         * spanned, and where India's 70 m Bailey bridge is being installed. Its confluence with the Trishuli at
+         * 27.9728 N is the district line and the scenario's camera target.
+         */
+        name: 'Phalakhu Khola',
+        path: [
+          [85.22226, 27.97406], [85.22134, 27.97555], [85.21914, 27.97582], [85.21674, 27.97507], [85.21559, 27.97361],
+          [85.21305, 27.97245], [85.2109, 27.97312], [85.20816, 27.97494], [85.20718, 27.97478], [85.20587, 27.97529],
+          [85.20383, 27.975], [85.2021, 27.9757], [85.20109, 27.97514], [85.19991, 27.97494], [85.19461, 27.97602],
+          [85.19144, 27.97549], [85.18912, 27.97664], [85.1881, 27.97646], [85.187, 27.97565], [85.18588, 27.9743],
+          [85.18463, 27.97389], [85.18404, 27.97281],
+        ],
+        depth: 1.5,
+        bankCells: 2,
+        snapRadius: 8,
+        maxHalfWidth: 15,
+      },
+    ],
+    /*
+     * Real, named, and measured on this DEM — every position is the OSM node in the extracts this preset ships with,
+     * NOT the coordinates in the research brief: several of those turned out to name a different node (the brief's
+     * "Neelkanta" point is 600 m from the school's own OSM node, and its "Barahi" and "Karki Manakamana" points are
+     * over a kilometre away from theirs). Heights above the 601 m channel at Betrawati: +56, +173, +321, +195 m.
+     * Nothing on the valley floor qualifies, which is the honest answer here — Shree Ramchandra Ni Ma Vi sits at
+     * 616 m, fifteen metres above the channel, and is not a refuge from this.
+     */
+    shelters: [
+      { name: 'Shree Neelkanta Higher Secondary School', at: [85.17849, 27.98388], search: 400 },
+      { name: 'Shree Sundaradevi Pra Vi', at: [85.17697, 27.97627], search: 400 },
+      { name: 'Shree Sivalaya Ni Ma Vi', at: [85.19131, 27.98355], search: 400 },
+      { name: 'Kalika Community Hospital (Uttargaya)', at: [85.18091, 28.02053], search: 500 },
+    ],
+    /*
+     * The surge is on the scale of the valley, not of a floodplain: 30 m of clearance above the nearest channel
+     * surface, rather than the default 20, before a point counts as high ground.
+     */
+    shelterMargin: 30,
+    storms: [],
+    rainRate: 0,
+    /*
+     * On the Betrawati bridge crossing, looking north up the Trishuli: the surge enters at the top of frame, and the
+     * Phalakhu comes in from the right exactly where the bridge was. 2.6 km back and pitch 0.52 keeps both confluences
+     * and the highway along the floor in shot without pointing the camera at the 1,900 m walls.
+     */
+    camera: { at: [85.1842, 27.9728], distance: 2600, yaw: 0, pitch: 0.52 },
+    description: () =>
+      'Betrawati stands where the Phalakhu Khola meets the Trishuli on the Nuwakot–Rasuwa district line, and its ' +
+      'bridge carried the Pasang Lhamu Highway — the only road into Rasuwa district. On the morning of 26 August ' +
+      '2026 rock and glacier ice broke from the north face of Langtang Lirung and fell about 1,200 m into the Lhende ' +
+      'Khola, sending a debris flood down the Bhote Koshi and the Trishuli; it reached Betrawati around 9:20 am, ' +
+      'minutes after the first SMS alerts went out, and took the bridge with it. Nepal\u2019s Flood Forecasting ' +
+      `Division reported about ${(BHOTE_KOSHI_EXCESS_M3 / 1e6).toFixed(0)} million m³ of excess water down the river ` +
+      `system, and this run releases that volume over 30 minutes — about ${TRISHULI_SURGE_INFLOW.toLocaleString('en-US')} m³/s, ` +
+      'an average rather than a measured peak, because the gauge here ' +
+      `(warning level ${BETRAWATI_WARNING_M} m, danger level ${BETRAWATI_DANGER_M} m) last read ` +
+      `${BETRAWATI_LAST_READING_M} m and was swept away before the crest arrived. The terrain is Copernicus 30 m ` +
+      'radar data, a surface model with canopy and buildings in it, filtered towards bare earth and still about a ' +
+      'metre high on the valley floor, and there is no aerial photograph here that this project may redistribute — ' +
+      'so watch which roads go under and where the routes turn uphill, and do not read street-level depths.',
+  },
 ];
 
 // ────────────────────────────────────────────────────────────────────────────────────────────────
@@ -713,19 +1069,57 @@ async function bake(def: PresetDef) {
   const toGrid = (ll: LonLat) => geoToGrid(grid, ll[0], ll[1]);
 
   // ── DEM
-  const requestKey = JSON.stringify({ center: def.center, sizeMeters: def.sizeMeters, n: N });
-  let demInfo = { source: 'usgs3dep' as 'usgs3dep' | 'terrarium', filled: 0 };
+  // The key carries the RESOLVED filter parameters, not just the overrides: retuning the defaults must invalidate a
+  // cached global DEM, or a re-bake would quietly ship the terrain the old filter produced.
+  const requestKey = JSON.stringify({
+    center: def.center,
+    sizeMeters: def.sizeMeters,
+    n: N,
+    ...(def.global ? { bareEarth: { ...BARE_EARTH_DEFAULTS, ...def.global.bareEarth } } : {}),
+  });
+  type DemInfo = { source: DEMSource; filled: number; tiles?: string[]; bareEarth?: Record<string, number> };
+  let demInfo: DemInfo = { source: 'usgs3dep', filled: 0 };
   const demBytes = await cachedBytes(def.id, requestKey, 'dem.f32', async () => {
-    const d = await fetchDEM(merc, N, N, cellSize);
-    demInfo = { source: d.source, filled: d.filled };
+    let elevation: Float32Array;
+    if (def.global) {
+      /*
+       * Copernicus GLO-30 is a SURFACE model: canopy and buildings are part of the terrain, and a flood run on it
+       * runs over tree tops. bareEarthFromSurface is a progressive morphological filter validated against 3DEP
+       * lidar over four US domains (artifacts/nepal-build/out-bareearth.txt); what it cannot remove — a metre or so
+       * of bias under continuous canopy — is stated in the scenario text and in public/presets/SOURCES.txt rather
+       * than hidden.
+       */
+      const g = await fetchCopernicusDEM(merc, N, N, (msg) => log(def.id, ` ${msg}`));
+      const bare = bareEarthFromSurface(g.elevation, N, N, { cellSize, ...def.global.bareEarth });
+      log(
+        def.id,
+        `bare-earth filter: ${(bare.removedFraction * 100).toFixed(1)} % of cells flagged as surface features, ` +
+          `mean drop ${bare.meanRemoved.toFixed(1)} m, max ${bare.maxRemoved.toFixed(1)} m, windows ${bare.windows.join('/')} m`,
+      );
+      demInfo = {
+        source: 'copernicus',
+        filled: g.filled,
+        tiles: g.tiles,
+        bareEarth: {
+          flaggedPercent: r2(bare.removedFraction * 100),
+          meanDropM: r2(bare.meanRemoved),
+          maxDropM: r2(bare.maxRemoved),
+        },
+      };
+      elevation = bare.ground;
+    } else {
+      const d = await fetchDEM(merc, N, N, cellSize);
+      demInfo = { source: d.source, filled: d.filled };
+      elevation = d.elevation;
+    }
     fs.mkdirSync(path.join(CACHE, def.id), { recursive: true });
     fs.writeFileSync(path.join(CACHE, def.id, 'dem.json'), JSON.stringify(demInfo));
-    return new Uint8Array(d.elevation.buffer, d.elevation.byteOffset, d.elevation.byteLength);
+    return new Uint8Array(elevation.buffer, elevation.byteOffset, elevation.byteLength);
   });
   const demInfoFile = path.join(CACHE, def.id, 'dem.json');
-  if (fs.existsSync(demInfoFile)) demInfo = JSON.parse(fs.readFileSync(demInfoFile, 'utf8'));
+  if (fs.existsSync(demInfoFile)) demInfo = JSON.parse(fs.readFileSync(demInfoFile, 'utf8')) as DemInfo;
   const dem = { elevation: new Float32Array(demBytes.slice().buffer), ...demInfo };
-  log(def.id, `DEM ${dem.source}, repaired ${dem.filled} cells`);
+  log(def.id, `DEM ${dem.source}, repaired ${dem.filled} cells${dem.tiles ? ` (tiles ${dem.tiles.join(', ')})` : ''}`);
   const raw = dem.elevation;
 
   // ── Hydro-conditioning
@@ -869,12 +1263,56 @@ async function bake(def: PresetDef) {
     }
   });
 
+  // ── Sea boundary (coastal domains)
+  if (def.sea) {
+    if (def.confluenceHead) throw new Error(`${def.id}: a sea boundary is a still-water rise; confluenceHead makes no sense with it`);
+    if (normalLevel === null) throw new Error(`${def.id}: a sea boundary needs a measured pool level (set def.pool)`);
+    const discs = seaBoundaryDiscs({
+      nx: N,
+      ny: N,
+      wet: (k) => h0[k] > 0.01,
+      bed: (k) => elevation[k],
+      growCeiling: def.sea.growCeiling,
+    });
+    if (!discs.length) throw new Error(`${def.id}: sea boundary found no wet edge crossing`);
+    discs.forEach((d, i) => {
+      sources.push({
+        id: `sea-${d.edge}-${i}`,
+        type: 'stage',
+        gx: r2(d.gx),
+        gy: r2(d.gy),
+        radius: r2(d.radius),
+        level: r3(normalLevel),
+        label: def.sea!.label,
+      });
+      log(
+        def.id,
+        `  sea boundary ${d.edge} cells ${d.run[0]}..${d.run[1]} (wet ${d.wetRun[0]}..${d.wetRun[1]}): disc (${d.gx}, ${d.gy}) r=${d.radius}`,
+      );
+    });
+    log(def.id, `sea boundary: ${discs.length} discs at ${normalLevel} m, grow ceiling ${def.sea.growCeiling} m`);
+  }
+  if (sources.length > 16) throw new Error(`${def.id}: ${sources.length} sources exceeds the solver's MAX_SOURCES (16)`);
+
   // ── Roads
-  const rawRoads = JSON.parse(
-    new TextDecoder().decode(
-      await cachedBytes(def.id, requestKey, 'roads-raw.json', async () => new TextEncoder().encode(JSON.stringify(await fetchTigerRoads(bounds)))),
-    ),
-  ) as RawRoad[];
+  /*
+   * TIGER/Line inside the US; OSM everywhere else. The OSM API refuses a box this size (50,000 nodes), so the
+   * quadrants are downloaded ahead of the bake by artifacts/nepal-build/fetch-osm.mjs and parsed here. Quadrants
+   * overlap in the ways that cross their edges — the API returns each such way in full — and buildRoadNetwork
+   * deduplicates identical edges, so concatenating them is correct.
+   */
+  const rawRoads = def.global
+    ? def.global.osmXml.flatMap((rel) => {
+        const file = path.resolve(HERE, '..', rel);
+        const parsed = parseOSMXml(fs.readFileSync(file, 'utf8'));
+        log(def.id, `  OSM ${rel}: ${parsed.length} drivable ways`);
+        return parsed;
+      })
+    : (JSON.parse(
+        new TextDecoder().decode(
+          await cachedBytes(def.id, requestKey, 'roads-raw.json', async () => new TextEncoder().encode(JSON.stringify(await fetchTigerRoads(bounds)))),
+        ),
+      ) as RawRoad[]);
   const roads = buildRoadNetwork(rawRoads, { nx: N, ny: N, cellSize, toGrid: makeGeoToGrid(grid) });
   log(def.id, 'roads', roadStats(roads));
 
@@ -974,6 +1412,38 @@ async function bake(def: PresetDef) {
     log(def.id, `stage: normal ${((stage.normalLevel - stage.gaugeDatum) / FT).toFixed(1)} ft, max ${((stage.normalLevel + stage.maxOffset - stage.gaugeDatum) / FT).toFixed(1)} ft`);
   }
 
+  // ── Evacuation start (the demo's opening pin), snapped to an ordinary street node
+  const evacStart = (() => {
+    if (!def.evacStart) return null;
+    const p = toGrid(def.evacStart.at);
+    // A home is on an ordinary street: the node has to carry a local or minor road, and must not also touch an
+    // interstate ramp or a bridge deck (the route would snap onto one of those instead of the street).
+    const streetNode = new Uint8Array(roads.nodes.length / 2);
+    const blocked = new Uint8Array(roads.nodes.length / 2);
+    for (const e of roads.edges) {
+      const bridge = /\bBrg\b|Bridge/.test(e.name ?? '');
+      if (e.cls === 'highway' || bridge) blocked[e.a] = blocked[e.b] = 1;
+      if ((e.cls === 'local' || e.cls === 'minor') && !bridge) streetNode[e.a] = streetNode[e.b] = 1;
+    }
+    const searchCells = 150 / cellSize;
+    let best: { gx: number; gy: number; d: number } | null = null;
+    for (let k = 0; k < roads.nodes.length / 2; k++) {
+      if (!streetNode[k] || blocked[k]) continue;
+      const gx = roads.nodes[k * 2];
+      const gy = roads.nodes[k * 2 + 1];
+      const d = Math.hypot(gx - p.gx, gy - p.gy);
+      if (d > searchCells) continue;
+      if (!best || d < best.d) best = { gx, gy, d };
+    }
+    const at = best ?? { gx: p.gx, gy: p.gy };
+    log(
+      def.id,
+      `evac start "${def.evacStart.label}": gx ${at.gx.toFixed(1)} gy ${at.gy.toFixed(1)}, ground ${elevAt(at.gx, at.gy).toFixed(2)} m` +
+        (best ? ` (street node ${(best.d * cellSize).toFixed(0)} m from the point)` : ' [no street node within 150 m — using the point itself]'),
+    );
+    return { gx: r2(at.gx), gy: r2(at.gy), label: def.evacStart.label };
+  })();
+
   const scenario: ScenarioPreset = {
     description: def.description({ normalLevel, gaugeDatum: stage?.gaugeDatum ?? null }),
     sources,
@@ -984,6 +1454,7 @@ async function bake(def: PresetDef) {
     initialFill,
     camera,
     ...(levee ? { levee } : {}),
+    ...(evacStart ? { evacStart } : {}),
   };
 
   // ── Imagery
@@ -992,7 +1463,7 @@ async function bake(def: PresetDef) {
   // laptop.) NAIP exports are limited to 4000 px, so NAIP always comes as four stitched 2048² quadrants.
   const imageryKey = JSON.stringify({ ...JSON.parse(requestKey), imagery: IMAGERY_SIZE, ...(IMAGERY_SOURCE === 'esri' ? {} : { source: IMAGERY_SOURCE }) });
   const imageryFile = `imagery-${IMAGERY_SOURCE === 'esri' ? '' : `${IMAGERY_SOURCE}-`}${IMAGERY_SIZE}.jpg`;
-  const jpg = await cachedBytes(def.id, imageryKey, imageryFile, async () => {
+  const jpg = def.global ? null : await cachedBytes(def.id, imageryKey, imageryFile, async () => {
     if (IMAGERY_SOURCE === 'naip' && IMAGERY_SIZE > NAIP_MAX_EXPORT) return fetchImageryStitched(merc, IMAGERY_SIZE, IMAGERY_SOURCE);
     try {
       return await fetchImageryBytes(merc, IMAGERY_SIZE, undefined, undefined, IMAGERY_SOURCE);
@@ -1012,7 +1483,7 @@ async function bake(def: PresetDef) {
    */
   let detailBytes: Uint8Array | null = null;
   let detailGrid: GridRect | null = null;
-  if (def.detail) {
+  if (def.detail && !def.global) {
     const baseMpt = def.sizeMeters / IMAGERY_SIZE;
     const at = def.detail.at ?? def.camera.at;
     const c = geoToGrid({ nx: N, ny: N, bounds }, at[0], at[1]);
@@ -1043,11 +1514,13 @@ async function bake(def: PresetDef) {
     ny: N,
     cellSize,
     bounds,
-    attribution: `Elevation: USGS 3DEP · ${IMAGERY_SOURCE === 'naip' ? NAIP_ATTRIBUTION : IMAGERY_ATTRIBUTION} · ${ROADS_ATTRIBUTION_TIGER}`,
+    attribution: def.global
+      ? `${demAttribution('copernicus')} · Terrain shading: no aerial imagery (hypsometric tint) · ${ROADS_ATTRIBUTION_OSM} (ODbL)`
+      : `Elevation: USGS 3DEP · ${IMAGERY_SOURCE === 'naip' ? NAIP_ATTRIBUTION : IMAGERY_ATTRIBUTION} · ${ROADS_ATTRIBUTION_TIGER}`,
     scenario,
     files: {
       elevation: 'elevation.f32',
-      imagery: 'imagery.jpg',
+      imagery: jpg ? 'imagery.jpg' : null,
       roads: 'roads.json',
       ...(detailGrid ? { imageryDetail: 'imagery-detail.jpg' } : {}),
     },
@@ -1056,6 +1529,8 @@ async function bake(def: PresetDef) {
       bakedAt: new Date().toISOString(),
       demSource: dem.source,
       demRepairedCells: dem.filled,
+      ...(dem.tiles ? { demTiles: dem.tiles } : {}),
+      ...(dem.bareEarth ? { bareEarth: dem.bareEarth } : {}),
       center: def.center,
       sizeMeters: def.sizeMeters,
       burnedCells: burn.burnedCells,
@@ -1068,11 +1543,12 @@ async function bake(def: PresetDef) {
   if (problems.length) throw new Error(`${def.id}: invalid meta: ${problems.join('; ')}`);
   fs.writeFileSync(path.join(dir, 'meta.json'), JSON.stringify(meta, null, 1));
   fs.writeFileSync(path.join(dir, 'elevation.f32'), Buffer.from(elevation.buffer, elevation.byteOffset, elevation.byteLength));
-  fs.writeFileSync(path.join(dir, 'imagery.jpg'), jpg);
+  if (jpg) fs.writeFileSync(path.join(dir, 'imagery.jpg'), jpg);
+  else fs.rmSync(path.join(dir, 'imagery.jpg'), { force: true });
   if (detailBytes) fs.writeFileSync(path.join(dir, 'imagery-detail.jpg'), detailBytes);
   else fs.rmSync(path.join(dir, 'imagery-detail.jpg'), { force: true });
   fs.writeFileSync(path.join(dir, 'roads.json'), JSON.stringify(encodeRoads(roads)));
-  const sizes = ['meta.json', 'elevation.f32', 'imagery.jpg', ...(detailBytes ? ['imagery-detail.jpg'] : []), 'roads.json'].map(
+  const sizes = ['meta.json', 'elevation.f32', ...(jpg ? ['imagery.jpg'] : []), ...(detailBytes ? ['imagery-detail.jpg'] : []), 'roads.json'].map(
     (f) => `${f} ${(fs.statSync(path.join(dir, f)).size / 1e6).toFixed(2)} MB`,
   );
   log(def.id, `wrote ${sizes.join(', ')} in ${((performance.now() - t0) / 1000).toFixed(1)} s`);

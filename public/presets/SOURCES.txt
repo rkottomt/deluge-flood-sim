@@ -66,6 +66,20 @@ artifacts/more-cities/nhd_path.py. Peak discharges and stages are from the USGS 
               Rainfall — 17.15 in over Boulder County September 9–16 and a record 9.08 in on September 12, the rate
               this scenario rains at: NWS Boulder (weather.gov/bou/Number1September2013Floods).
 
+  ftmyers     Hurricane Ian, September 28, 2022 — coastal storm surge up the Caloosahatchee. Tidal datums and water
+              levels from NOAA CO-OPS station 8725520 (Fort Myers, FL), 1983-2001 epoch, in feet above STATION DATUM:
+              MHHW 5.68, MSL 4.99, MLLW 4.36, NAVD88 5.40 (api.tidesandcurrents.noaa.gov mdapi station datums). The
+              station datum therefore lies 5.40 ft = 1.646 m below NAVD88, which is the gauge datum this scenario
+              uses, so the stage readout in the app is the gauge's own reading. MHHW is +0.085 m NAVD88.
+              The station's record water level, 12.923 ft = 2.293 m NAVD88, was set by Ian at 22:18 GMT on
+              2022-09-28 (NOAA CO-OPS 6-minute water_level series, NAVD datum, 2022-09-28/29) — the 12.9 ft mark on
+              the stage slider. No casualty or damage figures are used in this scenario's text.
+              The DEM's own flat estuary surface measures -0.28 m NAVD88, essentially MLLW (-0.317 m): the 3DEP
+              lidar was flown near low tide, and the bake measures that surface rather than assuming it.
+              Shelter locations are high ground found in the DEM (artifacts/florida-build/probe-layout.ts) and named
+              for the street at that point, confirmed by OpenStreetMap Nominatim reverse geocoding
+              (© OpenStreetMap contributors, ODbL) — used to NAME the points only; no OSM data is redistributed here.
+
 Place names used for shelters and camera framing are ordinary geographic names; no third-party place database is
 redistributed here.
 

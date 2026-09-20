@@ -22,6 +22,12 @@ export const PRESETS: PresetInfo[] = [
   { id: 'nashville', name: 'Nashville — Cumberland River', subtitle: 'May 2010 flood — raise the river past 51.86 ft' },
   { id: 'houston', name: 'Houston — Buffalo Bayou', subtitle: 'Hurricane Harvey, 2017 — the city floods from above' },
   { id: 'boulder', name: 'Boulder — Canyon Mouth', subtitle: '2013 Front Range flash flood — out of Boulder Canyon' },
+  { id: 'ftmyers', name: 'Fort Myers — Caloosahatchee', subtitle: "Hurricane Ian, 2022 — the Gulf's storm surge up a tidal river" },
+  {
+    id: 'nepal',
+    name: 'Betrawati — Trishuli Valley',
+    subtitle: '26 August 2026 — the bridge that was Rasuwa’s only road',
+  },
   { id: 'sandbox', name: SANDBOX_NAME, subtitle: 'Offline sandbox — river town, reservoir and dam' },
 ];
 

@@ -114,7 +114,11 @@ base in the terrain shader with an 8-cell feather. It buys 2.4–2.7× the texel
 cameras fly, costs 89.5 MB of GPU memory and 3.5–5.1 MB on disk each, and measures free on both load (−23 ms,
 interleaved A/B) and frame time (deltas inside sample noise, one of them negative). The other three domains are
 already at 1.22–1.46 m/texel, close enough to NAIP's own ~1 m limit that an inset would add megabytes and no detail.
-`public/presets` totals 87.7 MB against a 90 MB static-host budget enforced by `tests/data/presets.test.ts`.
+`public/presets` totals 97.2 MB across eight presets against a 120 MB static-host budget enforced by
+`tests/data/presets.test.ts`. A visitor never downloads that number — presets load one at a time, so the cost is the
+largest single preset (Asheville, 15.9 MB), which a separate 25 MB per-preset cap holds down; the directory total is
+a host-and-repo budget, and the rationale for where it sits is in
+[ARCHITECTURE.md §5](ARCHITECTURE.md#5-data).
 
 ## Why this is hard
 
