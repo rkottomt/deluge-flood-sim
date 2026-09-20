@@ -999,17 +999,31 @@ const PRESET_DEFS: PresetDef[] = [
     shelterMargin: 30,
     /*
      * Dry channels at t = 0 — see PresetDef.prefill for the measurements behind that. The scenario text says so, and
-     * the surge fills the Trishuli within the first minute of simulated time.
+     * the surge is on screen quickly: 354,000 m³ in the domain by 30 simulated seconds, the front in frame by about
+     * 8 simulated minutes and through the Betrawati crossing by 23 (measured, artifacts/nepal-build/shots).
      */
     prefill: 'none',
     storms: [],
     rainRate: 0,
     /*
-     * On the Betrawati bridge crossing, looking north up the Trishuli: the surge enters at the top of frame, and the
-     * Phalakhu comes in from the right exactly where the bridge was. 2.6 km back and pitch 0.52 keeps both confluences
-     * and the highway along the floor in shot without pointing the camera at the 1,900 m walls.
+     * Looking north up the Trishuli, with the Betrawati bridge crossing — the Phalakhu junction — in the lower third
+     * of the frame and the reach the surge comes down filling the rest.
+     *
+     * NONE OF THESE THREE NUMBERS IS TASTE; each one was measured against a screenshot, and the first framing this
+     * preset shipped with (the crossing itself at 2.6 km and pitch 0.52) failed on both counts:
+     *   • PITCH. The crossing sits at 600 m with 900 m ridges a kilometre away on both sides, so a shallow pitch puts
+     *     the camera BEHIND the south ridge and every shot is a green hillside with no river in it
+     *     (artifacts/nepal-build/shots/probe-A.png, probe2-I.png). Looking into a Himalayan valley means looking DOWN
+     *     into it: 0.72 rad clears the wall.
+     *   • WHERE THE WATER IS, AND WHEN. The surge enters 5.9 km upstream of the crossing and the solver caps at
+     *     15 m/s, so nothing reaches the crossing for about 20 simulated minutes — 30 s of real time at the app's 60x
+     *     default. Framed tight on the crossing, the opening half-minute of the demo is an empty valley (nepal-15s.png
+     *     has 4.4 million m³ of water in the domain and not one pixel of it on screen). Pulling back to 5 km and
+     *     putting the target 760 m NORTH of the crossing brings the front into the top of frame at about 8 simulated
+     *     minutes while the crossing, both shelters and the highway along the floor all stay in shot.
+     * The target is 27.97961 N, 85.18544 E — the Trishuli reach above Betrawati, not the confluence itself.
      */
-    camera: { at: [85.1842, 27.9728], distance: 2600, yaw: 0, pitch: 0.52 },
+    camera: { at: [85.18544, 27.97961], distance: 5000, yaw: 0.12, pitch: 0.72 },
     description: () =>
       'Betrawati stands where the Phalakhu Khola meets the Trishuli on the Nuwakot–Rasuwa district line, and its ' +
       'bridge carried the Pasang Lhamu Highway — the only road into Rasuwa district. On the morning of 26 August ' +
@@ -1022,7 +1036,8 @@ const PRESET_DEFS: PresetDef[] = [
       `(warning level ${BETRAWATI_WARNING_M} m, danger level ${BETRAWATI_DANGER_M} m) last read ` +
       `${BETRAWATI_LAST_READING_M} m and was swept away before the crest arrived. The terrain is Copernicus 30 m ` +
       'radar data, a surface model with canopy and buildings in it, filtered towards bare earth and still about a ' +
-      'metre high on the valley floor, and there is no aerial photograph here that this project may redistribute. ' +
+      'metre or two high on the valley floor — one to three metres, where US lidar can measure the same filter — and '
+      + 'there is no aerial photograph here that this project may redistribute. ' +
       'The rivers start dry, because no surviving gauge gives their flow that morning and this model cannot hold a ' +
       'river that falls 167 m across the domain at a level — so every drop you see is the modelled surge. Watch which ' +
       'roads go under and where the routes turn uphill, and do not read street-level depths.',

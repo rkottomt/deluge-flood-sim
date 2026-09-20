@@ -676,9 +676,19 @@ test('nepal: a labelled scenario hydrograph, sourced numbers, and the caveats on
   const rivers = (bake as { rivers?: Array<{ name: string; surfaceMax: number; surfaceMin: number }> }).rivers ?? [];
   const trishuli = rivers.find((r) => r.name === 'Trishuli')!;
   assert.ok(trishuli.surfaceMax - trishuli.surfaceMin > 150, `the Trishuli falls ${(trishuli.surfaceMax - trishuli.surfaceMin).toFixed(0)} m`);
-  // Camera on the Phalakhu confluence, where the bridge stood.
+  /*
+   * Framing. The camera looks north up the Trishuli from above the Betrawati crossing, and both of these numbers are
+   * load-bearing rather than decorative: a shallow pitch puts the camera behind the 900 m south ridge and shows a
+   * hillside with no river in it, and a target on the crossing itself leaves the first half-minute of the demo empty
+   * because the surge needs ~20 simulated minutes to travel the 5.9 km down to it. So: high enough to see into the
+   * valley, and far enough up the reach that the water is in frame early, with the crossing still in shot.
+   */
   assert.ok(s.camera, 'the framing is part of the story here');
-  assert.ok(Math.hypot(s.camera!.target.gx - 489, s.camera!.target.gy - 757) < 40, 'framed on the Betrawati bridge crossing');
+  assert.ok(s.camera!.pitch >= 0.6, `pitch ${s.camera!.pitch} looks into the ridge, not into the valley`);
+  assert.ok(s.camera!.distance >= 4000, `distance ${s.camera!.distance} m cannot hold both the inflow reach and the crossing`);
+  const fromCrossing = Math.hypot(s.camera!.target.gx - 489, s.camera!.target.gy - 757) * meta.cellSize;
+  assert.ok(fromCrossing < 1200, `camera target is ${fromCrossing.toFixed(0)} m from the Betrawati crossing`);
+  assert.ok(s.camera!.target.gy < 757, 'the target sits upstream of the crossing, where the surge comes from');
   /*
    * Real named places on real high ground, each named for its own OSM node — and THREE of them, not four: the school
    * nearest the bazaar stands 31.3 m above the channel beside it against this preset's 33 m bar, so the bake refuses

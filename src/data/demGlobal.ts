@@ -17,23 +17,25 @@
  *     N27_00_E085_00 therefore holds latitudes 28.0 down to 27.000278 in its 3600 rows, and its row 0 is the exact
  *     sample its northern neighbour's last row does not have — which is why the mosaic is seamless, and why the
  *     bilinear weights below carry no half-pixel shift. Getting this wrong displaces terrain by 15 m.
- *   • **Datum.** GLO-30 heights are EGM2008 orthometric, not ellipsoidal — re-verified here, not assumed: over the
- *     three US presets Copernicus minus 3DEP (NAVD88, i.e. also orthometric) has a median of +0.8 to +2.7 m
- *     (artifacts/nepal-build/out-vs3dep.txt, out-datum.txt). WGS84 ellipsoid heights would sit ~30 m away from that at
- *     those latitudes, so the tiles are orthometric and mix with the app's other elevations directly.
+ *   • **Datum.** GLO-30 heights are EGM2008 orthometric, not ellipsoidal — re-verified here, not assumed: over four US
+ *     domains Copernicus minus 3DEP (NAVD88, i.e. also orthometric) has a median of +1.2 to +3.9 m
+ *     (artifacts/nepal-build/out-datum2.txt, out-vs3dep.txt). WGS84 ellipsoid heights would sit about −33 m from that
+ *     at Pittsburgh and −17 m at Boulder, so the tiles are orthometric and mix with the app's other elevations directly.
  *
  * THE SURFACE-MODEL PROBLEM (bareEarthFromSurface)
  *   A progressive morphological filter (after Zhang et al. 2003, with the slope allowance of Pingel et al.'s SMRF)
  *   removes what stands *above* a locally-openable surface: buildings, forest patches, embankment clutter. What it
  *   cannot do is recover ground under continuous canopy, because a forest that covers a whole hillside is
  *   morphologically indistinguishable from the hillside. Measured against 3DEP over four US domains
- *   (artifacts/nepal-build/out-bareearth.txt, `validate-global.ts bareearth`) the defaults below are the only setting in
- *   a five-point sweep that improved every site and damaged none: against 3DEP lidar it cuts Pittsburgh's error from
- *   4.93 to 4.10 m MAE (rms 8.50 → 6.40, p95 +21.0 → +14.8 m — those are buildings), Nashville's from 2.70 to 2.45,
- *   Asheville's from 3.30 to 3.20, and leaves Boulder's steep canyon mouth untouched at 2.98 m. What survives is a
- *   floor bias of +1.0 to +1.6 m under continuous canopy that no morphological filter can see, plus whatever the
- *   EGM2008-vs-NAVD88 datum difference contributes. Both numbers belong in the provenance of anything baked from it,
- *   and in public/presets/SOURCES.txt.
+ *   (artifacts/nepal-build/out-bareearth-padded.txt, `validate-global.ts bareearth`) the defaults below are the only
+ *   setting in a six-point sweep that improved every site and damaged none. Over all cells it cuts Pittsburgh's error
+ *   from 4.93 to 4.54 m MAE (rms 8.50 → 7.64, p95 +21.0 → +17.9 m — those are buildings), Nashville's from 2.70 to
+ *   2.52, Asheville's from 3.30 to 3.22, and leaves Boulder's steep canyon mouth where it found it, 2.97 → 2.96 m.
+ *   THOSE ARE MODEST NUMBERS AND THEY SHOULD BE READ AS SUCH: the filter removes buildings and small stands of trees,
+ *   and what survives on the valley floor — the ground a flood actually spreads over — is a residual of +1.0 to +2.8 m
+ *   (median; +2.0 to +3.6 m at the mean, which the tail of remaining canopy drags up), plus whatever the
+ *   EGM2008-vs-NAVD88 datum difference contributes. Those numbers belong in the provenance of anything baked from it,
+ *   in public/presets/SOURCES.txt, and in the scenario text a visitor reads.
  */
 import { fromUrl } from 'geotiff';
 import type { GeoBounds, ProgressFn } from '../contracts';
@@ -321,13 +323,15 @@ export interface BareEarthOptions {
   cellSize: number;
   /**
    * Largest object removed, ground meters of half-width (default 120, validated). 120 m covers a village block or a
-   * stand of trees. Raising it to 250 m buys a little in towns and starts taking the tops off real spurs: at Boulder's
-   * canyon mouth it turned a harmless 2.97 m MAE into 3.41 and pushed rms from 3.40 to 4.71.
+   * stand of trees. Raising it to 250 m buys a little in towns and starts taking the tops off real spurs: against 3DEP
+   * lidar it flags 40 % of the Asheville domain (up from 4 %) and turns a 3.22 m MAE into 4.00 with p5 −10.1 m — i.e.
+   * it starts cutting ten metres off real ridges (artifacts/nepal-build/out-bareearth-padded.txt).
    */
   maxObjectMeters?: number;
   /**
    * Terrain-convexity allowance, m per m of window half-width (Zhang's slope parameter; default 0.1, validated).
-   * Lowering it to 0.05 flags a third of Asheville and starts eating ridges (p5 −10.3 m against lidar).
+   * Lowering it to 0.05 at a 250 m window flags 47 % of Asheville and eats ridges (p5 −10.2 m against lidar); at the
+   * default 120 m window it costs more than it returns, so both stay where the sweep put them.
    */
   slopeTolerance?: number;
   /** Threshold at the finest window, m: the DEM's own vertical noise, below which nothing is an object (default 1). */
