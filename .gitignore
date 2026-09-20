@@ -17,3 +17,4 @@ submission/video/work/
 # 4K master exceeds GitHub 100 MB limit; 1080p version is committed
 submission/video/deluge-demo-4k*.mp4
 submission/video/poster-4k.jpg
+.vercel
