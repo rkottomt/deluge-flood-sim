@@ -13,3 +13,7 @@ submission/raw-*/
 
 # raw video frames (the encoded film is committed, the frames are not)
 submission/video/work/
+
+# 4K master exceeds GitHub 100 MB limit; 1080p version is committed
+submission/video/deluge-demo-4k.mp4
+submission/video/poster-4k.jpg
