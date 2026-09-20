@@ -12,7 +12,7 @@
   "east": -105.25367730407109,
   "north": 40.036454186937206
  },
- "attribution": "Elevation: USGS 3DEP · Imagery: USDA NAIP via USGS The National Map · Roads: U.S. Census Bureau TIGER/Line",
+ "attribution": "Elevation: USGS 3DEP · Imagery: USDA NAIP via USGS The National Map · Roads: U.S. Census Bureau TIGER/Line · Buildings © OpenStreetMap contributors (ODbL)",
  "scenario": {
   "description": "Boulder is built at the mouth of Boulder Canyon, where the creek leaves the Rockies and crosses the city past downtown and the university. Between September 9 and 16, 2013 a stalled monsoon plume dropped 17.15 inches of rain on Boulder County — 9.08 inches on September 12 alone, the wettest calendar day in the city's record — and the canyons flashed. Boulder Creek left town at 8,400 ft³/s at the 75th Street gauge, four times its previous record of 2,050 ft³/s, and the flood closed every canyon road out of the city. Here that flood comes out of the canyon at the west edge while the record day's rain falls on the foothills. Boulder Creek is banked only about 3 m deep through town, so it leaves its channel within minutes and runs down the streets beside it.",
   "sources": [
@@ -1142,7 +1142,8 @@
  "files": {
   "elevation": "elevation.f32",
   "imagery": "imagery.jpg",
-  "roads": "roads.json"
+  "roads": "roads.json",
+  "buildings": "buildings.json"
  },
  "bake": {
   "bakedAt": "2026-09-19T15:47:00.702Z",
@@ -1174,6 +1175,104 @@
     "minor": 20,
     "local": 1573
    }
+  },
+  "buildings": {
+   "bakedAt": "2026-09-20T07:38:56.248Z",
+   "source": "OpenStreetMap API 0.6 /map (ODbL 1.0)",
+   "tiles": 9,
+   "microsoftFootprintsAdded": 0,
+   "parsed": 11915,
+   "kept": 11130,
+   "droppedTiny": 631,
+   "droppedOutside": 4,
+   "droppedInWater": 0,
+   "duplicates": 150,
+   "measured": 19,
+   "levels": 372,
+   "estimated": 10739,
+   "remote": 0,
+   "vertices": 80496,
+   "tallest": [
+    {
+     "name": "Folsom Field",
+     "height": 53,
+     "source": "measured"
+    },
+    {
+     "name": "Folsom Field",
+     "height": 53,
+     "source": "measured"
+    },
+    {
+     "name": "Golden West",
+     "height": 52.5,
+     "source": "levels"
+    },
+    {
+     "name": "Champions Center",
+     "height": 45,
+     "source": "measured"
+    },
+    {
+     "name": "Presbyterian Manor",
+     "height": 44.7,
+     "source": "levels"
+    },
+    {
+     "name": "Duane Physics and Astrophysics",
+     "height": 41,
+     "source": "measured"
+    },
+    {
+     "name": "Balch Fieldhouse",
+     "height": 38,
+     "source": "measured"
+    },
+    {
+     "name": "Colorado Building",
+     "height": 36.8,
+     "source": "levels"
+    },
+    {
+     "name": "Office Tower",
+     "height": 32.8,
+     "source": "levels"
+    },
+    {
+     "name": "(unnamed other)",
+     "height": 32.8,
+     "source": "levels"
+    },
+    {
+     "name": "Carlson Gymnasium",
+     "height": 29.5,
+     "source": "measured"
+    },
+    {
+     "name": "Dal Ward Athletic Center",
+     "height": 29,
+     "source": "measured"
+    },
+    {
+     "name": "(unnamed apartments)",
+     "height": 27.4,
+     "source": "levels"
+    },
+    {
+     "name": "Medical Pavilion",
+     "height": 26,
+     "source": "estimated"
+    },
+    {
+     "name": "NOAA - David Skaggs Research Center",
+     "height": 26,
+     "source": "estimated"
+    }
+   ],
+   "medianHeight": 6.8,
+   "maxHeight": 53,
+   "bytes": 648150,
+   "cellsBuiltOn": 120175
   }
  }
 }

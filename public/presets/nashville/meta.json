@@ -12,7 +12,7 @@
   "east": -86.74962151976024,
   "north": 36.18521782648162
  },
- "attribution": "Elevation: USGS 3DEP · Imagery: USDA NAIP via USGS The National Map · Roads: U.S. Census Bureau TIGER/Line",
+ "attribution": "Elevation: USGS 3DEP · Imagery: USDA NAIP via USGS The National Map · Roads: U.S. Census Bureau TIGER/Line · Buildings © OpenStreetMap contributors (ODbL)",
  "scenario": {
   "description": "Downtown Nashville stands on the west bank of the Cumberland River, which crosses the city as a navigation pool between Old Hickory Dam upstream and Cheatham Dam downstream. The pool in this elevation model reads about 24.5 ft on the Nashville gauge; flood stage is 40 ft. On May 1–2, 2010 a stalled front dropped 13.57 inches of rain on Nashville — double the previous two-day record of 6.68 inches — and on May 3 the river crested at 51.86 ft, the highest since the dams were built (USGS measured the peak at 52.55 ft and 188,000 ft³/s). Second Avenue, the Country Music Hall of Fame, the Schermerhorn Symphony Center and the stadium all took water; 18 people died in Middle Tennessee and damage passed $2 billion. Before the dams the river reached 53.90 ft in 1937 and a record 56.20 ft in 1927. Raise the river stage to replay those crests and watch the riverfront go under — then try a wall along First Avenue.",
   "sources": [
@@ -153,7 +153,8 @@
  "files": {
   "elevation": "elevation.f32",
   "imagery": "imagery.jpg",
-  "roads": "roads.json"
+  "roads": "roads.json",
+  "buildings": "buildings.json"
  },
  "bake": {
   "bakedAt": "2026-09-19T18:11:09.909Z",
@@ -185,6 +186,104 @@
     "minor": 112,
     "local": 4760
    }
+  },
+  "buildings": {
+   "bakedAt": "2026-09-20T07:40:20.164Z",
+   "source": "OpenStreetMap API 0.6 /map (ODbL 1.0)",
+   "tiles": 12,
+   "microsoftFootprintsAdded": 0,
+   "parsed": 14515,
+   "kept": 13741,
+   "droppedTiny": 493,
+   "droppedOutside": 16,
+   "droppedInWater": 2,
+   "duplicates": 263,
+   "measured": 56,
+   "levels": 305,
+   "estimated": 13380,
+   "remote": 0,
+   "vertices": 85034,
+   "tallest": [
+    {
+     "name": "AT&T Building",
+     "height": 188,
+     "source": "measured"
+    },
+    {
+     "name": "(unnamed commercial)",
+     "height": 149,
+     "source": "measured"
+    },
+    {
+     "name": "Bridgestone Tower",
+     "height": 140,
+     "source": "measured"
+    },
+    {
+     "name": "Renaissance Nashville Hotel",
+     "height": 139.4,
+     "source": "levels"
+    },
+    {
+     "name": "William R. Snodgrass Tennessee Tower",
+     "height": 137,
+     "source": "measured"
+    },
+    {
+     "name": "The Place",
+     "height": 135.5,
+     "source": "levels"
+    },
+    {
+     "name": "Residences at Broadwest",
+     "height": 135.5,
+     "source": "levels"
+    },
+    {
+     "name": "Pinnacle Building",
+     "height": 127,
+     "source": "measured"
+    },
+    {
+     "name": "Nashville Life & Casualty Tower",
+     "height": 124,
+     "source": "measured"
+    },
+    {
+     "name": "Viridian",
+     "height": 123.7,
+     "source": "levels"
+    },
+    {
+     "name": "Nashville City Center",
+     "height": 122,
+     "source": "measured"
+    },
+    {
+     "name": "(unnamed other)",
+     "height": 119.7,
+     "source": "measured"
+    },
+    {
+     "name": "ONE22ONE",
+     "height": 111.8,
+     "source": "levels"
+    },
+    {
+     "name": "One Nashville Place",
+     "height": 109,
+     "source": "measured"
+    },
+    {
+     "name": "UBS Tower",
+     "height": 108,
+     "source": "measured"
+    }
+   ],
+   "medianHeight": 8.5,
+   "maxHeight": 188,
+   "bytes": 762545,
+   "cellsBuiltOn": 187200
   }
  }
 }

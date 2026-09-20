@@ -12,7 +12,7 @@
   "east": -82.5258173064636,
   "north": 35.61892454858311
  },
- "attribution": "Elevation: USGS 3DEP · Imagery: USDA NAIP via USGS The National Map · Roads: U.S. Census Bureau TIGER/Line",
+ "attribution": "Elevation: USGS 3DEP · Imagery: USDA NAIP via USGS The National Map · Roads: U.S. Census Bureau TIGER/Line · Buildings © OpenStreetMap contributors (ODbL)",
  "scenario": {
   "description": "Asheville sits in a Blue Ridge valley where the Swannanoa River joins the French Broad. On September 27, 2024 Hurricane Helene's rain fell on ground already soaked by a storm two days before, and both rivers broke records that had stood since 1916: the French Broad crested at 24.82 ft at the Asheville gauge carrying 113,000 ft³/s, the Swannanoa at 27.33 ft and 60,800 ft³/s at Biltmore. The River Arts District was largely destroyed, Biltmore Village went under, dozens of people died in Buncombe County, and washed-out mains left the city without drinking water until November. Here both rivers run at those peaks — the French Broad from the south, the Swannanoa from the east. The inflows never stop: remove them after an hour of simulated time to let the valley drain.",
   "sources": [
@@ -1027,7 +1027,8 @@
   "elevation": "elevation.f32",
   "imagery": "imagery.jpg",
   "roads": "roads.json",
-  "imageryDetail": "imagery-detail.jpg"
+  "imageryDetail": "imagery-detail.jpg",
+  "buildings": "buildings.json"
  },
  "imageryDetail": {
   "x0": 366,
@@ -1072,6 +1073,104 @@
     "minor": 127,
     "local": 3005
    }
+  },
+  "buildings": {
+   "bakedAt": "2026-09-20T07:38:30.981Z",
+   "source": "OpenStreetMap API 0.6 /map (ODbL 1.0)",
+   "tiles": 20,
+   "microsoftFootprintsAdded": 0,
+   "parsed": 25060,
+   "kept": 21148,
+   "droppedTiny": 3607,
+   "droppedOutside": 3,
+   "droppedInWater": 0,
+   "duplicates": 302,
+   "measured": 1,
+   "levels": 200,
+   "estimated": 20947,
+   "remote": 0,
+   "vertices": 141305,
+   "tallest": [
+    {
+     "name": "(unnamed apartments)",
+     "height": 72.3,
+     "source": "levels"
+    },
+    {
+     "name": "Battery Park Apartments",
+     "height": 52.5,
+     "source": "levels"
+    },
+    {
+     "name": "(unnamed other)",
+     "height": 52.5,
+     "source": "levels"
+    },
+    {
+     "name": "Hotel Indigo Asheville Downtown",
+     "height": 48.6,
+     "source": "levels"
+    },
+    {
+     "name": "The Vanderbilt Apartments",
+     "height": 36.8,
+     "source": "levels"
+    },
+    {
+     "name": "The Flat Iron Hotel",
+     "height": 36.8,
+     "source": "levels"
+    },
+    {
+     "name": "DoubleTree by Hilton Asheville Downtown",
+     "height": 32.8,
+     "source": "levels"
+    },
+    {
+     "name": "(unnamed other)",
+     "height": 32.8,
+     "source": "levels"
+    },
+    {
+     "name": "McCormick Field",
+     "height": 32,
+     "source": "estimated"
+    },
+    {
+     "name": "Founders Hall",
+     "height": 28.9,
+     "source": "levels"
+    },
+    {
+     "name": "Embassy Suites by Hilton Asheville Downtown",
+     "height": 28.9,
+     "source": "levels"
+    },
+    {
+     "name": "(unnamed other)",
+     "height": 28.9,
+     "source": "levels"
+    },
+    {
+     "name": "City of Asheville Water Resources",
+     "height": 26,
+     "source": "estimated"
+    },
+    {
+     "name": "Buncombe County Schools Central Office",
+     "height": 26,
+     "source": "estimated"
+    },
+    {
+     "name": "Appalachian Trail Conservancy, Southern Region…",
+     "height": 26,
+     "source": "estimated"
+    }
+   ],
+   "medianHeight": 8.5,
+   "maxHeight": 72.3,
+   "bytes": 1159950,
+   "cellsBuiltOn": 79816
   }
  }
 }

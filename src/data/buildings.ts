@@ -272,7 +272,7 @@ export function classifyBuilding(tags: Record<string, string | undefined>): Buil
  * `building=yes` downtown is an office block and a 60 m^2 one is a rowhouse. Honest guesswork — always flagged
  * 'estimated'.
  */
-export function priorHeight(kind: BuildingKind, areaM2: number): number {
+function basePrior(kind: BuildingKind, areaM2: number): number {
   switch (kind) {
     case 'shed':
       return 3.2;
@@ -309,6 +309,32 @@ export function priorHeight(kind: BuildingKind, areaM2: number): number {
       if (areaM2 < 4000) return 15;
       return 20;
   }
+}
+
+/**
+ * Regional calibration for the height prior. The kind/area numbers above were fitted to US building stock — the same
+ * Pittsburgh and Johnstown footprints LEVEL_HEIGHT_LOW/HIGH came from — and a US storey is about 3.2 m. Applying them
+ * unchanged to a place that does not build like that raises every estimated roof.
+ *
+ *   'us'    — the fitted default.
+ *   'nepal' — the Trishuli valley. Nepal's NBC 205 mandatory rules of thumb for owner-built masonry housing work to a
+ *             storey of roughly 2.6 m, and the rural stock either side of the Pasang Lhamu Highway is predominantly
+ *             one or two storeys, with three- and four-storey RC frames only on the bazaar frontage. Scaling by
+ *             2.6/3.2 preserves the kind/area ordering the estimator depends on while putting a small `building=yes`
+ *             at two Nepali storeys rather than two American ones.
+ *
+ * This moves ONLY buildings flagged 'estimated'. A tagged `height`, a `building:levels` count or a remote-sensed
+ * height always wins, so a profile can never overwrite a real measurement.
+ */
+export type HeightProfile = 'us' | 'nepal';
+export const HEIGHT_PROFILE_SCALE: Record<HeightProfile, number> = { us: 1, nepal: 2.6 / 3.2 };
+
+/**
+ * Height prior for a building with no height tags: kind first, then footprint area, scaled by the regional profile.
+ * Honest guesswork — always flagged 'estimated'.
+ */
+export function priorHeight(kind: BuildingKind, areaM2: number, profile: HeightProfile = 'us'): number {
+  return basePrior(kind, areaM2) * HEIGHT_PROFILE_SCALE[profile];
 }
 
 // ──────────────────────────────────────────────────────────────────────────────────────────────
@@ -622,6 +648,8 @@ export interface BuildOptions {
   minAreaM2?: number;
   /** Set false to keep the pure kind/area prior for buildings with no height tags (used by tests). */
   neighbourBlend?: boolean;
+  /** Regional calibration for the estimated-height prior (default 'us'). See HEIGHT_PROFILE_SCALE. */
+  heightProfile?: HeightProfile;
   /** Credit line for the resulting set. Default `BUILDINGS_ATTRIBUTION_OSM`. */
   attribution?: string;
 }
@@ -899,7 +927,7 @@ export function buildBuildingSet(raw: RawBuilding[], opts: BuildOptions): { set:
 
   for (const c of cands) {
     if (c.height !== null) continue;
-    const prior = priorHeight(BUILDING_KINDS[c.kind], c.area);
+    const prior = priorHeight(BUILDING_KINDS[c.kind], c.area, opts.heightProfile ?? 'us');
     // Only the small untagged mass is blended. A large footprint's prior is already area-informed, and blending it
     // would make a stadium bowl next to downtown as tall as a tower.
     const kindName = BUILDING_KINDS[c.kind];
