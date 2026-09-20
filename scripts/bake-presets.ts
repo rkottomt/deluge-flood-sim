@@ -216,6 +216,20 @@ interface PresetDef {
    */
   evacStart?: { at: LonLat; label: string };
   /**
+   * `none` ships NO initial water: the channels start dry and every drop the scene shows comes from its sources.
+   *
+   * The default flat-level pre-fill cannot represent this domain. `initialFill` semantics are "every cell 4-connected
+   * to a seed through ground below the seed's level", and the Betrawati reach falls 167 m across 8 km: a front carrying
+   * an upstream level marches down the channel (everything downstream is below it) and then spills sideways onto
+   * ground the local level would never have wetted. Measured on the Betrawati bake: 44,261 cells outside the channel
+   * mask, ponded up to 85 m deep, with seeds on the centreline as the US presets place them; 6,653 cells and 55 m with
+   * a seed on every channel cell; sealing the shoreline (152 cells, ≤ 1.82 m) removed every escape point and changed
+   * nothing, because the leak is not an escape through a rim but the fill's own flat-level semantics
+   * (artifacts/nepal-build/probe-fill.ts). No measured baseflow for the Trishuli at Betrawati survives either — the
+   * gauge was destroyed — so inventing one to fill the channel would be worse than starting dry and saying so.
+   */
+  prefill?: 'none';
+  /**
    * Clearance (m) a shelter needs above the nearest channel's water surface where the preset has no stage slider.
    * The default 20 m is generous mountain-valley headroom. Houston's whole domain lies within 20 m of Buffalo Bayou,
    * so the default leaves no ground to stand on there; see that preset's note for the value it uses and why.
@@ -969,16 +983,21 @@ const PRESET_DEFS: PresetDef[] = [
      * 616 m, fifteen metres above the channel, and is not a refuge from this.
      */
     shelters: [
-      { name: 'Shree Neelkanta Higher Secondary School', at: [85.17849, 27.98388], search: 400 },
-      { name: 'Shree Sundaradevi Pra Vi', at: [85.17697, 27.97627], search: 400 },
-      { name: 'Shree Sivalaya Ni Ma Vi', at: [85.19131, 27.98355], search: 400 },
-      { name: 'Kalika Community Hospital (Uttargaya)', at: [85.18091, 28.02053], search: 500 },
+      { name: 'Shree Neelkanta Higher Secondary School', at: [85.17849, 27.98388], search: 200 },
+      { name: 'Shree Sundaradevi Pra Vi', at: [85.17697, 27.97627], search: 200 },
+      { name: 'Shree Sivalaya Ni Ma Vi', at: [85.19131, 27.98355], search: 200 },
+      { name: 'Kalika Community Hospital', at: [85.18091, 28.02053], search: 250 },
     ],
     /*
      * The surge is on the scale of the valley, not of a floodplain: 30 m of clearance above the nearest channel
      * surface, rather than the default 20, before a point counts as high ground.
      */
     shelterMargin: 30,
+    /*
+     * Dry channels at t = 0 — see PresetDef.prefill for the measurements behind that. The scenario text says so, and
+     * the surge fills the Trishuli within the first minute of simulated time.
+     */
+    prefill: 'none',
     storms: [],
     rainRate: 0,
     /*
@@ -999,8 +1018,10 @@ const PRESET_DEFS: PresetDef[] = [
       `(warning level ${BETRAWATI_WARNING_M} m, danger level ${BETRAWATI_DANGER_M} m) last read ` +
       `${BETRAWATI_LAST_READING_M} m and was swept away before the crest arrived. The terrain is Copernicus 30 m ` +
       'radar data, a surface model with canopy and buildings in it, filtered towards bare earth and still about a ' +
-      'metre high on the valley floor, and there is no aerial photograph here that this project may redistribute — ' +
-      'so watch which roads go under and where the routes turn uphill, and do not read street-level depths.',
+      'metre high on the valley floor, and there is no aerial photograph here that this project may redistribute. ' +
+      'The rivers start dry, because no surviving gauge gives their flow that morning and this model cannot hold a ' +
+      'river that falls 167 m across the domain at a level — so every drop you see is the modelled surge. Watch which ' +
+      'roads go under and where the routes turn uphill, and do not read street-level depths.',
   },
 ];
 
@@ -1180,7 +1201,9 @@ async function bake(def: PresetDef) {
     return best;
   };
   const initialFill: ScenarioPreset['initialFill'] = [];
-  if (normalLevel !== null) {
+  if (def.prefill === 'none') {
+    log(def.id, 'initial fill: none (see PresetDef.prefill) — the channels start dry and the sources bring the water');
+  } else if (normalLevel !== null) {
     const seeds: Array<{ gx: number; gy: number }> = [];
     burn.rivers.forEach((r, ri) => {
       const npts = r.centerline.length / 2;
@@ -1350,7 +1373,12 @@ async function bake(def: PresetDef) {
     }
     const at = best ?? { gx: p.gx, gy: p.gy };
     const z = elevAt(at.gx, at.gy);
-    log(def.id, `  shelter "${s.name}": ${z.toFixed(1)} m (${(z - ceiling).toFixed(1)} m above ceiling ${ceiling.toFixed(1)})${best ? '' : ' [no road node — landmark point]'}`);
+    const moved = Math.hypot(at.gx - p.gx, at.gy - p.gy) * cellSize;
+    log(
+      def.id,
+      `  shelter "${s.name}": ${z.toFixed(1)} m (${(z - ceiling).toFixed(1)} m above ceiling ${ceiling.toFixed(1)}), ` +
+        `${moved.toFixed(0)} m from the named point${best ? '' : ' [no road node — landmark point]'}`,
+    );
     if (z < ceiling + 3) throw new Error(`${def.id}: shelter "${s.name}" is not on high enough ground`);
     return { name: s.name, gx: r2(at.gx), gy: r2(at.gy) };
   });
@@ -1536,6 +1564,7 @@ async function bake(def: PresetDef) {
       burnedCells: burn.burnedCells,
       rivers: burn.rivers.map((r) => ({ name: r.name, cells: r.cells, depth: r.depth, surfaceMax: r2(r.maxLevel), surfaceMin: r2(r.minLevel) })),
       initialWetCells: wet,
+      ...(def.prefill ? { prefill: def.prefill } : {}),
       roads: roadStats(roads),
     },
   };

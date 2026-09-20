@@ -29,7 +29,7 @@ export class EvacController {
   /** The start and shelter list the tracking below belongs to (by identity: the store replaces them wholesale). */
   private trackedStart: { gx: number; gy: number } | null = null;
   private trackedShelters: unknown = null;
-  /** The last route that reached a shelter, and the sim time of the first one for this start. */
+  /** The last route that reached a shelter, and the sim time it (or the one that replaced a closure) was planned. */
   private lastOk: { lengthMeters: number; etaSeconds: number; shelterName: string } | null = null;
   private openedAt = 0;
   /** Set when the last route closed; cleared as soon as a route exists again. */
@@ -103,7 +103,10 @@ export class EvacController {
       return;
     }
     if (next.state === 'ok') {
-      if (!this.lastOk) this.openedAt = this.simTime;
+      // The clock on "how long there was a way out" starts at the first route for this start, and restarts whenever a
+      // route comes back after one closed (a levee, or the water falling): what the card claims is the stretch of
+      // simulated time that ended with the closure, not one that has a cut in the middle of it.
+      if (!this.lastOk || this.closure) this.openedAt = this.simTime;
       this.lastOk = { lengthMeters: next.lengthMeters, etaSeconds: next.etaSeconds, shelterName: next.shelter?.name ?? '' };
       this.closure = null;
     } else if (next.state === 'blocked' && this.lastOk && !this.closure) {

@@ -540,7 +540,10 @@ export interface RouteDiagnosis {
 export interface RouteClosure {
   /** Simulation clock when the last route closed, s. */
   simTime: number;
-  /** Simulated seconds the start had a route: from the first one planned for it to the moment it closed. */
+  /**
+   * Simulated seconds this start had a way out, ending at `simTime`: measured from the route it was first given, or
+   * from the one that came back after an earlier closure — never across a stretch when it was already cut off.
+   */
   openSeconds: number;
   /** The last route that existed, as it was published. */
   lengthMeters: number;
