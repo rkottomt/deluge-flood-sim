@@ -386,7 +386,7 @@ export function createWelcome(ctx: UIContext): HTMLElement {
       'div',
       { class: 'dl-welcome-head' },
       h('span', { class: 'dl-welcome-spark' }, icon('spark', 15)),
-      h('span', { class: 'dl-welcome-title' }, h('b', null, 'Try it'), ' — every drop is solved live on your GPU'),
+      h('span', { class: 'dl-welcome-title' }, h('b', null, 'Try it'), ' — click a button, watch the flood'),
     ),
     h('div', { class: 'dl-try-body' }, row, close),
     status,

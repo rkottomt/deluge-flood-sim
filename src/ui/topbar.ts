@@ -10,11 +10,11 @@ import { formatClock, fmtNum, formatSpeedup, formatSubsteps } from './format';
 import { SpeedEstimator, speedShortfall } from './stats';
 
 export const SPEEDS: Array<{ value: number; label: string; tip: string }> = [
-  { value: 1, label: '1×', tip: 'Real time' },
-  { value: 10, label: '10×', tip: '10 simulated seconds per second' },
-  { value: 60, label: '60×', tip: '1 simulated minute per second' },
-  { value: 300, label: '300×', tip: 'Fast-forward: up to 5 simulated minutes per second, as fast as your GPU allows' },
-  { value: 1200, label: '1200×', tip: 'Fast-forward: up to 20 simulated minutes per second, as fast as your GPU allows' },
+  { value: 1, label: '1×', tip: 'Real time — one second of flood per second' },
+  { value: 10, label: '10×', tip: 'A bit faster: 10 seconds of flood per second' },
+  { value: 60, label: '60×', tip: 'One minute of flood per second — a good watching speed' },
+  { value: 300, label: '300×', tip: 'Skip ahead: up to 5 minutes of flood per second' },
+  { value: 1200, label: '1200×', tip: 'Skip way ahead: up to 20 minutes of flood per second' },
 ];
 
 export interface TopBar {
@@ -69,14 +69,14 @@ export function createTopBar(ctx: UIContext, opts: { onTogglePanel(): void; isPa
   );
 
   const clockValue = h('span', { class: 'dl-clock-value' }, 'T+00:00:00');
-  const clockState = h('span', { class: 'dl-clock-label' }, 'SIM TIME');
-  const clock = h('div', { class: 'dl-clock', 'data-tip': 'Simulated time since the last reset', 'data-tip-side': 'bottom' }, clockState, clockValue);
+  const clockState = h('span', { class: 'dl-clock-label' }, 'TIME');
+  const clock = h('div', { class: 'dl-clock', 'data-tip': 'How long the flood has been running', 'data-tip-side': 'bottom' }, clockState, clockValue);
   bind(
     (s) => formatClock(s.stats?.simTime ?? 0),
     (v) => setText(clockValue, v),
   );
   bind(
-    (s) => (s.loading ? 'LOADING' : s.paused ? 'PAUSED' : 'SIM TIME'),
+    (s) => (s.loading ? 'LOADING' : s.paused ? 'PAUSED' : 'TIME'),
     (v) => {
       setText(clockState, v);
       toggleClass(clock, 'dl-clock-paused', v === 'PAUSED');
@@ -124,7 +124,7 @@ export function createTopBar(ctx: UIContext, opts: { onTogglePanel(): void; isPa
     {
       type: 'button',
       class: 'dl-btn dl-btn-accent dl-how-btn',
-      'data-tip': 'The equations, the stability work and the GPU pipeline',
+      'data-tip': 'How the flood is calculated',
       'data-tip-side': 'bottom',
       onclick: () => ctx.setPanel('howItWorks', true),
     },
@@ -136,8 +136,8 @@ export function createTopBar(ctx: UIContext, opts: { onTogglePanel(): void; isPa
     {
       type: 'button',
       class: 'dl-icon-btn',
-      'aria-label': 'Help and shortcuts',
-      'data-tip': 'Shortcuts & quick guide',
+      'aria-label': 'Help and tour',
+      'data-tip': 'Tour & shortcuts',
       'data-tip-key': '?',
       'data-tip-side': 'bottom',
       onclick: () => ctx.setPanel('help', !store.get().panels.help),

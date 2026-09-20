@@ -1,5 +1,5 @@
 /**
- * Help overlay (? / H): keyboard shortcuts and a 30-second "try this" tour.
+ * Help overlay (? / H): shortcuts and a short tour. The interactive walkthrough is Start the tour.
  */
 import { h, type UIContext } from './dom';
 import { icon } from './icons';
@@ -36,11 +36,12 @@ export function createHelp(ctx: UIContext): Modal {
   );
 
   const steps: Array<[string, Array<string | HTMLElement>]> = [
-    ['Speed up time', ['The simulation is already running. ', h('b', null, '300×'), ' in the top bar fast-forwards as far as your GPU allows; the button shows the speed it really reaches (e.g. 300× → 44×). ', kbd('Space'), ' pauses.']],
-    ['Raise the river', ['In ', h('b', null, 'Weather & rivers'), ', click the highest historic-crest chip (or crank the rain). The river rises along its whole length over a few simulated minutes (a time-lapse: the real 1936 rise took ~30 hours) and the flood spreads from every bank — watch the low-lying districts go under, street by street.']],
-    ['Build a levee', ['On Pittsburgh, ', h('b', null, 'Build a levee'), ' in the Try-it strip raises a floodwall along the North Shore and replays the 1936 rise: the land it keeps dry turns green. Or press ', kbd('2'), ' and drag your own wall across a low gap, tying both ends into high ground. The tool card checks the height against the flood (red = overtopped); water finds its way around open ends.']],
-    ['Get people out', ['Press ', kbd('8'), ' and click a house (or use ', h('b', null, 'Evacuate'), ' in the Try-it strip). The route to the nearest dry shelter re-plans as roads flood — or turns red.']],
-    ['See the hazard', ['Press ', kbd('V'), ' to step through ', h('b', null, 'Depth'), ', ', h('b', null, 'Max depth'), ' and ', h('b', null, 'Speed'), ' maps (or scroll the side panel to ', h('b', null, 'View'), '). Press ', kbd('0'), ' and hover to probe any spot.']],
+    ['Look around', ['Drag the map to spin it. Right-drag to slide. Scroll to zoom.']],
+    ['Raise the river', ['Click ', h('b', null, 'Raise to 1936 record'), ' in the Try-it strip. The rivers rise and downtown goes under.']],
+    ['Green pins', ['Those are ', h('b', null, 'shelters'), ' — high ground people can evacuate to. They are not the flood.']],
+    ['Get people out', ['Click ', h('b', null, 'Evacuate'), '. A route is drawn to the nearest dry shelter and re-plans as streets flood.']],
+    ['Hold the water back', ['Click ', h('b', null, 'Build a levee'), '. The land it keeps dry turns green. Or pick the wall tool and drag your own.']],
+    ['Speed up time', ['The numbers in the top bar skip ahead so you do not wait hours. ', h('b', null, '60×'), ' is a good watching speed. ', kbd('Space'), ' pauses.']],
   ];
 
   const tour = h(
@@ -58,19 +59,18 @@ export function createHelp(ctx: UIContext): Modal {
       type: 'button',
       class: 'dl-btn dl-btn-primary',
       onclick: () => {
-        store.set({ paused: false });
-        ctx.setSim({ timeScale: 300 });
         ctx.setPanel('help', false);
+        ctx.startTutorial?.();
       },
     },
-    icon('play', 14),
-    h('span', null, 'Fast-forward'),
+    icon('spark', 14),
+    h('span', null, 'Start the tour'),
   );
 
   modal = createModal({
     id: 'help',
     title: 'Quick guide',
-    subtitle: 'Everything is live — the water you see is being solved on your GPU right now.',
+    subtitle: 'A live flood on real terrain. Click around — you cannot break anything important.',
     icon: 'help',
     className: 'dl-help',
     onRequestClose: () => ctx.setPanel('help', false),
@@ -78,7 +78,7 @@ export function createHelp(ctx: UIContext): Modal {
       h(
         'div',
         { class: 'dl-help-grid' },
-        h('section', { class: 'dl-help-col' }, h('h3', { class: 'dl-h3' }, icon('spark', 16), 'Try this in 30 seconds'), tour),
+        h('section', { class: 'dl-help-col' }, h('h3', { class: 'dl-h3' }, icon('spark', 16), 'The idea'), tour),
         h(
           'section',
           { class: 'dl-help-col' },
@@ -101,14 +101,14 @@ export function createHelp(ctx: UIContext): Modal {
           h(
             'div',
             { class: 'dl-mouse-hints' },
-            h('span', null, h('b', null, 'Drag'), ' orbit (Navigate & Probe tools)'),
-            h('span', null, h('b', null, 'Right-drag'), ' pan'),
+            h('span', null, h('b', null, 'Drag'), ' look around'),
+            h('span', null, h('b', null, 'Right-drag'), ' slide the map'),
             h('span', null, h('b', null, 'Scroll'), ' zoom'),
           ),
         ),
       ),
     ],
-    footer: h('footer', { class: 'dl-modal-foot' }, h('span', { class: 'dl-foot-note' }, 'Press ', kbd('?'), ' any time to reopen this guide.'), startBtn),
+    footer: h('footer', { class: 'dl-modal-foot' }, h('span', { class: 'dl-foot-note' }, 'Press ', kbd('?'), ' any time to reopen this. Esc closes the tour.'), startBtn),
   });
 
   bind((s) => s.panels.help, (open) => modal.setOpen(open));
