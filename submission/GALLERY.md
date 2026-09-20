@@ -139,6 +139,12 @@ does false colour.
 **Every frame is paused** (`PAUSED` in the transport bar) with the live HUD visible, so the flooded-area, volume,
 max-depth and mass-error numbers in each caption are readable in the image itself.
 
+**The fps reading differs between frames, and one is low.** The measured claim — 60 fps, p95 18.7 ms, 68-73x real
+time (`ARCHITECTURE.md` 8.1) — is at 1600x1000. These stills are captured at 2400x1600, 2.4x the pixels, on a GPU
+shared with other work at the time, so the corner reads 41-60 fps on most frames and **18 fps on image 4**, which is
+the closest, heaviest 3D camera in the set. If a judge asks, that is the answer: a bigger viewport, not a different
+solver. If you would rather the question never came up, drop image 4 and submit 14 — see the note below.
+
 **Not included, deliberately:** no desktop/`Deluge.app` screenshot. An Electron window shows the identical UI, so it
 would have been the weakest image in the set; the offline/desktop story is carried in `SUBMISSION.md` text instead.
 
