@@ -12,7 +12,7 @@
   "east": -79.9427848808986,
   "north": 40.479923006456275
  },
- "attribution": "Elevation: USGS 3DEP · Imagery: USDA NAIP via USGS The National Map · Roads: U.S. Census Bureau TIGER/Line",
+ "attribution": "Elevation: USGS 3DEP · Imagery: USDA NAIP via USGS The National Map · Roads: U.S. Census Bureau TIGER/Line · Buildings © OpenStreetMap contributors (ODbL)",
  "scenario": {
   "description": "Downtown Pittsburgh sits on the Point, where the Allegheny and Monongahela rivers meet to form the Ohio. Normal pool here is about 16.0 ft on the Point gauge; flood stage is 22 ft, and by 25 ft the Parkway \"bathtub\" through downtown is closed by flooding. On March 18, 1936 — the St. Patrick's Day flood — snowmelt and heavy rain drove the river to a record 46 ft and flooded most of the Golden Triangle. The remnants of Agnes crested at 35.8 ft in June 1972 and Hurricane Ivan at 31 ft in September 2004. Raise the river stage to replay those crests and watch the Strip District, the North Shore stadiums and downtown go under — then try a levee.",
   "sources": [
@@ -282,7 +282,8 @@
  "files": {
   "elevation": "elevation.f32",
   "imagery": "imagery.jpg",
-  "roads": "roads.json"
+  "roads": "roads.json",
+  "buildings": "buildings.json"
  },
  "bake": {
   "bakedAt": "2026-09-17T10:58:49.521Z",
@@ -328,6 +329,123 @@
     "minor": 423,
     "local": 9980
    }
+  },
+  "buildings": {
+   "bakedAt": "2026-09-19T21:07:16.590Z",
+   "source": "OpenStreetMap API 0.6 /map (ODbL 1.0)",
+   "tiles": 20,
+   "microsoftFootprintsAdded": 0,
+   "lidar": {
+    "source": "USGS 3DEP via AWS Open Data s3://usgs-lidar-public (EPT), PA_WesternPA_1_2019 + PA_WesternPA_2_2019",
+    "licence": "public domain (USGS)",
+    "acquired": "2019-11-26/2020-02-23 (GpsTime range), leaf-off",
+    "estimator": "median of DSM within 5 m of the footprint p99 where that plane covers >=10 cells, else the footprint p85; eroded by one 0.977 m cell",
+    "groundResidualVsDemM": {
+     "median": -0.03,
+     "mad": 0.32
+    },
+    "measured": 41527,
+    "keptOsmBecause": {
+     "not sampled (too few DSM pixels)": 41,
+     "footprint mostly without returns (water)": 1,
+     "height implausible (<2 m or >300 m)": 737,
+     "canopy: measured surface is penetrable": 2772,
+     "setback tower: surveyed OSM height wins": 6
+    },
+    "rejectedOnApply": 0
+   },
+   "parsed": 48408,
+   "kept": 45084,
+   "droppedTiny": 2697,
+   "droppedOutside": 12,
+   "droppedInWater": 12,
+   "duplicates": 603,
+   "measured": 65,
+   "levels": 64,
+   "estimated": 3428,
+   "remote": 41527,
+   "vertices": 233479,
+   "tallest": [
+    {
+     "name": "U.S. Steel Tower",
+     "height": 256.8,
+     "source": "remote"
+    },
+    {
+     "name": "BNY Mellon Center",
+     "height": 225.3,
+     "source": "remote"
+    },
+    {
+     "name": "Fifth Avenue Place",
+     "height": 206,
+     "source": "measured"
+    },
+    {
+     "name": "One PPG Place",
+     "height": 193.5,
+     "source": "remote"
+    },
+    {
+     "name": "One Oxford Center",
+     "height": 184.6,
+     "source": "remote"
+    },
+    {
+     "name": "Gulf Tower",
+     "height": 178.4,
+     "source": "remote"
+    },
+    {
+     "name": "PPG Place Wintergarden",
+     "height": 171.9,
+     "source": "remote"
+    },
+    {
+     "name": "William Penn Place",
+     "height": 165.8,
+     "source": "remote"
+    },
+    {
+     "name": "Tower at PNC Plaza",
+     "height": 163.6,
+     "source": "remote"
+    },
+    {
+     "name": "Mellon National Bank Building",
+     "height": 160.8,
+     "source": "remote"
+    },
+    {
+     "name": "Cathedral of Learning",
+     "height": 158.3,
+     "source": "remote"
+    },
+    {
+     "name": "K&L Gates Center",
+     "height": 156.5,
+     "source": "remote"
+    },
+    {
+     "name": "Koppers Tower",
+     "height": 144.9,
+     "source": "remote"
+    },
+    {
+     "name": "Grant Building",
+     "height": 137,
+     "source": "remote"
+    },
+    {
+     "name": "One PNC Plaza",
+     "height": 134.1,
+     "source": "remote"
+    }
+   ],
+   "medianHeight": 8.9,
+   "maxHeight": 256.8,
+   "bytes": 2096944,
+   "cellsBuiltOn": 143606
   }
  }
 }

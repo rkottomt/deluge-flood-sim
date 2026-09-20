@@ -3,7 +3,10 @@ import { NORMAL_WATER_WGSL, PREP_CELLS_WGSL, PREP_VERTS_WGSL, PREP_VTXBED_WGSL, 
 import { TERRAIN_WGSL } from './shaders/terrain';
 import { WATER_WGSL } from './shaders/water';
 import { MARKER_WGSL, RIBBON_WGSL } from './shaders/overlay';
+import { BUILDINGS_WGSL } from './shaders/buildings';
+import { BUILDING_FRONT_FACE, BUILDING_VERTEX_BYTES } from './buildings';
 import { BLOOM_WGSL, RAIN_WGSL, SKY_WGSL, TONEMAP_WGSL } from './shaders/post';
+import { createShadowPipelines, type ShadowPipelines } from './shadows';
 
 export const HDR_FORMAT: GPUTextureFormat = 'rgba16float';
 export const DEPTH_FORMAT: GPUTextureFormat = 'depth32float';
@@ -12,6 +15,7 @@ export const MSAA = 4;
 export interface Pipelines {
   sceneBGL: GPUBindGroupLayout;
   overlayBGL: GPUBindGroupLayout;
+  buildingBGL: GPUBindGroupLayout;
   prepCells: GPUComputePipeline;
   prepVerts: GPUComputePipeline;
   prepVtxBed: GPUComputePipeline;
@@ -26,9 +30,15 @@ export interface Pipelines {
   ribbons: GPURenderPipeline;
   markersOpaque: GPURenderPipeline;
   markersBlend: GPURenderPipeline;
+  buildings: GPURenderPipeline;
   rain: GPURenderPipeline;
+  /** Bloom chain: bright pass + downsample (modes 0/1). */
   bloom: GPURenderPipeline;
+  /** Bloom chain: tent upsample (mode 2), blended additively into the finer mip. */
+  bloomUp: GPURenderPipeline;
   tonemap: GPURenderPipeline;
+  /** Sun-visibility / sky-visibility raster over the DEM (src/render/shadows.ts). */
+  shadow: ShadowPipelines;
 }
 
 const PREMULT: GPUBlendState = {
@@ -70,6 +80,14 @@ export async function createPipelines(device: GPUDevice, canvasFormat: GPUTextur
       { binding: 10, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
       // Land the user's walls keep dry (r8unorm, filtered): the terrain's green "protected" glow.
       { binding: 11, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
+      // Sun shading (rgba8unorm, filtered): r = sun visibility, g = open-sky fraction, per DEM cell.
+      { binding: 12, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
+      // Aerial imagery again, clamped/linear (the terrain pass reads it anisotropically at binding 5). The water
+      // pass needs it to colour what its reflection rays hit and to refract the ground under shallow water.
+      { binding: 13, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
+      // Roof height above ground per cell (r32float, src/render/buildings.ts), or a 1x1 zero when the scene has no
+      // buildings. Point-fetched, never filtered: the water pass marches it so the flood reflects the skyline.
+      { binding: 14, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'unfilterable-float' } },
     ],
   });
   const overlayBGL = device.createBindGroupLayout({
@@ -81,10 +99,33 @@ export async function createPipelines(device: GPUDevice, canvasFormat: GPUTextur
       { binding: 3, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },
     ],
   });
+  /**
+   * Buildings get their own bind group rather than a slot in `sceneBGL`: the extruded city needs the sun raster,
+   * the aerial photo, the per-vertex water surface and the max-depth field all at once, and nothing else in the
+   * frame needs that combination.
+   */
+  const buildingBGL = device.createBindGroupLayout({
+    label: 'buildings',
+    entries: [
+      { binding: 0, visibility: VF, buffer: { type: 'uniform' } },
+      { binding: 1, visibility: VF, buffer: { type: 'uniform' } },
+      // Sun raster (rgba8unorm): rg = street sun/sky, ba = roof sun/sky. See shaders/shadow.ts.
+      { binding: 2, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
+      { binding: 3, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
+      // Per-vertex (bed, water surface, mean depth, wet) — loaded, not filtered.
+      { binding: 4, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'unfilterable-float' } },
+      { binding: 5, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
+      { binding: 6, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } },
+      { binding: 7, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } },
+    ],
+  });
+  const buildingLayout = device.createPipelineLayout({ bindGroupLayouts: [buildingBGL] });
   const sceneLayout = device.createPipelineLayout({ bindGroupLayouts: [sceneBGL] });
   const overlayLayout = device.createPipelineLayout({ bindGroupLayouts: [overlayBGL] });
 
-  const [prepCellsM, prepVertsM, prepVtxBedM, wetBaseM, wetDownM, normalWaterM, terrainM, waterM, ribbonM, markerM, skyM, rainM, bloomM, tonemapM] = await Promise.all([
+  const shadowReady = createShadowPipelines(device, (code, label) => checkedModule(device, code, label));
+
+  const [prepCellsM, prepVertsM, prepVtxBedM, wetBaseM, wetDownM, normalWaterM, terrainM, waterM, ribbonM, markerM, buildingM, skyM, rainM, bloomM, tonemapM] = await Promise.all([
     checkedModule(device, PREP_WGSL + PREP_CELLS_WGSL, 'prep-cells'),
     checkedModule(device, PREP_WGSL + PREP_VERTS_WGSL, 'prep-verts'),
     checkedModule(device, PREP_WGSL + PREP_VTXBED_WGSL, 'prep-vtxbed'),
@@ -95,6 +136,7 @@ export async function createPipelines(device: GPUDevice, canvasFormat: GPUTextur
     checkedModule(device, WATER_WGSL, 'water'),
     checkedModule(device, RIBBON_WGSL, 'ribbons'),
     checkedModule(device, MARKER_WGSL, 'markers'),
+    checkedModule(device, BUILDINGS_WGSL, 'buildings'),
     checkedModule(device, SKY_WGSL, 'sky'),
     checkedModule(device, RAIN_WGSL, 'rain'),
     checkedModule(device, BLOOM_WGSL, 'bloom'),
@@ -123,6 +165,15 @@ export async function createPipelines(device: GPUDevice, canvasFormat: GPUTextur
       { shaderLocation: 1, offset: 16, format: 'float32x4' },
     ],
   };
+  /** Building vertex: grid x / elevation / grid y, the packed attribute word, and the building's roof height. */
+  const buildingVertexLayout: GPUVertexBufferLayout = {
+    arrayStride: BUILDING_VERTEX_BYTES,
+    attributes: [
+      { shaderLocation: 0, offset: 0, format: 'float32x3' },
+      { shaderLocation: 1, offset: 12, format: 'uint32' },
+      { shaderLocation: 2, offset: 16, format: 'float32' },
+    ],
+  };
   const markerLayout: GPUVertexBufferLayout = {
     arrayStride: 72,
     attributes: [
@@ -135,7 +186,7 @@ export async function createPipelines(device: GPUDevice, canvasFormat: GPUTextur
   };
 
   const R = (d: GPURenderPipelineDescriptor) => device.createRenderPipelineAsync(d);
-  const [sky, terrain, skirt, water, waterSkirt, ribbons, markersOpaque, markersBlend, rain, bloom, tonemap, prepCells, prepVerts, prepVtxBed, wetBase, wetDown, normalWater] =
+  const [sky, terrain, skirt, water, waterSkirt, ribbons, markersOpaque, markersBlend, buildings, rain, bloom, bloomUp, tonemap, prepCells, prepVerts, prepVtxBed, wetBase, wetDown, normalWater] =
     await Promise.all([
       R({
         label: 'sky',
@@ -210,6 +261,17 @@ export async function createPipelines(device: GPUDevice, canvasFormat: GPUTextur
         multisample: msaa,
       }),
       R({
+        label: 'buildings',
+        layout: buildingLayout,
+        vertex: { module: buildingM, entryPoint: 'vsBuilding', buffers: [buildingVertexLayout] },
+        fragment: { module: buildingM, entryPoint: 'fsBuilding', targets: hdrOpaque },
+        // Culling the away-facing half of every box halves the city's rasterisation. Which half that is comes from
+        // BUILDING_FRONT_FACE, next to the code that does the winding — see the note there for why it is 'ccw'.
+        primitive: { topology: 'triangle-list', cullMode: 'back', frontFace: BUILDING_FRONT_FACE },
+        depthStencil: depthWrite,
+        multisample: msaa,
+      }),
+      R({
         label: 'rain',
         layout: 'auto',
         vertex: { module: rainM, entryPoint: 'vsRain' },
@@ -225,6 +287,17 @@ export async function createPipelines(device: GPUDevice, canvasFormat: GPUTextur
         fragment: { module: bloomM, entryPoint: 'fsBloom', targets: [{ format: HDR_FORMAT }] },
       }),
       R({
+        label: 'bloom-up',
+        layout: 'auto',
+        vertex: { module: bloomM, entryPoint: 'vsFull' },
+        // Additive: each octave is summed into the finer mip it is upsampled onto.
+        fragment: {
+          module: bloomM,
+          entryPoint: 'fsBloom',
+          targets: [{ format: HDR_FORMAT, blend: { color: { srcFactor: 'one', dstFactor: 'one' }, alpha: { srcFactor: 'one', dstFactor: 'one' } } }],
+        },
+      }),
+      R({
         label: 'tonemap',
         layout: 'auto',
         vertex: { module: tonemapM, entryPoint: 'vsFull' },
@@ -238,5 +311,6 @@ export async function createPipelines(device: GPUDevice, canvasFormat: GPUTextur
       device.createComputePipelineAsync({ label: 'normal-water', layout: 'auto', compute: { module: normalWaterM, entryPoint: 'normalWater' } }),
     ]);
 
-  return { sceneBGL, overlayBGL, prepCells, prepVerts, prepVtxBed, wetBase, wetDown, normalWater, sky, terrain, skirt, water, waterSkirt, ribbons, markersOpaque, markersBlend, rain, bloom, tonemap };
+  const shadow = await shadowReady;
+  return { sceneBGL, overlayBGL, buildingBGL, prepCells, prepVerts, prepVtxBed, wetBase, wetDown, normalWater, sky, terrain, skirt, water, waterSkirt, ribbons, markersOpaque, markersBlend, buildings, rain, bloom, bloomUp, tonemap, shadow };
 }

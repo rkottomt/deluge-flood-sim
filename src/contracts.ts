@@ -54,6 +54,50 @@ export interface RoadEdge {
   pts: Float32Array;
 }
 
+/**
+ * Extruded building footprints for the domain — the city the flood runs BETWEEN, instead of over a photograph of one.
+ * Parallel arrays indexed by building 0 … count-1; see src/data/buildings.ts for the source, the licence and how each
+ * height was arrived at. All coordinates are GRID coordinates (cell units, see conventions above); all heights and
+ * elevations are metres, with no vertical exaggeration applied.
+ *
+ * A building k owns the vertices `offsets[k] … offsets[k+1]-1` of `verts`: ONE OPEN OUTER RING (the closing edge from
+ * the last vertex back to the first is implied, and courtyards/holes are not represented). Winding is whatever the
+ * source gave, so a renderer that needs a fixed winding must check the signed area itself. Vertices may sit up to a
+ * few cells outside [0, nx] × [0, ny] where a footprint straddles the domain edge.
+ *
+ * Extrude from `base[k]` (the LOWEST bare-earth elevation under the footprint, so a building on a slope rests on the
+ * ground at its downhill wall rather than hovering) up to `base[k] + height[k]`.
+ */
+export interface BuildingSet {
+  count: number;
+  /** Length count+1. Vertex range of building k is [offsets[k], offsets[k+1]); offsets[count] = total vertices. */
+  offsets: Uint32Array;
+  /** Interleaved ring vertices [gx0, gy0, gx1, gy1, …], rings concatenated in building order. */
+  verts: Float32Array;
+  /** Ground elevation each footprint is planted on, meters (minimum bare-earth elevation under the footprint). */
+  base: Float32Array;
+  /** Roof height above `base`, meters. */
+  height: Float32Array;
+  /**
+   * How `height` was obtained — index into `HEIGHT_SOURCES` in src/data/buildings.ts:
+   * 0 measured (a surveyed height tag), 1 from floor counts, 2 estimated from class and footprint area,
+   * 3 remote-sensed (machine-extracted from stereo imagery). Only 2 is a guess; the UI must say so if it quotes one.
+   */
+  heightSource: Uint8Array;
+  /** Coarse class per building; index into `BUILDING_KINDS` in src/data/buildings.ts (0 = 'other'). */
+  kind: Uint8Array;
+  /** Sparse names, length count — undefined for the great majority of buildings. */
+  names: Array<string | undefined>;
+  /**
+   * Optional nx·ny raster of roof height above ground in meters, 0 where there is no building (row-major, same layout
+   * as `TerrainData.elevation`). Presets fill it at load time; `rasterizeBuildingHeights()` rebuilds it. Handy for
+   * cheap occlusion, contact shadows or street-level ambient darkening without touching the footprint geometry.
+   */
+  heightRaster: Float32Array | null;
+  /** Attribution line for the footprint source, e.g. "Buildings © OpenStreetMap contributors (ODbL)". */
+  attribution: string;
+}
+
 /** A named place of refuge for evacuation routing (e.g. a school on high ground). */
 export interface Shelter {
   name: string;
@@ -74,6 +118,11 @@ export interface TerrainData {
   /** Aerial imagery covering exactly `bounds`, north-up. Any pixel size. Null if unavailable. */
   imagery: ImageBitmap | null;
   roads: RoadNetwork | null;
+  /**
+   * EXTENSION: real building footprints with heights, or null when none are available (live areas, the sandbox, and
+   * any preset baked before buildings existed). Renderers must feature-detect: `terrain.buildings ?? null`.
+   */
+  buildings?: BuildingSet | null;
   /** Attribution line(s) for the data shown on screen. */
   attribution: string;
   /** Optional scenario that comes with a preset. */
@@ -539,6 +588,8 @@ export interface DelugeDebugAPI {
   setStageOffset(meters: number): void;
   setTimeScale(scale: number): void;
   setWaterMode(mode: WaterViewMode): void;
+  /** View-panel look controls (quality tier, time of day, buildings, presentation mode). */
+  setLook(patch: Partial<LookSettings>): void;
   /** Draw a wall through grid-coord points. */
   drawWall(points: Array<{ gx: number; gy: number }>, height: number): void;
   addSource(source: WaterSource): void;
@@ -655,6 +706,12 @@ export interface AppState {
     showRoads: boolean;
     showContours: boolean;
   };
+  /**
+   * Look controls a presenter drives from the View panel. Kept apart from `render` because that object is spread
+   * straight into RenderSettings every frame, while these are scene-level settings pushed to the renderer only
+   * when they change: each of the first three rebuilds the sun-shading raster or the city's LOD cut.
+   */
+  look: LookSettings;
   sources: WaterSource[];
   storms: StormCell[];
   shelters: Shelter[];
@@ -671,6 +728,23 @@ export interface AppState {
   panels: { howItWorks: boolean; locationPicker: boolean; help: boolean };
   /** GPU adapter description for the diagnostics panel. */
   gpuInfo: string;
+}
+
+/** Time of day, as the three named suns the renderer ships (src/render/atmosphere.ts LIGHTING_PRESETS). */
+export type TimeOfDay = 'daylight' | 'goldenHour' | 'morning';
+
+export interface LookSettings {
+  /**
+   * 'auto' is the demo default: the adaptive ladder, which can still step down under load. 'cinematic' is the
+   * hero-still tier (depth of field, edge aberration, the densest sun raster, glass reflections) and is never
+   * selected automatically — a presenter has to ask for it.
+   */
+  quality: 'auto' | 'cinematic';
+  timeOfDay: TimeOfDay;
+  /** Draw the extruded city. Off gives the pre-buildings look (and the cheapest frame). */
+  buildings: boolean;
+  /** Hide every piece of UI chrome for a clean capture or a projector. */
+  presentation: boolean;
 }
 
 export interface Store {

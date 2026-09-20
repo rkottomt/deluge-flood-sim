@@ -6,8 +6,10 @@
  *   elevation.f32  nx·ny little-endian Float32, row-major (north row first), hydro-conditioned
  *   imagery.jpg    USDA NAIP aerial imagery covering exactly `bounds`, north-up
  *   roads.json     CompactRoads (see roads.ts)
+ *   buildings.json CompactBuildings (see buildings.ts) — optional; building footprints with heights
  */
 import type { GeoBounds, PresetInfo, ProgressFn, ScenarioPreset, TerrainData } from '../contracts';
+import { type CompactBuildings, decodeBuildings, rasterizeBuildingHeights, validateCompactBuildings } from './buildings';
 import { decodeImageBitmap } from './imagery';
 import { fetchBytes, fetchJSON } from './net';
 import { type CompactRoads, decodeRoads } from './roads';
@@ -31,7 +33,8 @@ export interface PresetMeta {
   bounds: GeoBounds;
   attribution: string;
   scenario: ScenarioPreset;
-  files: { elevation: string; imagery: string | null; roads: string | null };
+  /** `buildings` is absent in presets baked before building footprints existed. */
+  files: { elevation: string; imagery: string | null; roads: string | null; buildings?: string | null };
   /** Provenance / QA info written by the bake script (informational). */
   bake?: Record<string, unknown>;
 }
@@ -161,10 +164,17 @@ export async function loadPreset(id: string, onProgress?: ProgressFn): Promise<T
   if (problems.length) throw new Error(`Preset ${id} meta.json invalid: ${problems.join('; ')}`);
 
   // Weighted progress across the parallel downloads.
-  const parts = { elevation: 0, imagery: 0, roads: 0 };
-  const weights = { elevation: 0.45, imagery: 0.35, roads: 0.2 };
+  const parts = { elevation: 0, imagery: 0, roads: 0, buildings: 0 };
+  const weights = { elevation: 0.42, imagery: 0.32, roads: 0.16, buildings: 0.1 };
+  if (!meta.files.buildings) parts.buildings = 1;
   const report = (msg: string) => {
-    const f = 0.05 + 0.9 * (parts.elevation * weights.elevation + parts.imagery * weights.imagery + parts.roads * weights.roads);
+    const f =
+      0.05 +
+      0.9 *
+        (parts.elevation * weights.elevation +
+          parts.imagery * weights.imagery +
+          parts.roads * weights.roads +
+          parts.buildings * weights.buildings);
     onProgress?.(msg, Math.min(0.95, f));
   };
 
@@ -201,7 +211,30 @@ export async function loadPreset(id: string, onProgress?: ProgressFn): Promise<T
         })
     : Promise.resolve(null);
 
-  const [elevation, imagery, roads] = await Promise.all([elevationP, imageryP, roadsP]);
+  /**
+   * Building footprints. Best-effort like imagery and roads: a preset with no buildings.json, or a corrupt one, still
+   * loads and simply draws no buildings (`terrain.buildings === null`). The roof-height raster is filled in here —
+   * rasterising 45 000 Pittsburgh footprints costs ~15 ms, far less than downloading a second file for it.
+   */
+  const buildingsP = meta.files.buildings
+    ? fetchJSON<CompactBuildings>(`${dir}${meta.files.buildings}`, { timeoutMs: 60000, retries: 2 })
+        .then((c) => {
+          const set = decodeBuildings(c);
+          const problems = validateCompactBuildings(c, meta.nx, meta.ny, set);
+          if (problems.length) throw new Error(problems.join('; '));
+          set.heightRaster = rasterizeBuildingHeights(set, meta.nx, meta.ny);
+          parts.buildings = 1;
+          report('Buildings loaded');
+          return set;
+        })
+        .catch((e) => {
+          console.warn(`[data] buildings for ${id} unavailable:`, e);
+          parts.buildings = 1;
+          return null;
+        })
+    : Promise.resolve(null);
+
+  const [elevation, imagery, roads, buildings] = await Promise.all([elevationP, imageryP, roadsP, buildingsP]);
   onProgress?.('Ready', 1);
   return {
     name: meta.name,
@@ -212,6 +245,7 @@ export async function loadPreset(id: string, onProgress?: ProgressFn): Promise<T
     bounds: meta.bounds,
     imagery,
     roads,
+    buildings,
     attribution: meta.attribution,
     scenario: meta.scenario,
   };

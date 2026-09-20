@@ -1,5 +1,5 @@
 /** Terrain surface + diorama skirt shaders. */
-import { COMMON_WGSL, FRAME_WGSL, LOD_WGSL, WALL_WGSL } from './common';
+import { COMMON_WGSL, DETAIL_NORMAL_WGSL, FRAME_WGSL, LOD_WGSL, SUN_SHADING_WGSL, WALL_WGSL } from './common';
 
 export const TERRAIN_WGSL = /* wgsl */ `
 ${FRAME_WGSL}
@@ -14,9 +14,12 @@ ${FRAME_WGSL}
 @group(0) @binding(8) var wetTex: texture_2d<f32>;
 @group(0) @binding(9) var wallTex: texture_2d<f32>;
 @group(0) @binding(11) var protectTex: texture_2d<f32>;
+@group(0) @binding(12) var sunTex: texture_2d<f32>;
 ${COMMON_WGSL}
 ${LOD_WGSL}
 ${WALL_WGSL}
+${SUN_SHADING_WGSL}
+${DETAIL_NORMAL_WGSL}
 
 struct VOut {
   @builtin(position) pos: vec4f,
@@ -181,16 +184,55 @@ fn fsTerrain(in: VOut) -> @location(0) vec4f {
   albedo *= 1.0 - shadow;
 
   // ── Lighting ───────────────────────────────────────────────────────────────────────────
+  // Three terms, kept apart on purpose: the sun's warm beam gated by the cast-shadow raster, the cool sky dome
+  // gated by how much of it this cell can actually see, and the warm bounce off the land around it.
   let L = F.sunDir;
-  var ndl = max(dot(nLight, L), 0.0);
-  if (useImagery) {
-    // Aerial photos already contain shading: apply a softened hillshade relative to flat ground (walls are not in
-    // the photo, so they get full lighting).
-    let flatNdl = max(L.y, 0.2);
-    ndl = mix(mix(flatNdl, ndl, 0.62), ndl, wallBody);
+  let pxCells = max(distance(in.world, F.camPos) * F.elev.w / F.cellSize, 1e-4);
+
+  // ── Relief finer than a 7.8 m DEM cell ──────────────────────────────────────────────────
+  // Close up, a hillside that is visibly textured in the photograph renders as a smooth ramp, because the height
+  // field simply does not go that fine. The fix is already on screen: the photograph itself holds that structure —
+  // kerbs, tree canopy, roof lines — as luminance, so its gradient is both a cheaper bump than any noise (two
+  // taps, no register pressure) and a truer one, because the bumps land on the things that are really there.
+  // Terrain with no photo over it falls back to value noise. Either way this only bends the shading normal; the
+  // imagery's colours are never touched.
+  let detailFadeN = (1.0 - smoothstep(0.35, 1.8, pxCells * F.cellSize)) * F.shade.y;
+  if (detailFadeN > 0.004) {
+    var d: vec2f;
+    if (useImagery) {
+      let px = 1.4 / vec2f(textureDimensions(imageryTex, 0));
+      let lx = luminance(textureSampleLevel(imageryTex, linSamp, uv + vec2f(px.x, 0.0), 0.0).rgb)
+             - luminance(textureSampleLevel(imageryTex, linSamp, uv - vec2f(px.x, 0.0), 0.0).rgb);
+      let lz = luminance(textureSampleLevel(imageryTex, linSamp, uv + vec2f(0.0, px.y), 0.0).rgb)
+             - luminance(textureSampleLevel(imageryTex, linSamp, uv - vec2f(0.0, px.y), 0.0).rgb);
+      d = vec2f(lx, lz) * 3.0;
+    } else {
+      d = detailSlope(in.world.xz, F.shade.y > 0.9);
+    }
+    nLight = normalize(nLight + vec3f(-d.x, 0.0, -d.y) * detailFadeN * (1.0 - wallBody));
   }
+
+  let vis = sunShading(uv, pxCells);
+  var ndl = max(dot(nLight, L), 0.0);
+  var sunVis = vis.x;
+  if (useImagery) {
+    // Aerial photos already contain shading, so the hillshade only departs from flat ground by F.light.z and the
+    // cast shadow is applied at F.light.x — enough to put the hills' shadows on the valley without double-darkening
+    // what the photograph already shows. Walls are not in the photo, so they take full lighting and full shadow.
+    let flatNdl = max(L.y, 0.2);
+    // Relative relighting: F.shade.w restores flat ground to the illumination the photograph was taken under, so
+    // moving the sun changes the light's colour and direction and the shadows it throws — not the exposure of the
+    // aerial image underneath. (See imageryRelightFactor in atmosphere.ts.)
+    ndl = mix(mix(flatNdl, ndl, F.light.z), ndl, wallBody) * F.shade.w;
+    sunVis = mix(mix(1.0, vis.x, F.light.x), vis.x, wallBody);
+  }
+  let occ = mix(1.0, vis.y, F.light.y);
   let sunK = F.sunColor * (1.0 - F.opts.w * 0.75);
-  var color = albedo * (sunK * ndl + skyAmbient(nLight) * 0.85);
+  // With the sun low the beam carries less of the total light and the sky dome more, so the ambient comes up a
+  // little — enough that shadows read as shadow rather than as black, and no further: golden hour is supposed to
+  // be high-contrast, and lifting it any harder just pushes the whole frame into the tonemapper's grey shoulder.
+  let ambK = 0.85 + 0.3 * F.shade.z;
+  var color = albedo * (sunK * ndl * sunVis + skyAmbient(nLight) * ambK * occ);
   color += vec3f(1.0, 0.95, 0.85) * crestGlint * 0.35 * (1.0 - F.opts.w * 0.6);
   color = mix(color, vec3f(0.018, 0.014, 0.01), casing * 0.9);
 

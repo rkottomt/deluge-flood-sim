@@ -74,6 +74,12 @@ export function createInitialState(): AppState {
       showRoads: true,
       showContours: false,
     },
+    look: {
+      quality: 'auto',
+      timeOfDay: 'daylight',
+      buildings: true,
+      presentation: false,
+    },
     sources: [],
     storms: [],
     shelters: [],

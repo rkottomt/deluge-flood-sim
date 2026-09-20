@@ -233,6 +233,75 @@ test('prep: water surface, shoreline extension, walls and wet pyramid', async ()
   const wTop = await readTexture(device, wet, 1, 1, wetMips - 1);
   assert.equal(wTop[0], 1);
 
+  // ── Derived cell fields: the water-look channels ───────────────────────────────────────────────────────
+  // misc = (barrier, max depth, speed, collected whitewater). The last one is what the water shader puts foam on:
+  // it must be zero in open, uniform flow and clearly positive where the water is up against something.
+  const m = await readTexture(device, misc, N, N);
+  const mAt = (i: number, j: number) => {
+    const o = (j * N + i) * 4;
+    return { barrier: m[o], maxDepth: m[o + 1], speed: m[o + 2], collect: m[o + 3] };
+  };
+  const nrm = await readTexture(device, norm, N, N);
+  const nAt = (i: number, j: number) => {
+    const o = (j * N + i) * 4;
+    return { bedX: nrm[o], bedZ: nrm[o + 1], etaX: nrm[o + 2], etaZ: nrm[o + 3] };
+  };
+
+  // Open river, uniform flow, flat surface: nothing to foam on, and no water-surface slope.
+  const open = mAt(10, 20);
+  assert.ok(close(open.speed, 0.5, 1e-2), `river speed ${open.speed}`);
+  assert.ok(close(open.maxDepth, 1.2, 1e-2), `river max depth ${open.maxDepth}`);
+  assert.equal(open.barrier, 0);
+  assert.ok(open.collect < 0.02, `open river should not foam: ${open.collect}`);
+  const openN = nAt(10, 20);
+  assert.ok(close(openN.etaX, 0, 1e-3) && close(openN.etaZ, 0, 1e-3), `flat river has no surface slope: ${JSON.stringify(openN)}`);
+  assert.ok(close(openN.bedX, 0, 1e-3), `flat river bed slope ${openN.bedX}`);
+
+  // Against the wall (the cell whose +x neighbour is the 3 m barrier): water piling against something it cannot
+  // cross, with a dry cell beside it — the levee case the shader draws foam along.
+  const atWall = mAt(19, 20);
+  assert.ok(atWall.collect > 0.3, `no whitewater against the wall: ${atWall.collect}`);
+  // The bed slope still sees the wall (one-sided difference across a 3 m barrier over 2 cells of 8 m).
+  assert.ok(nAt(19, 20).bedX > 0.1, `wall bed slope ${nAt(19, 20).bedX}`);
+
+  // The shoreline row against the dry bank (j = 48) collects whitewater too; two rows in, it does not.
+  assert.ok(mAt(10, 47).collect > 0.2, `no whitewater at the shoreline: ${mAt(10, 47).collect}`);
+  assert.ok(mAt(10, 45).collect < 0.02, `whitewater two rows offshore: ${mAt(10, 45).collect}`);
+  // Dry ground never foams.
+  assert.equal(mAt(30, 20).collect, 0);
+  // The domain edge is a cut face, not a shoreline: the water there must not be outlined in foam.
+  assert.ok(mAt(0, 20).collect < 0.02, `domain edge foams: ${mAt(0, 20).collect}`);
+
+  // The max-depth view is a static map of where the water reached; live foam on it would be a lie.
+  pi[5] = 1;
+  device.queue.writeBuffer(params, 0, pb);
+  const miscMax = out('rgba16float', N, N);
+  const encM = device.createCommandEncoder();
+  const cpM = encM.beginComputePass();
+  cpM.setPipeline(P.prepCells);
+  cpM.setBindGroup(
+    0,
+    device.createBindGroup({
+      layout: P.prepCells.getBindGroupLayout(0),
+      entries: [
+        ...common,
+        { binding: 4, resource: out('rgba16float', N, N).createView() },
+        { binding: 5, resource: out('rgba16float', N, N).createView() },
+        { binding: 6, resource: miscMax.createView() },
+        { binding: 7, resource: out('rg32float', N, N).createView() },
+      ],
+    }),
+  );
+  cpM.dispatchWorkgroups(N / 16, N / 16);
+  cpM.end();
+  device.queue.submit([encM.finish()]);
+  const mm = await readTexture(device, miscMax, N, N);
+  for (const [i, j] of [[19, 20], [10, 47], [10, 20]] as const) {
+    assert.equal(mm[(j * N + i) * 4 + 3], 0, `max-depth view foams at ${i},${j}`);
+  }
+  pi[5] = 0;
+  device.queue.writeBuffer(params, 0, pb);
+
   // Second prep using the pyramid as a hint (the renderer's steady state) must give identical vertices.
   pf[9] = 1;
   device.queue.writeBuffer(params, 0, pb);

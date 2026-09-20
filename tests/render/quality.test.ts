@@ -96,3 +96,43 @@ test('sim pressure: a GPU-limited sim holds the level; a starved one steps down 
   run(q, 5, () => 16.7, t, 3);
   assert.equal(q.level, start, 'a GPU-limited sim takes back the better-than-default level');
 });
+
+test('the cinematic tier is opt-in only, and every rung of the auto ladder is a complete preset', () => {
+  // Cinematic is chosen by hand (setQuality / the render settings), never by the adaptive controller: it is not
+  // on the ladder, so no amount of headroom can promote a demo machine into it behind the presenter's back.
+  const ladder = AUTO_LADDER;
+  assert.ok(!ladder.includes(QUALITY_PRESETS.cinematic));
+  assert.ok(QUALITY_PRESETS.cinematic.lodQuadPixels < QUALITY_PRESETS.high.lodQuadPixels, 'cinematic is denser than high');
+  assert.equal(QUALITY_PRESETS.cinematic.shadows, 'cinematic');
+
+  for (const p of [...ladder, ...Object.values(QUALITY_PRESETS)]) {
+    assert.ok(p.shadowFilterCells >= 0 && p.shadowFilterCells <= 2, `shadowFilterCells ${p.shadowFilterCells}`);
+    assert.ok(p.detailNormals >= 0 && p.detailNormals <= 1, `detailNormals ${p.detailNormals}`);
+    assert.ok(['low', 'standard', 'cinematic'].includes(p.shadows), `shadows ${p.shadows}`);
+  }
+  // Cheaper rungs never ask for more shading work than dearer ones.
+  for (let i = 1; i < ladder.length; i++) {
+    assert.ok(ladder[i].shadowFilterCells <= ladder[i - 1].shadowFilterCells, `rung ${i} filter`);
+    assert.ok(ladder[i].detailNormals <= ladder[i - 1].detailNormals, `rung ${i} detail normals`);
+  }
+});
+
+test('the hero-shot post effects are on the cinematic tier only, and never on the auto ladder', () => {
+  // Depth of field and edge aberration cost real frame time. The adaptive controller must never be able to switch
+  // them on: it only ever picks a rung of AUTO_LADDER, so no rung may carry the flag.
+  for (const [i, rung] of AUTO_LADDER.entries()) {
+    assert.notEqual(rung.cinematicPost, true, `auto ladder rung ${i} must not enable cinematic post`);
+  }
+  assert.equal(QUALITY_PRESETS.cinematic.cinematicPost, true);
+  for (const name of ['high', 'balanced', 'low'] as const) {
+    assert.notEqual(QUALITY_PRESETS[name].cinematicPost, true, `${name} must not enable cinematic post`);
+  }
+});
+
+test('the adaptive controller still gives up levels under load with the new fields in place', () => {
+  const q = new AdaptiveQuality();
+  const start = q.level;
+  run(q, 3, () => 34);
+  assert.ok(q.level > start, 'sustained slow frames still step down');
+  assert.ok(q.preset.maxPixels <= AUTO_LADDER[start].maxPixels);
+});

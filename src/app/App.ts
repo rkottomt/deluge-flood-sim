@@ -248,6 +248,7 @@ export class App {
       this.requestRender();
     });
     this.sim.setOverride('governor', { maxSubstepsPerFrame: this.budget.cap });
+    this.installLookSync(renderer);
     this.installResizeHandling();
     this.installActivityTracking();
     this.store.subscribe((s, prev) => {
@@ -258,6 +259,38 @@ export class App {
       if (rainStarts || s.sim.stabilityMode !== prev.sim.stabilityMode) this.braceBudget();
     });
     this.loop.start();
+  }
+
+  /**
+   * Store → renderer for the View panel's look controls (quality tier, time of day, buildings, presentation).
+   *
+   * Pushed on change rather than per frame: each of the first three is a scene-level setting that rebuilds the
+   * sun-shading raster or the city's LOD cut, and the lighting one costs a ~15 ms GPU build, so binding it to a
+   * per-pointermove slider would be a mistake. The initial state is applied once here so a link or a saved
+   * default lands before the first frame.
+   */
+  private installLookSync(renderer: DelugeRendererAPI): void {
+    const apply = (look: AppState['look'], prev: AppState['look'] | null): void => {
+      try {
+        if (!prev || look.quality !== prev.quality) renderer.setQuality(look.quality);
+        if (!prev || look.timeOfDay !== prev.timeOfDay) renderer.setLighting({ preset: look.timeOfDay });
+        if (!prev || look.buildings !== prev.buildings) renderer.setBuildings({ enabled: look.buildings });
+        if (!prev || look.presentation !== prev.presentation) renderer.setCinematic({ presentation: look.presentation });
+      } catch (err) {
+        this.errors.report('ui', `look change failed: ${errorMessage(err)}`, err);
+      }
+      this.requestRender();
+    };
+    apply(this.store.get().look, null);
+    this.store.subscribe((s, prev) => {
+      if (s.look !== prev.look) apply(s.look, prev.look);
+    });
+    // The renderer owns presentation mode (it stamps the document element and other hosts may toggle it), so the
+    // store follows it rather than the other way round when it changes underneath us.
+    renderer.onPresentationChange((on) => {
+      const look = this.store.get().look;
+      if (look.presentation !== on) this.store.set({ look: { ...look, presentation: on } });
+    });
   }
 
   private async loadInitial(): Promise<void> {

@@ -4,7 +4,7 @@
  */
 
 /** Byte size of the Frame uniform (must match FRAME_WGSL and writeFrameUniforms in index.ts). */
-export const FRAME_UNIFORM_SIZE = 464;
+export const FRAME_UNIFORM_SIZE = 512;
 
 export const FRAME_WGSL = /* wgsl */ `
 struct Frame {
@@ -35,7 +35,11 @@ struct Frame {
   rainBox: f32,       // rain particle box size (m)
   wall: vec4f,        // x: any walls (wallTex valid), y: wall field range (cells), z: wall crest elevation origin (m), w: normal-water mask valid
   bands: array<vec4f, 8>, // rgb (HDR input that tone-maps to the legend colour) + upper threshold in .a
-  protect: vec4f,     // x: protected-land glow strength 0..1 (protectTex valid when > 0), yzw: unused
+  protect: vec4f,     // x: protected-land glow 0..1 (protectTex valid when > 0), y: 1 = roofTex is a real building-height raster, zw: unused
+  sunTint: vec3f,     // horizon radiance around the sun's azimuth (the warm band of a low sun)
+  skyWarmth: f32,     // 0 with the sun high, 1 with it on the horizon: how far that band is pushed
+  light: vec4f,       // shadow strength, sky-occlusion strength, relief strength, 1 = sun raster is built
+  shade: vec4f,       // PCF radius (cells), detail-normal strength, ground-bounce strength, imagery relight
 }
 `;
 
@@ -75,23 +79,43 @@ fn luminance(c: vec3f) -> f32 {
   return dot(c, vec3f(0.2126, 0.7152, 0.0722));
 }
 
+/**
+ * The horizon is not one colour. With the sun high it very nearly is, and this returns F.skyHorizon; as the sun
+ * drops, the air along the line of sight toward it is lit end-on and turns amber (F.sunTint, which carries the
+ * same Rayleigh + aerosol extinction as the sun's own beam — see skyColors in atmosphere.ts), while the horizon
+ * behind the viewer keeps the cool blue-grey of the earth's rising shadow. The band tightens around the sun's
+ * azimuth and falls away with altitude, which is what makes a low sun read as a direction rather than a filter.
+ */
+fn horizonColor(dir: vec3f) -> vec3f {
+  if (F.skyWarmth < 0.002) { return F.skyHorizon; }
+  let a = normalize(vec2f(dir.x, dir.z) + vec2f(1e-5, 0.0));
+  let b = normalize(vec2f(F.sunDir.x, F.sunDir.z) + vec2f(1e-5, 0.0));
+  let toward = max(dot(a, b), 0.0);
+  // A wide arc, not a spotlight: at sunset the warm half of the sky is genuinely half the sky, and the far horizon
+  // keeps a little of it too (0.18) because the air in between is lit from behind.
+  let band = (0.18 + 0.82 * pow(toward, 1.4)) * exp(-abs(dir.y) * 2.1);
+  return mix(F.skyHorizon, F.sunTint, band * F.skyWarmth);
+}
+
 /** Sky radiance along a direction, without the sun disk. */
 fn skyRadiance(dirIn: vec3f) -> vec3f {
   let dir = normalize(dirIn);
   let overcast = F.opts.w;
   let y = dir.y;
   let up = clamp(y, 0.0, 1.0);
-  var col = mix(F.skyHorizon, F.skyZenith, pow(up, 0.45));
+  let horizon = horizonColor(dir);
+  var col = mix(horizon, F.skyZenith, pow(up, 0.45));
   // Brighter, whiter band right at the horizon (aerosols).
-  col = mix(col, F.skyHorizon * 1.12 + vec3f(0.04), exp(-abs(y) * 14.0) * 0.6);
+  col = mix(col, horizon * 1.12 + vec3f(0.04), exp(-abs(y) * 14.0) * 0.6);
   // Below the horizon: a studio-like backdrop, hazy near the horizon and deepening downward, so the diorama floats
   // in atmosphere without a hard edge.
   let below = smoothstep(0.0, -0.08, y);
-  let backdrop = mix(F.skyHorizon * vec3f(0.84, 0.88, 0.93), F.skyZenith * 0.28 + vec3f(0.035, 0.04, 0.048), smoothstep(-0.02, -0.75, y));
+  let backdrop = mix(horizon * vec3f(0.84, 0.88, 0.93), F.skyZenith * 0.28 + vec3f(0.035, 0.04, 0.048), smoothstep(-0.02, -0.75, y));
   col = mix(col, backdrop, below);
-  // Sun glow (Mie-like forward scattering).
+  // Sun glow (Mie-like forward scattering). A low sun looks at us through more air, so its aureole is wider.
   let mu = max(dot(dir, F.sunDir), 0.0);
-  let glow = pow(mu, 8.0) * 0.22 + pow(mu, 64.0) * 0.5;
+  let spread = mix(8.0, 3.0, F.skyWarmth);
+  let glow = pow(mu, spread) * (0.22 + 0.5 * F.skyWarmth) + pow(mu, 64.0) * 0.5;
   col += F.sunColor * glow * (1.0 - overcast * 0.85);
   // Overcast storm sky: desaturate + darken.
   let grey = vec3f(luminance(col));
@@ -99,16 +123,48 @@ fn skyRadiance(dirIn: vec3f) -> vec3f {
   return col;
 }
 
-/** Soft high cloud layer (upper hemisphere only). */
+/**
+ * Two cloud decks on the sky dome, projected onto a flat layer (dir.xz / dir.y), so they converge toward the
+ * horizon the way a real cloud deck does.
+ *
+ * The part that sells them is not the noise, it is that they are *shaded*: the density field's own gradient stands
+ * in for a surface normal, so a deck lit from one side shows bright flanks toward the sun and grey ones away from
+ * it — and because the gradient is measured along the sun's horizontal direction, the light on the clouds swings
+ * round with the light on the ground. The thin cirrus above moves at a different rate, which gives the sky depth
+ * without another octave of noise.
+ */
+fn cloudDensity(p: vec2f) -> f32 {
+  return vnoise(p) * 0.55 + vnoise(p * 2.3 + 7.1) * 0.3 + vnoise(p * 5.3 + 3.7) * 0.15;
+}
+
 fn cloudLayer(dir: vec3f, col: vec3f) -> vec3f {
   if (dir.y <= 0.0) { return col; }
-  let cp = dir.xz / (dir.y + 0.15) * 1.3 + vec2f(F.time * 0.003, F.time * 0.001);
-  let c = vnoise(cp) * 0.55 + vnoise(cp * 2.3 + 7.1) * 0.3 + vnoise(cp * 5.3 + 3.7) * 0.15;
-  let cover = mix(0.56, 0.3, F.opts.w);
-  let cloud = smoothstep(cover, cover + 0.3, c) * smoothstep(0.0, 0.2, dir.y);
+  let sunH = normalize(vec2f(F.sunDir.x, F.sunDir.z) + vec2f(1e-5, 0.0));
   let lum = luminance(F.skyHorizon);
-  let cloudCol = mix(vec3f(1.0, 0.98, 0.95) * lum * 1.45, vec3f(0.42, 0.44, 0.48) * lum, F.opts.w);
-  return mix(col, cloudCol, cloud * 0.7);
+  let lit = mix(vec3f(1.0, 0.98, 0.95), normalize(F.sunColor + vec3f(1e-4)) * 1.7, F.skyWarmth * 0.85);
+  var out = col;
+
+  // ── Cumulus deck ──
+  let cp = dir.xz / (dir.y + 0.15) * 1.3 + vec2f(F.time * 0.003, F.time * 0.001);
+  let c = cloudDensity(cp);
+  let cover = mix(0.54, 0.3, F.opts.w);
+  let cloud = smoothstep(cover, cover + 0.26, c) * smoothstep(0.0, 0.2, dir.y);
+  // Slope of the density field toward the sun: positive on the flank turned into the light.
+  let g = (cloudDensity(cp + sunH * 0.22) - cloudDensity(cp - sunH * 0.22)) * 2.4;
+  let shade = clamp(0.5 + g, 0.12, 1.35);
+  let base = mix(vec3f(0.40, 0.43, 0.49), vec3f(0.30, 0.31, 0.36), F.skyWarmth);
+  let body = mix(base * lum * 1.15, lit * lum * 1.7, clamp(shade, 0.0, 1.0));
+  let cloudCol = mix(body, vec3f(0.42, 0.44, 0.48) * lum, F.opts.w);
+  out = mix(out, cloudCol, cloud * 0.74);
+
+  // ── Cirrus, higher and thinner, drifting the other way ──
+  if (F.opts.w < 0.55) {
+    let fp = dir.xz / (dir.y + 0.06) * 0.42 + vec2f(F.time * -0.0016, F.time * 0.0009);
+    let f = vnoise(fp * vec2f(0.6, 2.6)) * 0.6 + vnoise(fp * vec2f(1.7, 6.0) + 19.0) * 0.4;
+    let veil = smoothstep(0.58, 0.86, f) * smoothstep(0.02, 0.3, dir.y) * (1.0 - F.opts.w / 0.55);
+    out = mix(out, lit * lum * 1.9, veil * 0.3);
+  }
+  return out;
 }
 
 /** What calm water reflects: sky + clouds (no sun disk; the specular lobe handles the sun). */
@@ -118,8 +174,10 @@ fn skyReflection(dir: vec3f) -> vec3f {
 
 fn sunDisk(dir: vec3f) -> vec3f {
   let mu = dot(normalize(dir), F.sunDir);
-  let disk = smoothstep(0.99985, 0.99993, mu);
-  return F.sunColor * disk * 60.0 * (1.0 - F.opts.w);
+  // Refraction flattens and swells a setting sun; the edge also softens as the air in front of it thickens.
+  let soft = mix(0.00008, 0.0009, F.skyWarmth);
+  let disk = smoothstep(0.99993 - soft, 0.99993, mu);
+  return F.sunColor * disk * mix(60.0, 26.0, F.skyWarmth) * (1.0 - F.opts.w);
 }
 
 /**
@@ -141,11 +199,20 @@ fn hazeAmount(worldPos: vec3f) -> f32 {
   return clamp(1.0 - exp(-dist * rho * F.hazeDensity), 0.0, 1.0);
 }
 
-/** Ambient sky light for a surface normal (hemisphere approximation). */
+/**
+ * Ambient light for a surface normal: the cool sky dome above, the warm bounce off the surrounding ground below.
+ * Keeping the two apart is most of what separates "lit" from "brightened" — an upward face picks up zenith blue
+ * while a slope facing down-valley picks up the sun's colour off the land, so the two sides of a ridge differ in
+ * hue and not only in brightness.
+ */
 fn skyAmbient(n: vec3f) -> vec3f {
   let t = n.y * 0.5 + 0.5;
-  let ground = vec3f(0.30, 0.27, 0.22) * luminance(F.skyHorizon);
-  return mix(ground, mix(F.skyHorizon, F.skyZenith, 0.55), t);
+  let bounce = mix(vec3f(0.30, 0.27, 0.22), normalize(F.sunColor + vec3f(1e-4)) * 0.44, F.shade.z);
+  let ground = bounce * luminance(F.skyHorizon);
+  // With the sun low, most of the dome's light comes from the warm band near the horizon, not from the zenith, so
+  // the shadows it fills read as cool-but-not-blue rather than as a separate blue light source.
+  let dome = mix(mix(F.skyHorizon, F.skyZenith, 0.55), F.sunTint * 0.5, F.shade.z * 0.45);
+  return mix(ground, dome, t);
 }
 
 /** Pull a clip-space position slightly toward the camera along the view ray (no screen-space shift). */
@@ -282,5 +349,57 @@ fn wallProfile(pxM: f32) -> WallProfile {
   o.face = o.crest + max(0.8 * F.stride * F.cellSize, 1.0 * pxM);
   o.casing = o.face + max(0.18 * F.cellSize, 0.85 * pxM);
   return o;
+}
+`;
+
+/**
+ * Reading the sun-shading raster (src/render/shadows.ts). Needs a `sunTex` binding and `linSamp`.
+ *
+ * The raster already carries a real penumbra — its width comes from the sun's angular size and the distance of the
+ * blocker — so nothing here is trying to invent softness. The taps exist for two other reasons: to hide the DEM's
+ * own cell grid when the camera is close enough to see it, and to stop far terrain from sparkling, where one
+ * screen pixel covers many cells and a single bilinear tap would alias. Both are handled by one radius that
+ * follows the fragment's footprint.
+ */
+export const SUN_SHADING_WGSL = /* wgsl */ `
+fn sunShadingRaw(uv: vec2f) -> vec2f {
+  return textureSampleLevel(sunTex, linSamp, clamp(uv, vec2f(0.0), vec2f(1.0)), 0.0).rg;
+}
+
+/** (sun visibility, open-sky fraction) at grid uv. pxCells = grid cells covered by one screen pixel here. */
+fn sunShading(uv: vec2f, pxCells: f32) -> vec2f {
+  if (F.light.w < 0.5) { return vec2f(1.0, 1.0); }
+  let r = max(F.shade.x, min(pxCells * 0.6, 4.0));
+  if (r <= 0.02) { return sunShadingRaw(uv); }
+  // Rotated cross: isotropic at a quarter of a box filter's taps.
+  let e = r * 0.7 / F.grid;
+  let a = sunShadingRaw(uv + vec2f(e.x, e.y));
+  let b = sunShadingRaw(uv + vec2f(-e.x, e.y));
+  let c = sunShadingRaw(uv + vec2f(e.x, -e.y));
+  let d = sunShadingRaw(uv - vec2f(e.x, e.y));
+  return (a + b + c + d) * 0.25;
+}
+`;
+
+/**
+ * High-frequency ground relief for terrain that has no photograph over it (the hypsometric tint). One octave of
+ * value noise in world metres, as a slope (∂h/∂x, ∂h/∂z) for the caller to bend the shading normal with; the
+ * second octave is only worth its registers in the cinematic tier. Where imagery *is* available the terrain
+ * shader uses the photo's own luminance gradient instead, which is both cheaper and real.
+ */
+export const DETAIL_NORMAL_WGSL = /* wgsl */ `
+fn detailSlope(worldXZ: vec2f, fine: bool) -> vec2f {
+  // Forward differences, not central: half the taps for the same slope, and the half-texel phase shift is
+  // meaningless in noise.
+  let e = 0.6;
+  let p = worldXZ * 0.14;   // ≈ 7 m features
+  let c = vnoise(p);
+  var g = vec2f(vnoise(p + vec2f(e, 0.0)) - c, vnoise(p + vec2f(0.0, e)) - c);
+  if (fine) {
+    let q = worldXZ * 0.52; // ≈ 2 m features
+    let c2 = vnoise(q);
+    g += vec2f(vnoise(q + vec2f(e, 0.0)) - c2, vnoise(q + vec2f(0.0, e)) - c2) * 0.45;
+  }
+  return g * 2.4;
 }
 `;
