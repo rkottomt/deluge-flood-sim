@@ -319,6 +319,8 @@ async function buildAndServe(distDir, port, logFile) {
   build.stdout.pipe(log, { end: false });
   build.stderr.pipe(log, { end: false });
   const [code] = await once(build, 'exit');
+  build.stdout?.destroy();
+  build.stderr?.destroy();
   if (code !== 0) {
     log.end();
     throw new Error(`vite build failed (exit ${code}); see ${logFile}`);
@@ -346,16 +348,24 @@ async function buildAndServe(distDir, port, logFile) {
 
 /** Kill a detached child and everything it spawned. */
 function killTree(child) {
-  if (!child || child.exitCode !== null) return;
-  try {
-    process.kill(-child.pid, 'SIGKILL');
-  } catch {
+  if (!child) return;
+  if (child.exitCode === null) {
     try {
-      child.kill('SIGKILL');
+      process.kill(-child.pid, 'SIGKILL');
     } catch {
-      /* already gone */
+      try {
+        child.kill('SIGKILL');
+      } catch {
+        /* already gone */
+      }
     }
   }
+  // SIGKILL does not close the pipes on OUR side: the stdio streams were piped into the server log with
+  // { end: false }, so nothing destroys them and their fds keep node's event loop alive. Without this the
+  // suite prints its verdict, writes its JSON, and then never exits.
+  child.stdout?.destroy();
+  child.stderr?.destroy();
+  child.stdin?.destroy();
 }
 
 async function networkReachable() {
@@ -946,4 +956,12 @@ try {
   // fd is open node cannot exit, and the suite hangs after writing its report instead of finishing.
   serverLog?.end();
   if (!KEEP_DIST && !EXTERNAL_URL && fs.existsSync(distDir)) fs.rmSync(distDir, { recursive: true, force: true });
+  /*
+   * Exit explicitly. Playwright leaves FSEvents watchers open after browser.close() (three KQUEUE/DIR handles on
+   * this machine), so an empty-event-loop exit never comes: the suite would print its verdict, write its JSON and
+   * then sit there forever, which is fatal for `npm run test:all` and for anything running this unattended.
+   * Flush stdout first so the last lines of the report are not lost to the exit.
+   */
+  await new Promise((resolve) => process.stdout.write('', resolve));
+  process.exit(process.exitCode ?? 0);
 }

@@ -114,7 +114,7 @@ base in the terrain shader with an 8-cell feather. It buys 2.4–2.7× the texel
 cameras fly, costs 89.5 MB of GPU memory and 3.5–5.1 MB on disk each, and measures free on both load (−23 ms,
 interleaved A/B) and frame time (deltas inside sample noise, one of them negative). The other three domains are
 already at 1.22–1.46 m/texel, close enough to NAIP's own ~1 m limit that an inset would add megabytes and no detail.
-`public/presets` totals 87.7 MB against a 90 MB static-host budget enforced by `tests/data/presets.test.ts`.
+`public/presets` totals 87.8 MB against a 120 MB static-host budget enforced by `tests/data/presets.test.ts`.
 
 ## Why this is hard
 

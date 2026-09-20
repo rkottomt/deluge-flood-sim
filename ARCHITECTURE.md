@@ -577,8 +577,8 @@ map is read; the curve spends its codes where the water is shallow and gives awa
 the third digit. Any positive depth gets at least code 1, so a thin sheet never vanishes into the dry background. The
 measured worst-case round-trip error is **6.2 cm** (`plane.quantMaxError`, written by the export, not asserted in a
 comment) — an order of magnitude below the 0.13–0.29 m discretisation error the overlay exists to illustrate, so the
-encoding is not what limits the comparison. 184,610 wet cells of 1,048,576 gzip to 109 kB; `public/presets` is 84 MB of
-its 90 MB budget.
+encoding is not what limits the comparison. 184,610 wet cells of 1,048,576 gzip to 109 kB; `public/presets` is 87.8 MB of
+its 120 MB budget (§3.4).
 
 **Drawing it: a distance field, not a second tint.** `src/render/reference.ts` turns the decoded max-depth plane into
 the *wet edge* of "max depth ≥ threshold" and ships it to the GPU as an exact two-pass Euclidean signed distance in
