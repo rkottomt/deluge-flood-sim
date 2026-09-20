@@ -7,3 +7,6 @@ test-results
 playwright-report
 .vite
 release
+
+# large raw screenshot captures (curated gallery is committed)
+submission/raw-*/
