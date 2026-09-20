@@ -21,6 +21,7 @@ import { createLocationPicker } from './locationPicker';
 import { installKeyboard } from './keyboard';
 import { createWelcome } from './welcome';
 import { createRouteChip } from './routeChip';
+import { createTutorial } from './tutorial';
 import { selectTool } from './toolDefs';
 
 export { createToolController } from './tools';
@@ -74,6 +75,9 @@ export function mountUI(root: HTMLElement, store: Store, actions: AppActions): v
   const routeChip = createRouteChip(ctx, { reveal: () => panel.reveal('evac') });
   const notices = createNotices(ctx, { top: [createWelcome(ctx)], bottom: [routeChip] });
   const loading = createLoadingOverlay(ctx);
+  const tutorial = createTutorial(ctx);
+  ctx.startTutorial = () => tutorial.start();
+  ctx.skipTutorial = () => tutorial.skip();
   const help = createHelp(ctx);
   const how = createHowItWorks(ctx);
   const picker = createLocationPicker(ctx);
@@ -81,7 +85,7 @@ export function mountUI(root: HTMLElement, store: Store, actions: AppActions): v
   installSceneReset(ctx);
 
   const layer = h('div', { class: 'dl-layer' }, topbar.el, toolbar, options, hud, panel.el, notices.top, notices.bottom, probe.el);
-  root.append(layer, loading, help.el, how.el, picker.el);
+  root.append(layer, loading, help.el, how.el, picker.el, tutorial.el);
 
   const removeTooltips = installTooltips(root);
   const removeKeyboard = installKeyboard(ctx);
@@ -109,7 +113,7 @@ export function mountUI(root: HTMLElement, store: Store, actions: AppActions): v
 
   // Automation / dev hook (not part of the contract), compiled out of a released build: FINDINGS.json SEC-07.
   if (import.meta.env.DEV || __DELUGE_DEBUG_API__) {
-    (root as HTMLElement & { __delugeUI?: unknown }).__delugeUI = { picker, help, how, panel };
+    (root as HTMLElement & { __delugeUI?: unknown }).__delugeUI = { picker, help, how, panel, tutorial };
   }
 }
 

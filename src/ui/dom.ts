@@ -132,6 +132,10 @@ export interface UIContext {
   setPanel(name: keyof AppState['panels'], open: boolean): void;
   /** Register cleanup to run when the UI is unmounted (listeners outside the store, e.g. on the UI bridge). */
   own(dispose: () => void): void;
+  /** Replay the first-run tour (wired by mountUI). */
+  startTutorial?(): void;
+  /** Dismiss the first-run tour. */
+  skipTutorial?(): void;
 }
 
 /** Arrays compared element-wise by identity. */

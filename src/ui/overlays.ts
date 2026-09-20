@@ -6,12 +6,12 @@ import { icon, logoMark } from './icons';
 import { bridgeFor, type Notice } from './bridge';
 
 const TIPS = [
-  'Tip: press ? any time for shortcuts and a 30-second tour.',
-  'Tip: drag a wall (2) across a street and watch the water reroute.',
-  'Tip: “How it works” has the equations, the stability work and the GPU pipeline.',
-  'Tip: plan an evacuation (8) — the route re-plans as roads flood.',
-  'Tip: the mass-balance error in the HUD proves no water is created or lost.',
-];
+    'Tip: press ? any time for a tour and shortcuts.',
+    'Tip: drag a wall across a street and watch the water reroute.',
+    'Tip: green pins are shelters — high ground people can evacuate to.',
+    'Tip: plan an evacuation — the route re-plans as roads flood.',
+    'Tip: 60× in the top bar is a good speed for watching a flood unfold.',
+  ];
 
 export function createLoadingOverlay(ctx: UIContext): HTMLElement {
   const { bind, actions } = ctx;

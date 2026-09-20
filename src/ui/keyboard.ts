@@ -32,6 +32,11 @@ export function installKeyboard(ctx: UIContext): () => void {
     const s = store.get();
 
     if (e.key === 'Escape') {
+      if (ctx.skipTutorial && document.querySelector('.dl-tutorial:not([hidden])')) {
+        e.preventDefault();
+        ctx.skipTutorial();
+        return;
+      }
       const m = topModal(s);
       if (m) {
         e.preventDefault();

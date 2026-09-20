@@ -55,9 +55,11 @@ export function createHud(ctx: UIContext, achievedSpeed: () => number | null): H
   );
   const mass = stat(
     'Mass error',
-    'Mass-balance error: |V − (V₀ + in − out)| ÷ the most water held since reset. Every rain, river, boundary and brush change (and the GPU’s own Float32 rounding) is booked per cell and summed in Float64 — no water is created or destroyed.',
+    'How closely the water volume matches rain, rivers and outflow. Normally tiny; a large number means something went wrong.',
   );
-  const simSpeed = stat('Sim speed', 'Simulated seconds per real second actually achieved');
+  mass.el.dataset.detail = '1';
+  const simSpeed = stat('Sim speed', 'How many seconds of flood pass for each real second');
+  simSpeed.el.dataset.detail = '1';
 
   // Rain fallen since reset: under heavy rain the flooded area lags (runoff has to collect first), but this moves.
   const rain = new RainGauge();
@@ -209,11 +211,22 @@ export function createHud(ctx: UIContext, achievedSpeed: () => number | null): H
     { type: 'button', class: 'dl-hud-collapse', 'aria-label': 'Collapse statistics', 'data-tip': 'Collapse / expand stats', 'data-tip-side': 'top' },
     icon('chevronDown', 14),
   );
+  const detailsBtn = h(
+    'button',
+    {
+      type: 'button',
+      class: 'dl-hud-more',
+      'aria-label': 'Show solver details',
+      'data-tip': 'Show technical solver numbers',
+      'data-tip-side': 'top',
+    },
+    'Details',
+  );
 
   const el = h(
     'section',
-    { class: 'dl-hud dl-glass', 'aria-label': 'Simulation statistics' },
-    h('div', { class: 'dl-hud-head' }, h('span', { class: 'dl-hud-title' }, h('span', { class: 'dl-live-dot' }), 'Live solver'), gpu, collapseBtn),
+    { class: 'dl-hud dl-glass', 'aria-label': 'Flood statistics' },
+    h('div', { class: 'dl-hud-head' }, h('span', { class: 'dl-hud-title' }, h('span', { class: 'dl-live-dot' }), 'Flood'), gpu, detailsBtn, collapseBtn),
     h('div', { class: 'dl-hud-body' }, h('div', { class: 'dl-hud-big' }, area.el, volume.el), h('div', { class: 'dl-hud-grid' }, depth.el, speed.el, mass.el, simSpeed.el), h('div', { class: 'dl-hud-diag' }, dDt.el, dSub.el, dCo.el, dFps.el)),
     probeLine,
   );
@@ -222,6 +235,14 @@ export function createHud(ctx: UIContext, achievedSpeed: () => number | null): H
     collapseBtn.setAttribute('aria-label', c ? 'Expand statistics' : 'Collapse statistics');
   };
   collapseBtn.addEventListener('click', () => setCollapsed(!el.classList.contains('dl-collapsed')));
+  detailsBtn.addEventListener('click', () => {
+    const root = el.closest('.dl-ui');
+    if (!root) return;
+    const on = root.classList.toggle('dl-show-details');
+    detailsBtn.setAttribute('aria-label', on ? 'Hide solver details' : 'Show solver details');
+    setText(detailsBtn, on ? 'Simple' : 'Details');
+    detailsBtn.dataset.tip = on ? 'Hide technical solver numbers' : 'Show technical solver numbers';
+  });
   // On a phone the full HUD would cover a third of the map: start collapsed there.
   if (typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 600px)').matches) setCollapsed(true);
   bind((s) => s.paused || !s.stats, (idle) => toggleClass(el, 'dl-idle', idle));

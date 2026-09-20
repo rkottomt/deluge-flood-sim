@@ -10,6 +10,7 @@ import { MAX_SOURCES, MAX_STORMS } from './tools';
 import { icon, type IconName } from './icons';
 import { slider, kbd } from './controls';
 import { TOOLS, TOOL_BY_ID, selectTool } from './toolDefs';
+import { ADVANCED_TOOL_IDS } from './tutorial';
 import { formatBrush, formatDischarge, formatCfs, formatRain, formatMeters, formatFeet } from './format';
 import {
   logToT,
@@ -50,9 +51,14 @@ export function createToolbar(ctx: UIContext): { toolbar: HTMLElement; options: 
   // ── Toolbar ──
   const toolbar = h('nav', { class: 'dl-toolbar dl-glass', 'aria-label': 'Tools', role: 'toolbar', 'aria-orientation': 'vertical' });
   const buttons = new Map<ToolId, HTMLButtonElement>();
+  const advanced = new Set<string>(ADVANCED_TOOL_IDS);
   let group = -1;
   for (const def of TOOLS) {
-    if (group !== -1 && def.group !== group) toolbar.append(h('div', { class: 'dl-tool-sep', 'aria-hidden': 'true' }));
+    if (group !== -1 && def.group !== group) {
+      const sep = h('div', { class: 'dl-tool-sep', 'aria-hidden': 'true' });
+      if (advanced.has(def.id)) sep.dataset.advanced = '1';
+      toolbar.append(sep);
+    }
     group = def.group;
     const b = h(
       'button',
@@ -70,9 +76,33 @@ export function createToolbar(ctx: UIContext): { toolbar: HTMLElement; options: 
       icon(TOOL_ICONS[def.id], 21),
       h('span', { class: 'dl-tool-key', 'aria-hidden': 'true' }, def.key),
     );
+    if (advanced.has(def.id)) b.dataset.advanced = '1';
     buttons.set(def.id, b);
     toolbar.append(b);
   }
+  const moreBtn = h(
+    'button',
+    {
+      type: 'button',
+      class: 'dl-tool dl-tool-more',
+      'aria-label': 'More tools',
+      'aria-expanded': 'false',
+      'data-tip': 'Rain storms, pouring water, digging — extra tools',
+      'data-tip-side': 'right',
+      onclick: () => {
+        const root = toolbar.closest('.dl-ui');
+        if (!root) return;
+        const on = root.classList.toggle('dl-tools-all');
+        moreBtn.setAttribute('aria-expanded', String(on));
+        moreBtn.setAttribute('aria-label', on ? 'Hide extra tools' : 'More tools');
+        moreBtn.dataset.tip = on ? 'Hide extra tools' : 'Rain storms, pouring water, digging — extra tools';
+        toggleClass(moreBtn, 'dl-expanded', on);
+        if (!on && advanced.has(store.get().tool)) selectTool(store, 'orbit');
+      },
+    },
+    icon('chevronDown', 18),
+  );
+  toolbar.append(h('div', { class: 'dl-tool-sep', 'aria-hidden': 'true' }), moreBtn);
   bind(
     (s) => s.tool,
     (tool) => {
