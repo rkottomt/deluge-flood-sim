@@ -119,7 +119,7 @@ packaged app was measured loading Pittsburgh at 59.8 fps with *every* data host 
   - top right: ≈ 60 fps
   - bottom left, LIVE SOLVER: Mass error `<0.001 %`, Sim speed close to `60×` (far lower: something else is using the
     GPU)
-  - top centre, *Try it*: **Raise to 1936 record · Evacuate · Build a levee · Hurricane rain · Break it**
+  - top centre, *Try it*: **Raise to 1936 record · Evacuate · Build a levee · Hurricane rain**
   - right panel: River stage **16.0 ft**
 
 **Mid-pitch, in one line.** *Screen goes dark:* it shouldn't — Deluge.app blocks display sleep itself and the page
@@ -135,7 +135,7 @@ unchecked (checked after a full pitch in rehearsal), and the strip comes back ev
 again 1.7 s after Cmd-R at best, up to 12 s while other GPU work was going on. Don't use `R` for this: it resets only the
 water, so walls stay and a raised river rises again.
 
-While you wait for the next judge, press **Space** to pause: a paused view drops to ~4 renders a second (e2e flow 10),
+While you wait for the next judge, press **Space** to pause: a paused view drops to ~4 renders a second (e2e flow 9),
 so the fanless Air does less work between judges. Press Space again as the judge walks up.
 
 ### If something goes wrong
@@ -215,26 +215,16 @@ is the fallback. Timings are from the rehearsal (conditions noted).
   plan for 20 s.
 - **If not:** no green after ~25 s → check sim speed (see Beat 2) and fill with how the number is computed (Q9).
 
-### Beat 5 · 1:55–2:30 · Break it
-
-- **Click:** **Break it**. About 5 s later, **Restore robust solver** in the red banner at the bottom.
-- **Say:** "Why is this hard? This swaps in the textbook explicit scheme: explicit friction, no flux limiter, no
-  smoothing, a time step past its stability limit. One small splash, and it blows up: depths go to infinity and the HUD
-  says the numbers aren't physical." After Restore: "Switch back, and the robust solver just runs."
-- **Judge sees:** the banner "Stability demo — naive explicit solver at Courant 1.8"; the HUD turns red, "Diverged"
-  and "∞"; magenta speckle (infinite or NaN depth) spreading along the river from mid-view.
-  [Picture](docs/demo-break-it.jpg).
-  After Restore: the water resets at once and the river rises back to 46 ft with the levee still standing.
-  Rehearsal: banner within 0.6 s of the click, "Diverged" within 2 s; after Restore the water reset within 0.3 s.
-- **If not:** no magenta in view → press F to frame the whole map; the HUD says Diverged either way.
-
-### Beat 6 · 2:30–3:00 · The hard part, and close
+### Beat 5 · 1:55–2:25 · The hard part, and close
 
 - **Click:** **How it works** (top right) → the *Why it's hard* chip. Esc closes it.
 - **Say:** the 30-second version from section 4, then: "Real terrain, real physics, checked against analytic solutions
   and National Weather Service flood reports, at 60 frames a second on a MacBook Air. That's Deluge."
 - **Judge sees:** "Four ingredients that keep it stable at interactive speed", with the four formulas.
 - **If not:** skip the dialog and just say it. Then offer the mouse: drag to orbit, press 2 and drag to draw a wall.
+
+That leaves about 35 s of the three minutes as slack: it goes to the judge's first question, or to Beats 2 and 4 when
+the GPU is shared and the crest and the green take twice as long as the rehearsal.
 
 ---
 
@@ -247,11 +237,11 @@ Same start. Skip Evacuate; don't wait for a beat to finish before talking.
 | 0:00–0:08 | nothing | "Real USGS terrain of Pittsburgh, a million cells, with the shallow-water equations solved live on this laptop's GPU, in a browser, offline." |
 | 0:08–0:22 | **Raise to 1936 record** | "The 1936 flood, 46 feet at the Point. The rise is a time-lapse; the flood is real physics. Mass error stays under 0.001 %." |
 | 0:22–0:45 | **Build a levee** | "A 2.4 km floodwall on the North Shore, then the rise again. Green is the ~140 acres it keeps dry, computed from the live water." Move on as soon as the green count shows. |
-| 0:45–0:57 | **Break it**, then **Restore robust solver** | "The textbook scheme blows up in seconds. Ours doesn't: an adaptive time step, friction that can only slow water, a limiter that never lets depth go negative, and still water that stays still, all in parallel on the GPU." |
+| 0:45–0:57 | **How it works** → *Why it's hard* | "An explicit solver on terrain like this wants to blow up: deep channels, centimetre-thin films on the streets, a million cells at once. Four things keep it stable — an adaptive time step, friction that can only slow water, a limiter that never lets depth go negative, and still water that stays still — and it's checked against the Ritter dam-break solution and the Weather Service's own flood reports." |
 | 0:57–1:00 | nothing | "That's Deluge." |
 
 Rehearsal with a shared GPU: the whole sequence took 45 s of clicking (crest 16 s after Raise, green 10 s after Build a
-levee, Diverged 1 s after Break it). The crest comes ~3 s after Raise on a quiet GPU, so the timings above have slack.
+levee). The crest comes ~3 s after Raise on a quiet GPU, so the timings above have slack.
 
 ---
 
@@ -349,7 +339,7 @@ and explaining, not for engineering decisions.
 | Walled channels at 0 / 30 / 45 / 60° to the grid | depth / Manning normal depth 0.98 / 1.05 / 1.04 / 1.05 |
 | GPU Float32 vs a Float64 CPU reference, 5 cases × 400 steps | max \|Δh\| ≤ 4.3·10⁻⁵ m |
 
-Plus 12 end-to-end flows in headless Chromium on the real GPU, offline, and the mass error on screen the whole time.
+Plus 13 end-to-end flows in headless Chromium on the real GPU, offline, and the mass error on screen the whole time.
 
 **3. Why not a full shallow-water Riemann solver (HLL, Roe, Kurganov–Petrova)?**
 The local-inertial scheme is what production inundation models such as LISFLOOD-FP use, and we added advection to it.
@@ -358,12 +348,18 @@ within 1.6 %. A second-order Riemann-type scheme does more work per cell (recons
 stages per step); we haven't benchmarked one here. Where it wins is strongly supercritical flow, hydraulic jumps and
 violent dam breaks, which is exactly our stated limitation. A Kurganov–Petrova mode is first on the future-work list.
 
-**4. Isn't "Break it" rigged?**
-It deliberately runs the textbook scheme at Courant 1.8, past its limit of 1, so the failure shows up in seconds, and it
-removes all the ingredients at once. It shows why they exist; it isn't a benchmark against a tuned naive solver. They
-also matter at time steps a textbook calls safe: a test shows the 1-D formula at CFL 0.7 (2-D Courant 0.99, above the
-√θ ≈ 0.89 limit with smoothing) sloshes forever without the per-face guard, and explicit friction overshoots on thin
-films at any practical time step.
+**4. How do you know it's stable?**
+From the numbers in Q2, not from a demo. Lake at rest on rough terrain: max |u| = 9.3·10⁻⁵ m/s after 2000 steps, so the
+well-balanced face depth really does cancel pressure against bed slope. Ritter dam break: front ratio 1.01, 1.6 % L1
+profile error, so the front moves at the analytic speed instead of being held together by a clamp. Mass: 7·10⁻⁹ closed,
+≤ 9.1·10⁻⁸ open with rain, storm, inflow, stage and infiltration, 5.9·10⁻⁷ over three simulated hours — nothing is
+created or lost, which is what a limiter that clamped depth would break. Float32 on the GPU against a Float64 CPU
+reference: max |Δh| ≤ 4.3·10⁻⁵ m over 5 cases × 400 steps. And the flood the whole thing produces lands on the National
+Weather Service's own impact statements for the Point gauge (Q1). The ingredients also matter at time steps a textbook
+calls safe: a test shows the 1-D formula at CFL 0.7 (2-D Courant 0.99, above the √θ ≈ 0.89 limit with smoothing)
+sloshes forever without the per-face guard, and explicit friction overshoots on thin films at any practical time step.
+The HUD carries the live version of all this: Courant number, time step, substeps and mass error, on screen the whole
+pitch.
 
 **5. What about storm drains, buildings and bridges?**
 Not modelled. The terrain is bare earth: water flows through city blocks and under viaducts, and with no drains or
@@ -394,7 +390,7 @@ It's an estimate from the live water, not a second simulation. About once a seco
 of the water pressing on the wall and spreads it over the land below that level twice, with and without the walls.
 Land that would stand ≥ 0.3 m deep without the walls, isn't with them, and is dry now counts as protected. It ignores
 how long water leaking through a gap would take to fill the land behind. At the crest it settles around 139 acres and
-11 km of streets, and flooded land drops from 6.3 to 5.6 km² (e2e flow 13; rehearsal: 134–139 acres, 11 km). While the
+11 km of streets, and flooded land drops from 6.3 to 5.6 km² (e2e flow 12; rehearsal: 134–139 acres, 11 km). While the
 flood is still spreading it can overshoot (a peak of 152 in rehearsal) before it settles.
 
 **10. How does the evacuation routing work?**

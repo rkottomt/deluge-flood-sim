@@ -170,7 +170,7 @@ headless Chromium (or a real Electron build) and want a machine with WebGPU — 
 | --- | --- | --- |
 | `npm run typecheck` | TypeScript, no emit | ~5 s |
 | `npm test` | 326 unit tests (solver, data, routing, UI, render helpers) | ~35 s |
-| `npm run e2e` | 14 end-to-end app flows in a real browser (`-- --prod` for the built bundle) | ~4 min |
+| `npm run e2e` | 13 end-to-end app flows in a real browser (`-- --prod` for the built bundle) | ~4 min |
 | `npm run test:perf` | **No lag** — fps, frame times, sim speed, input latency, drift | ~10 min |
 | `npm run test:visual` | **No graphics glitches** — golden images + baseline-free detectors | ~20 min |
 | `npm run test:security` | **No security regressions** — the penetration test's cases, automated | ~8 min |

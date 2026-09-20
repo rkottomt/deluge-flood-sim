@@ -83,8 +83,8 @@ in full, including the validation table.
 > continuity run every frame at 60 fps and roughly 70× real time on an Apple M4, with the mass-balance error staying
 > under 0.001 % at the crest. Nothing here is a wrapper: no language models, no hosted simulation service, no baked
 > animation. The method is checked against the Ritter dam-break solution, a Float64 CPU reference and the National
-> Weather Service's own impact statements for the Pittsburgh Point gauge — and there's a **Break it** button that swaps
-> in a textbook explicit solver so you can watch the naive version blow up in seconds.
+> Weather Service's own impact statements for the Pittsburgh Point gauge, and every cubic metre is booked in a ledger
+> you can watch in the corner of the screen.
 
 Short version, if the field is tight:
 
@@ -107,7 +107,7 @@ All measured, all in the repo.
 | GPU Float32 vs Float64 CPU reference: max \|Δh\| ≤ 4.3·10⁻⁵ m over 5 cases × 400 steps | `tests/sim/reference.test.ts` |
 | Lake at rest on rough terrain, 2000 steps: max \|u\| = 9.3·10⁻⁵ m/s | `tests/sim/wellbalanced.test.ts` |
 | Water surface at the Point within 3 cm of the NWS gauge reading at every stage | `ARCHITECTURE.md §4` |
-| 326 unit tests, 14 end-to-end flows, plus perf / visual / security / desktop suites | `README.md` |
+| 326 unit tests, 13 end-to-end flows, plus perf / visual / security / desktop suites | `README.md` |
 | 1024 × 1024 cells, 7.8 m per cell, 8 km square (Pittsburgh) | in-app scenario panel |
 
 **Say these limitations out loud** (they're in `DEMO.md §6`, and saying them first is what makes the rest credible):
@@ -119,8 +119,8 @@ calibrated against a measured flood; performance measured only on Apple M4.
 
 ## Before you paste this
 
-1. **Branches.** The gallery images come from `graphics` (3D buildings, images 1–7) and `global-presets` (Asheville,
-   Nashville, Houston, Boulder, Fort Myers — images 8–15). `main` alone ships Pittsburgh, Johnstown, Ellicott and the
+1. **Branches.** The gallery images come from `graphics` (3D buildings, images 1–6) and `global-presets` (Asheville,
+   Nashville, Houston, Boulder, Fort Myers — images 7–14). `main` alone ships Pittsburgh, Johnstown, Ellicott and the
    sandbox. Merge what you intend to show, or the screenshots won't match the link.
 2. **`copernicus-dem`** is honest only if `global-presets` ships — the global DEM fallback lives in
    `src/data/demGlobal.ts` on that branch. Drop the tag if you submit `main`.
