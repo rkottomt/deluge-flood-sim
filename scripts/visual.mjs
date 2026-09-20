@@ -2,8 +2,8 @@
 /**
  * Deluge GRAPHICS-GLITCH SUITE — "is anything on screen wrong?", as a pass/fail gate.
  *
- *   npm run test:visual                  # full run (~5 min): 15 deterministic scenes
- *   npm run test:visual -- --quick       # fast subset (~1.5 min): 5 scenes
+ *   npm run test:visual                  # full run (~5 min): 14 deterministic scenes
+ *   npm run test:visual -- --quick       # fast subset (~1.5 min): 4 scenes
  *   node scripts/visual.mjs --update     # re-record the committed baselines after an intended change
  *   node scripts/visual.mjs --url=https://example.com/deluge/   # check a hosted copy
  *
@@ -22,7 +22,7 @@
  *       To update after an intentional rendering change: review artifacts/visual/diff/*.png, then `--update`.
  *   (b) DETECTORS THAT NEED NO BASELINE — these are the real regression net, because a stale baseline approves a
  *       glitch that a detector still catches:
- *         · black / blank frame                    · NaN-magenta pixels outside the Break-it scene
+ *         · black / blank frame                    · NaN-magenta pixels (the blown-up-cell sentinel colour)
  *         · water standing unsupported above terrain (hydrostatic check straight off the solver's own arrays)
  *         · shoreline stair-stepping               · z-fighting flicker (N frames, static camera, frozen sim)
  *         · missing imagery (uniform grey)         · UI panels overlapping / running off the canvas edges
@@ -92,10 +92,12 @@ const THRESHOLDS = {
   /** Standard deviation of luminance. Below this the frame is a flat colour — blank, not a scene. Flattest
    *  scene measured 0.129. */
   minLumaStd: numEnv('DELUGE_VISUAL_MIN_LUMA_STD', 0.06),
-  /** Fraction of hot-magenta pixels allowed outside the Break-it scene (the blown-up-cell sentinel colour). */
+  /**
+   * Fraction of hot-magenta pixels allowed in a frame (the blown-up-cell sentinel colour, src/render/shaders/prep.ts).
+   * Nothing a user can do reaches it; that the sentinel really is painted for non-finite state is covered by
+   * tests/render/prep.test.ts.
+   */
   maxMagentaFrac: numEnv('DELUGE_VISUAL_MAX_MAGENTA', 0.0015),
-  /** …and the minimum the Break-it scene must show, so "no glitch colour" is also a failure there. */
-  minBreakitMagentaFrac: numEnv('DELUGE_VISUAL_MIN_BREAKIT_MAGENTA', 0.004),
   /** Fraction of near-grey pixels above which the aerial imagery is presumed missing. Greyest scene with imagery
    *  measured 0.361 (the bridge close-up, which is mostly asphalt and concrete). */
   maxGreyFrac: numEnv('DELUGE_VISUAL_MAX_GREY', 0.55),
@@ -184,21 +186,6 @@ const SCENES = [
     actions: [{ crestFeet: 46 }, { rain: 100 }],
     simSeconds: 600,
     hazard: true,
-  },
-  {
-    id: 'breakit',
-    label: 'Break-it (naive scheme blows up)',
-    preset: 'pittsburgh',
-    quick: true,
-    camera: { kind: 'scenario' },
-    actions: [{ crestFeet: 46 }, { breakIt: true }],
-    simSeconds: 400,
-    // The point of this scene is that the glitch colours ARE there; every other scene must have none.
-    expectMagenta: true,
-    // A blown-up solver produces non-finite depths on purpose, so the hydrostatic check does not apply — and the
-    // glitch shader animates its speckle by design (src/render/shaders/water.ts mixes two colours by a per-cell
-    // flicker), so a frozen capture of THIS scene is meant to differ from the next one. Measured ~7% of pixels.
-    skipDetectors: ['unsupportedWater', 'shoreline', 'flicker'],
   },
   {
     id: 'johnstown',
@@ -690,10 +677,6 @@ async function setupScene(spec) {
       info.wall = { points: wallPoints, heightM: height };
       info.actions.push(`drawn wall, ${height} m above ground`);
     }
-    if (a.breakIt) {
-      d.actions.setStabilityDemo(true);
-      info.actions.push('stability demo ON');
-    }
   }
 
   // Exact simulated time, independent of how fast this machine is. Advanced BEFORE the camera is moved: runFor
@@ -787,7 +770,7 @@ async function settle(maxMs) {
 /**
  * Hydrostatic sanity, straight off the solver's own arrays: a wet cell whose water surface stands higher than every
  * neighbour's ground+barrier is holding water that nothing supports — the signature of a render/solver desync or a
- * wall that was written into the wrong field. Also counts non-finite depths, which must be zero outside Break-it.
+ * wall that was written into the wrong field. Also counts non-finite depths, which must be zero.
  */
 function simSanity() {
   const d = window.__deluge;
@@ -1008,8 +991,8 @@ async function runScene(browser, baseUrl, scene, palettes) {
    * holding") as the protection analysis re-runs, so whether one is on screen at the shutter depends on how long
    * the machine took to get here. That is worth ~3% of the frame — enough on its own to fail the golden check on a
    * slow run and pass it on a fast one, with no rendering change behind it. Hide them for the capture. They are
-   * covered where they belong: tests/ui/levee.test.ts for the wording, e2e flow 13 for "no false overtopping
-   * alarm". The bottom Break-it banner (.dl-naive-banner) is deliberately NOT hidden — it is part of that scene.
+   * covered where they belong: tests/ui/levee.test.ts for the wording, e2e flow 12 for "no false overtopping
+   * alarm".
    */
   await page.addStyleTag({ content: '.dl-notices .dl-toast { visibility: hidden !important; }' });
 
@@ -1078,17 +1061,7 @@ function checkScene(row, scene, golden) {
     add('blackFrame', row.stats.meanLuma >= THRESHOLDS.minMeanLuma, row.stats.meanLuma, `>= ${THRESHOLDS.minMeanLuma}`);
     add('blankFrame', row.stats.lumaStd >= THRESHOLDS.minLumaStd, row.stats.lumaStd, `>= ${THRESHOLDS.minLumaStd}`);
   }
-  if (scene.expectMagenta) {
-    add(
-      'glitchColourPresent',
-      row.stats.magentaFrac >= THRESHOLDS.minBreakitMagentaFrac,
-      row.stats.magentaFrac,
-      `>= ${THRESHOLDS.minBreakitMagentaFrac}`,
-      'Break-it must visibly blow up',
-    );
-  } else {
-    add('nanMagenta', row.stats.magentaFrac <= THRESHOLDS.maxMagentaFrac, row.stats.magentaFrac, `<= ${THRESHOLDS.maxMagentaFrac}`);
-  }
+  add('nanMagenta', row.stats.magentaFrac <= THRESHOLDS.maxMagentaFrac, row.stats.magentaFrac, `<= ${THRESHOLDS.maxMagentaFrac}`);
   if (!skip.has('greyImagery')) {
     add('imageryPresent', row.stats.greyFrac <= THRESHOLDS.maxGreyFrac, row.stats.greyFrac, `<= ${THRESHOLDS.maxGreyFrac}`);
   }
@@ -1307,8 +1280,7 @@ try {
         {
           meanLuma_min: agg((r) => r.stats.meanLuma, 'min'),
           lumaStd_min: agg((r) => r.stats.lumaStd, 'min'),
-          magentaFrac_max_nonBreakit: agg((r) => (r.id === 'breakit' ? NaN : r.stats.magentaFrac), 'max'),
-          magentaFrac_breakit: rows.find((r) => r.id === 'breakit')?.stats.magentaFrac ?? null,
+          magentaFrac_max: agg((r) => r.stats.magentaFrac, 'max'),
           greyFrac_max: agg((r) => r.stats.greyFrac, 'max'),
           flickerFrac_max: agg((r) => r.flickerFrac, 'max'),
           shorelineAxisFrac_max: agg((r) => r.hazard?.shorelineAxisFrac ?? NaN, 'max'),

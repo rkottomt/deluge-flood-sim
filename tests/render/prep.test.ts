@@ -360,3 +360,139 @@ test('prep: water surface, shoreline extension, walls and wet pyramid', async ()
 
   assert.deepEqual(errors, []);
 });
+
+/**
+ * Non-finite defence: the solver's 'naive' reference mode (and any future numerical accident) can leave NaN, ±Inf or
+ * absurd values in the state texture. The prep pass must never hand those to the geometry — it substitutes a finite
+ * spike so the frame stays drawable — and must mark the cell with the foam-channel sentinel the water shader paints
+ * as magenta speckle, so a blow-up looks like broken numbers instead of a plausible flood.
+ */
+test('prep: blown-up cells never reach the geometry and are flagged for the glitch colour', async () => {
+  const { createPipelines } = await import('../../src/render/pipelines');
+  const device = await getDevice();
+  const errors: string[] = [];
+  device.onuncapturederror = (e) => errors.push(e.error.message);
+  const P = await createPipelines(device, 'bgra8unorm');
+
+  // Flat bed at 100 m under a wet sheet (h = 1, u = 0.5): ordinary water, no foam worth mentioning.
+  const ground = new Float32Array(N * N).fill(100);
+  const barrier = new Float32Array(N * N);
+  const state = new Float32Array(N * N * 4);
+  for (let c = 0; c < N * N; c++) {
+    state[c * 4] = 1; // h
+    state[c * 4 + 1] = 0.5; // u
+    state[c * 4 + 3] = 1.2; // max depth
+  }
+  // Every way the state can stop being physical, one cell each.
+  const blown: Array<[string, number, number[]]> = [
+    ['NaN depth', 10 * N + 10, [NaN, 0.5, 0, 1.2]],
+    ['+Inf depth', 10 * N + 12, [Infinity, 0.5, 0, 1.2]],
+    ['NaN velocity', 10 * N + 14, [1, NaN, 0, 1.2]],
+    ['runaway depth', 10 * N + 16, [5000, 0.5, 0, 1.2]],
+    ['runaway speed', 10 * N + 18, [1, 500, -300, 1.2]],
+    ['negative depth', 10 * N + 20, [-5, 0.5, 0, 1.2]],
+  ];
+  for (const [, c, v] of blown) state.set(v, c * 4);
+
+  const tex = (format: GPUTextureFormat, data: Float32Array, bpp: number) => {
+    const t = device.createTexture({ size: [N, N], format, usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
+    device.queue.writeTexture({ texture: t }, data as Float32Array<ArrayBuffer>, { bytesPerRow: N * bpp }, [N, N]);
+    return t;
+  };
+  const bedTex = tex('r32float', ground, 4);
+  const barrierTex = tex('r32float', barrier, 4);
+  const stateTex = tex('rgba32float', state, 16);
+  const out = (format: GPUTextureFormat, w: number, h: number) =>
+    device.createTexture({ size: [w, h], format, usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC });
+  const V = N + 1;
+  const vtx = out('rgba32float', V, V);
+  const surf = out('rgba16float', N, N);
+  const norm = out('rgba16float', N, N);
+  const misc = out('rgba16float', N, N);
+  const cells = out('rg32float', N, N);
+  const vtxBed = out('r32float', V, V);
+  const wet = out('r32float', N, N);
+
+  const params = device.createBuffer({ size: 48, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+  const pb = new ArrayBuffer(48);
+  const pi = new Int32Array(pb);
+  const pf = new Float32Array(pb);
+  pi[0] = N;
+  pi[1] = N;
+  pi[2] = V;
+  pi[3] = V;
+  pi[4] = 1;
+  pi[5] = 0;
+  pf[6] = 0.01;
+  pf[7] = 8;
+  pf[8] = 0.05;
+  device.queue.writeBuffer(params, 0, pb);
+  const common = [
+    { binding: 0, resource: { buffer: params } },
+    { binding: 1, resource: bedTex.createView() },
+    { binding: 2, resource: barrierTex.createView() },
+    { binding: 3, resource: stateTex.createView() },
+  ];
+  const enc = device.createCommandEncoder();
+  const cp = enc.beginComputePass();
+  cp.setPipeline(P.prepCells);
+  cp.setBindGroup(
+    0,
+    device.createBindGroup({
+      layout: P.prepCells.getBindGroupLayout(0),
+      entries: [
+        ...common,
+        { binding: 4, resource: surf.createView() },
+        { binding: 5, resource: norm.createView() },
+        { binding: 6, resource: misc.createView() },
+        { binding: 7, resource: cells.createView() },
+      ],
+    }),
+  );
+  cp.dispatchWorkgroups(N / 16, N / 16);
+  cp.setPipeline(P.prepVtxBed);
+  cp.setBindGroup(
+    0,
+    device.createBindGroup({
+      layout: P.prepVtxBed.getBindGroupLayout(0),
+      entries: [common[0], common[1], common[2], { binding: 4, resource: vtxBed.createView() }],
+    }),
+  );
+  cp.dispatchWorkgroups(Math.ceil(V / 16), Math.ceil(V / 16));
+  cp.setPipeline(P.prepVerts);
+  cp.setBindGroup(
+    0,
+    device.createBindGroup({
+      layout: P.prepVerts.getBindGroupLayout(0),
+      entries: [
+        common[0],
+        { binding: 4, resource: vtx.createView() },
+        { binding: 5, resource: wet.createView() },
+        { binding: 6, resource: cells.createView() },
+        { binding: 7, resource: vtxBed.createView() },
+      ],
+    }),
+  );
+  cp.dispatchWorkgroups(Math.ceil(V / 16), Math.ceil(V / 16));
+  cp.end();
+  device.queue.submit([enc.finish()]);
+
+  // The glitch sentinel (foam = 8, far above the 1.5 real foam ever reaches) marks exactly the blown cells.
+  const s = await readTexture(device, surf, N, N);
+  for (const [what, c] of blown) assert.equal(s[c * 4 + 3], 8, `${what}: expected the glitch sentinel in the foam channel`);
+  const calm = 10 * N + 40;
+  assert.ok(s[calm * 4 + 3] <= 1.5, `ordinary water must not be flagged (foam ${s[calm * 4 + 3]})`);
+
+  // Nothing non-finite reaches the geometry: the vertex field stays drawable everywhere.
+  const v = await readTexture(device, vtx, V, V);
+  const bad = [...v].findIndex((x) => !Number.isFinite(x));
+  assert.equal(bad, -1, `vertex texture holds a non-finite value at index ${bad}`);
+  // The depth of a blown cell is replaced by a bounded spike (1–10 m), not by its Inf/NaN/5000 m state.
+  const spike = await readTexture(device, cells, N, N);
+  for (const [what, c] of blown) {
+    const d = spike[c * 2];
+    assert.ok(Number.isFinite(d) && d >= 1 && d <= 10, `${what}: displayed depth ${d} is not a bounded spike`);
+  }
+
+  assert.deepEqual(errors, []);
+});

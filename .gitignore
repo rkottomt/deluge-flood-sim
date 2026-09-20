@@ -10,3 +10,6 @@ release
 
 # large raw screenshot captures (curated gallery is committed)
 submission/raw-*/
+
+# raw video frames (the encoded film is committed, the frames are not)
+submission/video/work/

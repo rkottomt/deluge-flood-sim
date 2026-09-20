@@ -71,8 +71,6 @@ URL options: `?preset=pittsburgh|johnstown|ellicott|sandbox`, or any US area wit
    land it keeps dry turns green and the strip counts it (about 139 acres and 11 km of streets at the crest), while
    the evacuation route re-plans as the water comes back. Or press **2** and drag your own wall, tying both ends into
    high ground; press **V** to step through Depth / Max depth / Speed (or scroll the side panel to View).
-4. **Break it** (Try-it strip or How it works) swaps in a textbook explicit solver and drops one small splash mid-view;
-   it blows up within seconds. **Restore** recovers.
 
 ![The one-click levee along the North Shore at the 1936 crest: the land it keeps dry is green, the Try-it strip counts the acres and streets it saves](docs/levee-north-shore.jpg)
 
@@ -194,7 +192,7 @@ the perf numbers stop meaning anything (see below).
 ```sh
 npm run test:suites                     # fast gate, all three
 npm run test:perf -- --quick            # one suite, fast
-npm run test:visual -- --scene=breakit  # one scene
+npm run test:visual -- --scene=bridge  # one scene
 npm run test:security -- --case=CAP     # one group of cases
 ```
 
@@ -224,14 +222,13 @@ and `power` lines it printed before you go looking in the renderer.
 
 ### `npm run test:visual` — the graphics-glitch suite
 
-Fifteen scenes are frozen into an exactly reproducible state through `window.__deluge` — sim paused, advanced by an
+Fourteen scenes are frozen into an exactly reproducible state through `window.__deluge` — sim paused, advanced by an
 exact number of simulated seconds with `runFor`, camera pose assigned rather than animated, and the adaptive quality
 ladder pinned so render scale cannot drift — then captured at 1470×956 @ DPR 2. Scenes cover the default Pittsburgh
-view, the 1936 crest, the demo levee with its protected-land glow, all three hazard modes, the Break-it stability
-demo, each other preset's own camera, a close-up shoreline, a drawn wall, a bridge, top-down and a low grazing angle.
+view, the 1936 crest, the demo levee with its protected-land glow, all three hazard modes, each other preset's own
+camera, a close-up shoreline, a drawn wall, a bridge, top-down and a low grazing angle.
 The two transient toasts are hidden for the capture — they auto-dismiss on a wall-clock timer, so whether one is on
-screen depends on how long the machine took, which is worth ~3 % of the frame and nothing to do with rendering. The
-Break-it banner is not hidden; it belongs to that scene.
+screen depends on how long the machine took, which is worth ~3 % of the frame and nothing to do with rendering.
 
 Two independent checks:
 
@@ -240,7 +237,8 @@ Two independent checks:
   is intentional, look at the diffs in `artifacts/visual/diff/`, then re-record with `node scripts/visual.mjs
   --update` and commit the updated PNGs.
 - **Detectors that need no baseline** — the real regression net, because a stale baseline happily approves a glitch:
-  black or blank frames, NaN-magenta pixels outside Break-it (and their *absence* inside it), water standing
+  black or blank frames, NaN-magenta pixels (the blown-up-cell sentinel colour, which nothing a user can do
+  reaches — that it *is* painted for non-finite state is covered by `tests/render/prep.test.ts`), water standing
   unsupported above terrain (a hydrostatic check against the solver's own arrays), shoreline stair-stepping,
   z-fighting flicker (repeat captures of a frozen scene must be identical), missing aerial imagery, UI panels running
   off the canvas edges, and legend-vs-pixels colour agreement — the water mask is obtained by re-rendering the same

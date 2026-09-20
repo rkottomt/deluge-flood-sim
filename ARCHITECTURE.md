@@ -194,13 +194,23 @@ and apply the same math to CPU mirrors of ground and walls, which picking and ro
 water in place for river crests (§4). The stats pass reduces the exported state per 16×16 block on the GPU, so a
 readback costs a few milliseconds of main-thread time at 1024².
 
-### 3.8 The stability demo ("Break it")
+### 3.8 The naive reference mode, and surviving it
 
-Naive mode removes semi-implicit friction, the limiter, the caps, the smoothing and the CFL margins, and runs at
-Courant 1.8. The UI (`src/ui/stabilityDemo.ts`) drops a 2 m splash of water into the water nearest the camera
-target, so it diverges mid-view within seconds and the NaNs run along the rivers; the clock is slowed to 3× until
-divergence, then the user's speed returns. The solver keeps running through the NaNs without validation errors;
-routing freezes on the last physical flood, and restoring robust mode rewrites every state texture.
+`SimParams.stabilityMode = 'naive'` is the textbook scheme with the four ingredients above taken out: explicit
+friction, no flux limiter, no velocity cap, no θ-smoothing and no CFL margins, with `dt` computed from the requested
+Courant number even above 1. It is an internal reference with no UI. Its only job is to make the safeguards
+falsifiable: `tests/sim/robustness.test.ts` runs the same rough-terrain case in both modes and requires that naive
+blows up (non-finite depths or speeds past 100 m/s) where robust stays finite and positive, and
+`tests/sim/wellbalanced.test.ts` and `reference.test.ts` pin down which ingredient each result depends on.
+
+Because the solver can produce NaN/±Inf in that mode, everything downstream is written to survive it, which is also
+what protects the app from any future numerical accident: the solver keeps running without WebGPU validation errors
+and `reset()` rewrites every state texture back to the initial condition (`tests/sim/robustness.test.ts`); the prep
+pass substitutes a bounded spike for a blown-up cell so nothing non-finite reaches the geometry and flags it for the
+magenta sentinel the water shader paints (`tests/render/prep.test.ts`); the HUD presents non-physical statistics as
+"Diverged" instead of a plausible flood (`src/ui/stats.ts`); and routing, the protected-land analysis and the wall
+check all freeze on the last physical readback rather than reading NaN depths as dry ground (`src/app/evac.ts`,
+`protection.ts`, `tests/app/logic.test.ts`).
 
 ---
 
@@ -253,14 +263,15 @@ Monongahela and Ohio cross the domain edge.
   behind it. A run is ~2–3 ms of warm work on the land near the walls, but on the page's main thread it often took
   10–20 ms (a dropped frame about every other second during the levee demo), so it runs in a Web Worker
   (`src/app/protectionWorker.ts`): the page copies the depth field per run (~1–2 ms), and ground + barrier only after a
-  terrain edit. Without walls nothing runs (one scan per terrain edit, stopping at the first wall); naive or diverged
-  readbacks (Break it) are skipped, so the last physical answer stays up. A sudden collapse is confirmed by a second run
+  terrain edit. Without walls nothing runs (one scan per terrain edit, stopping at the first wall); non-physical
+  readbacks (non-finite depths, or a solver not running the robust scheme) are skipped, so the last physical answer
+  stays up. A sudden collapse is confirmed by a second run
   before it is shown, and the one-time success notice waits until the river has arrived and two runs agree. Pittsburgh's scenario carries
   a demo levee (`ScenarioPreset.levee`, baked): a 2.4 km floodwall along the North Shore from bluff to bluff with its
   crest 1 m above the 1936 record. *Build a levee* resets the water if the flood is already out, raises it along its
   line in ~2 s (each ~40 m piece tall enough for the lowest ground under it), and replays the rise; at the crest it
   keeps ~0.56 km² (139 acres) and 11 km of streets dry while flooded land drops from 6.3 to 5.6 km²
-  (`scripts/e2e.mjs` flow 13).
+  (`scripts/e2e.mjs` flow 12).
 
 ## 5. Data
 
@@ -409,9 +420,9 @@ From `npm test` (tests run on the real GPU through Dawn):
 | GPU (Float32, parallel) vs Float64 CPU reference, 5 cases × 400 steps | max \|Δh\| ≤ 4.3·10⁻⁵ m | `tests/sim/reference.test.ts` |
 | Stale-CFL abuse, heavy rain on steep terrain | no NaN, no negative depth | `tests/sim/robustness.test.ts`, `stability.test.ts` |
 
-`npm run e2e` drives 14 end-to-end demo flows (load, raise to the crest, levee, rain, evacuation, break and recover,
-presets, tools, frame rate, idle power, cancelling a stalled `?live=` link, the one-click levee, the screen wake
-lock, and a GPU device loss mid-load; `--live` adds a live-area flow) in headless Chromium on the real GPU,
+`npm run e2e` drives 13 end-to-end demo flows (load, raise to the crest, levee, rain, evacuation, presets, tools,
+frame rate, idle power, cancelling a stalled `?live=` link, the one-click levee, the screen wake lock, and a GPU
+device loss mid-load; `--live` adds a live-area flow) in headless Chromium on the real GPU,
 offline — every request to a non-local host is blocked and reported, so a flow that quietly needed the network
 fails.
 
@@ -472,7 +483,7 @@ their own port and drive it in headless Chromium on the real GPU:
 | Suite | Asserts |
 | --- | --- |
 | `npm run test:perf` | fps, frame-time p50/p95/p99, achieved sim speed, CPU ms/frame, GPU queue latency, input latency, time-to-interactive and drift over a 60 s sustain run, across six scenarios and two viewports. Floors are always fatal; targets are advisory when the machine is noisy or in Low Power Mode (which moves the numbers by ~6×), and the power state is recorded with every run. |
-| `npm run test:visual` | Fifteen exactly-frozen scenes at 1470×956 @ DPR 2, compared with committed golden images in `tests/visual/baselines/` **and** checked by baseline-free detectors: blank frames, NaN magenta, water unsupported above terrain, shoreline stair-stepping, z-fighting flicker, missing imagery, UI off the canvas, legend-vs-pixel colour agreement. |
+| `npm run test:visual` | Fourteen exactly-frozen scenes at 1470×956 @ DPR 2, compared with committed golden images in `tests/visual/baselines/` **and** checked by baseline-free detectors: blank frames, NaN magenta, water unsupported above terrain, shoreline stair-stepping, z-fighting flicker, missing imagery, UI off the canvas, legend-vs-pixel colour agreement. |
 | `npm run test:security` | The penetration test's cases against the *released* bundle (no debug API): link-parameter spoofing, XSS through hostile upstream bodies, the CSP and its violations, response byte caps, `dist/` hygiene, `npm audit`. |
 
 ## 11. Future work
