@@ -4,7 +4,7 @@
  */
 
 /** Byte size of the Frame uniform (must match FRAME_WGSL and writeFrameUniforms in index.ts). */
-export const FRAME_UNIFORM_SIZE = 512;
+export const FRAME_UNIFORM_SIZE = 576;
 
 export const FRAME_WGSL = /* wgsl */ `
 struct Frame {
@@ -40,6 +40,8 @@ struct Frame {
   skyWarmth: f32,     // 0 with the sun high, 1 with it on the horizon: how far that band is pushed
   light: vec4f,       // shadow strength, sky-occlusion strength, relief strength, 1 = sun raster is built
   shade: vec4f,       // PCF radius (cells), detail-normal strength, ground-bounce strength, imagery relight
+  detailRect: vec4f,  // detail-imagery inset, grid cells: x0, y0, x1, y1 (empty when detail.x == 0)
+  detail: vec4f,      // x: inset strength 0..1 (detailTex valid when > 0), y: feather width (cells), zw: unused
 }
 `;
 

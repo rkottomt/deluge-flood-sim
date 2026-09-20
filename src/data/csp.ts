@@ -24,6 +24,9 @@ export const CSP_CONNECT_SRC = [
   "'self'",
   'https://elevation.nationalmap.gov/arcgis/rest/services/3DEPElevation/',
   'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/',
+  // Copernicus GLO-30 COGs outside 3DEP coverage (src/data/demGlobal.ts). The bucket name is in the HOST here, so
+  // unlike the shared s3.amazonaws.com above, the host itself already restricts this to the Copernicus open dataset.
+  'https://copernicus-dem-30m.s3.amazonaws.com/',
   'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/',
   'https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/Transportation/MapServer/',
   'https://api.openstreetmap.org/api/0.6/map',

@@ -36,6 +36,27 @@ export function stormWeight(d: number, R: number): number {
   return 1 - smoothstep(0.3 * R, R, d);
 }
 
+/** The simulated-time window a packed forcing will be used over: [from, to] seconds (to = from while paused). */
+export interface ForcingWindow {
+  from: number;
+  to: number;
+}
+
+/**
+ * Fraction of its discharge a timed inflow (WaterSource.stopAfter) delivers over the window [from, to].
+ *
+ * A hard on/off switch would round the delivered volume to whole frames — at 256 substeps a frame the Nepal surge
+ * would over- or under-deliver by up to a minute of discharge. Instead the frame that STRADDLES the stop gets the
+ * fraction of itself that lies before it, so the total delivered is exactly Q·stopAfter however the run is chunked.
+ * No stopAfter (or a non-finite one) means the inflow never stops, which is every other preset.
+ */
+export function inflowFactor(stopAfter: number | undefined, from: number, to: number): number {
+  if (stopAfter === undefined || !Number.isFinite(stopAfter)) return 1;
+  const stop = Math.max(0, stopAfter);
+  if (!(to > from)) return from < stop ? 1 : 0;
+  return Math.min(1, Math.max(0, (stop - from) / (to - from)));
+}
+
 /** The cells (row-major indices) where a source footprint has weight > 0, in row-major order, with their weights. */
 export interface Footprint {
   cells: Int32Array;
@@ -70,7 +91,10 @@ export interface PackedForcing {
   nStorms: number;
   /** Largest depth a stage source may impose anywhere in its footprint (for the CFL estimate), m. */
   stageDepthMax: number;
-  /** Total inflow discharge actually represented (sources fully outside the domain are dropped), m³/s. */
+  /**
+   * Total inflow discharge actually represented, m³/s: sources fully outside the domain are dropped, and a timed
+   * inflow past its stopAfter contributes nothing.
+   */
   inflowTotal: number;
   /** Largest storm-cell intensity packed, m/s (for the CFL estimate). */
   stormRateMax: number;
@@ -82,6 +106,8 @@ export interface PackedForcing {
  * Pack sources and storms. `bedAt` (row-major index → bed meters, NOT datum-relative) bounds the depth a stage
  * source can create (given as a lookup so no combined array has to be allocated); z0 is the solver's internal
  * elevation datum. `footprintOf` may supply cached footprints (see sourceFootprint; same cells and weights).
+ * `window` is the simulated-time window this packing will be stepped over, and only a timed inflow reads it
+ * (WaterSource.stopAfter, see inflowFactor); omitted means t = 0, where nothing has stopped yet.
  */
 export function packForcing(
   sources: readonly WaterSource[],
@@ -92,6 +118,7 @@ export function packForcing(
   z0: number,
   bedAt: (index: number) => number,
   footprintOf?: (source: WaterSource) => Footprint,
+  window?: ForcingWindow,
 ): PackedForcing {
   const data = new Float32Array(FORCING_FLOATS);
   const cellArea = cellSize * cellSize;
@@ -120,7 +147,8 @@ export function packForcing(
     data[o + 1] = s.gy;
     data[o + 2] = R;
     if (s.type === 'inflow') {
-      const q = Number.isFinite(s.discharge) ? s.discharge : 0;
+      const gate = inflowFactor(s.stopAfter, window?.from ?? 0, window?.to ?? 0);
+      const q = (Number.isFinite(s.discharge) ? s.discharge : 0) * gate;
       data[o + 3] = 0;
       data[o + 4] = q / (wSum * cellArea);
       inflowTotal += q;

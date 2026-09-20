@@ -7,7 +7,7 @@
  * the DEM is decoded, in parallel with the imagery and road downloads, and the page stays responsive.
  */
 import type { LiveAreaRequest, ProgressFn, RoadNetwork, TerrainData } from '../contracts';
-import { fetchDEM } from './dem';
+import { DEM_SOURCE_NAMES, demAttribution, fetchDEM } from './dem';
 import { isLikelyUS, squareDomain } from './geo';
 import { fetchImagery, IMAGERY_ATTRIBUTION } from './imagery';
 import { detectLiveWater, finishLiveTerrain, type LiveTerrainResult } from './liveTerrain';
@@ -172,7 +172,7 @@ export async function loadLiveArea(req: LiveAreaRequest, onProgress?: ProgressFn
     ctrl.signal.throwIfAborted();
     progress.dem = 1;
     demDone = true;
-    demMsg = dem.source === 'usgs3dep' ? 'Elevation decoded (USGS 3DEP)' : 'Elevation decoded (Terrarium)';
+    demMsg = `Elevation decoded (${DEM_SOURCE_NAMES[dem.source]})`;
     report();
     await tick();
     // Water detection starts now (in a worker when possible) while imagery and roads finish downloading.
@@ -203,7 +203,7 @@ export async function loadLiveArea(req: LiveAreaRequest, onProgress?: ProgressFn
       conditioner.dispose();
     }
     const attribution = [
-      dem.source === 'usgs3dep' ? 'Elevation: USGS 3DEP' : 'Elevation: Mapzen Terrarium (AWS Open Data)',
+      demAttribution(dem.source),
       imagery ? IMAGERY_ATTRIBUTION : null,
       roads?.attribution ?? null,
     ]

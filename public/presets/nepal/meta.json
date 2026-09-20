@@ -1,0 +1,119 @@
+{
+ "version": 1,
+ "id": "nepal",
+ "name": "Betrawati — Trishuli Valley",
+ "subtitle": "26 August 2026 — the bridge that was Rasuwa’s only road",
+ "nx": 1024,
+ "ny": 1024,
+ "cellSize": 7.8125,
+ "bounds": {
+  "west": 85.14530757619498,
+  "south": 27.954061401848804,
+  "east": 85.226692423805,
+  "north": 28.025926621198217
+ },
+ "attribution": "Elevation: Copernicus DEM GLO-30 (© DLR e.V. 2010–2014 / © Airbus Defence and Space GmbH, ESA), bare-earth filtered · Terrain shading: no aerial imagery (hypsometric tint) · Roads © OpenStreetMap contributors (ODbL)",
+ "scenario": {
+  "description": "Betrawati stands where the Phalakhu Khola meets the Trishuli on the Nuwakot–Rasuwa district line, and its bridge carried the Pasang Lhamu Highway — the only road into Rasuwa district. On the morning of 26 August 2026 rock and glacier ice broke from the north face of Langtang Lirung and fell about 1,200 m into the Lhende Khola, sending a debris flood down the Bhote Koshi and the Trishuli; it reached Betrawati around 9:20 am, minutes after the first SMS alerts went out, and took the bridge with it. Nepal’s Flood Forecasting Division reported about 20 million m³ of excess water down the river system, and this run releases that volume over 30 minutes — about 11,100 m³/s, an average rather than a measured peak, because the gauge here (warning level 4.1 m, danger level 5 m) last read 3.55 m and was swept away before the crest arrived; the inflow then stops, so the run delivers that volume and no more. The terrain is Copernicus 30 m radar data, a surface model with canopy and buildings in it. The bare-earth filter only runs on ground flatter than 20°, and 77 % of this domain is steeper: the valley floor is filtered and still a metre or two high, the walls above it are the raw surface model. No photograph is baked in — open satellite imagery of this valley could be redistributed, but composing a cloud-free monsoon mosaic of it was beyond this bake and the ready-made cloud-free mosaics are licensed against redistribution — so the ground is shaded by height instead. The rivers start dry, because no surviving gauge gives their flow that morning and this model cannot hold a river that falls 167 m across the domain at a level — so every drop you see is the modelled surge. The clock is the model’s, not the flood’s: the front sits on the solver’s 15 m/s speed cap from the first half-minute on, so these are not the real arrival times. Watch which roads go under and in what order, and where the routes turn uphill, and do not read street-level depths.",
+  "sources": [
+   {
+    "id": "trishuli-inflow",
+    "type": "inflow",
+    "gx": 536.5,
+    "gy": 8.5,
+    "radius": 4,
+    "discharge": 11100,
+    "stopAfter": 1800,
+    "label": "Trishuli — scenario surge: 20 million m³ over 30 minutes (DHM reported volume, not a measured peak)"
+   }
+  ],
+  "storms": [],
+  "shelters": [
+   {
+    "name": "Shree Sundaradevi Pra Vi",
+    "gx": 408.24,
+    "gy": 722.11
+   },
+   {
+    "name": "Shree Sivalaya Ni Ma.V",
+    "gx": 583.82,
+    "gy": 603.75
+   }
+  ],
+  "rainRate": 0,
+  "stage": null,
+  "initialFill": [],
+  "camera": {
+   "target": {
+    "gx": 505,
+    "gy": 660,
+    "elevation": 754.8
+   },
+   "distance": 5000,
+   "yaw": 0.12,
+   "pitch": 0.72
+  },
+  "defaultView": "depth"
+ },
+ "files": {
+  "elevation": "elevation.f32",
+  "imagery": null,
+  "roads": "roads.json"
+ },
+ "bake": {
+  "bakedAt": "2026-09-20T03:50:48.718Z",
+  "demSource": "copernicus",
+  "demRepairedCells": 0,
+  "demTiles": [
+   "Copernicus_DSM_COG_10_N27_00_E085_00_DEM",
+   "Copernicus_DSM_COG_10_N28_00_E085_00_DEM"
+  ],
+  "bareEarth": {
+   "flaggedPercent": 2.45,
+   "meanDropM": 3.53,
+   "maxDropM": 12
+  },
+  "center": {
+   "lat": 27.99,
+   "lon": 85.186
+  },
+  "sizeMeters": 8000,
+  "burnedCells": 17171,
+  "rivers": [
+   {
+    "name": "Trishuli",
+    "cells": 8488,
+    "depth": 4,
+    "surfaceMax": 727.62,
+    "surfaceMin": 560.51
+   },
+   {
+    "name": "Salankhu Khola",
+    "cells": 4269,
+    "depth": 1.5,
+    "surfaceMax": 736.23,
+    "surfaceMin": 614.08
+   },
+   {
+    "name": "Phalakhu Khola",
+    "cells": 4414,
+    "depth": 1.5,
+    "surfaceMax": 716.17,
+    "surfaceMin": 600.69
+   }
+  ],
+  "initialWetCells": 0,
+  "prefill": "none",
+  "roads": {
+   "nodes": 451,
+   "edges": 464,
+   "km": 201.7730744216293,
+   "byClass": {
+    "highway": 0,
+    "major": 40,
+    "minor": 384,
+    "local": 40
+   }
+  }
+ }
+}

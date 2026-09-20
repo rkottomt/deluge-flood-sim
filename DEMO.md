@@ -144,7 +144,7 @@ so the fanless Air does less work between judges. Press Space again as the judge
 | --- | --- |
 | "Lost connection to the GPU" with "Reloading in 3 s…" | Nothing. It reloads by itself into the same scene (rehearsal: running again 11 s after the loss, on a busy GPU). Say: "the GPU driver reset; the whole simulation lives on the GPU, so it restarts." |
 | The same card with **no countdown** and a **Reload** button (you are on Pittsburgh, the usual pitch scene) | A second loss within 10 minutes of an automatic reload in this tab waits for you instead of looping. The card says how long the scene ran after the last restart: minutes means another one-off, seconds means the machine is struggling. Quit other GPU apps and click **Reload** (rehearsal: running 9 s later). If it keeps happening, open a new tab at localhost:4173 (the limit is per tab) or relaunch Brave. |
-| The same card with **Reload this scene** *and* **Start with Pittsburgh** | Same thing, but you were on Johnstown, Ellicott City, the sandbox or a live area. **Start with Pittsburgh** is the way out: it is the lightest scenario, needs no network and always loads. A live area or an oversized grid that keeps dying switches to it by itself. |
+| The same card with **Reload this scene** *and* **Start with Pittsburgh** | Same thing, but you were on one of the other six cities, the sandbox or a live area. **Start with Pittsburgh** is the way out: it is the lightest scenario, needs no network and always loads. A live area or an oversized grid that keeps dying switches to it by itself. |
 | Either card while a scene was still loading | The load is dropped the moment the GPU goes, so nothing carries on behind the card and the address bar still points at what you asked for. |
 | Brave's own crash page, or a blank page | Cmd-R. |
 | **In Deluge.app:** a dark page saying *"The view stopped and could not restart"* with a **Restart Deluge** button | The graphics view crashed three times in a row, so the app stopped reloading it. Click **Restart Deluge**. If it happens again, quit (Cmd-Q) and reopen from the Dock, which gives the GPU a completely fresh start. The four built-in scenes need no network, so staying off *Pick a location* is the safe path. |
@@ -428,9 +428,23 @@ frame time and GPU latency; with the GPU emulated ~35 % slower, frames held 58�
 Any US location, through *Pick any US location…* or `?live=lat,lon,km`, but it **needs internet** (USGS, Esri,
 TIGERweb). A healthy 1024² area loads in well under 15 s; on dead wifi it gives up after ~12–15 s and offers the
 offline scenarios. With no river crossing the map edge, the first button drops a 120 mm/hr thunderstorm over the view.
-Only try it at the venue if you've tested the network there. Offline alternatives under *Scenario → Change*: Johnstown
-(the 1889 flood as a 3,730 m³/s inflow down today's valley, not a dam-break simulation) and Ellicott City (the 2016
-flash-flood storm).
+Only try it at the venue if you've tested the network there.
+
+**Reach for a baked city first.** Seven are in the build and need no network at all — each loads in well under a
+second from *Scenario → Change*. If a judge names a city, or a disaster, this is the map:
+
+| They say | Show | The one-click button does | Watch out |
+| --- | --- | --- | --- |
+| Pittsburgh, "a big river flood", anything | **Pittsburgh** | Raises all three rivers to the 1936 record, 46 ft | The lead demo. Always works. |
+| Helene, North Carolina, Appalachia, 2024 | **Asheville** | Pours Helene's record peaks down the French Broad and the Swannanoa | The most dramatic of the new four: 1.2 km² under water inside a minute of sim. |
+| Harvey, Texas, "what about rain, not rivers?" | **Houston** | Rains 173 mm/hr (6.8 in/hr) over a dead-flat city | Best answer to "your flood comes from the edge of the map" — this one falls out of the sky. Streets go orange across the whole grid. |
+| Nashville, Tennessee, 2010 | **Nashville** | **Raises to the 1927 record (56.2 ft), not 2010.** The 2010 crest (51.9 ft) is the second tick on the River stage slider — drag to it if the 2010 story is the point | The scene's title says 2010; the button offers the highest historic mark, which is 1927. Say so rather than be caught. |
+| Colorado, Front Range, flash floods, "a creek, not a river" | **Boulder** | Sends the 2013 flood out of Boulder Canyon | Quietest of the seven — a ribbon of water down the creek and a few streets (0.03 km²). Use it for *narrow and fast*, not for scale. |
+| Dam failure, "what if a dam breaks?" | **Johnstown** | Plays the 1889 flood as a 3,730 m³/s inflow down today's valley | Say plainly: it is the lake's volume arriving as an inflow, **not** a dam-break simulation. |
+| Flash flood, "small and sudden" | **Ellicott City** | Plays the 2016 storm over the Tiber branch | 5 km domain, so the whole town is in one view. |
+
+Only Pittsburgh and Nashville have a gauge with historic marks, so only those two read *Raise to…*. The other five
+read *Play the flood* — that is expected, not a broken scene.
 
 **16. What did AI write?**
 Answer honestly. We used AI coding assistants heavily to write, test and review the code and the docs; the No Wrapper

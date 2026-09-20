@@ -88,6 +88,9 @@ export async function createPipelines(device: GPUDevice, canvasFormat: GPUTextur
       // Roof height above ground per cell (r32float, src/render/buildings.ts), or a 1x1 zero when the scene has no
       // buildings. Point-fetched, never filtered: the water pass marches it so the flood reflects the skyline.
       { binding: 14, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'unfilterable-float' } },
+      // Close-up imagery inset (rgba8unorm-srgb, filtered) — a 1x1 placeholder when the area has none. Binding 15:
+      // 12-14 were taken by the sun raster, the second imagery view and the roof-height raster.
+      { binding: 15, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
     ],
   });
   const overlayBGL = device.createBindGroupLayout({

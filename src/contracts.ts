@@ -105,6 +105,20 @@ export interface Shelter {
   gy: number;
 }
 
+/** A grid-aligned rectangle in cell coordinates (gx east, gy south from the north edge). */
+export interface GridRect {
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+}
+
+/** A finer aerial photo covering `rect` of the grid (src/data/imagery.ts, src/render/textures.ts). */
+export interface ImageryDetail {
+  image: ImageBitmap;
+  rect: GridRect;
+}
+
 export interface TerrainData {
   /** Short human name e.g. "Pittsburgh — Three Rivers". */
   name: string;
@@ -117,6 +131,11 @@ export interface TerrainData {
   bounds: GeoBounds;
   /** Aerial imagery covering exactly `bounds`, north-up. Any pixel size. Null if unavailable. */
   imagery: ImageBitmap | null;
+  /**
+   * Optional second, finer photo over part of the domain (the "detail inset": downtown, where close-ups happen).
+   * The renderer blends it over `imagery` inside `rect`. Null when the area has no inset.
+   */
+  imageryDetail?: ImageryDetail | null;
   roads: RoadNetwork | null;
   /**
    * EXTENSION: real building footprints with heights, or null when none are available (live areas, the sandbox, and
@@ -156,6 +175,29 @@ export interface ScenarioPreset {
   initialFill: { seeds: Array<{ gx: number; gy: number; level?: number }>; level: number }[];
   /** Suggested camera framing. */
   camera?: CameraPose;
+  /**
+   * Extension: where the scenario's evacuation story starts — a home the demo puts the evacuation pin on, chosen so
+   * the route to a shelter re-plans as the flood rises rather than merely existing or merely failing (see
+   * artifacts/evac-story, artifacts/demo-beats). The user can move the pin anywhere; this is only the opening position.
+   *
+   * The demo shows this pin at the moment the flood is already up, so it is picked to STILL HAVE A ROUTE there where
+   * the scenario has one to give: a start that is blocked when the judge first sees it shows the re-planning once,
+   * invisibly, on the way. Where the flood leaves no such start (a flat coast), the story is the warning time
+   * instead and the pin is the home whose last route closes (RouteResult.closure).
+   */
+  evacStart?: { gx: number; gy: number; label?: string };
+  /**
+   * Extension: the evacuation story's second beat — a home that stays DRY and still loses every road out, so the
+   * route card turns red and explains itself with measured numbers ("830 m of the 1.9 km drive is flooded"). One
+   * click away from `evacStart` in the Try-it strip; only presets where such a start was measured carry one.
+   */
+  evacCutOff?: { gx: number; gy: number; label?: string };
+  /**
+   * Extension: the water view this scenario opens in (default 'realistic'). A site whose flood the photoreal view
+   * cannot tell the truth about names the view that can: on the Trishuli the water arrives on dry rock at the
+   * solver's speed cap, and the realistic shading reads as a grey-tan gravel bed until the depth colours are on it.
+   */
+  defaultView?: WaterViewMode;
   /**
    * Extension: a levee the "Build a levee" demo raises in one click. It is tied into high ground at both ends and every
    * segment reaches `crest`, so it holds the scenario's most dramatic flood (see src/ui/levee.ts).
@@ -204,6 +246,19 @@ export type WaterSource =
       radius: number;
       /** Volumetric discharge, m³/s. */
       discharge: number;
+      /**
+       * Simulated seconds after which this inflow delivers nothing more; omitted = it runs for ever.
+       *
+       * A scenario forced by a published VOLUME needs it. Nepal's surge is 20 million m³ released over 30 minutes;
+       * without a stop the same 11,100 m³/s kept arriving, so the run had put 2.07e7 m³ into the valley by 31
+       * simulated minutes and 5.15e7 m³ by 78 — two and a half times the event — and the number on screen stopped
+       * being the number that was reported.
+       *
+       * Exactly Q·stopAfter is delivered: the solver re-packs the forcing every frame while the stop is still ahead
+       * and scales the frame that straddles it by the fraction of itself that falls before it, so the total does not
+       * depend on the frame size (src/sim/forcing.ts inflowFactor).
+       */
+      stopAfter?: number;
       label?: string;
     }
   | {
@@ -530,6 +585,50 @@ export interface RouteResult {
    * is flooded. Shelter in place on higher floors."); 'none': the same as `message`; 'ok': ''.
    */
   advice?: string;
+  /** 'blocked': the numbers behind `reason` (src/routing fills it in). null for 'ok' and for 'none'. */
+  diagnosis?: RouteDiagnosis | null;
+  /**
+   * 'blocked': the moment this start's last way out closed, when it had one earlier in the run. Set by the app
+   * (src/app/evac.ts), which watches the route over simulated time; the router only ever sees one flood field, so
+   * it never sets this. null while a route exists and for a start that never had one.
+   */
+  closure?: RouteClosure | null;
+}
+
+/**
+ * Why a 'blocked' route is blocked, in numbers rather than a sentence, so a UI can quote them and a measurement can
+ * group starts without parsing prose. Everything is measured from the flood field of the last updateFlood.
+ */
+export interface RouteDiagnosis {
+  /** Flood depth at the start point, m. */
+  startDepth: number;
+  /** Valid shelters considered, and how many of them are above water themselves. */
+  shelters: number;
+  dryShelters: number;
+  /** Roads the start can snap to within the router's snap radius, and how many of those are passable. */
+  startRoads: number;
+  startRoadsUsable: number;
+  /**
+   * The route the flood cut: the drive that would exist with every flooded road passable — the polyline a 'blocked'
+   * result carries, and its dry-road travel time — plus how much of it is under water now. null when this start
+   * reaches no shelter even on a dry network: a gap in the road data rather than a flood.
+   */
+  cutRoute: { lengthMeters: number; etaSeconds: number; shelterName: string; floodedMeters: number } | null;
+}
+
+/** The simulated moment a start's last route to a shelter closed, and the route that was cut (RouteResult.closure). */
+export interface RouteClosure {
+  /** Simulation clock when the last route closed, s. */
+  simTime: number;
+  /**
+   * Simulated seconds this start had a way out, ending at `simTime`: measured from the route it was first given, or
+   * from the one that came back after an earlier closure — never across a stretch when it was already cut off.
+   */
+  openSeconds: number;
+  /** The last route that existed, as it was published. */
+  lengthMeters: number;
+  etaSeconds: number;
+  shelterName: string;
 }
 
 /** Why RouteResult has no route ('none' and 'blocked' states). */

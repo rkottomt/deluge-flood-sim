@@ -552,6 +552,11 @@ function isRaised(s: AppState, ctrl: StageControl): boolean {
 /**
  * Select the evacuation tool and put the start on a street that the scenario's flood will reach, trying a few
  * candidates until the router finds a route (a start the router can't connect makes a poor first impression).
+ *
+ * The scenario's own evacuation start goes first when it has one: those are chosen by sweeping every street in the
+ * domain for a route that re-plans as the water rises and then loses its last road (artifacts/evac-story), which is
+ * the story this step exists to show. It is skipped like any other candidate if it cannot be routed right now — for
+ * instance when the flood is already at its peak — and the generic suggestions take over.
  */
 export async function planEvacuation(ctx: Pick<UIContext, 'store'>): Promise<void> {
   const { store } = ctx;
@@ -584,6 +589,7 @@ export async function planEvacuation(ctx: Pick<UIContext, 'store'>): Promise<voi
     return;
   }
   const snap = solver.getSnapshot();
+  const hint = s.scenario?.evacStart ?? null;
   const cands = suggestEvacStarts({
     nx: solver.nx,
     ny: solver.ny,
@@ -597,6 +603,7 @@ export async function planEvacuation(ctx: Pick<UIContext, 'store'>): Promise<voi
     currentLevel: ctrl ? ctrl.normalLevel + s.stageOffsetApplied : null,
     max: 10,
   });
+  if (hint) cands.unshift({ gx: hint.gx, gy: hint.gy });
   if (!cands.length) {
     postNotice(store, { kind: 'info', key: 'try-evac', title: 'Click a home on the map', message: 'The route to the nearest dry shelter appears at once and re-plans as roads flood.' });
     return;
@@ -614,10 +621,11 @@ export async function planEvacuation(ctx: Pick<UIContext, 'store'>): Promise<voi
       const now = store.get();
       const rising = !!ctrl && now.stageOffsetApplied < now.stageOffset - 0.05;
       const risen = !!ctrl && now.stageOffsetApplied > 0.3;
+      const from = hint && start.gx === hint.gx && start.gy === hint.gy && hint.label ? ` from ${hint.label}` : '';
       postNotice(store, {
         kind: 'info',
         key: 'try-evac',
-        title: 'Evacuation route planned',
+        title: `Evacuation route planned${from}`,
         message: rising
           ? 'The river is still rising: watch the route re-plan around streets as they flood.'
           : risen

@@ -1,0 +1,731 @@
+{
+ "version": 1,
+ "id": "houston",
+ "name": "Houston — Buffalo Bayou",
+ "subtitle": "Hurricane Harvey, 2017 — the city floods from above",
+ "nx": 1024,
+ "ny": 1024,
+ "cellSize": 7.8125,
+ "bounds": {
+  "west": -95.42689270026241,
+  "south": 29.726560947092082,
+  "east": -95.34410729973756,
+  "north": 29.798426166651232
+ },
+ "attribution": "Elevation: USGS 3DEP · Imagery: USDA NAIP via USGS The National Map · Roads: U.S. Census Bureau TIGER/Line",
+ "scenario": {
+  "description": "Houston is built on a dead-flat coastal plain drained by slow bayous, and Buffalo Bayou runs in a deep trench past downtown. Hurricane Harvey stalled over the city in August 2017 and dropped more than 40 inches of rain in four days over much of Harris County — 60.58 inches at Nederland, a US tropical-cyclone record — with bands that trained over the same ground long enough to put 6.8 inches on southeast Houston in a single hour. Buffalo Bayou crested at 41.90 ft at the Shepherd Drive gauge on August 28 carrying 32,600 ft³/s, its biggest flood since 1935, swollen by emergency releases from the Addicks and Barker reservoirs upstream. Here the bayou runs at that peak while the city takes Harvey's worst hour of rain, 6.8 inches an hour: the bayou's own flood stays in its trench, 12 m below the streets, so with nowhere for the rain to drain the water rises in the streets instead — which is how Houston actually flooded.",
+  "sources": [
+   {
+    "id": "buffalo-bayou-inflow",
+    "type": "inflow",
+    "gx": 5.5,
+    "gy": 576.5,
+    "radius": 4,
+    "discharge": 923,
+    "label": "Buffalo Bayou — Harvey's peak (32,600 ft³/s at Shepherd Dr)"
+   }
+  ],
+  "storms": [],
+  "shelters": [
+   {
+    "name": "George R. Brown Convention Center",
+    "gx": 880.32,
+    "gy": 654.08
+   },
+   {
+    "name": "Houston Heights",
+    "gx": 345.37,
+    "gy": 110.38
+   },
+   {
+    "name": "Memorial Park (east)",
+    "gx": 63.97,
+    "gy": 463.97
+   },
+   {
+    "name": "Rice Military",
+    "gx": 273.84,
+    "gy": 470.61
+   },
+   {
+    "name": "Midtown / Fourth Ward",
+    "gx": 540.29,
+    "gy": 692.39
+   }
+  ],
+  "rainRate": 173,
+  "stage": null,
+  "initialFill": [
+   {
+    "seeds": [
+     {
+      "gx": 0.5,
+      "gy": 572.5,
+      "level": 1.04
+     },
+     {
+      "gx": 10.5,
+      "gy": 579.5,
+      "level": 1.01
+     },
+     {
+      "gx": 20.5,
+      "gy": 594.5,
+      "level": 0.9
+     },
+     {
+      "gx": 21.5,
+      "gy": 594.5,
+      "level": 0.9
+     },
+     {
+      "gx": 30.5,
+      "gy": 581.5,
+      "level": 0.88
+     },
+     {
+      "gx": 30.5,
+      "gy": 577.5,
+      "level": 0.87
+     },
+     {
+      "gx": 42.5,
+      "gy": 570.5,
+      "level": 0.82
+     },
+     {
+      "gx": 53.5,
+      "gy": 584.5,
+      "level": 0.78
+     },
+     {
+      "gx": 55.5,
+      "gy": 585.5,
+      "level": 0.77
+     },
+     {
+      "gx": 68.5,
+      "gy": 571.5,
+      "level": 0.74
+     },
+     {
+      "gx": 80.5,
+      "gy": 557.5,
+      "level": 0.69
+     },
+     {
+      "gx": 81.5,
+      "gy": 557.5,
+      "level": 0.67
+     },
+     {
+      "gx": 93.5,
+      "gy": 564.5,
+      "level": 0.66
+     },
+     {
+      "gx": 98.5,
+      "gy": 575.5,
+      "level": 0.65
+     },
+     {
+      "gx": 108.5,
+      "gy": 579.5,
+      "level": 0.62
+     },
+     {
+      "gx": 117.5,
+      "gy": 569.5,
+      "level": 0.6
+     },
+     {
+      "gx": 126.5,
+      "gy": 556.5,
+      "level": 0.6
+     },
+     {
+      "gx": 130.5,
+      "gy": 550.5,
+      "level": 0.59
+     },
+     {
+      "gx": 133.5,
+      "gy": 546.5,
+      "level": 0.58
+     },
+     {
+      "gx": 153.5,
+      "gy": 549.5,
+      "level": 0.57
+     },
+     {
+      "gx": 154.5,
+      "gy": 549.5,
+      "level": 0.57
+     },
+     {
+      "gx": 167.5,
+      "gy": 544.5,
+      "level": 0.53
+     },
+     {
+      "gx": 169.5,
+      "gy": 534.5,
+      "level": 0.52
+     },
+     {
+      "gx": 168.5,
+      "gy": 522.5,
+      "level": 0.49
+     },
+     {
+      "gx": 170.5,
+      "gy": 514.5,
+      "level": 0.46
+     },
+     {
+      "gx": 181.5,
+      "gy": 516.5,
+      "level": 0.4
+     },
+     {
+      "gx": 188.5,
+      "gy": 519.5,
+      "level": 0.38
+     },
+     {
+      "gx": 205.5,
+      "gy": 529.5,
+      "level": 0.35
+     },
+     {
+      "gx": 212.5,
+      "gy": 533.5,
+      "level": 0.34
+     },
+     {
+      "gx": 220.5,
+      "gy": 537.5,
+      "level": 0.32
+     },
+     {
+      "gx": 229.5,
+      "gy": 541.5,
+      "level": 0.29
+     },
+     {
+      "gx": 244.5,
+      "gy": 537.5,
+      "level": 0.25
+     },
+     {
+      "gx": 248.5,
+      "gy": 536.5,
+      "level": 0.24
+     },
+     {
+      "gx": 263.5,
+      "gy": 534.5,
+      "level": 0.15
+     },
+     {
+      "gx": 267.5,
+      "gy": 534.5,
+      "level": 0.13
+     },
+     {
+      "gx": 282.5,
+      "gy": 534.5,
+      "level": 0.11
+     },
+     {
+      "gx": 292.5,
+      "gy": 532.5,
+      "level": 0.1
+     },
+     {
+      "gx": 308.5,
+      "gy": 522.5,
+      "level": 0.09
+     },
+     {
+      "gx": 312.5,
+      "gy": 520.5,
+      "level": 0.08
+     },
+     {
+      "gx": 321.5,
+      "gy": 519.5,
+      "level": 0.08
+     },
+     {
+      "gx": 332.5,
+      "gy": 519.5,
+      "level": 0.06
+     },
+     {
+      "gx": 341.5,
+      "gy": 522.5,
+      "level": 0.04
+     },
+     {
+      "gx": 354.5,
+      "gy": 519.5,
+      "level": 0.01
+     },
+     {
+      "gx": 363.5,
+      "gy": 516.5,
+      "level": -0.02
+     },
+     {
+      "gx": 372.5,
+      "gy": 512.5,
+      "level": -0.07
+     },
+     {
+      "gx": 380.5,
+      "gy": 508.5,
+      "level": -0.08
+     },
+     {
+      "gx": 392.5,
+      "gy": 505.5,
+      "level": -0.09
+     },
+     {
+      "gx": 396.5,
+      "gy": 505.5,
+      "level": -0.09
+     },
+     {
+      "gx": 412.5,
+      "gy": 510.5,
+      "level": -0.09
+     },
+     {
+      "gx": 425.5,
+      "gy": 511.5,
+      "level": -0.1
+     },
+     {
+      "gx": 426.5,
+      "gy": 511.5,
+      "level": -0.1
+     },
+     {
+      "gx": 443.5,
+      "gy": 512.5,
+      "level": -0.1
+     },
+     {
+      "gx": 449.5,
+      "gy": 513.5,
+      "level": -0.1
+     },
+     {
+      "gx": 461.5,
+      "gy": 518.5,
+      "level": -0.1
+     },
+     {
+      "gx": 469.5,
+      "gy": 521.5,
+      "level": -0.11
+     },
+     {
+      "gx": 482.5,
+      "gy": 525.5,
+      "level": -0.12
+     },
+     {
+      "gx": 487.5,
+      "gy": 525.5,
+      "level": -0.13
+     },
+     {
+      "gx": 501.5,
+      "gy": 524.5,
+      "level": -0.13
+     },
+     {
+      "gx": 507.5,
+      "gy": 524.5,
+      "level": -0.13
+     },
+     {
+      "gx": 519.5,
+      "gy": 523.5,
+      "level": -0.13
+     },
+     {
+      "gx": 526.5,
+      "gy": 512.5,
+      "level": -0.13
+     },
+     {
+      "gx": 531.5,
+      "gy": 501.5,
+      "level": -0.13
+     },
+     {
+      "gx": 540.5,
+      "gy": 492.5,
+      "level": -0.13
+     },
+     {
+      "gx": 550.5,
+      "gy": 495.5,
+      "level": -0.13
+     },
+     {
+      "gx": 557.5,
+      "gy": 507.5,
+      "level": -0.13
+     },
+     {
+      "gx": 567.5,
+      "gy": 519.5,
+      "level": -0.13
+     },
+     {
+      "gx": 570.5,
+      "gy": 520.5,
+      "level": -0.13
+     },
+     {
+      "gx": 583.5,
+      "gy": 515.5,
+      "level": -0.13
+     },
+     {
+      "gx": 594.5,
+      "gy": 514.5,
+      "level": -0.13
+     },
+     {
+      "gx": 605.5,
+      "gy": 519.5,
+      "level": -0.13
+     },
+     {
+      "gx": 615.5,
+      "gy": 530.5,
+      "level": -0.13
+     },
+     {
+      "gx": 626.5,
+      "gy": 532.5,
+      "level": -0.13
+     },
+     {
+      "gx": 635.5,
+      "gy": 528.5,
+      "level": -0.13
+     },
+     {
+      "gx": 645.5,
+      "gy": 527.5,
+      "level": -0.13
+     },
+     {
+      "gx": 655.5,
+      "gy": 528.5,
+      "level": -0.13
+     },
+     {
+      "gx": 666.5,
+      "gy": 530.5,
+      "level": -0.13
+     },
+     {
+      "gx": 679.5,
+      "gy": 521.5,
+      "level": -0.13
+     },
+     {
+      "gx": 683.5,
+      "gy": 519.5,
+      "level": -0.13
+     },
+     {
+      "gx": 695.5,
+      "gy": 506.5,
+      "level": -0.13
+     },
+     {
+      "gx": 705.5,
+      "gy": 497.5,
+      "level": -0.13
+     },
+     {
+      "gx": 715.5,
+      "gy": 498.5,
+      "level": -0.13
+     },
+     {
+      "gx": 725.5,
+      "gy": 501.5,
+      "level": -0.13
+     },
+     {
+      "gx": 731.5,
+      "gy": 501.5,
+      "level": -0.13
+     },
+     {
+      "gx": 745.5,
+      "gy": 497.5,
+      "level": -0.13
+     },
+     {
+      "gx": 750.5,
+      "gy": 489.5,
+      "level": -0.13
+     },
+     {
+      "gx": 762.5,
+      "gy": 480.5,
+      "level": -0.13
+     },
+     {
+      "gx": 772.5,
+      "gy": 481.5,
+      "level": -0.13
+     },
+     {
+      "gx": 781.5,
+      "gy": 484.5,
+      "level": -0.13
+     },
+     {
+      "gx": 794.5,
+      "gy": 483.5,
+      "level": -0.13
+     },
+     {
+      "gx": 807.5,
+      "gy": 477.5,
+      "level": -0.13
+     },
+     {
+      "gx": 812.5,
+      "gy": 476.5,
+      "level": -0.13
+     },
+     {
+      "gx": 822.5,
+      "gy": 476.5,
+      "level": -0.13
+     },
+     {
+      "gx": 832.5,
+      "gy": 474.5,
+      "level": -0.13
+     },
+     {
+      "gx": 843.5,
+      "gy": 478.5,
+      "level": -0.13
+     },
+     {
+      "gx": 845.5,
+      "gy": 481.5,
+      "level": -0.13
+     },
+     {
+      "gx": 853.5,
+      "gy": 497.5,
+      "level": -0.13
+     },
+     {
+      "gx": 862.5,
+      "gy": 504.5,
+      "level": -0.13
+     },
+     {
+      "gx": 874.5,
+      "gy": 509.5,
+      "level": -0.13
+     },
+     {
+      "gx": 882.5,
+      "gy": 512.5,
+      "level": -0.13
+     },
+     {
+      "gx": 893.5,
+      "gy": 516.5,
+      "level": -0.13
+     },
+     {
+      "gx": 905.5,
+      "gy": 518.5,
+      "level": -0.13
+     },
+     {
+      "gx": 908.5,
+      "gy": 512.5,
+      "level": -0.13
+     },
+     {
+      "gx": 907.5,
+      "gy": 497.5,
+      "level": -0.13
+     },
+     {
+      "gx": 905.5,
+      "gy": 489.5,
+      "level": -0.13
+     },
+     {
+      "gx": 902.5,
+      "gy": 480.5,
+      "level": -0.13
+     },
+     {
+      "gx": 909.5,
+      "gy": 466.5,
+      "level": -0.13
+     },
+     {
+      "gx": 919.5,
+      "gy": 466.5,
+      "level": -0.13
+     },
+     {
+      "gx": 931.5,
+      "gy": 471.5,
+      "level": -0.13
+     },
+     {
+      "gx": 942.5,
+      "gy": 474.5,
+      "level": -0.13
+     },
+     {
+      "gx": 953.5,
+      "gy": 471.5,
+      "level": -0.13
+     },
+     {
+      "gx": 961.5,
+      "gy": 466.5,
+      "level": -0.13
+     },
+     {
+      "gx": 974.5,
+      "gy": 454.5,
+      "level": -0.13
+     },
+     {
+      "gx": 984.5,
+      "gy": 456.5,
+      "level": -0.13
+     },
+     {
+      "gx": 991.5,
+      "gy": 460.5,
+      "level": -0.13
+     },
+     {
+      "gx": 992.5,
+      "gy": 474.5,
+      "level": -0.13
+     },
+     {
+      "gx": 991.5,
+      "gy": 484.5,
+      "level": -0.13
+     },
+     {
+      "gx": 992.5,
+      "gy": 494.5,
+      "level": -0.13
+     },
+     {
+      "gx": 992.5,
+      "gy": 505.5,
+      "level": -0.13
+     },
+     {
+      "gx": 998.5,
+      "gy": 517.5,
+      "level": -0.13
+     },
+     {
+      "gx": 1001.5,
+      "gy": 518.5,
+      "level": -0.13
+     },
+     {
+      "gx": 1016.5,
+      "gy": 518.5,
+      "level": -0.13
+     },
+     {
+      "gx": 1022.5,
+      "gy": 517.5,
+      "level": -0.13
+     }
+    ],
+    "level": -0.13
+   }
+  ],
+  "camera": {
+   "target": {
+    "gx": 518.2,
+    "gy": 519.1,
+    "elevation": 3.8
+   },
+   "distance": 2200,
+   "yaw": 1.45,
+   "pitch": 0.42
+  }
+ },
+ "files": {
+  "elevation": "elevation.f32",
+  "imagery": "imagery.jpg",
+  "roads": "roads.json",
+  "imageryDetail": "imagery-detail.jpg"
+ },
+ "imageryDetail": {
+  "x0": 326,
+  "y0": 327,
+  "x1": 710,
+  "y1": 711
+ },
+ "bake": {
+  "bakedAt": "2026-09-19T17:59:57.608Z",
+  "demSource": "usgs3dep",
+  "demRepairedCells": 0,
+  "center": {
+   "lat": 29.7625,
+   "lon": -95.3855
+  },
+  "sizeMeters": 8000,
+  "burnedCells": 4524,
+  "rivers": [
+   {
+    "name": "Buffalo Bayou",
+    "cells": 4524,
+    "depth": 4,
+    "surfaceMax": 1.04,
+    "surfaceMin": -0.13
+   }
+  ],
+  "initialWetCells": 4524,
+  "roads": {
+   "nodes": 6356,
+   "edges": 10529,
+   "km": 1087.6238594142942,
+   "byClass": {
+    "highway": 532,
+    "major": 31,
+    "minor": 661,
+    "local": 9305
+   }
+  }
+ }
+}

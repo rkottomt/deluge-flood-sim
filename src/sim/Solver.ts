@@ -61,7 +61,7 @@ import {
   WET_DEPTH,
   type SolverOptions,
 } from './constants';
-import { footprintRadius, packForcing, sourceFootprint, type Footprint, type PackedForcing } from './forcing';
+import { footprintRadius, inflowFactor, packForcing, sourceFootprint, type ForcingWindow, type Footprint, type PackedForcing } from './forcing';
 import { brushWGSL, BRUSH_UNIFORM_BYTES } from './shaders/brush';
 import { ACC_PER_CELL, FORCING_UNIFORM_BYTES, SIM_UNIFORM_BYTES } from './shaders/common';
 import { continuityWGSL } from './shaders/continuity';
@@ -187,6 +187,13 @@ export class GpuFloodSolver implements FloodSolver {
   /** setSources since the last refreshForcing (a terrain edit also re-packs the forcing, but starts no new flow). */
   private sourcesChanged = false;
   private warnedDropped = false;
+  /**
+   * Latest WaterSource.stopAfter among the inflow sources, simulated seconds (0 = none of them is timed). While the
+   * stop is still ahead of the frame last packed, the forcing is re-packed every frame — see gateTimedInflow.
+   */
+  private inflowStopAt = 0;
+  /** Simulated-time window the packed forcing was built for (null = t = 0, i.e. nothing has stopped yet). */
+  private forcingWindow: ForcingWindow | null = null;
 
   private initialDepth: Float32Array;
   /**
@@ -576,6 +583,14 @@ export class GpuFloodSolver implements FloodSolver {
 
   setSources(sources: WaterSource[]): void {
     this.sources = sources.map((s) => ({ ...s }));
+    let stopAt = 0;
+    for (const s of this.sources) {
+      if (s.type === 'inflow' && s.stopAfter !== undefined && Number.isFinite(s.stopAfter) && s.stopAfter > stopAt) stopAt = s.stopAfter;
+    }
+    this.inflowStopAt = stopAt;
+    // A zero-length window at the current time: a source added mid-run is gated by where the clock already is, and
+    // the next frame replaces this with its own window.
+    this.forcingWindow = { from: this.simTime, to: this.simTime };
     this.forcingDirty = true;
     this.sourcesChanged = true;
   }
@@ -804,6 +819,9 @@ export class GpuFloodSolver implements FloodSolver {
     this.peakVolume = this.initialVolume;
     this.resetMaxPending = true;
     // All sources start acting on the initial water: the first window must not run on the calm reset state's dt.
+    // A timed inflow runs again from the top, so the gate has to be re-packed — the buffer may hold its stopped 0.
+    this.forcingWindow = null;
+    this.forcingDirty = true;
     this.refreshForcing();
     this.uBoost = this.forcingSpeedEstimate();
     this.uBoostTime = 0;
@@ -1071,6 +1089,7 @@ export class GpuFloodSolver implements FloodSolver {
 
   private encodeFrame(n: number, dt: number, fromStep: boolean): void {
     const { device } = this;
+    this.gateTimedInflow(n * dt);
     this.writeSimUniform(dt);
     const enc = device.createCommandEncoder({ label: 'sim.frame' });
     // Frames driven by step() are timed on the GPU to keep the substep budget current (see shouldProbe).
@@ -1248,7 +1267,9 @@ export class GpuFloodSolver implements FloodSolver {
     for (const s of this.sources.slice(0, MAX_SOURCES)) {
       const R = footprintRadius(s.radius);
       if (s.type === 'inflow') {
-        const Q = Number.isFinite(s.discharge) ? Math.max(0, s.discharge) : 0;
+        // A timed inflow that has already stopped is not about to produce anything (inflowFactor at the clock's
+        // current instant is 0), so it must not hold the timestep down for the rest of the run.
+        const Q = (Number.isFinite(s.discharge) ? Math.max(0, s.discharge) : 0) * inflowFactor(s.stopAfter, this.simTime, this.simTime);
         if (Q > 0) u = Math.max(u, 2 * Math.cbrt((GRAVITY * Q) / (2 * Math.PI * (R + 0.5) * cellSize)));
         continue;
       }
@@ -1264,9 +1285,35 @@ export class GpuFloodSolver implements FloodSolver {
     return Math.min(u, this.options.uMax);
   }
 
+  /**
+   * Point the packed forcing at the window this frame is about to cover, so a timed inflow (WaterSource.stopAfter)
+   * delivers exactly Q·stopAfter and then nothing.
+   *
+   * Called from encodeFrame only — the writeSimUniform(0) that keeps stateTexture current after a brush or a reset
+   * steps no time and must not move the window. Re-packing stops once the window already packed starts after the
+   * stop: by then the buffer holds a zero discharge and nothing further changes it.
+   */
+  private gateTimedInflow(span: number): void {
+    if (this.inflowStopAt <= 0) return;
+    const packed = this.forcingWindow;
+    if (packed && packed.from >= this.inflowStopAt) return;
+    this.forcingWindow = { from: this.simTime, to: this.simTime + Math.max(0, span) };
+    this.forcingDirty = true;
+  }
+
   private packForcingNow(): PackedForcing {
     const { ground, barrier } = this;
-    return packForcing(this.sources, this.storms, this.nx, this.ny, this.cellSize, this.z0, (c) => ground[c] + barrier[c], this.footprintOf);
+    return packForcing(
+      this.sources,
+      this.storms,
+      this.nx,
+      this.ny,
+      this.cellSize,
+      this.z0,
+      (c) => ground[c] + barrier[c],
+      this.footprintOf,
+      this.forcingWindow ?? undefined,
+    );
   }
 
   /** Whether a grid rectangle overlaps any stage source's footprint (the only part of the forcing that reads the bed). */

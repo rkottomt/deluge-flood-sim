@@ -11,6 +11,7 @@
 import type {
   FloodRenderer,
   FloodSolver,
+  GridRect,
   OverlayState,
   PickResult,
   RenderSettings,
@@ -55,6 +56,16 @@ export { LIGHTING_PRESETS, type LightingPreset, type LightingSettings } from './
 export type { RendererQuality, SimPressure } from './quality';
 
 const WATER_MODE_INDEX = { realistic: 0, depth: 1, maxDepth: 2, velocity: 3 } as const;
+/** Cells over which the detail-imagery inset fades into the base photo, so its rectangle never reads as an edge. */
+const DETAIL_FEATHER_CELLS = 8;
+/**
+ * Can this inset rectangle be drawn on this grid? The data layer validates the same rectangle against meta.json
+ * (src/data/imagery.ts), but the renderer is handed terrain from live areas and tests too, so it checks for itself
+ * rather than trusting the caller — a bad rectangle would stretch the photo over the wrong ground.
+ */
+function detailRectFits(r: GridRect, nx: number, ny: number): boolean {
+  return r.x0 >= 0 && r.y0 >= 0 && r.x1 > r.x0 && r.y1 > r.y0 && r.x1 <= nx && r.y1 <= ny;
+}
 
 /** Tallest thing a brush can add or remove, for sizing the sun-shading rebuild after an edit (metres). */
 const EDIT_RELIEF_M = 40;
@@ -255,6 +266,10 @@ interface SceneGPU {
   miscTex: GPUTexture;
   imageryTex: GPUTexture;
   hasImagery: boolean;
+  /** Finer imagery over part of the grid (the close-up inset), and the cell rectangle it covers. */
+  detailTex: GPUTexture;
+  hasDetail: boolean;
+  detailRect: GridRect | null;
   terrainBG: GPUBindGroup;
   waterBG: GPUBindGroup;
   overlayBG: GPUBindGroup;
@@ -654,6 +669,25 @@ class DelugeRenderer implements DelugeRendererAPI {
         console.warn('[render] imagery upload failed, using hypsometric tint', e);
       }
     }
+    /*
+     * Close-up inset: a finer photo over part of the grid, blended over the base in the terrain shader. It is pure
+     * polish — an upload failure or a rectangle that does not fit this grid just leaves the base photo alone.
+     */
+    let detailTex = this.dummyImagery;
+    let hasDetail = false;
+    let detailRect: GridRect | null = null;
+    const wantDetail = hasImagery ? terrain.imageryDetail : null;
+    if (wantDetail && wantDetail.image.width > 0 && detailRectFits(wantDetail.rect, nx, ny)) {
+      try {
+        detailTex = createImageryTexture(device, wantDetail.image, 'imagery-detail');
+        hasDetail = true;
+        detailRect = wantDetail.rect;
+      } catch (e) {
+        console.warn('[render] detail imagery upload failed, using the base photo', e);
+      }
+    } else if (wantDetail) {
+      console.warn('[render] detail imagery ignored: rectangle does not fit this grid');
+    }
 
     // Declared here (filled in below) so the scene bind groups can bind the roof-height raster.
     let buildings: BuildingLayer | null = null;
@@ -673,6 +707,7 @@ class DelugeRenderer implements DelugeRendererAPI {
       { binding: 12, resource: sun.texture.createView() },
       { binding: 13, resource: imageryTex.createView() },
       { binding: 14, resource: (buildings?.heightTexture ?? this.dummyHeights).createView() },
+      { binding: 15, resource: detailTex.createView() },
     ];
 
     // Roads
@@ -771,6 +806,9 @@ class DelugeRenderer implements DelugeRendererAPI {
       miscTex,
       imageryTex,
       hasImagery,
+      detailTex,
+      hasDetail,
+      detailRect,
       terrainBG,
       waterBG,
       overlayBG,
@@ -918,6 +956,7 @@ class DelugeRenderer implements DelugeRendererAPI {
     s.normalWetTex.destroy();
     s.protectTex.destroy();
     if (s.hasImagery) s.imageryTex.destroy();
+    if (s.hasDetail) s.detailTex.destroy();
     s.roadVerts?.destroy();
     s.roadIndices?.destroy();
     s.roadStatus.destroy();
@@ -1950,6 +1989,17 @@ class DelugeRenderer implements DelugeRendererAPI {
     f[125] = this.debugSkip.has('detail') ? 0 : preset.detailNormals;
     f[126] = warmth;
     f[127] = imageryRelightFactor(light.elevationDeg);
+    // Detail-imagery inset: its rectangle in cells, then strength and the feather width that hides its edge.
+    // Appended after the shading block (f[116..127]) rather than sharing its slots.
+    const detail = s?.hasDetail && s.detailRect && settings.showImagery ? s.detailRect : null;
+    f[128] = detail?.x0 ?? 0;
+    f[129] = detail?.y0 ?? 0;
+    f[130] = detail?.x1 ?? 0;
+    f[131] = detail?.y1 ?? 0;
+    f[132] = detail ? 1 : 0;
+    f[133] = DETAIL_FEATHER_CELLS;
+    f[134] = 0;
+    f[135] = 0;
     this.device.queue.writeBuffer(this.frameBuf, 0, f);
 
     // Overlay uniforms.

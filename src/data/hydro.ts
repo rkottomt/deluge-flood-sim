@@ -1676,3 +1676,94 @@ export function burnWaterBodies(
     fills: seeds.length ? [{ seeds, level: minLevel }] : [],
   };
 }
+
+// ────────────────────────────────────────────────────────────────────────────────────────────
+// Coastal (tidal / sea) boundaries
+// ────────────────────────────────────────────────────────────────────────────────────────────
+
+/** One stage-boundary disc on a domain edge, with the edge crossing it covers. */
+export interface SeaBoundaryDisc {
+  edge: DomainEdge;
+  gx: number;
+  gy: number;
+  radius: number;
+  /** Edge cells the disc covers after growth, inclusive. */
+  run: [number, number];
+  /** The at-rest wet crossing the run grew from, inclusive. */
+  wetRun: [number, number];
+}
+
+export interface SeaBoundaryOptions {
+  nx: number;
+  ny: number;
+  /** True where water stands at rest (the initial fill), by row-major cell index. */
+  wet: (k: number) => boolean;
+  /** Conditioned bed elevation by row-major cell index, m. */
+  bed: (k: number) => number;
+  /**
+   * Elevation (m, same datum as `bed`) a dry edge cell must be below to join a crossing — the cross-section wet at
+   * the TOP OF THE TIDE, not at the top of the surge slider. See the note on growth below.
+   */
+  growCeiling: number;
+  /** Runs separated by at most this many edge cells become one disc. Default 16. */
+  mergeGap?: number;
+  /** Crossings shorter than this many cells are ignored (DEM speckle at the edge). Default 3. */
+  minRun?: number;
+  maxPenetration?: number;
+}
+
+/**
+ * Stage-boundary discs for an OPEN-WATER (tidal / sea) edge: one disc per crossing of each domain edge by the water
+ * at rest.
+ *
+ * A river enters and leaves a domain once each, so the two discs `findRiverEnds` + `edgeStageDisc` provide cover it.
+ * Open water does not: Fort Myers' Caloosahatchee estuary is cut by THREE of the four edges (it leaves through the
+ * west edge and the south edge at once, because the domain corner falls in the middle of the river mouth). Every
+ * boundary cell a disc misses is an open boundary, so at rest the estuary drains through it and pours off the edge —
+ * the "no edge waterfall" failure — and at a raised stage the missed cells draw the surface down metres within a few
+ * cells of the disc rim.
+ *
+ * Runs separated by at most `mergeGap` cells become one disc: a bridge causeway or a spit splits one real crossing
+ * into several runs in the DEM, and a disc per fragment is both wasteful (MAX_SOURCES is 16) and leaves the gap
+ * between them uncovered.
+ *
+ * Each merged run then grows along the edge while the bed stays below `growCeiling` — deliberately the top of the
+ * TIDE (MHHW), not `normalLevel + maxOffset` the way a river crossing grows (see growEdgeRun). A coastal domain is
+ * flat and most of it sits below the surge ceiling, so growth to that ceiling runs away along the whole edge and the
+ * disc — which reaches inland as a lens — would hold the surge level over dry neighbourhoods far from the water,
+ * making the flood appear everywhere at once instead of advancing inland from the coast. Overbank cells beside the
+ * disc at high surge are left on the open boundary, which is the honest condition there: the flood really does
+ * continue past the edge of the domain.
+ */
+export function seaBoundaryDiscs(opts: SeaBoundaryOptions): SeaBoundaryDisc[] {
+  const { nx, ny, wet, bed, growCeiling } = opts;
+  const mergeGap = opts.mergeGap ?? 16;
+  const minRun = opts.minRun ?? 3;
+  const out: SeaBoundaryDisc[] = [];
+  for (const edge of ['north', 'south', 'west', 'east'] as const) {
+    const len = edge === 'north' || edge === 'south' ? nx : ny;
+    // Merge wet runs across short dry gaps, then drop speckle.
+    const merged: Array<[number, number]> = [];
+    for (const r of edgeRuns(edge, nx, ny, wet)) {
+      const last = merged[merged.length - 1];
+      if (last && r[0] - last[1] - 1 <= mergeGap) last[1] = r[1];
+      else merged.push([r[0], r[1]]);
+    }
+    for (const wetRun of merged) {
+      if (wetRun[1] - wetRun[0] + 1 < minRun) continue;
+      const floodable = (k: number) => wet(k) || bed(k) < growCeiling;
+      let [t0, t1] = growEdgeRun(edge, wetRun[0], wetRun[1], nx, ny, floodable);
+      // Growth may have run into a neighbouring merged crossing; clamp so discs on one edge stay disjoint.
+      for (const other of merged) {
+        if (other === wetRun) continue;
+        if (other[1] < wetRun[0]) t0 = Math.max(t0, Math.min(wetRun[0], other[1] + 1));
+        if (other[0] > wetRun[1]) t1 = Math.min(t1, Math.max(wetRun[1], other[0] - 1));
+      }
+      t0 = Math.max(0, t0);
+      t1 = Math.min(len - 1, t1);
+      const disc = edgeStageDisc(edge, t0, t1, nx, ny, opts.maxPenetration);
+      out.push({ edge, ...disc, run: [t0, t1], wetRun });
+    }
+  }
+  return out;
+}

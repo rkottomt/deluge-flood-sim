@@ -7,7 +7,10 @@ import type { AppState, RouteResult } from '../contracts';
 import { h, setText, toggleClass, type UIContext } from './dom';
 import { icon } from './icons';
 import { formatDistance, formatDuration } from './format';
-import { blockedAdvice } from './routeText';
+import { blockedSummary, closureText } from './routeText';
+
+/** How long the chip holds the "last route out just closed" announcement before settling to the standing reason. */
+const CLOSURE_FLASH_MS = 6000;
 
 export function createRouteChip(ctx: UIContext, opts: { reveal(): void }): HTMLElement {
   const { store, bind } = ctx;
@@ -45,6 +48,10 @@ export function createRouteChip(ctx: UIContext, opts: { reveal(): void }): HTMLE
 
   let lastShelter: string | null = null;
   let lastStart: AppState['evacStart'] = null;
+  /** The closure already announced, so the "last route closed" moment flashes once and not at every readback. */
+  let announcedClosure = -1;
+  /** True while the closure flash owns the chip's text (later readbacks must not overwrite it mid-flash). */
+  let flashingClosure = false;
   let flashTimer = 0;
   let iconKind = '';
   const setIcon = (kind: 'ok' | 'blocked' | 'wait') => {
@@ -52,6 +59,13 @@ export function createRouteChip(ctx: UIContext, opts: { reveal(): void }): HTMLE
     iconKind = kind;
     statusIcon.replaceChildren(kind === 'ok' ? icon('check', 17) : kind === 'blocked' ? icon('warning', 17) : h('span', { class: 'dl-spinner dl-spin-on' }));
   };
+
+  /** The standing blocked text, once any closure flash is over. */
+  function settle() {
+    const r = store.get().route;
+    setText(label, 'No safe route');
+    setText(dest, blockedSummary(r));
+  }
 
   function render(route: RouteResult | null, s: AppState) {
     // Hidden during the stability demo: routing ignores the blown-up depths (src/app/evac.ts), so the chip would only
@@ -61,6 +75,9 @@ export function createRouteChip(ctx: UIContext, opts: { reveal(): void }): HTMLE
     if (s.evacStart !== lastStart) {
       lastStart = s.evacStart;
       lastShelter = null;
+      announcedClosure = -1;
+      flashingClosure = false;
+      clearTimeout(flashTimer);
     }
     toggleClass(el, 'dl-show', show);
     el.inert = !show;
@@ -92,10 +109,26 @@ export function createRouteChip(ctx: UIContext, opts: { reveal(): void }): HTMLE
       lastShelter = name;
     } else if (state === 'blocked') {
       setIcon('blocked');
-      setText(label, 'No safe route');
-      setText(dest, blockedAdvice(route));
       metrics.hidden = true;
       lastShelter = '';
+      // The moment the last way out closes is the loudest thing in the demo: flash it once, with the sim clock and
+      // the route that was lost, then settle back to the standing reason.
+      const closure = route?.closure ?? null;
+      if (closure && closure.simTime !== announcedClosure) {
+        announcedClosure = closure.simTime;
+        flashingClosure = true;
+        setText(label, 'Last route out just closed');
+        setText(dest, closureText(route));
+        el.classList.remove('dl-replanned');
+        void el.offsetWidth;
+        el.classList.add('dl-replanned');
+        clearTimeout(flashTimer);
+        flashTimer = window.setTimeout(() => {
+          flashingClosure = false;
+          el.classList.remove('dl-replanned');
+          settle();
+        }, CLOSURE_FLASH_MS);
+      } else if (!flashingClosure) settle();
     } else {
       setIcon('wait');
       setText(label, s.shelters.length ? 'Planning evacuation route…' : 'No shelters to route to');

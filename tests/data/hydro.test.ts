@@ -16,6 +16,7 @@ import {
   monotoneNonIncreasing,
   openWaterGaps,
   riverLevelProfile,
+  seaBoundaryDiscs,
   type WaterBody,
 } from '../../src/data/hydro';
 import { computeInitialWater } from '../../src/data/initialWater';
@@ -519,4 +520,81 @@ test('live areas: after opening, the burned channel is continuous — water fill
   }
   assert.ok(maxBed <= 101 - 2.9, `ridge carved to the river bed (highest ${maxBed.toFixed(2)} m)`);
   assert.equal(open.h[100 * n + 79], 0, 'the causeway still holds (road band kept)');
+});
+
+/*
+ * Sea boundaries (seaBoundaryDiscs): a coastal domain's open water is cut by more than two edges, so every crossing
+ * of every edge needs a stage disc or the open boundary drains it. Synthetic bay: water below level 0 occupying the
+ * south-west corner, so it crosses the west edge AND the south edge, with a causeway splitting the south crossing.
+ */
+test('seaBoundaryDiscs covers every edge crossing of the open water', () => {
+  const n = 128;
+  const bed = new Float32Array(n * n);
+  const wet = new Uint8Array(n * n);
+  for (let j = 0; j < n; j++) {
+    for (let i = 0; i < n; i++) {
+      const k = j * n + i;
+      // Diagonal shoreline: the south-west corner is bay (bed -3), the north-east is land rising away from it.
+      const d = i + (n - 1 - j); // small in the SW corner
+      bed[k] = d < 90 ? -3 : (d - 90) * 0.2;
+      wet[k] = bed[k] < -0.5 ? 1 : 0;
+    }
+  }
+  // A causeway across the south edge: 6 dry cells at x = 40..45 splitting that crossing in the DEM.
+  for (let i = 40; i <= 45; i++) {
+    for (let j = n - 4; j < n; j++) {
+      bed[j * n + i] = 2;
+      wet[j * n + i] = 0;
+    }
+  }
+  const discs = seaBoundaryDiscs({
+    nx: n,
+    ny: n,
+    wet: (k) => wet[k] === 1,
+    bed: (k) => bed[k],
+    growCeiling: 0.1,
+  });
+  const edges = discs.map((d) => d.edge).sort();
+  assert.deepEqual(edges, ['south', 'west'], `expected one disc per crossing, got ${JSON.stringify(discs)}`);
+
+  // Every wet boundary cell must lie inside some disc, otherwise it is an open boundary that drains the bay.
+  const inside = (d: (typeof discs)[number], i: number, j: number) => Math.hypot(i + 0.5 - d.gx, j + 0.5 - d.gy) <= d.radius - 0.5;
+  let uncovered = 0;
+  for (let t = 0; t < n; t++) {
+    for (const [i, j] of [
+      [t, 0],
+      [t, n - 1],
+      [0, t],
+      [n - 1, t],
+    ] as Array<[number, number]>) {
+      if (!wet[j * n + i]) continue;
+      if (!discs.some((d) => inside(d, i, j))) uncovered++;
+    }
+  }
+  assert.equal(uncovered, 0, `${uncovered} wet boundary cells are not covered by any disc`);
+
+  // The causeway gap is merged into the south crossing rather than producing a third disc.
+  const south = discs.find((d) => d.edge === 'south')!;
+  assert.ok(south.run[0] <= 40 && south.run[1] >= 45, `south disc ${JSON.stringify(south.run)} should span the causeway`);
+
+  // Growth must stay near the waterline: the grow ceiling is the tide, not the surge, so a disc must not reach
+  // across the whole edge onto high ground.
+  for (const d of discs) {
+    const grew = d.run[1] - d.run[0] - (d.wetRun[1] - d.wetRun[0]);
+    assert.ok(grew <= 12, `${d.edge} disc grew ${grew} cells beyond the waterline`);
+  }
+});
+
+/* A domain with no open water at its edges must produce no sea discs (an inland preset must not get one). */
+test('seaBoundaryDiscs finds nothing when the water does not reach an edge', () => {
+  const n = 64;
+  const bed = new Float32Array(n * n).fill(5);
+  const wet = new Uint8Array(n * n);
+  for (let j = 20; j < 40; j++)
+    for (let i = 20; i < 40; i++) {
+      bed[j * n + i] = -2;
+      wet[j * n + i] = 1;
+    }
+  const discs = seaBoundaryDiscs({ nx: n, ny: n, wet: (k) => wet[k] === 1, bed: (k) => bed[k], growCeiling: 0.1 });
+  assert.equal(discs.length, 0);
 });

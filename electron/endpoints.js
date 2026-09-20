@@ -20,6 +20,9 @@ export const PREFIXES = Object.freeze([
   'https://elevation.nationalmap.gov/arcgis/rest/services/3DEPElevation/',
   // Mapzen/AWS Terrarium DEM tiles, the fallback when 3DEP is down — src/data/dem.ts
   'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/',
+  // Copernicus DEM GLO-30 COGs, the elevation source outside 3DEP coverage — src/data/demGlobal.ts.
+  // The bucket name is in the host here, so unlike the shared s3.amazonaws.com above this prefix is one dataset.
+  'https://copernicus-dem-30m.s3.amazonaws.com/',
   // Esri World Imagery: exportImage for the scene texture, XYZ tiles for the picker map
   'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/',
   // Esri place-label overlay — picker map only, and only ever as <img> tiles (see IMG_ONLY)
@@ -45,7 +48,7 @@ const IMG_ONLY = new Set(['https://server.arcgisonline.com/ArcGIS/rest/services/
 /** Covers both Esri tile layers the picker map draws as <img>. */
 export const ESRI_TILE_PREFIX = 'https://server.arcgisonline.com/ArcGIS/rest/services/';
 
-/** The seven endpoints the page may fetch() — must equal src/data/csp.ts CSP_CONNECT_SRC minus 'self'. */
+/** The endpoints the page may fetch() — must equal src/data/csp.ts CSP_CONNECT_SRC minus 'self'. */
 export const CONNECT_SOURCES = Object.freeze([...PREFIXES.filter((p) => !IMG_ONLY.has(p)), ...EXACT]);
 
 /**

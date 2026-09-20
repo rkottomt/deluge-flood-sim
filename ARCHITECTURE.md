@@ -281,12 +281,67 @@ Monongahela and Ohio cross the domain edge.
   centreline waypoints and a measured pool level; live areas detect flat water bodies, open narrow false ridges
   across rivers (keeping dams, islands and road causeways), and burn them. Live conditioning runs in a Web Worker.
 * **Imagery:** baked presets use USDA NAIP (public domain) via USGS The National Map at 4096²; live areas use Esri
-  World Imagery.
+  World Imagery. **Esri imagery is never baked into the repo** — it is not redistributable, so `public/presets` holds
+  NAIP only and `--imagery=esri` exists for local experiments, not for anything committed.
+* **Close-up imagery inset.** A 4096² photo over an 8 km domain is 1.95 m/texel, which is mush once the camera drops
+  to street level. Domains coarser than NAIP's own ~1 m limit carry a second 4096² NAIP photo (`imagery-detail.jpg`)
+  covering the `imageryDetail` rectangle of `meta.json` — the middle 2.5–3.0 km, where the scenario cameras go — and
+  the terrain shader blends it over the base with an 8-cell smoothstep feather, sampling both through the same
+  trilinear/aniso-16 sampler in uniform control flow. It is an exact sub-rectangle of the base export bbox, so it
+  registers to the pixel (measured best-fit shift 0 px in both axes; mean per-channel colour within 2 %, so the
+  feathered edge shows no tonal step). Pittsburgh, Johnstown, Asheville and Houston have one (0.61–0.73 m/texel,
+  2.4–2.7×); Ellicott City, Boulder and Nashville do not, because their smaller domains already give 1.22–1.46 m/texel.
+  Cost: 89.5 MB of GPU memory and 3.5–5.1 MB on disk per inset, −23 ms on load (interleaved A/B: both photos fetch and
+  decode concurrently and the upload is ~17 ms) and a main-pass delta inside sample noise. The alternatives were
+  measured and rejected: an 8192² base costs 357.9 MB of GPU memory and still only reaches 0.98 m/texel; tiled
+  streaming needs a pyramid, a residency policy and upload scheduling for a demo that flies between fixed poses; and
+  KTX2/ASTC — which this M4 supports and which would cut 89.5 MB to ~5.6 MB — is the right long-term answer but needs
+  an encoder and a container reader that the repo does not have.
 * **Roads:** US Census TIGER/Line via TIGERweb, fallback OpenStreetMap; noded into a graph in grid coordinates.
-* **Presets** (`public/presets/<id>/`: `meta.json`, `elevation.f32`, `imagery.jpg`, `roads.json`) are baked by
-  `npx tsx scripts/bake-presets.ts` and work fully offline: Pittsburgh (three rivers, with a demo levee), Johnstown (the
-  1889 South Fork Dam flood, as a lake-average 3,730 m³/s inflow on the Little Conemaugh, entering today's valley),
-  Ellicott City (the 2016 flash-flood storm over the Tiber-Hudson-New Cut watershed), and a procedural sandbox.
+* **Presets** (`public/presets/<id>/`: `meta.json`, `elevation.f32`, `imagery.jpg`, `roads.json`, and
+  `imagery-detail.jpg` where the base photo is too coarse) are baked by `npx tsx scripts/bake-presets.ts` and work
+  fully offline. Eight cities plus a procedural sandbox:
+
+  | Preset | Domain / cell | Scenario forcing | Photo | Road edges |
+  | --- | --- | --- | --- | --- |
+  | `pittsburgh` | 8.0 km / 7.81 m | 1936 crest via the stage control, plus a demo levee | 1.95 + inset 0.73 | 11,053 |
+  | `johnstown` | 7.0 km / 6.84 m | 1889 South Fork Dam flood as a lake-average 3,730 m³/s inflow on the Little Conemaugh | 1.71 + inset 0.61 | 4,903 |
+  | `ellicott` | 5.0 km / 4.88 m | 2016 flash-flood storm over the Tiber–Hudson–New Cut watershed | 1.22 | 1,224 |
+  | `asheville` | 8.0 km / 7.81 m | Helene 2024: 3,200 m³/s French Broad + 1,722 m³/s Swannanoa, sloping (no stage control) | 1.95 + inset 0.73 | 3,556 |
+  | `nashville` | 6.0 km / 5.86 m | Cumberland stage control: 2010 (51.86 ft), 1937 (53.90), 1927 record (56.20) | 1.46 | 5,410 |
+  | `houston` | 8.0 km / 7.81 m | Harvey 2017: 173 mm/hr over the whole domain, bayou at its 923 m³/s peak | 1.95 + inset 0.73 | 10,529 |
+  | `boulder` | 5.0 km / 4.88 m | 2013 Front Range flood: 238 m³/s out of Boulder Canyon | 1.22 | 1,749 |
+  | `ftmyers` | 8.0 km / 7.81 m | Hurricane Ian 2022 storm surge: a tidal stage on three sea boundaries, 4.5 → 12.9 ft | 1.95 | 3,252 |
+
+  River centrelines for the four 2024/2025 additions are traced from USGS NHD high-resolution flowlines; peak
+  discharges, stages and gauge datums come from the USGS annual peak-flow files and NWIS site file. Everything in
+  `public/presets` is public-domain U.S. government data, recorded per city in `public/presets/SOURCES.txt`.
+
+  `ftmyers` is the first COASTAL domain and the first without a river forcing it: a storm surge is a still-water rise,
+  so `seaBoundaryDiscs` (`src/data/hydro.ts`) puts a stage disc on every crossing of every domain edge by the estuary
+  — three of the four edges here, because the domain corner falls in the middle of the river mouth — and the slider
+  raises all of them together. Its tidal datums and the 12.92 ft record are NOAA CO-OPS station 8725520; the pool
+  level is MEASURED from the DEM's own flat estuary surface (-0.28 m NAVD88, essentially MLLW — the lidar was flown
+  near low tide) rather than assumed.
+* **Deploy budget.** `public/presets` is served from a public static host, so `tests/data/presets.test.ts` caps the
+  whole directory at **120 MB** and each preset at 25 MB. It currently stands at **97.2 MB across eight presets** —
+  Asheville is the largest single city at 15.9 MB, Fort Myers the smallest at 9.5 MB, and close-up insets account for
+  16.5 MB of the total.
+
+  The two caps guard different things, which is why they moved differently. **The per-preset cap is the one a visitor
+  feels**: presets load one at a time, so what anyone downloads is bounded by the largest single preset (15.9 MB), not
+  by the directory. That cap stays at 25 MB. **The directory cap is a host-and-repo cost.** GitHub Pages publishes
+  sites up to 1 GB and recommends the source repository stay under 1 GB, with a soft 100 GB/month of bandwidth
+  ([GitHub Pages limits](https://docs.github.com/en/pages/getting-started-with-github-pages/github-pages-limits), read
+  2026-09-19); at 120 MB the published site is 12 % of that limit and the largest single file is a 6.2 MB JPEG. What
+  keeps the cap finite at all is git history: JPEG and Float32 blobs do not delta-compress, so each preset costs about
+  its own size again forever, and the repository is already 189 MB of worktree plus 132 MB of `.git`.
+
+  Raising 90 → 120 MB buys roughly one more full preset (~10 MB) **plus** room to restore **one** of the two insets
+  dropped for space — Nashville's is exported and cached in `artifacts/bake-cache` (0.611 m/texel, 2.4×, 3.80 MB), and
+  Fort Myers qualifies on the texel-density rule at 1.95 m/texel. It is not room for both a second new preset and both
+  insets; the bake after next needs this argument made again. If the number ever has to come down instead, the lever
+  is the insets: the test's failure message names each preset's inset size and the largest one to drop.
 * **Live areas** are cancellable. A download that stalls mid-transfer fails after 20 s without data, and the elevation
   has a 90 s overall deadline (the error then says the service can't be reached). Dead venue wifi often leaves requests
   hanging instead of failing: while no elevation has arrived, the loader checks every 9 s that the data hosts answer at
@@ -403,7 +458,8 @@ speed degrades toward ~15–20× while the frame rate holds at 60 fps. Plug it i
 
 ## 9. Validation
 
-From `npm test` (tests run on the real GPU through Dawn):
+From `npm test` (tests run on the real GPU through Dawn); the grid-convergence rows from
+`npx tsx scripts/reference-run.ts` (§9.1), likewise on the real GPU:
 
 | Check | Result | Test |
 | --- | --- | --- |
@@ -419,12 +475,139 @@ From `npm test` (tests run on the real GPU through Dawn):
 | Stage discs | zero discharge inside, no water above the stage | `tests/sim/boundary.test.ts` |
 | GPU (Float32, parallel) vs Float64 CPU reference, 5 cases × 400 steps | max \|Δh\| ≤ 4.3·10⁻⁵ m | `tests/sim/reference.test.ts` |
 | Stale-CFL abuse, heavy rain on steep terrain | no NaN, no negative depth | `tests/sim/robustness.test.ts`, `stability.test.ts` |
+| Grid convergence, 1024² demo grid vs a 4096² reference (§9.1), Pittsburgh 1936 crest | flooded area −0.92 %, extent IoU 98.0 %, max-depth RMSE 0.29 m | `scripts/reference-run.ts` |
+| The same, 100 mm/hr rain | flooded area −0.55 %, extent IoU 78.2 %, max-depth RMSE 0.22 m | `scripts/reference-run.ts` |
+| The convergence harness's own arithmetic (refinement, masks, IoU, percentiles, arrival times) | 21 checks | `tests/sim/referenceMetrics.test.ts` |
+| All seven baked cities in the production build, offline, 1470x956 DPR 2: cold load, scenario play, streets, routing | load 606–744 ms, 60 fps, sim 48–125× real time, mass error ≤ 6.6·10⁻⁸, 0 console/WebGPU errors, 0 network requests | `scripts/e2e.mjs` flow 7 |
+| Each preset's files, grid, scenario, shelters on high ground, confined initial water, inset registration and deploy size | 7 cities × 5 checks | `tests/data/presets.test.ts` |
 
 `npm run e2e` drives 13 end-to-end demo flows (load, raise to the crest, levee, rain, evacuation, presets, tools,
 frame rate, idle power, cancelling a stalled `?live=` link, the one-click levee, the screen wake lock, and a GPU
 device loss mid-load; `--live` adds a live-area flow) in headless Chromium on the real GPU,
 offline — every request to a non-local host is blocked and reported, so a flow that quietly needed the network
 fails.
+
+**Per-city verification.** `scripts/e2e.mjs` flow 7 reads the list of cities off `public/presets` rather than a
+hard-coded array, so a city added by a bake cannot be forgotten by the suite. Every one of the seven is loaded cold in
+the production build at the demo viewport, played with its own camera and forcing, and checked for finite stats, a
+plausible maximum speed, zero console/WebGPU errors and zero network requests.
+
+**One known-flaky golden.** `pittsburgh-velocity` is the only visual scene that compares an *instantaneous* field
+(flow speed at exactly 600 simulated seconds of crest + 100 mm/hr rain) rather than an accumulated one. Its golden
+diff measured 0.0051, 0.0163, 0.0215 and 0.0305 on four runs of identical code against a 0.02 threshold, with
+187,512–193,610 wet cells at the same simulated time: with the adaptive budget off and `runFor` pinning sim time, what
+still varies is the CFL readback latency under GPU contention, which changes the substep sequence and therefore the
+trajectory. Every other scene sits at 0.0000–0.0051. The scene is worth keeping — it is the one that would catch a
+velocity-shader regression — but its tolerance is not honest at 0.02 on a loaded machine.
+
+### 9.1 Grid convergence: the demo grid against a 16× finer reference
+
+Every check above is a small analytic problem or an exact accounting identity. None of them answers the question a
+judge actually asks about the demo: *is the flood you are showing me an artefact of your 7.8 m cells?*
+`scripts/reference-run.ts` answers it by running the **same** solver — `src/sim`, on the GPU through Dawn in Node — on
+the **same** shipped Pittsburgh scenario at 1024², 2048² and 4096² over the same 8 km square (7.81, 3.91 and 1.95 m
+cells), and comparing the results cell by cell. Two scenarios, 30 simulated minutes each:
+
+* **crest** — the 1936 stage ramp of §4: the Point gauge rises to its record 46 ft at the app's 3 m per sim-minute
+  rate (`src/app/stageRamp.ts`) with the channel raise of `src/app/crest.ts`, then holds.
+* **rain** — 100 mm/hr over the whole domain with the rivers at normal pool. Centimetre-deep sheet flow down
+  hillsides and streets is where cell size should hurt most, so this is the harder case of the two.
+
+Everything but the cell size is held fixed. One DEM defines the bed and each grid samples that same surface at its own
+cell centres; the wetted river footprint is taken once on the baked grid and replicated, then filled to the same
+216.3 m surface; stage-source centres and radii scale with the grid while their levels, discharges and rain rates do
+not; and the stage ramp and the readbacks are driven on a **simulated**-time cadence, because the solver's CFL estimate
+reads back flow maxima and a wall-clock cadence would have handed the grids different timesteps for reasons that have
+nothing to do with dx. What does change is the timestep: each grid runs at its own CFL limit, so the 4096² run takes
+4× smaller steps and 64× the work of the demo grid.
+
+| Grid | dx | Substeps (crest / rain) | Wall clock (crest / rain) | GPU memory | mass error (crest / rain) |
+| --- | --- | --- | --- | --- | --- |
+| 1024² (the demo) | 7.813 m | 8,882 / 5,560 | 26 s / 20 s | 0.13 GB | 1.2·10⁻⁸ / 6.6·10⁻⁹ |
+| 2048² | 3.906 m | 16,119 / 11,905 | 1.9 min / 2.0 min | 0.44–0.45 GB | 1.2·10⁻⁸ / 1.3·10⁻⁸ |
+| 4096² (reference) | 1.953 m | 32,159 / 23,940 | 13.1 min / 15.8 min | 1.75–1.81 GB | 7.5·10⁻⁹ / 4.1·10⁻¹⁰ |
+
+The whole ladder is 34 minutes of GPU time on the fanless M4 — the reference run fits on the demo laptop, so nothing
+here needed a rented GPU. Peak Node RSS was 1.3–1.9 GB at 4096² (Dawn's Metal heaps are on top of that).
+
+**Agreement of the 1024² demo grid with the 4096² reference** (16× the cells, 4× smaller timestep):
+
+| Measure | crest (1936) | rain (100 mm/hr) |
+| --- | --- | --- |
+| Newly flooded land, ≥ 0.15 m | 6.549 vs 6.609 km² (**−0.92 %**) | 3.155 vs 3.173 km² (**−0.55 %**) |
+| Flood-extent IoU of those maps | **98.0 %** | **78.2 %** |
+| Total wet extent incl. rivers, ≥ 0.15 m | 10.902 vs 10.957 km² (−0.50 %), IoU 98.9 % | 7.508 vs 7.519 km² (−0.14 %), IoU 90.1 % |
+| Water held at the end | +0.11 % | +0.47 % |
+| Max-depth error on flooded land (on the 4096² grid) | RMSE 0.288 m, L1 0.148 m, median 0.060 m, p90 0.368 m, p99 1.276 m | RMSE 0.220 m, L1 0.118 m, median 0.053 m, p90 0.289 m, p99 0.981 m |
+| Max-depth error at 7.8 m resolution (4096² block-averaged down) | RMSE 0.106 m, median 0.038 m, p99 0.362 m | RMSE 0.150 m, median 0.037 m, p99 0.663 m |
+| Arrival of 0.15 m at six flooded landmarks | −0.2 … +6.7 s on 155–313 s arrivals (≤ 2.2 %) | only one site reaches 0.15 m (+122 s on 1,582 s); at 0.05 m, four do: +21 … +142 s on 673–1,218 s arrivals |
+| Three dry controls (Grant St ridge, Mt Washington, Oakland) | dry on both grids | dry on both grids |
+
+Halving the cell size roughly halves the error, which is what a scheme with first-order upwind advection and
+wetting/drying fronts should do. Against the 4096² reference, going 1024² → 2048² cuts the crest's flooded-area
+difference 2.93×, its max-depth RMSE 2.29×, its p90 2.12× and its IoU shortfall 2.25×; for rain the RMSE, p90 and IoU
+shortfall fall 2.30×, 2.35× and 2.10×. (Rain's flooded *area* difference does not: it is 0.55 % at 1024² and 1.03 % at
+2048². A total area is a difference of two large numbers and cancels, so it can agree while the water sits somewhere
+else — which is exactly what rain's IoU says. Read the IoU and the percentiles for placement, not the area.)
+
+**Where the demo grid really does differ.** The averages are the flattering half of the story. On the crest, half the
+flooded cells agree within 6 cm — but the worst 1 % differ by more than 1.28 m, and the single worst cell by 6.1 m.
+Those cells are at the edges: restricted to land *both* grids flood, the worst cell drops to 3.8 m, so the extremes
+are margin cells where a 7.8 m cell is wet-or-dry and 16 fine cells resolve a shoreline. Rain is worse in placement
+(IoU 78 % against the reference, 0.38 km² wet only at 1024² and 0.40 km² only at 4096²) because runoff concentrates
+into flow paths narrower than a coarse cell. And one quantity does **not** converge at all: the area with *any* water
+(h > 1 cm) at the end of the rain case reads 25.3, 23.3 and 21.9 km² on the three grids, and with the bed replicated
+rather than interpolated the 2048² run reads 32.8 km² — it moves by tens of per cent and not even in a consistent
+direction. A 7.8 m cell cannot hold the rills that runoff collects into, so how much of a hillside is left as a
+millimetre-to-centimetre sheet instead of a drained channel depends on the cell size and on how the micro-topography
+is represented. So: anything reported at a centimetre threshold under rain is resolution-dependent and should not be
+quoted as a converged number. The 0.15 m hazard bands the app actually draws are converged — that is the difference
+between the 21.9 km² figure and the 7.519 km² one in the table above.
+
+**How much of that is the bed, not the numerics.** Sampling the 7.8 m DEM at 3.9 m centres gives the finer grid a
+slightly different (smoother) bed — visible as a 0.4 % difference in initial river volume. Re-running the 1024²/2048²
+pair with the bed replicated instead of interpolated (`--bed=nearest`: identical piecewise-constant surface, initial
+volume equal to the bit) drops the crest's max-depth RMSE from 0.126 m to 0.032 m and raises its IoU from 99.1 % to
+99.6 %. So roughly three quarters of the apparent disagreement in the table above is the bed being re-sampled, not the
+solver — the headline numbers are conservative in the honest direction.
+
+**Cross-checks that the harness is running the demo and not something else.** Driven to 46 ft and held 15 simulated
+minutes it puts 15.4 ft of water at Point State Park, against the 15.7 ft in the §4 NWS comparison (9 cm apart), and it
+applies exactly 9.130 m of stage offset (46.00 ft). At 4 sim-minutes it floods 4.58 km², against the 4.2–4.3 km² noted
+in `src/app/stageRamp.ts`; the ~8 % gap is that the app's figure came from a frame-paced run that drops backlog when
+throttled, while the harness runs every CFL substep.
+
+**What this proves.** That the flood the demo draws is converged in cell size. For the river crest — the scenario the
+demo leads with — the outline a judge sees at 7.8 m is within 0.92 % in area and 98 % in overlap of what the same
+equations say at 1.95 m, the depths agree to 6 cm for half the flooded area, and arrival at named landmarks agrees to
+2 % or better. For 100 mm/hr rain the area still lands within 0.55 %, but only 78 % of the map overlaps: the coarse
+grid floods about the right amount of ground and is noticeably less sure which ground. It also shows the mass ledger
+holding at 10⁻⁸ over tens of thousands of substeps at three resolutions.
+
+**What this does not prove.**
+
+1. **Not accuracy against reality.** Grid convergence says the discretisation is near its own limit; it says nothing
+   about whether that limit is the real 1936 flood. The only reality check in this repo is the NWS impact-stage
+   comparison in §4, and that is against *statements about stages*, not a surveyed inundation map.
+2. **Not DEM resolution.** The finer grids resample the same 7.8 m bare-earth DEM; they add no terrain detail. Real
+   1 m lidar would add flood walls, embankments, road camber, kerbs and buildings that a 7.8 m DEM smooths away, and
+   those move flood paths far more than the numerics do. This measurement is a lower bound on total uncertainty, not
+   an estimate of it.
+3. **Not the physics.** Both grids solve the same local-inertial shallow-water equations with one Manning's n, no
+   buildings, no storm drains, no bridge piers, no infiltration. A missing process converges exactly as cleanly as a
+   present one.
+4. **Not a substitute for the analytic tests.** A grid-independent error in the scheme — a wrong friction term, say —
+   would converge beautifully to the wrong answer. That is what the Ritter dam break, the lake at rest, Manning's
+   normal depth and the exact mass ledger above are for. Convergence and correctness are different claims.
+5. **Not a formal convergence order.** Two error pairs against one reference show a trend. A published order needs
+   more grids, a reference far finer than the finest compared grid, and a smooth solution — and a flood front is not
+   smooth. The ratios above are reported as ratios for that reason.
+
+Re-run with `npx tsx scripts/reference-run.ts` (`--grids`, `--cases`, `--minutes`, `--bed`; `--compare-only` re-derives
+every number from the saved fields without a GPU). Full tables, the per-threshold ladders and the landmark time series
+land in `artifacts/reference-run/results.md` and `results.json`; the file header explains how to run the next rung
+(8192², 64× the demo grid) on a rented GPU. The harness's own arithmetic is unit-tested in
+`tests/sim/referenceMetrics.test.ts`.
 
 ## 10. Shipping: browser, desktop app and the test suites
 
