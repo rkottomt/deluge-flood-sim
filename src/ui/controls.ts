@@ -156,7 +156,7 @@ export function slider(o: SliderOptions): Slider {
       });
       // Staggering makes `container` taller, and `container` is what the observer watches. Doing that inside the
       // callback resizes an observed element during delivery, which is exactly what "ResizeObserver loop completed
-      // with undelivered notifications" reports — Nashville's three bunched gauge marks (51.9 / 53.9 / 56.2 ft) are
+      // with undelivered notifications" reports — Nashville's three bunched gauge marks (52.6 / 53.9 / 56.2 ft) are
       // the first ticks in the app that need two rows, and they raised it on every load. The height change is real
       // and wanted; only the timing was wrong, so it happens on the next frame instead, outside the delivery.
       toggleClass(container, 'dl-ticks-staggered', alt);

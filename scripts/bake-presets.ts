@@ -513,10 +513,12 @@ const PRESET_DEFS: PresetDef[] = [
     // the 2010 flood was taken from. The stadium is on the near bank, Second Avenue and the riverfront on the far one.
     camera: { at: [-86.7735, 36.1635], distance: 2100, yaw: -Math.PI / 2, pitch: 0.45 },
     /*
-     * No inset here, though at 1.46 m/texel the base photo is coarser than NAIP resolves and one was baked and
-     * measured (2.4x, 3.8 MB). public/presets is served from a public static host under a 90 MB budget
-     * (tests/data/presets.test.ts), and five insets put it at 91.5 MB — so the bytes go to the four domains with
-     * the worst blur (1.71-1.95 m/texel) and Nashville, the mildest of the five, keeps its base photo.
+     * No inset here YET, though at 1.46 m/texel the base photo is coarser than NAIP resolves and one was baked
+     * and measured (0.611 m/texel, 2.4x, 3.80 MB; the export is cached in artifacts/bake-cache). It was dropped
+     * when the directory budget was 90 MB, because five insets came to 91.5 MB and Nashville is the mildest blur
+     * of the five. That budget is now 120 MB (tests/data/presets.test.ts explains the raise), so the 3.80 MB fits
+     * — adding it is a deliberate call for the lead, not a side effect of the budget moving, so it stays out
+     * until someone decides the inset is worth the bytes.
      */
     description: ({ normalLevel, gaugeDatum }) =>
       'Downtown Nashville stands on the west bank of the Cumberland River, which crosses the city as a navigation ' +

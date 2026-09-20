@@ -26,8 +26,22 @@ import { generateSandbox } from '../../src/data/sandbox';
 const ROOT = path.resolve(import.meta.dirname, '../../public/presets');
 const FT = 0.3048;
 const BAKED = ['pittsburgh', 'johnstown', 'ellicott', 'asheville', 'nashville', 'houston', 'boulder'];
-/** public/presets is served from a public static host, so the whole directory has a size budget (MB). */
-const PRESETS_BUDGET_MB = 90;
+/*
+ * public/presets is served from a public static host, so the whole directory has a size budget (MB).
+ *
+ * 120, raised from 90 once 90 stopped being a number anyone could derive. The two real constraints:
+ *   • The deploy target is GitHub Pages (.github/workflows/pages.yml), whose published-site limit is a hard
+ *     1 GB (docs.github.com/en/pages/.../github-pages-limits). A full `vite build` of this repo measures
+ *     88.8 MB, so the site uses ~9 % of what the host allows — 90 MB was never the host's limit.
+ *   • What a visitor actually downloads is ONE city, not the directory, and that is capped separately at
+ *     25 MB below (largest today: asheville at 15.9 MB). That per-preset cap is the one protecting the demo.
+ * So the directory total only has to keep the repo and the Pages artifact sane, and 120 MB does that at 12 %
+ * of the hard limit while leaving room for the Nashville inset (3.80 MB, already baked and cached) plus one
+ * more city. The alternatives were measured and rejected: re-encoding the seven 4096² base photos below the
+ * baker's quality 0.92 degrades the most visible surface in a graphics demo, and dropping an inset gives back
+ * a measured 2.4–2.7× resolution gain on the blurriest domains. Neither is worth 2–5 MB.
+ */
+const PRESETS_BUDGET_MB = 120;
 
 interface Loaded {
   meta: PresetMeta;
@@ -412,10 +426,22 @@ test('nashville: stage control matches the Cumberland gauge story', { skip: !fs.
   assert.match(meta.scenario.description, /flood stage is 40 ft/);
   const normalFt = (st.normalLevel - st.gaugeDatum) / FT;
   assert.ok(normalFt > 10 && normalFt < st.floodStageFt, `pool reads ${normalFt.toFixed(1)} ft, below flood stage`);
-  // Every historic mark must be reachable with the slider, and 2010 must be one of them.
+  /*
+   * Every historic mark must be reachable with the slider, and all three must be the gauge's own annual peaks
+   * (USGS 03431500 peak file; the NWS Nashville crest table agrees). 2010 crested at 52.55 ft, NOT the 51.86 ft
+   * this preset once marked it as — that was the preliminary reading published while the river was still rising.
+   */
   const crest2010 = st.marks!.find((m) => /2010/.test(m.label))!;
-  assert.equal(crest2010.ft, 51.86);
+  assert.equal(crest2010.ft, 52.55);
+  assert.equal(st.marks!.find((m) => /1937/.test(m.label))!.ft, 53.9);
   assert.equal(st.marks!.find((m) => /1927/.test(m.label))!.ft, 56.2);
+  // The one-click flood takes the HIGHEST reachable mark, so the story the UI tells is 1927's — the subtitle,
+  // the description and SOURCES.txt have to say that and not sell the button as 2010.
+  const highest = st.marks!.reduce((a, m) => (m.ft > a.ft ? m : a));
+  assert.match(highest.label, /1927/, 'the button plays the highest mark');
+  assert.match(meta.scenario.description, /52\.55 ft/);
+  assert.match(meta.scenario.description, /1927 record/);
+  assert.ok(!/51\.86/.test(meta.scenario.description), 'the preliminary 51.86 ft reading must not be quoted as the crest');
   for (const m of st.marks!) {
     const offset = m.ft * FT + st.gaugeDatum - st.normalLevel;
     assert.ok(offset > 0 && offset <= st.maxOffset, `mark ${m.label} (${m.ft} ft) needs offset ${offset.toFixed(2)} of ${st.maxOffset}`);

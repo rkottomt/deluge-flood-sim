@@ -297,7 +297,7 @@ Monongahela and Ohio cross the domain edge.
   | `johnstown` | 7.0 km / 6.84 m | 1889 South Fork Dam flood as a lake-average 3,730 m³/s inflow on the Little Conemaugh | 1.71 + inset 0.61 | 4,903 |
   | `ellicott` | 5.0 km / 4.88 m | 2016 flash-flood storm over the Tiber–Hudson–New Cut watershed | 1.22 | 1,224 |
   | `asheville` | 8.0 km / 7.81 m | Helene 2024: 3,200 m³/s French Broad + 1,722 m³/s Swannanoa, sloping (no stage control) | 1.95 + inset 0.73 | 3,556 |
-  | `nashville` | 6.0 km / 5.86 m | Cumberland stage control: 2010 (51.86 ft), 1937 (53.90), 1927 record (56.20) | 1.46 | 5,410 |
+  | `nashville` | 6.0 km / 5.86 m | Cumberland stage control: 2010 (52.55 ft), 1937 (53.90), 1927 record (56.20) | 1.46 | 5,410 |
   | `houston` | 8.0 km / 7.81 m | Harvey 2017: 173 mm/hr over the whole domain, bayou at its 923 m³/s peak | 1.95 + inset 0.73 | 10,529 |
   | `boulder` | 5.0 km / 4.88 m | 2013 Front Range flood: 238 m³/s out of Boulder Canyon | 1.22 | 1,749 |
 
@@ -305,11 +305,16 @@ Monongahela and Ohio cross the domain edge.
   discharges, stages and gauge datums come from the USGS annual peak-flow files and NWIS site file. Everything in
   `public/presets` is public-domain U.S. government data, recorded per city in `public/presets/SOURCES.txt`.
 * **Deploy budget.** `public/presets` is served from a public static host, so `tests/data/presets.test.ts` caps the
-  whole directory at 90 MB and each preset at 25 MB. It currently stands at 87.7 MB — Pittsburgh is the largest single
-  city at 14.7 MB. Nashville qualifies for an inset on the texel-density rule and one was baked and measured
-  (0.611 m/texel, 2.4×, 3.80 MB), but five insets came to 91.5 MB, so it was dropped rather than raising the ceiling;
-  the export is cached in `artifacts/bake-cache`, so re-adding it costs one bake if the budget ever moves. With
-  2.3 MB of headroom, the next city will need either a smaller base photo or a deliberate decision to raise the cap.
+  whole directory at 120 MB and each preset at 25 MB. It currently stands at 87.8 MB — Asheville is the largest single
+  city at 15.9 MB, and close-up insets account for 16.5 MB across four cities. The per-preset cap is the one that
+  protects a visitor, who downloads one city and not the directory. The directory cap was 90 MB, which left 2.2 MB of
+  headroom and no way to derive the number: the deploy target is GitHub Pages (`.github/workflows/pages.yml`), whose
+  published-site limit is a hard 1 GB, and a full `vite build` of this repo measures 88.8 MB — about 9 % of what the
+  host allows. It was raised to 120 MB (12 % of the limit) rather than buying 2–5 MB by re-encoding the seven 4096²
+  base photos below the baker's quality 0.92 or by dropping an inset, either of which spends image quality — the most
+  visible surface here — to respect a self-imposed number. Nashville qualifies for an inset on the texel-density rule
+  and one was baked and measured (0.611 m/texel, 2.4×, 3.80 MB); it now fits, and the export is cached in
+  `artifacts/bake-cache`, so re-adding it costs one bake.
 * **Live areas** are cancellable. A download that stalls mid-transfer fails after 20 s without data, and the elevation
   has a 90 s overall deadline (the error then says the service can't be reached). Dead venue wifi often leaves requests
   hanging instead of failing: while no elevation has arrived, the loader checks every 9 s that the data hosts answer at
@@ -543,6 +548,67 @@ every number from the saved fields without a GPU). Full tables, the per-threshol
 land in `artifacts/reference-run/results.md` and `results.json`; the file header explains how to run the next rung
 (8192², 64× the demo grid) on a rented GPU. The harness's own arithmetic is unit-tested in
 `tests/sim/referenceMetrics.test.ts`.
+
+### 9.2 Shipping the reference into the app: the "Reference (4096²)" overlay
+
+The ladder above proves the demo grid is near its own limit, but it proves it in a table. `scripts/reference-run.ts
+--export-overlay` writes the finest run's answer into the preset as data, so the app can *draw* the reference flood
+edge over the live simulation and put the measured agreement beside it.
+
+**The artifact.** `public/presets/pittsburgh/reference.json` (1.8 kB) + `reference.bin` (109 kB) — Pittsburgh only, and
+only for the case the reference was actually computed for. It is not third-party data: it is this repo's own solver at
+4096², resampled to the shipped 1024² grid by the same 4×4 block mean the convergence table uses, so the overlay and
+the metrics are the *same* comparison and the renderer can index the field with the live simulation's own cell indices.
+
+| File | Contents |
+| --- | --- |
+| `reference.json` | Manifest: grid (`nx`, `ny`, `cellSize`, `referenceGrid`, `refine`), the scenario each plane was computed for (stage offset and gauge feet, rain, storms, boundary, Manning's n, when the ramp arrived, duration), the measured `agreement` block lifted straight out of the same run's comparison, provenance (GPU, host, wall clock, mass error, sha256 of the binary), and one entry per plane with its byte range, quantisation, scale and *measured* worst-case round-trip error. |
+| `reference.bin` | The planes' bytes concatenated. Each plane is `nx·ny` bytes of u8 — row-major, the same indexing as `elevation.f32` — gzip-compressed **independently**, so one fetch serves them all and the loader inflates only the plane it draws. `DecompressionStream` is a strictly weaker requirement than WebGPU. |
+
+Two plane kinds, both reserving code 0 for "nothing here" so a missing value can never be read as a real one:
+
+| Plane | Decode | Resolution | Shipped |
+| --- | --- | --- | --- |
+| `maxDepth` | `d = scale · (code/255)²`, `scale` 15.8 m | ≈1.2 cm per code at the 0.15 m hazard band, ≈12 cm at 15 m | yes (crest) |
+| `arrival` | `t = (code−1)/254 · scale`, code 0 → NaN ("never reached the threshold") | linear, ≈7 s per code over 30 min | no — the format carries it, the shipped file does not |
+
+Depth is sqrt-quantised rather than linear because a flat u8 step over 16 m is 6.3 cm, coarsest exactly where a flood
+map is read; the curve spends its codes where the water is shallow and gives away precision at 15 m where nobody reads
+the third digit. Any positive depth gets at least code 1, so a thin sheet never vanishes into the dry background. The
+measured worst-case round-trip error is **6.2 cm** (`plane.quantMaxError`, written by the export, not asserted in a
+comment) — an order of magnitude below the 0.13–0.29 m discretisation error the overlay exists to illustrate, so the
+encoding is not what limits the comparison. 184,610 wet cells of 1,048,576 gzip to 109 kB; `public/presets` is 84 MB of
+its 90 MB budget.
+
+**Drawing it: a distance field, not a second tint.** `src/render/reference.ts` turns the decoded max-depth plane into
+the *wet edge* of "max depth ≥ threshold" and ships it to the GPU as an exact two-pass Euclidean signed distance in
+cells (Felzenszwalb & Huttenlocher), clamped to ±8 cells and quantised to u8 in an `r8unorm` texture. A binary mask
+sampled per pixel gives a line whose width swims with the camera and breaks into dashes at a pixel per cell; a signed
+distance has a gradient of one cell per cell everywhere, so the water shader draws a constant-width line (≈2.6 px core
+with a 2 px dark halo, widths set in *pixels* from the camera's pixel footprint) at every zoom, anti-aliased, with no
+marching squares, no geometry and no CPU work per frame. A translucent second tint over the live water only produces a
+third colour nobody can attribute; an outline beside the live shoreline is readable in a second.
+
+**It refuses rather than mislead.** The overlay is honest only over a live simulation that is still the scenario the
+manifest records, so `referenceFit` (`src/data/referenceOverlay.ts`) compares the two and returns one of fourteen
+mismatch reasons (`ReferenceMismatch` in `src/contracts.ts`): wrong `preset` or `grid`, the `naive` solver, terrain
+`edits` (walls drawn or ground dug), `rain`, `storms`, wrong `stage`, still `rising`, a `late-crest` (right stage,
+raised far later than the reference's own ramp — a different flood), different `friction` or `boundary`, and `early` or
+`past` the reference's simulated time. The View-panel switch then disables itself and states the reason *and the fix*
+in place of the readout. The control is absent entirely for a preset that ships no reference, and the readout and
+legend are formatted from the manifest's numbers (`src/ui/referenceText.ts`), never from prose that can drift from the
+data: `extent IoU 98.0 % · flooded area −0.9 % · max-depth RMSE 0.29 m · water held +0.1 %`.
+
+Both the terrain and the water pass draw the same line, so it crosses the live shoreline without a break — which is the
+whole point: where the two waterlines coincide, the line hugs the water's edge, and where they part you can see by how
+much. In each pass it is composited **last**, after the hazard maps, contours and the protected-land wash, because it
+is an annotation about the picture rather than part of it; the halo only darkens what is already there. Hazard-mode
+colours and the default look are unchanged.
+
+**Cost.** Off by default. The edge texture is allocated with the scene (1 MB at 1024², like the protected-land mask, so
+the bind group never changes) and its bytes are uploaded once, the first time the overlay is switched on — the decode
+and the distance transform run once on the CPU at that moment, not per frame. While it is off the uniform is zero, the
+branch is skipped and `refTex` is never sampled.
 
 ## 10. Shipping: browser, desktop app and the test suites
 
