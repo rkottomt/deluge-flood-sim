@@ -18,3 +18,4 @@ submission/video/work/
 submission/video/deluge-demo-4k*.mp4
 submission/video/poster-4k.jpg
 .vercel
+.env*

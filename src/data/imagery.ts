@@ -3,7 +3,7 @@
  * areas, USDA NAIP (ImageServer `exportImage`, US, public domain) for the baked presets. In browsers the JPEG is decoded
  * to an ImageBitmap; in Node (bake script) callers keep bytes.
  */
-import type { ProgressFn } from '../contracts';
+import type { GridRect, ProgressFn } from '../contracts';
 import type { MercatorBBox } from './geo';
 import { fetchBytes, MB } from './net';
 
@@ -101,4 +101,64 @@ export async function fetchImagery(
     console.warn('[data] imagery unavailable:', e);
     return null;
   }
+}
+
+// ── Detail inset ───────────────────────────────────────────────────────────────────────────────
+/*
+ * A baked preset covers 4-8 km with ONE 4096² photo (Pittsburgh: 1.95 m per texel), which is sharp from the air and
+ * mush in a close-up — judges zoom in. Raising the base to 8192² would cost ~358 MB of GPU memory with mips; instead
+ * a second 4096² photo covers only the middle of the domain, where the scenario camera and the levee demo live, at
+ * 3x the texel density for ~90 MB and a few MB on disk. The renderer blends it over the base inside its rectangle
+ * (src/render/shaders/terrain.ts); everything below is the geometry that keeps the two exactly registered.
+ *
+ * Measured over downtown Pittsburgh (artifacts/detail-imagery): NAIP's own detail runs out just under 1 m per texel,
+ * so an inset finer than ~0.6 m/texel buys nothing but bytes — DETAIL_TARGET_MPT is the size to aim for.
+ */
+
+/** Ground meters per texel a detail inset aims for: NAIP's usable limit, not the finest export the server allows. */
+export const DETAIL_TARGET_MPT = 0.75;
+/** Detail inset edge length in texels (4096² = 67 MB + mips; see the budget note above). */
+export const DETAIL_SIZE = 4096;
+
+/**
+ * Grid rectangle for a detail inset: a square of `sizeMeters` centred on (`gx`, `gy`), snapped to whole cells and
+ * shifted (not clipped) to stay inside the grid, so the inset is always square and cell-aligned. Returns null when
+ * the square would cover the whole domain anyway — then the base photo should simply be finer.
+ */
+export function detailRect(nx: number, ny: number, cellSize: number, center: { gx: number; gy: number }, sizeMeters: number): GridRect | null {
+  if (!(sizeMeters > 0) || !(cellSize > 0)) return null;
+  const side = Math.round(sizeMeters / cellSize);
+  if (!(side > 0) || side >= Math.min(nx, ny)) return null;
+  const clampStart = (c: number, n: number) => Math.max(0, Math.min(n - side, Math.round(c - side / 2)));
+  const x0 = clampStart(center.gx, nx);
+  const y0 = clampStart(center.gy, ny);
+  return { x0, y0, x1: x0 + side, y1: y0 + side };
+}
+
+/** Is `r` a whole-cell rectangle inside an nx x ny grid with a positive area? */
+export function isValidDetailRect(r: GridRect | null | undefined, nx: number, ny: number): r is GridRect {
+  if (!r) return false;
+  const ints = [r.x0, r.y0, r.x1, r.y1].every((v) => Number.isInteger(v));
+  return ints && r.x0 >= 0 && r.y0 >= 0 && r.x1 > r.x0 && r.y1 > r.y0 && r.x1 <= nx && r.y1 <= ny;
+}
+
+/**
+ * Mercator sub-bbox of a grid rectangle. The grid is linear in mercator (src/data/geo.ts), so this is an exact
+ * sub-rectangle of the domain's own export bbox: the inset lands on the same ground as the base photo, to the pixel.
+ */
+export function detailMercatorBBox(m: MercatorBBox, nx: number, ny: number, r: GridRect): MercatorBBox {
+  const w = m.xmax - m.xmin;
+  const h = m.ymax - m.ymin;
+  return {
+    xmin: m.xmin + (r.x0 / nx) * w,
+    xmax: m.xmin + (r.x1 / nx) * w,
+    // Grid rows run north → south, mercator y runs south → north.
+    ymin: m.ymax - (r.y1 / ny) * h,
+    ymax: m.ymax - (r.y0 / ny) * h,
+  };
+}
+
+/** Ground meters per texel of a `size`² photo over `r`. */
+export function detailMetersPerTexel(r: GridRect, cellSize: number, size: number): number {
+  return ((r.x1 - r.x0) * cellSize) / size;
 }

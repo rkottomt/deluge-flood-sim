@@ -5,12 +5,13 @@
  *   meta.json      PresetMeta (grid, bounds, attribution, scenario, provenance)
  *   elevation.f32  nx·ny little-endian Float32, row-major (north row first), hydro-conditioned
  *   imagery.jpg    USDA NAIP aerial imagery covering exactly `bounds`, north-up
+ *   imagery-detail.jpg  optional finer NAIP photo over `imageryDetail` (grid cells) — the close-up inset
  *   roads.json     CompactRoads (see roads.ts)
  *   buildings.json CompactBuildings (see buildings.ts) — optional; building footprints with heights
  */
-import type { GeoBounds, PresetInfo, ProgressFn, ScenarioPreset, TerrainData } from '../contracts';
+import type { GeoBounds, GridRect, ImageryDetail, PresetInfo, ProgressFn, ScenarioPreset, TerrainData } from '../contracts';
 import { type CompactBuildings, decodeBuildings, rasterizeBuildingHeights, validateCompactBuildings } from './buildings';
-import { decodeImageBitmap } from './imagery';
+import { decodeImageBitmap, isValidDetailRect } from './imagery';
 import { fetchBytes, fetchJSON } from './net';
 import { type CompactRoads, decodeRoads } from './roads';
 import { generateSandbox, SANDBOX_NAME } from './sandbox';
@@ -19,6 +20,16 @@ export const PRESETS: PresetInfo[] = [
   { id: 'pittsburgh', name: 'Pittsburgh — Three Rivers', subtitle: "1936 St. Patrick's Day flood — raise the rivers" },
   { id: 'johnstown', name: 'Johnstown — Conemaugh Valley', subtitle: "The Flood City — the 1889 flood in today's valley" },
   { id: 'ellicott', name: 'Ellicott City — Main Street', subtitle: 'Flash floods of 2016 & 2018 — a storm over the Tiber branch' },
+  { id: 'asheville', name: 'Asheville — French Broad Valley', subtitle: 'Hurricane Helene, 2024 — record crests on two rivers' },
+  { id: 'nashville', name: 'Nashville — Cumberland River', subtitle: 'May 2010 flood — raise the river past 51.86 ft' },
+  { id: 'houston', name: 'Houston — Buffalo Bayou', subtitle: 'Hurricane Harvey, 2017 — the city floods from above' },
+  { id: 'boulder', name: 'Boulder — Canyon Mouth', subtitle: '2013 Front Range flash flood — out of Boulder Canyon' },
+  { id: 'ftmyers', name: 'Fort Myers — Caloosahatchee', subtitle: "Hurricane Ian, 2022 — the Gulf's storm surge up a tidal river" },
+  {
+    id: 'nepal',
+    name: 'Betrawati — Trishuli Valley',
+    subtitle: '26 August 2026 — the bridge that was Rasuwa’s only road',
+  },
   { id: 'sandbox', name: SANDBOX_NAME, subtitle: 'Offline sandbox — river town, reservoir and dam' },
 ];
 
@@ -33,8 +44,10 @@ export interface PresetMeta {
   bounds: GeoBounds;
   attribution: string;
   scenario: ScenarioPreset;
-  /** `buildings` is absent in presets baked before building footprints existed. */
-  files: { elevation: string; imagery: string | null; roads: string | null; buildings?: string | null };
+  /** `buildings` and `imageryDetail` are absent in presets baked before those features existed. */
+  files: { elevation: string; imagery: string | null; roads: string | null; buildings?: string | null; imageryDetail?: string | null };
+  /** Grid rectangle (cells) covered by `files.imageryDetail`, if the preset has a detail inset. */
+  imageryDetail?: GridRect | null;
   /** Provenance / QA info written by the bake script (informational). */
   bake?: Record<string, unknown>;
 }
@@ -133,6 +146,9 @@ export function validatePresetMeta(m: PresetMeta): string[] {
       errs.push('bad camera pose');
     }
   }
+  if (m.files?.imageryDetail && !isValidDetailRect(m.imageryDetail, m.nx, m.ny)) {
+    errs.push('files.imageryDetail without a valid imageryDetail rectangle');
+  }
   if (s.levee) {
     const l = s.levee;
     if (!l.name || !isNum(l.crest) || !Array.isArray(l.points) || l.points.length < 2) errs.push('bad levee');
@@ -164,8 +180,11 @@ export async function loadPreset(id: string, onProgress?: ProgressFn): Promise<T
   if (problems.length) throw new Error(`Preset ${id} meta.json invalid: ${problems.join('; ')}`);
 
   // Weighted progress across the parallel downloads.
-  const parts = { elevation: 0, imagery: 0, roads: 0, buildings: 0 };
-  const weights = { elevation: 0.42, imagery: 0.32, roads: 0.16, buildings: 0.1 };
+  const parts = { elevation: 0, imagery: 0, detail: 0, roads: 0, buildings: 0 };
+  const hasDetail = !!(meta.files.imageryDetail && isValidDetailRect(meta.imageryDetail, meta.nx, meta.ny));
+  const weights = hasDetail
+    ? { elevation: 0.38, imagery: 0.26, detail: 0.12, roads: 0.16, buildings: 0.08 }
+    : { elevation: 0.42, imagery: 0.3, detail: 0, roads: 0.18, buildings: 0.1 };
   if (!meta.files.buildings) parts.buildings = 1;
   const report = (msg: string) => {
     const f =
@@ -173,6 +192,7 @@ export async function loadPreset(id: string, onProgress?: ProgressFn): Promise<T
       0.9 *
         (parts.elevation * weights.elevation +
           parts.imagery * weights.imagery +
+          parts.detail * weights.detail +
           parts.roads * weights.roads +
           parts.buildings * weights.buildings);
     onProgress?.(msg, Math.min(0.95, f));
@@ -194,6 +214,24 @@ export async function loadPreset(id: string, onProgress?: ProgressFn): Promise<T
         .catch((e) => {
           console.warn(`[data] imagery for ${id} unavailable:`, e);
           parts.imagery = 1;
+          return null;
+        })
+    : Promise.resolve(null);
+  /*
+   * The close-up inset (src/data/imagery.ts): a second, finer photo over part of the domain. It downloads next to
+   * the base photo, and like it is optional — a missing or broken inset only costs sharpness downtown.
+   */
+  const detailP: Promise<ImageryDetail | null> = hasDetail
+    ? fetchBytes(`${dir}${meta.files.imageryDetail}`, { timeoutMs: 60000, retries: 2 })
+        .then(async (buf) => {
+          const image = await decodeImageBitmap(buf, 'image/jpeg');
+          parts.detail = 1;
+          report('Detail imagery loaded');
+          return image ? { image, rect: meta.imageryDetail as GridRect } : null;
+        })
+        .catch((e) => {
+          console.warn(`[data] detail imagery for ${id} unavailable:`, e);
+          parts.detail = 1;
           return null;
         })
     : Promise.resolve(null);
@@ -234,7 +272,7 @@ export async function loadPreset(id: string, onProgress?: ProgressFn): Promise<T
         })
     : Promise.resolve(null);
 
-  const [elevation, imagery, roads, buildings] = await Promise.all([elevationP, imageryP, roadsP, buildingsP]);
+  const [elevation, imagery, imageryDetail, roads, buildings] = await Promise.all([elevationP, imageryP, detailP, roadsP, buildingsP]);
   onProgress?.('Ready', 1);
   return {
     name: meta.name,
@@ -244,6 +282,7 @@ export async function loadPreset(id: string, onProgress?: ProgressFn): Promise<T
     elevation,
     bounds: meta.bounds,
     imagery,
+    imageryDetail: imagery ? imageryDetail : null,
     roads,
     buildings,
     attribution: meta.attribution,

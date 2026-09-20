@@ -1,6 +1,20 @@
 /** Terrain surface + diorama skirt shaders. */
 import { COMMON_WGSL, DETAIL_NORMAL_WGSL, FRAME_WGSL, LOD_WGSL, SUN_SHADING_WGSL, WALL_WGSL } from './common';
 
+/**
+ * Close-up imagery inset (src/data/imagery.ts): how much of the finer photo shows at a grid position — 0 outside its
+ * rectangle, 1 well inside, feathered over F.detail.y cells at the edge so the rectangle never reads as a seam, and
+ * 0 everywhere when no inset is bound. Its own snippet so tests/render/detailImagery.test.ts can run the shipped
+ * code on the GPU without the whole terrain pipeline.
+ */
+export const DETAIL_IMAGERY_WGSL = /* wgsl */ `
+fn detailWeight(g: vec2f) -> f32 {
+  let r = F.detailRect;
+  let inset = min(min(g.x - r.x, r.z - g.x), min(g.y - r.y, r.w - g.y));
+  return smoothstep(0.0, max(F.detail.y, 1.0), inset) * clamp(F.detail.x, 0.0, 1.0);
+}
+`;
+
 export const TERRAIN_WGSL = /* wgsl */ `
 ${FRAME_WGSL}
 @group(0) @binding(0) var<uniform> F: Frame;
@@ -15,11 +29,13 @@ ${FRAME_WGSL}
 @group(0) @binding(9) var wallTex: texture_2d<f32>;
 @group(0) @binding(11) var protectTex: texture_2d<f32>;
 @group(0) @binding(12) var sunTex: texture_2d<f32>;
+@group(0) @binding(15) var detailTex: texture_2d<f32>;
 ${COMMON_WGSL}
 ${LOD_WGSL}
 ${WALL_WGSL}
 ${SUN_SHADING_WGSL}
 ${DETAIL_NORMAL_WGSL}
+${DETAIL_IMAGERY_WGSL}
 
 struct VOut {
   @builtin(position) pos: vec4f,
@@ -102,7 +118,19 @@ fn fsTerrain(in: VOut) -> @location(0) vec4f {
   let uv = in.grid / F.grid;
   let nrm = textureSampleLevel(normTex, linSamp, uv, 0.0);
   let misc = textureSampleLevel(miscTex, linSamp, uv, 0.0);
-  let img = textureSample(imageryTex, imgSamp, uv).rgb;
+  var img = textureSample(imageryTex, imgSamp, uv).rgb;
+  /*
+   * Close-up detail inset: a second, finer photo over the middle of the domain (src/data/imagery.ts). Both photos
+   * are sampled in uniform control flow — the branch is on a uniform, so implicit derivatives (and anisotropy) stay
+   * valid — and the inset is feathered in over F.detail.y cells so its rectangle never shows as an edge. Outside the
+   * rectangle the feather is 0 and the fetch is discarded; the sampler clamps to edge, so no wrapping artefacts.
+   */
+  if (F.detail.x > 0.001) {
+    let r = F.detailRect;
+    let span = max(r.zw - r.xy, vec2f(1.0));
+    let detail = textureSample(detailTex, imgSamp, (in.grid - r.xy) / span).rgb;
+    img = mix(img, detail, detailWeight(in.grid));
+  }
   // Derivatives must be taken in uniform control flow.
   let contourCoord = in.elev / max(F.opts.z, 0.01);
   let contourFw = fwidth(contourCoord);

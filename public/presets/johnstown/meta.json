@@ -1382,7 +1382,8 @@
   "elevation": "elevation.f32",
   "imagery": "imagery.jpg",
   "roads": "roads.json",
-  "buildings": "buildings.json"
+  "buildings": "buildings.json",
+  "imageryDetail": "imagery-detail.jpg"
  },
  "bake": {
   "bakedAt": "2026-09-17T10:12:57.637Z",
@@ -1526,6 +1527,17 @@
    "maxHeight": 32,
    "bytes": 772270,
    "cellsBuiltOn": 62178
+  },
+  "imageryDetail": {
+   "sizeMeters": 2502,
+   "texels": 4096,
+   "metersPerTexel": 0.611
   }
+ },
+ "imageryDetail": {
+  "x0": 387,
+  "y0": 322,
+  "x1": 753,
+  "y1": 688
  }
 }

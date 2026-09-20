@@ -34,7 +34,7 @@ import {
 import { legendTitle } from './legend';
 import { bandsForMode, NORMAL_WATER_LEGEND, showsNormalWater } from '../render/legend';
 import { selectTool } from './toolDefs';
-import { blockedAdvice, routeDetail } from './routeText';
+import { blockedText, routeDetail } from './routeText';
 import { MAX_SOURCES, MAX_STORMS } from './tools';
 import { formatStage, hasGauge, stageSub, weatherBadge } from './stageText';
 
@@ -466,9 +466,14 @@ export function createPanel(ctx: UIContext): Panel {
         ...((detail) => (detail ? [h('p', { class: 'dl-evac-msg' }, detail)] : []))(routeDetail(route)),
       );
     } else if (state === 'blocked') {
+      // Why, then when the last way out closed (the strongest thing this simulation can say about warning time),
+      // then what to do. The closure line only exists for a start the app watched lose a route it had.
+      const t = blockedText(route);
       evacCard.replaceChildren(
         h('div', { class: 'dl-evac-alarm' }, icon('warning', 30), h('span', { class: 'dl-evac-alarm-text' }, 'NO SAFE ROUTE')),
-        h('p', { class: 'dl-evac-msg' }, blockedAdvice(route)),
+        h('p', { class: 'dl-evac-msg' }, t.reason),
+        ...(t.closure ? [h('p', { class: 'dl-evac-msg dl-evac-closed' }, t.closure)] : []),
+        h('p', { class: 'dl-evac-msg dl-evac-action' }, t.action),
       );
     } else if (s.evacStart) {
       evacCard.replaceChildren(

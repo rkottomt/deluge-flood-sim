@@ -4,7 +4,7 @@
  *
  * Usage:
  *   node scripts/shot.mjs <url> <out.png> [--wait=ms] [--width=1600] [--height=1000]
- *        [--ready="js expression returning a promise/value to await before the wait"]
+ *        [--dpr=2] [--ready="js expression returning a promise/value to await before the wait"]
  *        [--eval="js to run after ready (may be async), result is printed"]
  *
  * Examples:
@@ -42,7 +42,9 @@ const browser = await chromium.launch({
 });
 let bad = 0;
 try {
-  const page = await browser.newPage({ viewport: { width, height }, deviceScaleFactor: 1 });
+  // --dpr emulates a Retina demo machine (the MacBook Air M4 runs 1470x956 CSS px at DPR 2). Defaults to 1 so
+  // existing callers and baselines are unchanged.
+  const page = await browser.newPage({ viewport: { width, height }, deviceScaleFactor: Number(opt.dpr ?? 1) });
   page.on('response', (r) => {
     if (r.status() >= 400) console.log(`[http ${r.status()}] ${r.url()}`);
   });

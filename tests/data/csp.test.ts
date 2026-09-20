@@ -13,6 +13,7 @@ import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
 import { CSP_DIRECTIVES, REFERRER_POLICY, contentSecurityPolicy, cspAllows } from '../../src/data/csp';
 import { TERRARIUM_TILES, USGS_3DEP_EXPORT, usgs3depUrl } from '../../src/data/dem';
+import { copernicusTileId, copernicusTileUrl } from '../../src/data/demGlobal';
 import { ESRI_IMAGERY_EXPORT, ESRI_LABELS_TILE_TEMPLATE, ESRI_TILE_TEMPLATE, NAIP_IMAGERY_EXPORT, esriImageryUrl } from '../../src/data/imagery';
 import { OSM_MAP_API, TIGERWEB_TRANSPORT } from '../../src/data/roads';
 import { NOMINATIM_REVERSE, NOMINATIM_SEARCH } from '../../src/data/placeName';
@@ -29,8 +30,9 @@ const MERC = (() => {
 
 test('every URL the app fetches at runtime is allowed by connect-src', () => {
   const urls = [
-    // Elevation: 3DEP first, Terrarium as the worldwide fallback.
+    // Elevation: 3DEP inside its coverage, Copernicus GLO-30 outside it, Terrarium as the worldwide fallback.
     usgs3depUrl(MERC, 512, 512),
+    copernicusTileUrl(copernicusTileId(27.99, 85.186)),
     `${TERRARIUM_TILES}/12/1140/1541.png`,
     // Imagery for a live area.
     esriImageryUrl(MERC, 2048, 2048),
@@ -57,6 +59,9 @@ test('the location picker’s map tiles are allowed by img-src', () => {
 test('sources are path-restricted, not host-wide', () => {
   // The whole point of the path restriction: s3.amazonaws.com and arcgisonline host anyone's data.
   assert.ok(!cspAllows('https://s3.amazonaws.com/attacker-bucket/exfil', 'connect-src'), 'any S3 bucket would be an exfiltration target');
+  // The Copernicus bucket is named in the host, so the host is the restriction — a different bucket is a different host.
+  assert.ok(cspAllows(copernicusTileUrl(copernicusTileId(28.5, 85.5)), 'connect-src'));
+  assert.ok(!cspAllows('https://attacker-bucket.s3.amazonaws.com/exfil', 'connect-src'));
   assert.ok(cspAllows(`${TERRARIUM_TILES}/1/2/3.png`, 'connect-src'));
   assert.ok(!cspAllows('https://server.arcgisonline.com/ArcGIS/rest/services/Other_Service/MapServer/export', 'connect-src'));
   assert.ok(cspAllows(`${ESRI_IMAGERY_EXPORT}?f=image`, 'connect-src'));

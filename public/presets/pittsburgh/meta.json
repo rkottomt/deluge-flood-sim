@@ -277,13 +277,24 @@
     "yaw": 0.1,
     "pitch": 0.68
    }
+  },
+  "evacStart": {
+   "gx": 423.5,
+   "gy": 557.6,
+   "label": "Smithfield St at Oliver Ave, downtown Pittsburgh"
+  },
+  "evacCutOff": {
+   "gx": 371.7,
+   "gy": 569.2,
+   "label": "Market Square, downtown Pittsburgh"
   }
  },
  "files": {
   "elevation": "elevation.f32",
   "imagery": "imagery.jpg",
   "roads": "roads.json",
-  "buildings": "buildings.json"
+  "buildings": "buildings.json",
+  "imageryDetail": "imagery-detail.jpg"
  },
  "bake": {
   "bakedAt": "2026-09-17T10:58:49.521Z",
@@ -446,6 +457,17 @@
    "maxHeight": 256.8,
    "bytes": 2096944,
    "cellsBuiltOn": 143606
+  },
+  "imageryDetail": {
+   "sizeMeters": 3000,
+   "texels": 4096,
+   "metersPerTexel": 0.732
   }
+ },
+ "imageryDetail": {
+  "x0": 157,
+  "y0": 348,
+  "x1": 541,
+  "y1": 732
  }
 }

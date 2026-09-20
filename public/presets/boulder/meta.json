@@ -1,0 +1,1278 @@
+{
+ "version": 1,
+ "id": "boulder",
+ "name": "Boulder — Canyon Mouth",
+ "subtitle": "2013 Front Range flash flood — out of Boulder Canyon",
+ "nx": 1024,
+ "ny": 1024,
+ "cellSize": 4.8828125,
+ "bounds": {
+  "west": -105.31232269592891,
+  "south": 39.99153842307075,
+  "east": -105.25367730407109,
+  "north": 40.036454186937206
+ },
+ "attribution": "Elevation: USGS 3DEP · Imagery: USDA NAIP via USGS The National Map · Roads: U.S. Census Bureau TIGER/Line · Buildings © OpenStreetMap contributors (ODbL)",
+ "scenario": {
+  "description": "Boulder is built at the mouth of Boulder Canyon, where the creek leaves the Rockies and crosses the city past downtown and the university. Between September 9 and 16, 2013 a stalled monsoon plume dropped 17.15 inches of rain on Boulder County — 9.08 inches on September 12 alone, the wettest calendar day in the city's record — and the canyons flashed. Boulder Creek left town at 8,400 ft³/s at the 75th Street gauge, four times its previous record of 2,050 ft³/s, and the flood closed every canyon road out of the city. Here that flood comes out of the canyon at the west edge while the record day's rain falls on the foothills. Boulder Creek is banked only about 3 m deep through town, so it leaves its channel within minutes and runs down the streets beside it.",
+  "sources": [
+   {
+    "id": "boulder-creek-inflow",
+    "type": "inflow",
+    "gx": 20.5,
+    "gy": 481.5,
+    "radius": 4,
+    "discharge": 238,
+    "label": "Boulder Creek — the 2013 flood out of Boulder Canyon (8,400 ft³/s)"
+   }
+  ],
+  "storms": [],
+  "shelters": [
+   {
+    "name": "Chautauqua Park",
+    "gx": 545.37,
+    "gy": 829.59
+   },
+   {
+    "name": "Mount Sanitas trailhead",
+    "gx": 295.15,
+    "gy": 343.19
+   },
+   {
+    "name": "University Hill",
+    "gx": 609.36,
+    "gy": 706.64
+   },
+   {
+    "name": "Flagstaff Mountain (Flagstaff Rd)",
+    "gx": 306.17,
+    "gy": 807.8
+   }
+  ],
+  "rainRate": 9.6,
+  "stage": null,
+  "initialFill": [
+   {
+    "seeds": [
+     {
+      "gx": 12.5,
+      "gy": 476.5,
+      "level": 1705.51
+     },
+     {
+      "gx": 17.5,
+      "gy": 477.5,
+      "level": 1704.92
+     },
+     {
+      "gx": 19.5,
+      "gy": 479.5,
+      "level": 1704.5
+     },
+     {
+      "gx": 20.5,
+      "gy": 481.5,
+      "level": 1703.82
+     },
+     {
+      "gx": 20.5,
+      "gy": 483.5,
+      "level": 1703.54
+     },
+     {
+      "gx": 20.5,
+      "gy": 487.5,
+      "level": 1703.43
+     },
+     {
+      "gx": 19.5,
+      "gy": 489.5,
+      "level": 1702.28
+     },
+     {
+      "gx": 19.5,
+      "gy": 490.5,
+      "level": 1701.52
+     },
+     {
+      "gx": 18.5,
+      "gy": 491.5,
+      "level": 1701.32
+     },
+     {
+      "gx": 17.5,
+      "gy": 499.5,
+      "level": 1699.81
+     },
+     {
+      "gx": 19.5,
+      "gy": 503.5,
+      "level": 1699.42
+     },
+     {
+      "gx": 22.5,
+      "gy": 507.5,
+      "level": 1698.99
+     },
+     {
+      "gx": 25.5,
+      "gy": 510.5,
+      "level": 1698.4
+     },
+     {
+      "gx": 34.5,
+      "gy": 517.5,
+      "level": 1697.51
+     },
+     {
+      "gx": 37.5,
+      "gy": 518.5,
+      "level": 1697.16
+     },
+     {
+      "gx": 38.5,
+      "gy": 518.5,
+      "level": 1696.77
+     },
+     {
+      "gx": 41.5,
+      "gy": 519.5,
+      "level": 1696.33
+     },
+     {
+      "gx": 42.5,
+      "gy": 519.5,
+      "level": 1696.16
+     },
+     {
+      "gx": 56.5,
+      "gy": 517.5,
+      "level": 1693.61
+     },
+     {
+      "gx": 58.5,
+      "gy": 519.5,
+      "level": 1693.17
+     },
+     {
+      "gx": 61.5,
+      "gy": 527.5,
+      "level": 1691.66
+     },
+     {
+      "gx": 61.5,
+      "gy": 529.5,
+      "level": 1691.45
+     },
+     {
+      "gx": 61.5,
+      "gy": 534.5,
+      "level": 1690.97
+     },
+     {
+      "gx": 60.5,
+      "gy": 536.5,
+      "level": 1690.41
+     },
+     {
+      "gx": 60.5,
+      "gy": 537.5,
+      "level": 1690.15
+     },
+     {
+      "gx": 57.5,
+      "gy": 544.5,
+      "level": 1689.31
+     },
+     {
+      "gx": 57.5,
+      "gy": 546.5,
+      "level": 1689.09
+     },
+     {
+      "gx": 57.5,
+      "gy": 548.5,
+      "level": 1688.82
+     },
+     {
+      "gx": 57.5,
+      "gy": 550.5,
+      "level": 1688.48
+     },
+     {
+      "gx": 61.5,
+      "gy": 558.5,
+      "level": 1687.04
+     },
+     {
+      "gx": 62.5,
+      "gy": 559.5,
+      "level": 1685.78
+     },
+     {
+      "gx": 68.5,
+      "gy": 563.5,
+      "level": 1684.05
+     },
+     {
+      "gx": 73.5,
+      "gy": 564.5,
+      "level": 1681.27
+     },
+     {
+      "gx": 74.5,
+      "gy": 564.5,
+      "level": 1680.98
+     },
+     {
+      "gx": 75.5,
+      "gy": 564.5,
+      "level": 1680.72
+     },
+     {
+      "gx": 77.5,
+      "gy": 564.5,
+      "level": 1680.51
+     },
+     {
+      "gx": 84.5,
+      "gy": 561.5,
+      "level": 1679.3
+     },
+     {
+      "gx": 88.5,
+      "gy": 559.5,
+      "level": 1678.03
+     },
+     {
+      "gx": 95.5,
+      "gy": 555.5,
+      "level": 1676.38
+     },
+     {
+      "gx": 101.5,
+      "gy": 551.5,
+      "level": 1675.84
+     },
+     {
+      "gx": 104.5,
+      "gy": 549.5,
+      "level": 1675.51
+     },
+     {
+      "gx": 109.5,
+      "gy": 548.5,
+      "level": 1674.83
+     },
+     {
+      "gx": 110.5,
+      "gy": 548.5,
+      "level": 1674.43
+     },
+     {
+      "gx": 114.5,
+      "gy": 548.5,
+      "level": 1674.39
+     },
+     {
+      "gx": 116.5,
+      "gy": 548.5,
+      "level": 1673.05
+     },
+     {
+      "gx": 118.5,
+      "gy": 548.5,
+      "level": 1672.72
+     },
+     {
+      "gx": 125.5,
+      "gy": 549.5,
+      "level": 1671.57
+     },
+     {
+      "gx": 128.5,
+      "gy": 550.5,
+      "level": 1671.08
+     },
+     {
+      "gx": 132.5,
+      "gy": 551.5,
+      "level": 1670.78
+     },
+     {
+      "gx": 134.5,
+      "gy": 551.5,
+      "level": 1670.47
+     },
+     {
+      "gx": 136.5,
+      "gy": 551.5,
+      "level": 1670.19
+     },
+     {
+      "gx": 143.5,
+      "gy": 551.5,
+      "level": 1668.97
+     },
+     {
+      "gx": 149.5,
+      "gy": 553.5,
+      "level": 1668.59
+     },
+     {
+      "gx": 150.5,
+      "gy": 553.5,
+      "level": 1668.33
+     },
+     {
+      "gx": 158.5,
+      "gy": 554.5,
+      "level": 1667.55
+     },
+     {
+      "gx": 159.5,
+      "gy": 554.5,
+      "level": 1667.34
+     },
+     {
+      "gx": 170.5,
+      "gy": 556.5,
+      "level": 1666.78
+     },
+     {
+      "gx": 177.5,
+      "gy": 558.5,
+      "level": 1666.32
+     },
+     {
+      "gx": 182.5,
+      "gy": 557.5,
+      "level": 1665.33
+     },
+     {
+      "gx": 191.5,
+      "gy": 553.5,
+      "level": 1664.59
+     },
+     {
+      "gx": 195.5,
+      "gy": 551.5,
+      "level": 1664.22
+     },
+     {
+      "gx": 196.5,
+      "gy": 548.5,
+      "level": 1663.88
+     },
+     {
+      "gx": 196.5,
+      "gy": 547.5,
+      "level": 1663.46
+     },
+     {
+      "gx": 194.5,
+      "gy": 540.5,
+      "level": 1662.9
+     },
+     {
+      "gx": 193.5,
+      "gy": 540.5,
+      "level": 1662.15
+     },
+     {
+      "gx": 193.5,
+      "gy": 539.5,
+      "level": 1661.74
+     },
+     {
+      "gx": 192.5,
+      "gy": 539.5,
+      "level": 1662.76
+     },
+     {
+      "gx": 192.5,
+      "gy": 538.5,
+      "level": 1661.71
+     },
+     {
+      "gx": 188.5,
+      "gy": 531.5,
+      "level": 1661.16
+     },
+     {
+      "gx": 188.5,
+      "gy": 525.5,
+      "level": 1660.11
+     },
+     {
+      "gx": 188.5,
+      "gy": 524.5,
+      "level": 1659.78
+     },
+     {
+      "gx": 189.5,
+      "gy": 521.5,
+      "level": 1659.47
+     },
+     {
+      "gx": 194.5,
+      "gy": 515.5,
+      "level": 1658.62
+     },
+     {
+      "gx": 198.5,
+      "gy": 514.5,
+      "level": 1658.37
+     },
+     {
+      "gx": 201.5,
+      "gy": 514.5,
+      "level": 1657.21
+     },
+     {
+      "gx": 202.5,
+      "gy": 514.5,
+      "level": 1657.2
+     },
+     {
+      "gx": 212.5,
+      "gy": 515.5,
+      "level": 1655.61
+     },
+     {
+      "gx": 218.5,
+      "gy": 517.5,
+      "level": 1655.1
+     },
+     {
+      "gx": 224.5,
+      "gy": 520.5,
+      "level": 1654.37
+     },
+     {
+      "gx": 228.5,
+      "gy": 522.5,
+      "level": 1654.06
+     },
+     {
+      "gx": 232.5,
+      "gy": 524.5,
+      "level": 1653.67
+     },
+     {
+      "gx": 240.5,
+      "gy": 527.5,
+      "level": 1652.77
+     },
+     {
+      "gx": 246.5,
+      "gy": 529.5,
+      "level": 1652.44
+     },
+     {
+      "gx": 251.5,
+      "gy": 530.5,
+      "level": 1651.95
+     },
+     {
+      "gx": 256.5,
+      "gy": 531.5,
+      "level": 1651.44
+     },
+     {
+      "gx": 262.5,
+      "gy": 532.5,
+      "level": 1651.36
+     },
+     {
+      "gx": 265.5,
+      "gy": 532.5,
+      "level": 1650.6
+     },
+     {
+      "gx": 273.5,
+      "gy": 529.5,
+      "level": 1649.23
+     },
+     {
+      "gx": 279.5,
+      "gy": 528.5,
+      "level": 1648.18
+     },
+     {
+      "gx": 284.5,
+      "gy": 527.5,
+      "level": 1648.08
+     },
+     {
+      "gx": 288.5,
+      "gy": 526.5,
+      "level": 1647.67
+     },
+     {
+      "gx": 291.5,
+      "gy": 526.5,
+      "level": 1647.19
+     },
+     {
+      "gx": 296.5,
+      "gy": 525.5,
+      "level": 1646.91
+     },
+     {
+      "gx": 302.5,
+      "gy": 522.5,
+      "level": 1645.95
+     },
+     {
+      "gx": 306.5,
+      "gy": 520.5,
+      "level": 1645.54
+     },
+     {
+      "gx": 312.5,
+      "gy": 519.5,
+      "level": 1644.61
+     },
+     {
+      "gx": 316.5,
+      "gy": 518.5,
+      "level": 1644.2
+     },
+     {
+      "gx": 317.5,
+      "gy": 518.5,
+      "level": 1643.92
+     },
+     {
+      "gx": 318.5,
+      "gy": 518.5,
+      "level": 1643.69
+     },
+     {
+      "gx": 322.5,
+      "gy": 517.5,
+      "level": 1643.39
+     },
+     {
+      "gx": 325.5,
+      "gy": 517.5,
+      "level": 1643.13
+     },
+     {
+      "gx": 326.5,
+      "gy": 517.5,
+      "level": 1642.86
+     },
+     {
+      "gx": 337.5,
+      "gy": 518.5,
+      "level": 1641.81
+     },
+     {
+      "gx": 341.5,
+      "gy": 518.5,
+      "level": 1641.57
+     },
+     {
+      "gx": 350.5,
+      "gy": 517.5,
+      "level": 1640.55
+     },
+     {
+      "gx": 355.5,
+      "gy": 517.5,
+      "level": 1639.85
+     },
+     {
+      "gx": 361.5,
+      "gy": 516.5,
+      "level": 1639.64
+     },
+     {
+      "gx": 365.5,
+      "gy": 517.5,
+      "level": 1639.42
+     },
+     {
+      "gx": 369.5,
+      "gy": 517.5,
+      "level": 1639.2
+     },
+     {
+      "gx": 371.5,
+      "gy": 518.5,
+      "level": 1638.95
+     },
+     {
+      "gx": 376.5,
+      "gy": 519.5,
+      "level": 1638.57
+     },
+     {
+      "gx": 385.5,
+      "gy": 520.5,
+      "level": 1638.24
+     },
+     {
+      "gx": 387.5,
+      "gy": 520.5,
+      "level": 1637.94
+     },
+     {
+      "gx": 390.5,
+      "gy": 521.5,
+      "level": 1637.7
+     },
+     {
+      "gx": 396.5,
+      "gy": 521.5,
+      "level": 1637.38
+     },
+     {
+      "gx": 397.5,
+      "gy": 521.5,
+      "level": 1637.07
+     },
+     {
+      "gx": 401.5,
+      "gy": 521.5,
+      "level": 1636.85
+     },
+     {
+      "gx": 406.5,
+      "gy": 521.5,
+      "level": 1636.61
+     },
+     {
+      "gx": 411.5,
+      "gy": 520.5,
+      "level": 1636.41
+     },
+     {
+      "gx": 413.5,
+      "gy": 520.5,
+      "level": 1636.16
+     },
+     {
+      "gx": 421.5,
+      "gy": 520.5,
+      "level": 1635.94
+     },
+     {
+      "gx": 424.5,
+      "gy": 520.5,
+      "level": 1635.73
+     },
+     {
+      "gx": 427.5,
+      "gy": 520.5,
+      "level": 1635.49
+     },
+     {
+      "gx": 439.5,
+      "gy": 517.5,
+      "level": 1635.2
+     },
+     {
+      "gx": 446.5,
+      "gy": 515.5,
+      "level": 1634.4
+     },
+     {
+      "gx": 448.5,
+      "gy": 515.5,
+      "level": 1634.02
+     },
+     {
+      "gx": 456.5,
+      "gy": 514.5,
+      "level": 1633.72
+     },
+     {
+      "gx": 462.5,
+      "gy": 513.5,
+      "level": 1633.52
+     },
+     {
+      "gx": 465.5,
+      "gy": 512.5,
+      "level": 1633.28
+     },
+     {
+      "gx": 475.5,
+      "gy": 508.5,
+      "level": 1633.06
+     },
+     {
+      "gx": 479.5,
+      "gy": 506.5,
+      "level": 1632.66
+     },
+     {
+      "gx": 485.5,
+      "gy": 503.5,
+      "level": 1632.26
+     },
+     {
+      "gx": 486.5,
+      "gy": 503.5,
+      "level": 1632.18
+     },
+     {
+      "gx": 493.5,
+      "gy": 506.5,
+      "level": 1631.72
+     },
+     {
+      "gx": 498.5,
+      "gy": 507.5,
+      "level": 1631.4
+     },
+     {
+      "gx": 500.5,
+      "gy": 507.5,
+      "level": 1631.2
+     },
+     {
+      "gx": 505.5,
+      "gy": 507.5,
+      "level": 1630.81
+     },
+     {
+      "gx": 506.5,
+      "gy": 507.5,
+      "level": 1630.76
+     },
+     {
+      "gx": 518.5,
+      "gy": 504.5,
+      "level": 1630.23
+     },
+     {
+      "gx": 525.5,
+      "gy": 503.5,
+      "level": 1629.91
+     },
+     {
+      "gx": 529.5,
+      "gy": 502.5,
+      "level": 1629.62
+     },
+     {
+      "gx": 538.5,
+      "gy": 498.5,
+      "level": 1629.22
+     },
+     {
+      "gx": 546.5,
+      "gy": 496.5,
+      "level": 1629.09
+     },
+     {
+      "gx": 552.5,
+      "gy": 495.5,
+      "level": 1628.86
+     },
+     {
+      "gx": 560.5,
+      "gy": 493.5,
+      "level": 1628.58
+     },
+     {
+      "gx": 561.5,
+      "gy": 493.5,
+      "level": 1628.37
+     },
+     {
+      "gx": 576.5,
+      "gy": 491.5,
+      "level": 1627.79
+     },
+     {
+      "gx": 578.5,
+      "gy": 490.5,
+      "level": 1627.56
+     },
+     {
+      "gx": 581.5,
+      "gy": 490.5,
+      "level": 1627.26
+     },
+     {
+      "gx": 582.5,
+      "gy": 491.5,
+      "level": 1627.04
+     },
+     {
+      "gx": 583.5,
+      "gy": 491.5,
+      "level": 1626.83
+     },
+     {
+      "gx": 584.5,
+      "gy": 491.5,
+      "level": 1626.6
+     },
+     {
+      "gx": 586.5,
+      "gy": 492.5,
+      "level": 1626.24
+     },
+     {
+      "gx": 600.5,
+      "gy": 503.5,
+      "level": 1624.69
+     },
+     {
+      "gx": 607.5,
+      "gy": 508.5,
+      "level": 1624.56
+     },
+     {
+      "gx": 612.5,
+      "gy": 511.5,
+      "level": 1623.94
+     },
+     {
+      "gx": 625.5,
+      "gy": 517.5,
+      "level": 1623.54
+     },
+     {
+      "gx": 638.5,
+      "gy": 524.5,
+      "level": 1622.8
+     },
+     {
+      "gx": 642.5,
+      "gy": 526.5,
+      "level": 1622.68
+     },
+     {
+      "gx": 649.5,
+      "gy": 530.5,
+      "level": 1622.32
+     },
+     {
+      "gx": 657.5,
+      "gy": 535.5,
+      "level": 1622
+     },
+     {
+      "gx": 669.5,
+      "gy": 546.5,
+      "level": 1621.5
+     },
+     {
+      "gx": 670.5,
+      "gy": 546.5,
+      "level": 1621.29
+     },
+     {
+      "gx": 682.5,
+      "gy": 554.5,
+      "level": 1620.74
+     },
+     {
+      "gx": 694.5,
+      "gy": 561.5,
+      "level": 1620.01
+     },
+     {
+      "gx": 703.5,
+      "gy": 564.5,
+      "level": 1619.41
+     },
+     {
+      "gx": 709.5,
+      "gy": 564.5,
+      "level": 1619.26
+     },
+     {
+      "gx": 724.5,
+      "gy": 565.5,
+      "level": 1618.6
+     },
+     {
+      "gx": 725.5,
+      "gy": 565.5,
+      "level": 1618.5
+     },
+     {
+      "gx": 732.5,
+      "gy": 568.5,
+      "level": 1618.22
+     },
+     {
+      "gx": 735.5,
+      "gy": 570.5,
+      "level": 1618
+     },
+     {
+      "gx": 744.5,
+      "gy": 571.5,
+      "level": 1617.33
+     },
+     {
+      "gx": 754.5,
+      "gy": 569.5,
+      "level": 1617.01
+     },
+     {
+      "gx": 759.5,
+      "gy": 568.5,
+      "level": 1616.85
+     },
+     {
+      "gx": 765.5,
+      "gy": 568.5,
+      "level": 1616.64
+     },
+     {
+      "gx": 776.5,
+      "gy": 569.5,
+      "level": 1616.19
+     },
+     {
+      "gx": 781.5,
+      "gy": 569.5,
+      "level": 1615.95
+     },
+     {
+      "gx": 789.5,
+      "gy": 572.5,
+      "level": 1615.63
+     },
+     {
+      "gx": 790.5,
+      "gy": 573.5,
+      "level": 1615.38
+     },
+     {
+      "gx": 792.5,
+      "gy": 574.5,
+      "level": 1614.9
+     },
+     {
+      "gx": 802.5,
+      "gy": 576.5,
+      "level": 1614.53
+     },
+     {
+      "gx": 809.5,
+      "gy": 577.5,
+      "level": 1614.25
+     },
+     {
+      "gx": 811.5,
+      "gy": 578.5,
+      "level": 1614.2
+     },
+     {
+      "gx": 820.5,
+      "gy": 581.5,
+      "level": 1613.95
+     },
+     {
+      "gx": 829.5,
+      "gy": 579.5,
+      "level": 1613.57
+     },
+     {
+      "gx": 836.5,
+      "gy": 574.5,
+      "level": 1613.14
+     },
+     {
+      "gx": 843.5,
+      "gy": 572.5,
+      "level": 1612.65
+     },
+     {
+      "gx": 848.5,
+      "gy": 570.5,
+      "level": 1612.36
+     },
+     {
+      "gx": 853.5,
+      "gy": 570.5,
+      "level": 1611.98
+     },
+     {
+      "gx": 863.5,
+      "gy": 571.5,
+      "level": 1611.59
+     },
+     {
+      "gx": 870.5,
+      "gy": 572.5,
+      "level": 1611.23
+     },
+     {
+      "gx": 878.5,
+      "gy": 572.5,
+      "level": 1611.11
+     },
+     {
+      "gx": 891.5,
+      "gy": 569.5,
+      "level": 1610.71
+     },
+     {
+      "gx": 896.5,
+      "gy": 567.5,
+      "level": 1610.49
+     },
+     {
+      "gx": 909.5,
+      "gy": 563.5,
+      "level": 1609.67
+     },
+     {
+      "gx": 910.5,
+      "gy": 563.5,
+      "level": 1609.87
+     },
+     {
+      "gx": 918.5,
+      "gy": 566.5,
+      "level": 1609.34
+     },
+     {
+      "gx": 933.5,
+      "gy": 574.5,
+      "level": 1609.05
+     },
+     {
+      "gx": 935.5,
+      "gy": 575.5,
+      "level": 1608.85
+     },
+     {
+      "gx": 938.5,
+      "gy": 576.5,
+      "level": 1608.75
+     },
+     {
+      "gx": 941.5,
+      "gy": 577.5,
+      "level": 1608.34
+     },
+     {
+      "gx": 943.5,
+      "gy": 578.5,
+      "level": 1608.14
+     },
+     {
+      "gx": 947.5,
+      "gy": 577.5,
+      "level": 1607.68
+     },
+     {
+      "gx": 959.5,
+      "gy": 580.5,
+      "level": 1607.06
+     },
+     {
+      "gx": 963.5,
+      "gy": 581.5,
+      "level": 1606.78
+     },
+     {
+      "gx": 970.5,
+      "gy": 582.5,
+      "level": 1606.48
+     },
+     {
+      "gx": 982.5,
+      "gy": 583.5,
+      "level": 1606.22
+     },
+     {
+      "gx": 987.5,
+      "gy": 583.5,
+      "level": 1606.07
+     },
+     {
+      "gx": 997.5,
+      "gy": 584.5,
+      "level": 1605.91
+     },
+     {
+      "gx": 999.5,
+      "gy": 584.5,
+      "level": 1605.71
+     },
+     {
+      "gx": 1009.5,
+      "gy": 580.5,
+      "level": 1605.21
+     },
+     {
+      "gx": 1011.5,
+      "gy": 579.5,
+      "level": 1605.06
+     },
+     {
+      "gx": 1013.5,
+      "gy": 578.5,
+      "level": 1604.84
+     },
+     {
+      "gx": 1020.5,
+      "gy": 576.5,
+      "level": 1604.69
+     }
+    ],
+    "level": 1604.69
+   }
+  ],
+  "camera": {
+   "target": {
+    "gx": 389.8,
+    "gy": 521.1,
+    "elevation": 1637.4
+   },
+   "distance": 1800,
+   "yaw": -1.35,
+   "pitch": 0.45
+  }
+ },
+ "files": {
+  "elevation": "elevation.f32",
+  "imagery": "imagery.jpg",
+  "roads": "roads.json",
+  "buildings": "buildings.json"
+ },
+ "bake": {
+  "bakedAt": "2026-09-19T15:47:00.702Z",
+  "demSource": "usgs3dep",
+  "demRepairedCells": 0,
+  "center": {
+   "lat": 40.014,
+   "lon": -105.283
+  },
+  "sizeMeters": 5000,
+  "burnedCells": 3796,
+  "rivers": [
+   {
+    "name": "Boulder Creek",
+    "cells": 3796,
+    "depth": 2,
+    "surfaceMax": 1705.69,
+    "surfaceMin": 1604.69
+   }
+  ],
+  "initialWetCells": 3763,
+  "roads": {
+   "nodes": 1180,
+   "edges": 1749,
+   "km": 228.33650908896846,
+   "byClass": {
+    "highway": 8,
+    "major": 148,
+    "minor": 20,
+    "local": 1573
+   }
+  },
+  "buildings": {
+   "bakedAt": "2026-09-20T07:38:56.248Z",
+   "source": "OpenStreetMap API 0.6 /map (ODbL 1.0)",
+   "tiles": 9,
+   "microsoftFootprintsAdded": 0,
+   "parsed": 11915,
+   "kept": 11130,
+   "droppedTiny": 631,
+   "droppedOutside": 4,
+   "droppedInWater": 0,
+   "duplicates": 150,
+   "measured": 19,
+   "levels": 372,
+   "estimated": 10739,
+   "remote": 0,
+   "vertices": 80496,
+   "tallest": [
+    {
+     "name": "Folsom Field",
+     "height": 53,
+     "source": "measured"
+    },
+    {
+     "name": "Folsom Field",
+     "height": 53,
+     "source": "measured"
+    },
+    {
+     "name": "Golden West",
+     "height": 52.5,
+     "source": "levels"
+    },
+    {
+     "name": "Champions Center",
+     "height": 45,
+     "source": "measured"
+    },
+    {
+     "name": "Presbyterian Manor",
+     "height": 44.7,
+     "source": "levels"
+    },
+    {
+     "name": "Duane Physics and Astrophysics",
+     "height": 41,
+     "source": "measured"
+    },
+    {
+     "name": "Balch Fieldhouse",
+     "height": 38,
+     "source": "measured"
+    },
+    {
+     "name": "Colorado Building",
+     "height": 36.8,
+     "source": "levels"
+    },
+    {
+     "name": "Office Tower",
+     "height": 32.8,
+     "source": "levels"
+    },
+    {
+     "name": "(unnamed other)",
+     "height": 32.8,
+     "source": "levels"
+    },
+    {
+     "name": "Carlson Gymnasium",
+     "height": 29.5,
+     "source": "measured"
+    },
+    {
+     "name": "Dal Ward Athletic Center",
+     "height": 29,
+     "source": "measured"
+    },
+    {
+     "name": "(unnamed apartments)",
+     "height": 27.4,
+     "source": "levels"
+    },
+    {
+     "name": "Medical Pavilion",
+     "height": 26,
+     "source": "estimated"
+    },
+    {
+     "name": "NOAA - David Skaggs Research Center",
+     "height": 26,
+     "source": "estimated"
+    }
+   ],
+   "medianHeight": 6.8,
+   "maxHeight": 53,
+   "bytes": 648150,
+   "cellsBuiltOn": 120175
+  }
+ }
+}

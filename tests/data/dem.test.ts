@@ -199,7 +199,11 @@ function terrariumTile(elevation: number): Buffer {
   return makePNG(256, 256, rgb);
 }
 
-/** Run `fn` with global fetch answering 3DEP requests with `dep` and Terrarium tile requests with `tile`. */
+/**
+ * Run `fn` with global fetch answering 3DEP requests with `dep` and Terrarium tile requests with `tile`.
+ * Copernicus GLO-30 requests 404, which is how the global branch's fallback to Terrarium gets exercised; the
+ * Copernicus reader itself is covered in tests/data/demGlobal.test.ts.
+ */
 async function withStubbedServices<T>(dep: (nx: number, ny: number) => Float32Array, tileElevation: number, fn: () => Promise<T>): Promise<{ result: T; urls: string[] }> {
   const real = globalThis.fetch;
   const urls: string[] = [];
@@ -231,7 +235,8 @@ test('outside 3DEP coverage (an all-zero raster) falls back to Terrarium; open w
   assert.ok(!isEmptyZeroPlane(Float32Array.from({ length: 4096 }, () => NaN)), 'no-data is not a zero plane');
   assert.equal(landFraction(Float32Array.from([-3, 0.2, 0.6, 12])), 0.5);
 
-  const { merc } = squareDomain({ lat: 51.5074, lon: -0.1278 }, 2000);
+  // Inside 3DEP coverage the 3DEP branch runs, so a zero plane there is what the Terrarium fallback is for.
+  const { merc } = squareDomain({ lat: 40.4406, lon: -79.9959 }, 2000);
   const zeros = (nx: number, ny: number) => new Float32Array(nx * ny);
   const land = await withStubbedServices(zeros, 11.5, () => fetchDEM(merc, 64, 64, 2000 / 64));
   assert.equal(land.result.source, 'terrarium', 'zero plane → Terrarium');
@@ -248,4 +253,16 @@ test('outside 3DEP coverage (an all-zero raster) falls back to Terrarium; open w
   const us = await withStubbedServices(nola, 99, () => fetchDEM(merc, 64, 64, 2000 / 64));
   assert.equal(us.result.source, 'usgs3dep');
   assert.ok(!us.urls.some((u) => u.includes('terrarium')), 'no Terrarium requests');
+});
+
+test('outside the US the DEM comes from Copernicus GLO-30, never from 3DEP', async () => {
+  // London: 3DEP would answer a plane of zeros here, so the global branch must not spend the round trip on it.
+  const { merc } = squareDomain({ lat: 51.5074, lon: -0.1278 }, 2000);
+  const nonsense = (nx: number, ny: number) => new Float32Array(nx * ny).fill(4242);
+  const out = await withStubbedServices(nonsense, 11.5, () => fetchDEM(merc, 64, 64, 2000 / 64));
+  assert.ok(out.urls.some((u) => u.includes('copernicus-dem-30m')), `Copernicus asked first, got ${out.urls.join(', ')}`);
+  assert.ok(!out.urls.some((u) => u.includes('3DEPElevation')), '3DEP is not asked outside its coverage');
+  // The stub 404s the Copernicus bucket, so this run also proves the global branch still has Terrarium behind it.
+  assert.equal(out.result.source, 'terrarium');
+  assert.ok(out.result.elevation.every((v) => Math.abs(v - 11.5) < 0.01));
 });

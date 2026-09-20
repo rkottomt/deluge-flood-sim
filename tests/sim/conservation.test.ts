@@ -62,6 +62,53 @@ test('inflow source injects exactly Q·t (error < 0.5%), also when the footprint
   assert.deepEqual(gpuErrors(), []);
 });
 
+test('a timed inflow delivers exactly Q·stopAfter and then nothing (WaterSource.stopAfter)', async () => {
+  /*
+   * The Nepal surge is a REPORTED VOLUME divided by a release time, so the release time is part of the number: with no
+   * stop the solver kept delivering 11,100 m³/s for ever and had put 2.5x the reported 20 million m³ into the valley
+   * by 78 simulated minutes. Scaled down here (1/1000th of the discharge, 1/10th of the duration) so it runs on a
+   * 64² grid, and stepped in three uneven chunks, one of which STRADDLES the stop — the case a hard on/off switch
+   * gets wrong by up to a frame of discharge.
+   */
+  const nx = 64;
+  const ny = 64;
+  const dx = 5;
+  const Q = 11.1;
+  const stopAfter = 180;
+  const elevation = roughTerrain(nx, ny, 11, 6, 80);
+  const solver = await makeSolver({ nx, ny, cellSize: dx, elevation, params: { boundary: 'wall' } });
+  solver.setSources([{ id: 'surge', type: 'inflow', gx: 32.5, gy: 8.5, radius: 4, discharge: Q, stopAfter, label: 'scenario surge' }]);
+  const want = Q * stopAfter;
+
+  // 100 s: still running, and the accounting sees Q·t.
+  let snap = await stepAndSnapshot(solver, 500, { dt: 0.2 });
+  assert.ok(Math.abs(snap.stats.volumeIn - Q * snap.simTime) < 0.005 * Q * snap.simTime, `at ${snap.simTime} s: ${snap.stats.volumeIn} m³`);
+
+  // Past the stop, in a chunk that straddles it (100 → 260 s), then long past it (260 → 900 s).
+  snap = await stepAndSnapshot(solver, 800, { dt: 0.2 });
+  const straddled = snap.stats.volumeIn;
+  snap = await stepAndSnapshot(solver, 3200, { dt: 0.2 });
+  const after = snap.stats.volumeIn;
+  console.log(
+    `  timed inflow: Q·stopAfter=${want.toFixed(1)} m³, at ${snap.simTime.toFixed(0)} s accounted ${after.toFixed(1)} m³ ` +
+      `(straddling chunk ${straddled.toFixed(1)}), stored ${snap.stats.volume.toFixed(1)} m³`,
+  );
+  // Exactly the sourced total: the frame that crosses the stop delivers only the fraction of itself before it.
+  assert.ok(Math.abs(straddled - want) < 0.005 * want, `straddling chunk delivered ${straddled} m³, want ${want}`);
+  // And NOTHING after it: five times the release time later the total has not moved.
+  assert.ok(Math.abs(after - want) < 0.005 * want, `${snap.simTime.toFixed(0)} s later it had delivered ${after} m³`);
+  // Walled domain, so every drop is still in it.
+  assert.equal(snap.stats.volumeOut, 0);
+  assert.ok(Math.abs(snap.stats.volume - want) < 0.01 * want, `stored ${snap.stats.volume} m³ vs delivered ${want}`);
+
+  // reset() puts the inflow back: the run is repeatable, not a one-shot.
+  solver.reset();
+  snap = await stepAndSnapshot(solver, 500, { dt: 0.2 });
+  assert.ok(snap.stats.volumeIn > 0.9 * Q * snap.simTime, `after reset the surge delivered ${snap.stats.volumeIn} m³ in ${snap.simTime} s`);
+  assert.deepEqual(gpuErrors(), []);
+  solver.destroy();
+});
+
 test('SimStats.massError < 1e-3 in an open domain with rain, storm, inflow, stage and infiltration', async () => {
   const nx = 128;
   const ny = 128;

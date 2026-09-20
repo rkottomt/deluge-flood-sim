@@ -57,7 +57,9 @@ Presenting to judges? [DEMO.md](DEMO.md) has the pre-demo checklist, pitch scrip
 sub-path (`.github/workflows/pages.yml` publishes it to GitHub Pages once the repository is public and Pages is set to
 "GitHub Actions"). A hosted copy still needs WebGPU; keep `npm run demo` as the offline path.
 
-URL options: `?preset=pittsburgh|johnstown|ellicott|sandbox`, or any US area with `?live=<lat>,<lon>,<km>`
+URL options: `?preset=pittsburgh|johnstown|ellicott|asheville|nashville|houston|boulder|sandbox` (the full list is
+under *Scenario → Change*, and in [Seven cities, offline](#seven-cities-offline) below), or any US area with
+`?live=<lat>,<lon>,<km>`
 (e.g. `?live=29.95,-90.07,6` for New Orleans; this needs the internet for USGS, Esri and Census TIGERweb).
 
 ## Try this (30 seconds)
@@ -82,6 +84,40 @@ adapts solver substeps and render resolution to measured frame time and GPU late
 battery, but 60 fps needs mains power. On an Apple M4 the 1936 crest flood with extreme rain runs at 60 fps (p95 frame 19 ms) and
 ~70× real time at 1600×1000 (numbers and the MacBook Air expectation: [ARCHITECTURE.md §8.1](ARCHITECTURE.md#81-performance-budget-measured)).
 
+## Seven cities, offline
+
+Every scene below is baked into the repo and needs no network: real USGS elevation, real NAIP photography, real Census
+streets, and a scenario built from that city's own gauge records (sources and licences:
+[public/presets/SOURCES.txt](public/presets/SOURCES.txt)). Load time, frame rate and sim speed are measured in the
+production build at 1470x956 DPR 2 on the demo MacBook Air M4, offline, with the scene's own camera and forcing —
+one fresh browser context per scene, on a machine that was in Low Power Mode and sharing its GPU, so read them as an
+upper bound on load time and a lower bound on speed. Sim speed is how many simulated seconds each wall-clock second
+buys while the flood plays; it swings ±10 % run to run.
+
+| Scene | Flood | Domain / cell | Photo | Streets | Cold load | fps | Sim speed |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| **Pittsburgh — Three Rivers** | 1936 St Patrick's Day crest, 46 ft | 8.0 km / 7.81 m | 1.95 m/texel + 3.0 km inset at 0.73 | 11,053 | 744 ms | 60 | ~100× |
+| **Johnstown — Conemaugh Valley** | 1889 South Fork Dam flood as a 3,730 m³/s inflow | 7.0 km / 6.84 m | 1.71 + 2.5 km inset at 0.61 | 4,903 | 687 ms | 60 | ~82× |
+| **Ellicott City — Main Street** | 2016 flash-flood storm over the Tiber branch | 5.0 km / 4.88 m | 1.22 m/texel | 1,224 | 606 ms | 60 | ~53× |
+| **Asheville — French Broad Valley** | Hurricane Helene, 27 Sep 2024: record crests on two rivers | 8.0 km / 7.81 m | 1.95 + 3.0 km inset at 0.73 | 3,556 | 705 ms | 60 | ~125× |
+| **Nashville — Cumberland River** | May 2010 flood; the slider also holds 1937 and the 1927 record | 6.0 km / 5.86 m | 1.46 m/texel | 5,410 | 686 ms | 60 | ~85× |
+| **Houston — Buffalo Bayou** | Hurricane Harvey, Aug 2017: 173 mm/hr over a dead-flat plain | 8.0 km / 7.81 m | 1.95 + 3.0 km inset at 0.73 | 10,529 | 691 ms | 60 | ~63× |
+| **Boulder — Canyon Mouth** | 2013 Front Range flash flood out of Boulder Canyon | 5.0 km / 4.88 m | 1.22 m/texel | 1,749 | 636 ms | 60 | ~48× |
+
+Plus a procedural **sandbox** (river town, reservoir and dam) that uses no external data at all.
+
+**The close-up inset.** Four of the domains are wide enough that a single 4096² photo lands at ~1.7–2.0 m/texel, which
+is mush at street level — so those four carry a second 4096² NAIP photo over the middle 2.5–3.0 km, blended into the
+base in the terrain shader with an 8-cell feather. It buys 2.4–2.7× the texel density exactly where the scenario
+cameras fly, costs 89.5 MB of GPU memory and 3.5–5.1 MB on disk each, and measures free on both load (−23 ms,
+interleaved A/B) and frame time (deltas inside sample noise, one of them negative). The other three domains are
+already at 1.22–1.46 m/texel, close enough to NAIP's own ~1 m limit that an inset would add megabytes and no detail.
+`public/presets` totals 97.2 MB across eight presets against a 120 MB static-host budget enforced by
+`tests/data/presets.test.ts`. A visitor never downloads that number — presets load one at a time, so the cost is the
+largest single preset (Asheville, 15.9 MB), which a separate 25 MB per-preset cap holds down; the directory total is
+a host-and-repo budget, and the rationale for where it sits is in
+[ARCHITECTURE.md §5](ARCHITECTURE.md#5-data).
+
 ## Why this is hard
 
 An explicit shallow-water solver on real terrain wants to explode: rivers are deep and fast, floodplains are
@@ -102,7 +138,8 @@ that rises in simulated time instead of dam-breaking along every bank.
 
 ### Validation
 
-From `npm test` (the solver tests run on a real GPU through Dawn):
+From `npm test` (the solver tests run on a real GPU through Dawn); the grid-convergence rows from
+`npx tsx scripts/reference-run.ts`, also on the real GPU:
 
 | Check | Result |
 | --- | --- |
@@ -114,8 +151,22 @@ From `npm test` (the solver tests run on a real GPU through Dawn):
 | Rain on a tilted plane at steady state ([boundary](tests/sim/boundary.test.ts)) | outflow / rain = 1.000 |
 | Channels at 0–60° to the grid ([channel](tests/sim/channel.test.ts)) | depth within 6 % of Manning's normal depth (0.98–1.05) |
 | GPU (Float32, parallel) vs Float64 CPU reference, 5 cases × 400 steps ([reference](tests/sim/reference.test.ts)) | max \|Δh\| ≤ 4.3·10⁻⁵ m |
+| Grid convergence, 1936 crest: the 1024² demo grid vs a 4096² run of the same solver, 16× the cells, 30 sim-min ([reference-run](scripts/reference-run.ts)) | flooded area −0.92 %, flood-extent IoU 98.0 %, max-depth RMSE 0.29 m (median 6 cm), landmark arrivals within 2.2 % |
+| The same under 100 mm/hr rain ([reference-run](scripts/reference-run.ts)) | flooded area −0.55 %, flood-extent IoU 78.2 %, max-depth RMSE 0.22 m (median 5 cm) |
+| All seven baked cities in the production build, offline, at 1470x956 DPR 2 ([e2e](scripts/e2e.mjs) flow 7, [presets](tests/data/presets.test.ts)) | load 606–744 ms, 58.7–60 fps, sim 48–134× real time, mass error ≤ 6·10⁻⁸, no console or WebGPU errors, zero network requests |
+| Every scene's streets, shelters and evacuation routing ([e2e](scripts/e2e.mjs) flow 5) | 1,224–11,053 road edges, 4–5 shelters, a route plans dry and re-plans as streets flood, on all seven |
 
 In the running app the HUD's mass-balance error stays below 0.001 % at the 1936 crest, with or without hurricane rain.
+
+**The flood is not an artefact of the cell size.** The same solver on the same scenario at 7.81, 3.91 and 1.95 m cells
+(34 minutes of GPU time on this laptop — the 4096² reference run needed no rented GPU) agrees to about 1 % in flooded
+area, and halving the cell size halves the error. It converges *less* well where you would expect: rain puts water in
+noticeably different places at 7.8 m (78 % overlap against the reference, against 98 % for the river crest), the worst
+1 % of flooded cells differ by more than 1.3 m — those are flood-margin and street-width flow paths — and the area with
+*any* water (1 cm) under rain does not converge at all. What this does and does not prove, in detail:
+[ARCHITECTURE.md §9.1](ARCHITECTURE.md#91-grid-convergence-the-demo-grid-against-a-16-finer-reference). Short version:
+it bounds the solver's discretisation error; it says nothing about whether a 7.8 m bare-earth DEM is the right terrain,
+and nothing about accuracy against the real flood.
 
 **Checked against the National Weather Service.** NWS impact statements for the Point gauge (PTTP1), against Deluge
 holding each stage for 15 simulated minutes:
@@ -230,6 +281,15 @@ camera, a close-up shoreline, a drawn wall, a bridge, top-down and a low grazing
 The two transient toasts are hidden for the capture — they auto-dismiss on a wall-clock timer, so whether one is on
 screen depends on how long the machine took, which is worth ~3 % of the frame and nothing to do with rendering.
 
+Two honest limits on what these goldens catch. **They have no scene for Asheville, Nashville, Houston or Boulder** —
+those four are covered end to end by `npm run e2e` (flow 7 reads the city list off `public/presets`, so it cannot go
+stale), not by a pixel baseline. And the goldens compare at **1/8 resolution** (`baselineShrink 8`), which is what
+makes them robust to sub-pixel drift but also means they are **blind to imagery sharpness**: the close-up insets moved
+them by nothing, and a future sharpness regression would not move them either. One scene is genuinely flaky —
+`pittsburgh-velocity`, the only one comparing an instantaneous field rather than an accumulated one, measured 0.0051,
+0.0163, 0.0215 and 0.0305 on four runs of identical code against a 0.02 threshold; see
+[ARCHITECTURE.md §9](ARCHITECTURE.md#9-validation).
+
 Two independent checks:
 
 - **Golden images.** Each scene is compared with its committed baseline in `tests/visual/baselines/` using a
@@ -328,13 +388,16 @@ a simulation. `Deluge.app` serves the same build with `frame-ancestors 'none'` a
 
 ## Data and attribution
 
-Baked presets use only public-domain U.S. government data (details in
-[public/presets/SOURCES.txt](public/presets/SOURCES.txt)):
+All seven baked cities use only public-domain U.S. government data — nothing in `public/presets` comes from a source
+that forbids redistribution (details, per city, in [public/presets/SOURCES.txt](public/presets/SOURCES.txt)):
 
 * Elevation: **USGS 3D Elevation Program (3DEP)**
-* Imagery: **USDA NAIP** via USGS The National Map
-* Roads: **U.S. Census Bureau TIGER/Line**
-* Flood stages and historic crests: NOAA National Weather Service (gauge PTTP1) and USGS peak-flow records
+* Imagery: **USDA NAIP** via USGS The National Map — both the base photo and the close-up inset
+* Roads: **U.S. Census Bureau TIGER/Line** via TIGERweb
+* River centrelines: **USGS National Hydrography Dataset** high-resolution flowlines
+* Flood stages and historic crests: NOAA National Weather Service (gauges PTTP1, Nashville) and USGS annual peak-flow
+  records (French Broad at Asheville 03451500, Swannanoa at Biltmore 03451000, Cumberland at Nashville 03431500,
+  Buffalo Bayou at Houston 08074000, Boulder Creek 06730200, Stonycreek 03040000, Patapsco 01589000)
 
 Live areas and the location picker's basemap fetch **Esri World Imagery** at runtime (© Esri, Vantor, Earthstar
 Geographics, and the GIS User Community; Esri's terms apply). Fallbacks: **Mapzen Terrarium** elevation tiles (AWS Open

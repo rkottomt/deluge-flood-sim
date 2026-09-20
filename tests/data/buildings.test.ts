@@ -107,6 +107,24 @@ test('height priors are ordered sensibly and never absurd', () => {
   }
 });
 
+test("the 'nepal' height profile lowers estimated roofs without reordering them", () => {
+  // A Nepali storey is about 2.6 m against the US prior's 3.2 m, so every estimated roof comes down by that ratio.
+  for (const k of BUILDING_KINDS) {
+    for (const a of [30, 300, 3000, 50000]) {
+      const us = priorHeight(k, a, 'us');
+      const np = priorHeight(k, a, 'nepal');
+      assert.ok(np < us, `${k} at ${a} m2 should be lower under the nepal profile`);
+      assert.ok(Math.abs(np / us - 2.6 / 3.2) < 1e-9, `${k} at ${a} m2 scaled by ${np / us}`);
+      assert.ok(np >= 2.5 && np <= 40, `nepal prior for ${k} at ${a} m2 was ${np} m`);
+    }
+  }
+  // The ordering the estimator leans on must survive the rescale.
+  assert.ok(priorHeight('shed', 40, 'nepal') < priorHeight('house', 100, 'nepal'));
+  assert.ok(priorHeight('house', 100, 'nepal') < priorHeight('apartments', 1000, 'nepal'));
+  // Default is unchanged, so no US preset moves.
+  assert.equal(priorHeight('house', 100), priorHeight('house', 100, 'us'));
+});
+
 // ──────────────────────────────────────────────────────────────────────────────────────────────
 // OSM XML parsing
 // ──────────────────────────────────────────────────────────────────────────────────────────────

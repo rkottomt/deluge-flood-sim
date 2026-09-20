@@ -52,7 +52,18 @@ const ALL_TOOLS = ['orbit', 'wall', 'eraseWall', 'inflow', 'storm', 'water', 'di
 const BRAVE = '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser';
 /** Main preset for flows 1–5 and 8 (the demo is Pittsburgh; other presets are useful while developing). */
 const PRESET = String(args.preset ?? process.env.E2E_PRESET ?? 'pittsburgh');
-const OTHER_PRESETS = ['pittsburgh', 'sandbox', 'johnstown', 'ellicott'].filter((p) => p !== PRESET);
+/**
+ * Flow 7 loads every other scene the app offers, so it is read off the baked directory rather than hard-coded:
+ * a preset added by a bake but forgotten here would otherwise never be driven end to end.
+ */
+const BAKED_PRESETS = fs
+  .readdirSync(path.join(ROOT, 'public', 'presets'), { withFileTypes: true })
+  .filter((d) => d.isDirectory() && fs.existsSync(path.join(ROOT, 'public', 'presets', d.name, 'meta.json')))
+  .map((d) => d.name)
+  .sort();
+const OTHER_PRESETS = ['pittsburgh', 'sandbox', ...BAKED_PRESETS.filter((p) => p !== 'pittsburgh')].filter(
+  (p) => p !== PRESET,
+);
 
 fs.mkdirSync(OUT, { recursive: true });
 

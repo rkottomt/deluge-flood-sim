@@ -11,6 +11,8 @@
  *     --fit        also print the metres-per-storey fit from every building that carries BOTH `height` and
  *                  `building:levels` (this is where LEVEL_HEIGHT_LOW / LEVEL_HEIGHT_HIGH come from)
  *     --fill / --no-fill   force the Microsoft ML footprint fill on/off (default: on where OSM coverage is thin)
+ *     --profile=us|nepal   regional calibration of the ESTIMATED height prior (default: per preset; Nepal uses
+ *                  'nepal', everything else 'us'). Never touches a tagged, floor-counted or remote-sensed height.
  *     --out=<dir>  default public/presets
  *
  * SECOND SOURCE: where OpenStreetMap has mapped fewer than MS_FILL_DENSITY buildings per km^2, the gap is filled
@@ -40,6 +42,7 @@ import { fileURLToPath } from 'node:url';
 import type { BuildingSet, GeoBounds } from '../src/contracts';
 import {
   buildBuildingSet,
+  type HeightProfile,
   BUILDING_KINDS,
   BUILDINGS_ATTRIBUTION_OSM,
   BUILDINGS_ATTRIBUTION_OSM_MS,
@@ -67,6 +70,16 @@ const REFRESH = process.argv.includes('--refresh');
 const DRY = process.argv.includes('--dry');
 const FIT = process.argv.includes('--fit');
 const FILL = process.argv.includes('--fill') ? true : process.argv.includes('--no-fill') ? false : null;
+/**
+ * Regional calibration of the estimated-height prior (src/data/buildings.ts). Defaults per preset, because the prior
+ * was fitted to US building stock: everything in the United States takes it as fitted, Betrawati does not.
+ */
+const HEIGHT_PROFILE_BY_PRESET: Record<string, HeightProfile> = { nepal: 'nepal' };
+const PROFILE_ARG = argValue('profile') as HeightProfile | undefined;
+if (PROFILE_ARG && PROFILE_ARG !== 'us' && PROFILE_ARG !== 'nepal') {
+  throw new Error(`--profile must be 'us' or 'nepal', got '${PROFILE_ARG}'`);
+}
+const heightProfileFor = (id: string): HeightProfile => PROFILE_ARG ?? HEIGHT_PROFILE_BY_PRESET[id] ?? 'us';
 /** Lidar path (see the block comment above HS_LIDAR): dump footprints for the sampler / apply the sampled roofs. */
 const LIDAR_EXPORT = argValue('lidar-export');
 const LIDAR_APPLY = argValue('lidar');
@@ -424,7 +437,9 @@ async function bake(id: string): Promise<void> {
   for (const xml of xmls) raw.push(...parseOSMBuildings(xml));
   log(id, `parsed ${raw.length} OSM footprints (${raw.filter((b) => b.height !== null).length} with a tagged height)`);
 
-  let built = buildBuildingSet(raw, { nx, ny, cellSize, bounds, elevation, water });
+  const heightProfile = heightProfileFor(id);
+  if (heightProfile !== 'us') log(id, `estimated-height prior: '${heightProfile}' profile`);
+  let built = buildBuildingSet(raw, { nx, ny, cellSize, bounds, elevation, water, heightProfile });
   const areaKm2 = (nx * cellSize * ny * cellSize) / 1e6;
   const density = built.set.count / areaKm2;
   let msAdded = 0;
@@ -459,6 +474,7 @@ async function bake(id: string): Promise<void> {
       bounds,
       elevation,
       water,
+      heightProfile,
       attribution: msAdded > 0 ? BUILDINGS_ATTRIBUTION_OSM_MS : BUILDINGS_ATTRIBUTION_OSM,
     });
   }
@@ -535,6 +551,8 @@ async function bake(id: string): Promise<void> {
       source: 'OpenStreetMap API 0.6 /map (ODbL 1.0)',
       tiles: ts.length,
       microsoftFootprintsAdded: msAdded,
+      // Which regional calibration produced the 'estimated' heights below (src/data/buildings.ts).
+      heightProfile,
       ...(lidar
         ? {
             lidar: {
