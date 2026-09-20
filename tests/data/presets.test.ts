@@ -15,7 +15,8 @@ import path from 'node:path';
 import type { AddressInfo } from 'node:net';
 import type { RoadNetwork, ScenarioPreset, TerrainData, WaterSource } from '../../src/contracts';
 import { type DomainEdge, edgeCell, edgeRuns, STAGE_DISC_MAX_PENETRATION } from '../../src/data/hydro';
-import { cellSizeFor } from '../../src/data/geo';
+import { cellSizeFor, geoToGrid } from '../../src/data/geo';
+import { BARE_EARTH_DEFAULTS } from '../../src/data/demGlobal';
 import { detailMetersPerTexel, DETAIL_TARGET_MPT, isValidDetailRect } from '../../src/data/imagery';
 import { computeInitialWater } from '../../src/data/initialWater';
 import { listPresets, loadPreset } from '../../src/data/index';
@@ -630,6 +631,44 @@ test('boulder: the 2013 flood comes out of the canyon', { skip: !fs.existsSync(p
  * be LABELLED a scenario, the surface-model and dry-start caveats have to be in the text a visitor reads, and no
  * casualty count may appear anywhere near simulation output.
  */
+/*
+ * THE NEPAL SHELTERS, PINNED. Every shipped shelter name is a real OSM feature at a known node, spelled as OSM
+ * spells it, and the shelter the bake ships must be within that node's search radius of it.
+ *
+ * This exists because a name drifted: "Kalika Community Hospital" shipped at [85.18091, 28.02053], an untagged
+ * vertex of OSM way 443766738 (waterway=stream) 3.5 km north of the hospital and 753 m below it, and the false
+ * name reached the on-screen route text. A shelter is the one thing in this app that names a real building people
+ * would go to, so the name, the node and the position are asserted together and the justification lives in
+ * scripts/bake-presets.ts and public/presets/SOURCES.txt.
+ *
+ * The lat/lon here are the node's own coordinates, read from the OSM extracts the bake consumes; when those
+ * extracts are on this machine (they are gitignored downloads) the table is re-checked against them below.
+ */
+const NEPAL_SHELTERS = [
+  { name: 'Shree Sundaradevi Pra Vi', node: '5063441826', lat: 27.9762731, lon: 85.1769728, search: 200 },
+  { name: 'Shree Sivalaya Ni Ma.V', node: '4969611375', lat: 27.9835489, lon: 85.1913123, search: 200 },
+] as const;
+const NEPAL_OSM_XML = [0, 1, 2, 3].map((q) => path.resolve(import.meta.dirname, `../../artifacts/nepal-build/osm-betrawati-q${q}.xml`));
+
+/** `name`, `lat` and `lon` of an OSM node id in the cached extracts, or null when they are not on this machine. */
+function osmNode(id: string): { name: string | null; lat: number; lon: number } | null {
+  for (const f of NEPAL_OSM_XML) {
+    if (!fs.existsSync(f)) continue;
+    const xml = fs.readFileSync(f, 'utf8');
+    const at = xml.indexOf(`<node id="${id}" `);
+    if (at < 0) continue;
+    // A node is either self-closing or a block of <tag> children: stop at whichever comes first.
+    const ends = [xml.indexOf('</node>', at + 1), xml.indexOf('<node id=', at + 1)].filter((i) => i > 0);
+    const chunk = xml.slice(at, ends.length ? Math.min(...ends) : at + 2000);
+    return {
+      name: /<tag k="name" v="([^"]*)"/.exec(chunk)?.[1] ?? null,
+      lat: Number(/ lat="([-0-9.]+)"/.exec(chunk)?.[1]),
+      lon: Number(/ lon="([-0-9.]+)"/.exec(chunk)?.[1]),
+    };
+  }
+  return null;
+}
+
 test('nepal: a labelled scenario hydrograph, sourced numbers, and the caveats on screen', { skip: !fs.existsSync(path.join(ROOT, 'nepal/meta.json')) }, () => {
   const { meta } = load('nepal');
   const s = meta.scenario;
@@ -638,6 +677,16 @@ test('nepal: a labelled scenario hydrograph, sourced numbers, and the caveats on
   const surge = s.sources.find((x) => x.type === 'inflow')!;
   assert.equal(s.sources.length, 1, 'one forcing: the wave from upstream');
   assert.equal(surge.type === 'inflow' && surge.discharge, 11100);
+  /*
+   * AND IT STOPS, after exactly the 30 minutes the label and the text both quote. Without a stop this source kept
+   * delivering the same peak for ever: 2.07e7 m³ by 31 simulated minutes, 5.15e7 by 78, against the 2.0e7 m³ DHM
+   * reported — the run outran its own sourced number and went on outrunning it. 11,100 × 1,800 s = 19.98 million m³,
+   * the reported total to within the rounding of the discharge to a hundred m³/s; tests/sim/conservation.test.ts
+   * asserts the solver actually delivers Q·stopAfter and then nothing.
+   */
+  assert.equal(surge.type === 'inflow' && surge.stopAfter, 30 * 60);
+  const delivered = (surge.type === 'inflow' && surge.discharge * surge.stopAfter!) as number;
+  assert.ok(Math.abs(delivered - 2.0e7) / 2.0e7 < 0.002, `the surge delivers ${(delivered / 1e6).toFixed(3)} million m³, not the reported 20`);
   assert.equal(s.stage, null, 'a stage slider would raise the whole reach at once — the opposite of this event');
   assert.equal(s.rainRate, 0);
   assert.equal(s.storms.length, 0);
@@ -652,11 +701,37 @@ test('nepal: a labelled scenario hydrograph, sourced numbers, and the caveats on
   assert.match(s.description, /3\.55 m/, 'the gauge\u2019s last reading');
   assert.match(s.description, /warning level 4\.1 m, danger level 5 m/);
   assert.match(s.description, /an average rather than a measured peak/);
-  // Caveats a visitor must not have to dig for.
+  // Caveats a visitor must not have to dig for. Each of the three below was in SOURCES.txt ALONE until the audit,
+  // which is the same as nowhere: the on-screen sentence either says it or the app is overclaiming.
   assert.match(s.description, /surface model with canopy and buildings/);
   assert.match(s.description, /rivers start dry/);
-  assert.match(s.description, /no aerial photograph/);
   assert.match(s.description, /do not read street-level depths/);
+  /*
+   * (a) THE FILTER DOES NOT TOUCH MOST OF THIS DOMAIN. The bare-earth filter is gated to ground flatter than 20°
+   * (BARE_EARTH_DEFAULTS.slopeGate = 0.364 m/m) and 77 % of the Betrawati square is steeper, so the valley walls
+   * ship as the raw surface model. "filtered towards bare earth", which is what the text used to say, reads as the
+   * whole terrain. The share is recomputed from the shipped elevation below, so the number on screen cannot rot.
+   */
+  assert.match(s.description, /flatter than 20°/);
+  assert.match(s.description, /raw surface model/);
+  const steepClaim = Number(/([0-9]+) % of this domain is steeper/.exec(s.description)?.[1]);
+  assert.ok(Number.isFinite(steepClaim), 'the text states what share of the domain the filter skipped');
+  /*
+   * (b) THE ARRIVAL TIMES ARE THE SOLVER'S SPEED CAP, not the terrain's answer. Measured on this bake the reported
+   * max speed is 15.0 m/s (SOLVER_DEFAULTS.uMax) by 32 simulated seconds and stays pinned there
+   * (artifacts/nepal-verify/nepal-run.json), so "when the water arrives" is a statement about the cap. The research
+   * brief is explicit that this must not be presented as reproducing the real arrival times.
+   */
+  assert.match(s.description, /15 m\/s/);
+  assert.match(s.description, /not the real arrival times/);
+  /*
+   * (c) THE IMAGERY SENTENCE MUST NOT CONTRADICT SOURCES.txt, which says Sentinel-2 L2A is open and COULD be
+   * redistributed with credit — it simply was not composed. "there is no aerial photograph here that this project may
+   * redistribute", the old wording, said the opposite of the file it is meant to summarise.
+   */
+  assert.match(s.description, /No photograph is baked in/);
+  assert.match(s.description, /could be redistributed/);
+  assert.doesNotMatch(s.description, /no aerial photograph/);
   // No casualty or missing-persons figure anywhere in what the app shows: this model cannot produce one.
   const shown = `${meta.name} ${meta.subtitle} ${s.description} ${s.sources.map((x) => x.label ?? '').join(' ')}`;
   assert.doesNotMatch(shown, /\b(dead|death|deaths|killed|casualt\w*|missing|bodies|swept away [0-9])/i, shown);
@@ -690,13 +765,62 @@ test('nepal: a labelled scenario hydrograph, sourced numbers, and the caveats on
   assert.ok(fromCrossing < 1200, `camera target is ${fromCrossing.toFixed(0)} m from the Betrawati crossing`);
   assert.ok(s.camera!.target.gy < 757, 'the target sits upstream of the crossing, where the surge comes from');
   /*
-   * Real named places on real high ground, each named for its own OSM node — and THREE of them, not four: the school
-   * nearest the bazaar stands 31.3 m above the channel beside it against this preset's 33 m bar, so the bake refuses
-   * it (scripts/bake-presets.ts). This count is asserted so that bar cannot be quietly lowered to get it back.
+   * REAL NAMED PLACES, EACH PINNED TO ITS OWN OSM NODE (see NEPAL_SHELTERS above for why). Two of them: the third
+   * entry named a hospital over a stream vertex 3.5 km away, and the hospital's real node is 919 m up on the
+   * Kalikasthan ridge, which the research brief calls "a long climb, not a walk" — not a refuge for anyone on the
+   * valley floor, so it is gone rather than relocated. Shree Neelkanta is out for a different reason
+   * (scripts/bake-presets.ts): the road graph has no node within its search radius.
    */
-  assert.equal(s.shelters.length, 3);
-  for (const sh of s.shelters) assert.match(sh.name, /^(Shree|Kalika)/, sh.name);
-  assert.doesNotMatch(s.shelters.map((sh) => sh.name).join(' '), /Neelkanta/);
+  assert.equal(s.shelters.length, NEPAL_SHELTERS.length, 'two shelters, both pinned to an OSM node');
+  const grid = { nx: meta.nx, ny: meta.ny, bounds: meta.bounds };
+  for (const want of NEPAL_SHELTERS) {
+    const got = s.shelters.find((sh) => sh.name === want.name);
+    assert.ok(got, `no shelter named "${want.name}" (shipped: ${s.shelters.map((sh) => sh.name).join(', ')})`);
+    const p = geoToGrid(grid, want.lon, want.lat);
+    const off = Math.hypot(got.gx - p.gx, got.gy - p.gy) * meta.cellSize;
+    // The bake snaps a shelter to a high road node within `search` of the named place; further than that and the
+    // name is on the wrong ground.
+    assert.ok(off <= want.search, `${want.name} sits ${off.toFixed(0)} m from OSM node ${want.node}, outside its ${want.search} m search`);
+    // And the table itself is checked against the extracts when they are on this machine.
+    const node = osmNode(want.node);
+    if (node) {
+      assert.equal(node.name, want.name, `OSM node ${want.node} is named "${node.name}", not "${want.name}"`);
+      assert.ok(Math.abs(node.lat - want.lat) < 1e-6 && Math.abs(node.lon - want.lon) < 1e-6, `OSM node ${want.node} is at ${node.lat}, ${node.lon}`);
+    }
+  }
+  // Nothing may re-appear under a name whose place is somewhere else: these two were both wrong, differently.
+  const names = s.shelters.map((sh) => sh.name).join(' ');
+  assert.doesNotMatch(names, /Neelkanta/);
+  assert.doesNotMatch(names, /Kalika/);
+});
+
+test('nepal: the share of the domain the bare-earth filter skipped is the share the text claims', { skip: !fs.existsSync(path.join(ROOT, 'nepal/meta.json')) }, () => {
+  /*
+   * The on-screen sentence says "77 % of this domain is steeper" than the filter's 20° gate. That number was measured
+   * during the sweep (artifacts/nepal-build/out-bareearth-nepal.txt: 53 % at 20–35° plus 24 % over 35°), and an
+   * artifact is not a guard — so recompute the gate's own test on the shipped elevation, the same ±2-cell slope
+   * bareEarthFromSurface uses, and hold the claim to it.
+   */
+  const { meta, elevation } = load('nepal');
+  const { nx, ny, cellSize } = meta;
+  const g = 2;
+  let steep = 0;
+  for (let j = 0; j < ny; j++) {
+    for (let i = 0; i < nx; i++) {
+      const xa = Math.max(0, i - g);
+      const xb = Math.min(nx - 1, i + g);
+      const ya = Math.max(0, j - g);
+      const yb = Math.min(ny - 1, j + g);
+      const dzdx = (elevation[j * nx + xb] - elevation[j * nx + xa]) / ((xb - xa) * cellSize);
+      const dzdy = (elevation[yb * nx + i] - elevation[ya * nx + i]) / ((yb - ya) * cellSize);
+      if (Math.hypot(dzdx, dzdy) > BARE_EARTH_DEFAULTS.slopeGate) steep++;
+    }
+  }
+  const pct = (100 * steep) / (nx * ny);
+  const claim = Number(/([0-9]+) % of this domain is steeper/.exec(meta.scenario.description)?.[1]);
+  console.log(`  nepal: ${pct.toFixed(1)} % of cells steeper than the ${BARE_EARTH_DEFAULTS.slopeGate} m/m gate; the text claims ${claim} %`);
+  assert.ok(pct > 50, `only ${pct.toFixed(1)} % steep — the gate is not what leaves this domain unfiltered`);
+  assert.ok(Math.abs(pct - claim) <= 2, `the text claims ${claim} %, the shipped DEM measures ${pct.toFixed(1)} %`);
 });
 
 test(`public/presets stays inside its ${PRESETS_BUDGET_MB} MB budget`, () => {

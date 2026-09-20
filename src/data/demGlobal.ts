@@ -36,6 +36,12 @@
  *   (median; +2.0 to +3.6 m at the mean, which the tail of remaining canopy drags up), plus whatever the
  *   EGM2008-vs-NAVD88 datum difference contributes. Those numbers belong in the provenance of anything baked from it,
  *   in public/presets/SOURCES.txt, and in the scenario text a visitor reads.
+ *
+ *   AND ON STEEP GROUND THE FILTER DOES NOTHING, BY DESIGN. The slope gate (`slopeGate`, 20° by default) makes cells
+ *   on ground steeper than that ineligible, because up there no opening can tell a roof from a spur nose. On a
+ *   mountain domain that is most of the map: 77 % of the Betrawati square is steeper than 20° and ships as the raw
+ *   surface model, with only the valley floor filtered. bareEarthFromSurface returns that share as `steepFraction`,
+ *   and any text that says "filtered terrain" owes the reader the part that was NOT filtered.
  */
 import { fromUrl } from 'geotiff';
 import type { GeoBounds, ProgressFn } from '../contracts';

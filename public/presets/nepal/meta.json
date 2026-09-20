@@ -14,7 +14,7 @@
  },
  "attribution": "Elevation: Copernicus DEM GLO-30 (© DLR e.V. 2010–2014 / © Airbus Defence and Space GmbH, ESA), bare-earth filtered · Terrain shading: no aerial imagery (hypsometric tint) · Roads © OpenStreetMap contributors (ODbL)",
  "scenario": {
-  "description": "Betrawati stands where the Phalakhu Khola meets the Trishuli on the Nuwakot–Rasuwa district line, and its bridge carried the Pasang Lhamu Highway — the only road into Rasuwa district. On the morning of 26 August 2026 rock and glacier ice broke from the north face of Langtang Lirung and fell about 1,200 m into the Lhende Khola, sending a debris flood down the Bhote Koshi and the Trishuli; it reached Betrawati around 9:20 am, minutes after the first SMS alerts went out, and took the bridge with it. Nepal’s Flood Forecasting Division reported about 20 million m³ of excess water down the river system, and this run releases that volume over 30 minutes — about 11,100 m³/s, an average rather than a measured peak, because the gauge here (warning level 4.1 m, danger level 5 m) last read 3.55 m and was swept away before the crest arrived. The terrain is Copernicus 30 m radar data, a surface model with canopy and buildings in it, filtered towards bare earth and still about a metre or two high on the valley floor — one to three metres, where US lidar can measure the same filter — and there is no aerial photograph here that this project may redistribute. The rivers start dry, because no surviving gauge gives their flow that morning and this model cannot hold a river that falls 167 m across the domain at a level — so every drop you see is the modelled surge. Watch which roads go under and where the routes turn uphill, and do not read street-level depths.",
+  "description": "Betrawati stands where the Phalakhu Khola meets the Trishuli on the Nuwakot–Rasuwa district line, and its bridge carried the Pasang Lhamu Highway — the only road into Rasuwa district. On the morning of 26 August 2026 rock and glacier ice broke from the north face of Langtang Lirung and fell about 1,200 m into the Lhende Khola, sending a debris flood down the Bhote Koshi and the Trishuli; it reached Betrawati around 9:20 am, minutes after the first SMS alerts went out, and took the bridge with it. Nepal’s Flood Forecasting Division reported about 20 million m³ of excess water down the river system, and this run releases that volume over 30 minutes — about 11,100 m³/s, an average rather than a measured peak, because the gauge here (warning level 4.1 m, danger level 5 m) last read 3.55 m and was swept away before the crest arrived; the inflow then stops, so the run delivers that volume and no more. The terrain is Copernicus 30 m radar data, a surface model with canopy and buildings in it. The bare-earth filter only runs on ground flatter than 20°, and 77 % of this domain is steeper: the valley floor is filtered and still a metre or two high, the walls above it are the raw surface model. No photograph is baked in — open satellite imagery of this valley could be redistributed, but composing a cloud-free monsoon mosaic of it was beyond this bake and the ready-made cloud-free mosaics are licensed against redistribution — so the ground is shaded by height instead. The rivers start dry, because no surviving gauge gives their flow that morning and this model cannot hold a river that falls 167 m across the domain at a level — so every drop you see is the modelled surge. The clock is the model’s, not the flood’s: the front sits on the solver’s 15 m/s speed cap from the first half-minute on, so these are not the real arrival times. Watch which roads go under and in what order, and where the routes turn uphill, and do not read street-level depths.",
   "sources": [
    {
     "id": "trishuli-inflow",
@@ -23,6 +23,7 @@
     "gy": 8.5,
     "radius": 4,
     "discharge": 11100,
+    "stopAfter": 1800,
     "label": "Trishuli — scenario surge: 20 million m³ over 30 minutes (DHM reported volume, not a measured peak)"
    }
   ],
@@ -34,14 +35,9 @@
     "gy": 722.11
    },
    {
-    "name": "Shree Sivalaya Ni Ma Vi",
+    "name": "Shree Sivalaya Ni Ma.V",
     "gx": 583.82,
     "gy": 603.75
-   },
-   {
-    "name": "Kalika Community Hospital",
-    "gx": 470.41,
-    "gy": 97.1
    }
   ],
   "rainRate": 0,
@@ -64,7 +60,7 @@
   "roads": "roads.json"
  },
  "bake": {
-  "bakedAt": "2026-09-20T03:00:42.308Z",
+  "bakedAt": "2026-09-20T03:50:48.718Z",
   "demSource": "copernicus",
   "demRepairedCells": 0,
   "demTiles": [

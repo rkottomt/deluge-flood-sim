@@ -123,18 +123,26 @@ sources accessed 19-20 September 2026. The full research trail is artifacts/nepa
                  on purpose: on that ground no filter can tell a roof from a spur nose, and shaving 8-12 m off real
                  spur crests (which the ungated filter did) would be worse than admitting the canopy. 2.5 % of the
                  domain's cells were adjusted, by 3.5 m on average and 12 m at most; the numbers for the shipped bake
-                 are in meta.json under `bake.bareEarth`. The scenario text on screen says the terrain is a filtered
-                 surface model and still about a metre high on the valley floor, and that street-level depths must not
-                 be read from it.
+                 are in meta.json under `bake.bareEarth`. THE SCENARIO TEXT ON SCREEN CARRIES ALL OF THAT, INCLUDING
+                 THE SPLIT: that the filter only runs on ground flatter than 20 degrees, that 77 % of this domain is
+                 steeper and ships as the raw surface model, that the filtered valley floor is still a metre or two
+                 high, and that street-level depths must not be read from it. (Until the 19-20 September 2026 audit
+                 the on-screen sentence said only "filtered towards bare earth", which reads as the whole terrain; the
+                 77 % lived in this file alone. A caveat a visitor never sees is not a caveat.)
 
-  imagery        NONE, and that is a licence decision, not an omission. Sentinel-2 L2A COGs on AWS Open Data
-                 (https://sentinel-cogs.s3.us-west-2.amazonaws.com) are open under the Copernicus licence and could
-                 be composed to RGB with attribution; composing a cloud-free August mosaic over a monsoon-season
-                 Himalayan valley was not something this bake could do well in the time available, and a bad photo is
-                 worse than none. The EOX s2cloudless mosaics that would have been easy are CC BY-NC-SA for 2018 and
-                 later, so they must NOT be baked into a redistributable repository. Esri World Imagery is never baked
-                 for any preset (its terms do not allow it); the app uses it only for live, runtime-fetched areas.
-                 The preset therefore ships hypsometric relief plus roads, and `files.imagery` is null.
+  imagery        NONE - half a licence decision and half an admission, and the two halves are different sources.
+                 Sentinel-2 L2A COGs on AWS Open Data (https://sentinel-cogs.s3.us-west-2.amazonaws.com) are open
+                 under the Copernicus licence and COULD be composed to RGB and redistributed with attribution;
+                 composing a cloud-free August mosaic over a monsoon-season Himalayan valley was not something this
+                 bake could do well in the time available, and a bad photo is worse than none. That half is a limit of
+                 this bake, not of the licence. The EOX s2cloudless mosaics that would have been easy ARE a licence
+                 decision: CC BY-NC-SA for 2018 and later, so they must NOT be baked into a redistributable
+                 repository. Esri World Imagery is never baked for any preset (its terms do not allow it); the app
+                 uses it only for live, runtime-fetched areas. The preset therefore ships hypsometric relief plus
+                 roads, and `files.imagery` is null.
+                 THE ON-SCREEN SENTENCE SAYS BOTH HALVES. Until the September 2026 audit it said "there is no aerial
+                 photograph here that this project may redistribute", which flatly contradicted the paragraph above:
+                 redistributable imagery of this valley does exist and was not composed.
 
   roads.json     OpenStreetMap, (c) OpenStreetMap contributors, ODbL. Downloaded from the OSM API 0.6 `map` endpoint
                  (https://api.openstreetmap.org/api/0.6/map) in four quadrants, because the API refuses a box this
@@ -155,6 +163,12 @@ sources accessed 19-20 September 2026. The full research trail is artifacts/nepa
                      Forecasting Division technical report, 27 August 2026. The inflow this scenario uses, 11,100 m3/s,
                      is that volume divided by 30 minutes. IT IS ARITHMETIC ON A REPORTED VOLUME, NOT A MEASURED PEAK,
                      and the app's own label and scenario text say so.
+                     AND THE INFLOW STOPS AFTER THOSE 30 MINUTES (WaterSource.stopAfter, honoured by the solver), so
+                     the run delivers 11,100 x 1,800 s = 19.98 million m3 - the reported total, to within the rounding
+                     of the discharge to a hundred m3/s - and then nothing. It did not, until the September 2026 audit:
+                     the source had no duration, so the same peak kept arriving and the run had put 2.07e7 m3 into the
+                     valley by 31 simulated minutes and 5.15e7 m3 by 78, while the label still said 20 million.
+                     tests/data/presets.test.ts asserts the product and tests/sim asserts the solver delivers it.
                    * Trishuli at Betrawati, DHM station 447 (dhm.gov.np/hydrology/hms-Single/52): warning level 4.1 m,
                      danger level 5.0 m, last reading 3.55 m at 09:20 before the station was destroyed. There is no
                      measured peak level or discharge here, and none is shown.
@@ -165,6 +179,12 @@ sources accessed 19-20 September 2026. The full research trail is artifacts/nepa
                  Arrival times, depths and extent are model output, not measurements. The published delineation of the
                  real flood is Copernicus EMS activation EMSR927 (mapping.emergency.copernicus.eu/news/flood-in-nepal-emsr927)
                  - the thing to compare against, explicitly, if anyone ever wants to.
+                 SHARPER THAN THAT, AND NOW ON SCREEN: the arrival times in this run are SET BY the 15 m/s cap, not by
+                 the terrain. Measured on the shipped bake, the reported maximum speed is already 15.0 m/s at 32
+                 simulated seconds and stays there for the rest of the run (artifacts/nepal-verify/nepal-run.json), so
+                 the front travels at the solver's ceiling from the first half-minute on and "when the water reaches
+                 X" is a statement about the cap. What the model is for is the ORDER in which ground and roads go
+                 under, and the scenario text on screen now says which of the two it is.
                  THE CHANNELS START DRY. No surviving gauge gives the Trishuli's flow that morning, and this model
                  cannot hold a river that falls 167 m across the domain at a steady level without inventing a
                  baseflow; an invented one would read as measurement. Every drop on screen is the modelled surge.
@@ -177,15 +197,36 @@ sources accessed 19-20 September 2026. The full research trail is artifacts/nepa
                  ICIMOD (as above), the Kathmandu Post (29 August and 13 September 2026: washed-out bridges, 41
                  bridges and 40 km of highway lost, the Bailey bridge for the Phalakhu Khola) and Rising Nepal
                  (risingnepaldaily.com/news/54805, the concrete bridge at the Rasuwa-Nuwakot border).
-                 SHELTERS are three real, named places, each at its own OSM node with an elevation measured on this
-                 DEM: Shree Sundaradevi Pra Vi, Shree Sivalaya Ni Ma Vi and Kalika Community Hospital.
-                 A fourth candidate, Shree Neelkanta Higher Secondary School, was dropped: the highest road node
-                 within 200 m of it stands 31.3 m above the channel beside it, short of the 33 m of clearance this
-                 preset requires, and lowering that bar to keep a conveniently placed shelter would have been
-                 dishonest. Shree Ramchandra Ni Ma Vi, 15 m above the channel, was never a candidate.
+                 SHELTERS are TWO real, named places, each spelled and positioned as its own node in the OSM
+                 extracts this preset ships with, and each snapped by the bake to a high road node within 200 m:
+                   * Shree Sundaradevi Pra Vi  node 5063441826  27.9762731 N, 85.1769728 E  -> shelter at 715 m,
+                     80 m above the channel surface beside it
+                   * Shree Sivalaya Ni Ma.V    node 4969611375  27.9835489 N, 85.1913123 E  -> shelter at 929 m,
+                     276 m above the channel surface beside it
+                 It said THREE until the September 2026 audit, and the third was wrong twice over. "Kalika Community
+                 Hospital" was pinned to [85.18091, 28.02053], which is an untagged vertex of OSM way 443766738 (a
+                 stream) 3.5 km north of the hospital and 753 m below it - a real hospital's name, on screen and in
+                 the routing text, over a stream bank. The hospital's own node (4407834159, 27.9938874 N,
+                 85.2034632 E, addr:city Kalikasthan) is inside the domain but stands at 1,520 m on this DEM, 919 m
+                 above the valley floor on the Kalikasthan ridge; the research brief calls that "on the ridge - a long
+                 climb, not a walk" and warns against a UI that implies the ridge tops are minutes away. Moving the
+                 pin there would have corrected the name and told a worse lie - a 900 m climb offered as an
+                 evacuation destination with a travel time beside it - so the entry is gone and the set is two.
+                 Shree Sivalaya's name was also corrected here: OSM spells it "Ni Ma.V", not "Ni Ma Vi".
+                 Shree Neelkanta Higher Sec School (node 4706138525) is not a shelter either, and NOT because it is
+                 too low: it stands 706.4 m, 69 m clear of the channel beside it, comfortably over the 33 m this
+                 preset requires. It is out because this bake's road graph has no node within its 200 m search radius
+                 (the nearest three are 260 m away), so the shelter would sit off the road network, where the router
+                 cannot reach it. The number this file used to give for it - "the highest road node within 200 m
+                 stands 31.3 m above the channel, short of 33 m" - measured a road node 775 m away from the school,
+                 beside the Trishuli rather than the Salankhu: the same class of error as the Kalika pin.
+                 Shree Ramchandra Ni Ma Vi, 15 m above the channel, was never a candidate.
+                 Every shelter name shipped is pinned to its OSM node id and coordinates by tests/data/presets.test.ts,
+                 so a name can no longer drift away from the place it names.
 
 Place names used for shelters and camera framing are ordinary geographic names; no third-party place database is
-redistributed here.
+redistributed here. For the Nepal preset the two shelter names are read out of the OSM extracts listed above, and
+that preset's `attribution` already carries the ODbL credit those extracts require.
 
 Please credit the agencies when reusing the data: "Elevation: USGS 3DEP · Imagery: USDA NAIP via USGS The National
 Map · Roads: U.S. Census Bureau TIGER/Line" (also stored as `attribution` in each meta.json). For the Nepal preset the

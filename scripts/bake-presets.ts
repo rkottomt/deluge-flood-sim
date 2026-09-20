@@ -12,8 +12,10 @@
  *
  * NON-US ("global") PRESETS take the same steps with different sources (PresetDef.global): Copernicus DEM GLO-30 read
  * straight from the COGs and put through the DSM → bare-earth filter (src/data/demGlobal.ts), roads from OSM API XML
- * downloaded ahead of time (artifacts/nepal-build/fetch-osm.mjs), and no baked photo — there is no global orthoimagery
- * this repo may redistribute, so the renderer's hypsometric tint is the ground texture and the scenario text says so.
+ * downloaded ahead of time (artifacts/nepal-build/fetch-osm.mjs), and no baked photo — Sentinel-2 L2A is open and
+ * could be redistributed with credit, but composing a usable cloud-free mosaic is its own job and the ready-made
+ * cloud-free mosaics (EOX s2cloudless 2018+) are CC BY-NC-SA, so the renderer's hypsometric tint is the ground
+ * texture. The scenario text says which of those it is; see public/presets/SOURCES.txt.
  *
  * Steps per preset: USGS 3DEP DEM (1024²) → no-data/seam repair → river centerlines from waypoints →
  * pool level measured from the DEM → channel burn with smooth banks → sources placed on the channel spine at
@@ -24,7 +26,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import type { CameraPose, GridRect, ScenarioPreset, Shelter, StageControl, StormCell, WaterSource } from '../src/contracts';
+import type { CameraPose, GridRect, ScenarioPreset, Shelter, StageControl, StormCell, WaterSource, WaterViewMode } from '../src/contracts';
 import { type DEMSource, demAttribution, fetchDEM } from '../src/data/dem';
 import { bareEarthFromSurface, BARE_EARTH_ALGO_VERSION, BARE_EARTH_DEFAULTS, type BareEarthOptions, fetchCopernicusDEM } from '../src/data/demGlobal';
 import { geoToGrid, squareDomain } from '../src/data/geo';
@@ -167,8 +169,12 @@ interface RiverDef {
   bankCells?: number;
   snapRadius?: number;
   maxHalfWidth?: number;
-  /** Source created where the UPSTREAM end meets the domain edge. */
-  upstream?: { type: 'inflow'; discharge: number; label: string } | { type: 'stage'; label: string };
+  /**
+   * Source created where the UPSTREAM end meets the domain edge. An inflow may carry `stopAfter` (simulated
+   * seconds): a scenario forced by a published VOLUME rather than by a gauge record has to stop, or the run keeps
+   * delivering the peak for ever and the total on screen leaves the total that was reported behind.
+   */
+  upstream?: { type: 'inflow'; discharge: number; stopAfter?: number; label: string } | { type: 'stage'; label: string };
   /** Source created where the DOWNSTREAM end meets the domain edge. */
   downstream?: { type: 'stage'; label: string };
 }
@@ -210,11 +216,20 @@ interface PresetDef {
   shelters: Array<{ name: string; at: LonLat; /** search radius for a high road node, m */ search?: number }>;
   /**
    * Where the scenario's evacuation story starts: the home the "Evacuate" demo step puts the pin on, chosen on
-   * evidence — a start whose route to a shelter re-plans as the flood rises and then loses its last road, rather
-   * than one that merely works or merely fails (artifacts/evac-story ranks every street in the domain). Snapped to
-   * the nearest ordinary street node, never a highway ramp or a bridge deck.
+   * evidence — a start whose route to a shelter re-plans as the flood rises, and that still has a way out at the
+   * crest where the scenario has one to give, rather than one that merely works or merely fails (artifacts/evac-story
+   * ranks every street in the domain; artifacts/demo-beats checks the finalists on the GPU). Snapped to the nearest
+   * ordinary street node, never a highway ramp or a bridge deck.
    */
   evacStart?: { at: LonLat; label: string };
+  /**
+   * The second evacuation beat: a home that stays dry and still loses every road out at the scenario's crest, one
+   * click from the first in the Try-it strip. Only where such a start was measured — on a flat coast every start
+   * that loses its roads is under water itself, and there is no dry one to show.
+   */
+  evacCutOff?: { at: LonLat; label: string };
+  /** Water view the scenario opens in (ScenarioPreset.defaultView); the photoreal view when omitted. */
+  view?: WaterViewMode;
   /**
    * `none` ships NO initial water: the channels start dry and every drop the scene shows comes from its sources.
    *
@@ -325,12 +340,26 @@ const PRESET_DEFS: PresetDef[] = [
     // mean flows; ±0.2 m at 46 ft gives Allegheny 3,560, Monongahela 2,950 and Ohio 3,070 m³/s with no fast jets.
     confluenceHead: { normal: 0.15, crestFt: 46, crest: 0.4 },
     /*
-     * Market Square downtown, 226.2 m — a metre above the 1936 crest, so the story is the roads, not the house. Its
-     * route re-plans five times on the way to 46 ft (Mount Washington over the Fort Pitt Bridge → longer ways round
-     * → the Hill District) and is cut off entirely at 44.5 ft. The best of 3,248 streets in the domain by that
-     * measure (artifacts/evac-story/pickStart.ts).
+     * The two evacuation beats, both measured on the GPU at the 1936 crest and not on the bathtub stand-in
+     * (artifacts/demo-beats/pgh-endpoints.json, pgh-timeline.json, pgh-cutoff.json).
+     *
+     * OPENING PIN — Smithfield St at Oliver Ave, 226.5 m, a metre above the 46 ft crest. The demo clicks "Evacuate"
+     * AFTER the river is up, so the pin has to still have a route then: this one keeps its way out and re-plans
+     * twice on the way — Mount Washington over the Smithfield St bridge (2.4 km), then the same shelter by the
+     * Parkway as the bridge approaches go (2.2 km), then the Hill District once the Parkway floods
+     * (2.2 km, 5 min at the crest, unchanged from +900 s to +1330 s of simulated time).
+     *
+     * The start this replaced (Market Square, below) is cut off at the crest: at the moment the judge sees it, the
+     * only thing on screen was a red card, and the re-planning it does on the way up had already happened.
      */
-    evacStart: { at: [-80.00294, 40.43999], label: 'Market Square, downtown Pittsburgh' },
+    evacStart: { at: [-79.99816, 40.4408], label: 'Smithfield St at Oliver Ave, downtown Pittsburgh' },
+    /*
+     * SECOND BEAT — Market Square, 226.2 m, also above the crest and dry in the simulation (0.00 m at every sample
+     * from +919 s to +1329 s), and still cut off: 830 m of the 1.9 km drive to Mount Washington is under water.
+     * The Golden Triangle's tip is the only pocket in this domain where that happens — of 4,467 street nodes, 6
+     * stay dry and lose every road out, and all six are these blocks (artifacts/demo-beats/sweep-cutoff.ts).
+     */
+    evacCutOff: { at: [-80.00294, 40.43999], label: 'Market Square, downtown Pittsburgh' },
     shelters: [
       { name: 'Cathedral of Learning (Pitt, Oakland)', at: [-79.95319, 40.4443], search: 250 },
       { name: 'Mount Washington — Grandview Ave', at: [-80.0105, 40.4362], search: 350 },
@@ -932,6 +961,14 @@ const PRESET_DEFS: PresetDef[] = [
         upstream: {
           type: 'inflow',
           discharge: TRISHULI_SURGE_INFLOW,
+          /*
+           * AND IT STOPS. The forcing here is a reported VOLUME divided by a release time, so the release time is
+           * part of the number: without it the same 11,100 m³/s kept arriving and the run had delivered 2.07e7 m³ by
+           * 31 simulated minutes and 5.15e7 m³ by 78 — two and a half times the 20 million m³ DHM reported, while
+           * the label on screen still said 20. 11,100 × 1,800 s = 19.98 million m³, the reported total to within the
+           * rounding of the discharge to a hundred m³/s (tests/data/presets.test.ts asserts the product).
+           */
+          stopAfter: BHOTE_KOSHI_RELEASE_S,
           label: `Trishuli — scenario surge: ${(BHOTE_KOSHI_EXCESS_M3 / 1e6).toFixed(0)} million m³ over 30 minutes (DHM reported volume, not a measured peak)`,
         },
       },
@@ -975,22 +1012,44 @@ const PRESET_DEFS: PresetDef[] = [
       },
     ],
     /*
-     * Real, named, and measured on this DEM — every position is the OSM node in the extracts this preset ships with,
-     * NOT the coordinates in the research brief: several of those turned out to name a different node (the brief's
-     * "Neelkanta" point is 600 m from the school's own OSM node, and its "Barahi" and "Karki Manakamana" points are
-     * over a kilometre away from theirs). Heights above the 601 m channel at Betrawati: +114, +328, +165 m.
+     * TWO SHELTERS, and each is a node in the OSM extracts this preset ships with — name, spelling and position all
+     * read out of the XML (artifacts/nepal-build/osm-betrawati-q*.xml), not out of the research brief and not out of
+     * anyone's memory. tests/data/presets.test.ts pins both to their node id and coordinates.
      *
-     * THREE, NOT FOUR. Shree Neelkanta Higher Secondary School, the school nearest the Betrawati bazaar, was in this
-     * list and is not any more: the highest road node within 200 m of it stands 656.1 m, which is 31.3 m above the
-     * Salankhu channel beside it and BELOW the 33 m of clearance this preset demands (`shelterMargin` + the bake's own
-     * 3 m buffer). Lowering the bar to keep a convenient shelter would be the one dishonest edit available here, so
-     * the school is out and the valley floor has three refuges instead of four. Shree Ramchandra Ni Ma Vi, at 616 m,
-     * is fifteen metres above the channel and was never a candidate.
+     *   Shree Sundaradevi Pra Vi   node 5063441826   27.9762731 N, 85.1769728 E   774 m on this DEM
+     *   Shree Sivalaya Ni Ma.V     node 4969611375   27.9835489 N, 85.1913123 E   917 m on this DEM
+     *
+     * The bake then snaps each to a high road node within `search` — a refuge nothing drives to is no refuge — which
+     * puts them at 715 m and 929 m, 80 m and 276 m above the channel surface the burn measured beside each of them
+     * (605 m and 623 m). The second one's spelling really is "Ni Ma.V" in OSM; it shipped as "Ni Ma Vi" until the
+     * audit, and a name that is not the name is a small lie that goes out on the on-screen route text.
+     *
+     * NOT "Kalika Community Hospital", which was the third entry and was wrong twice over:
+     *   • its coordinates, [85.18091, 28.02053], are an untagged vertex of OSM way 443766738 — a stream — 3.5 km
+     *     north of the hospital and 753 m below it. The name was on screen, in the routing text, over a stream bank.
+     *   • the hospital's real node (4407834159, 27.9938874 N, 85.2034632 E, addr:city Kalikasthan) stands at 1,520 m
+     *     on this DEM, 919 m above the valley floor and up on the Kalikasthan ridge. The research brief calls that
+     *     "on the ridge — a long climb, not a walk" and warns that a UI implying the ridge tops are minutes away is
+     *     lying. Moving the pin to the true node would have fixed the name and told a worse lie: the router would
+     *     have offered a 900 m climb as an evacuation destination with a travel time beside it.
+     * So the honest set here is two, both on the 700–930 m band the brief recommends, and the domain keeps a real
+     * hospital it does not pretend is reachable.
+     *
+     * ALSO NOT Shree Neelkanta Higher Sec School (node 4706138525, 27.9785677 N, 85.1840744 E) — the school nearest
+     * the Betrawati bazaar, and the one the research brief wanted. NOT because it is too low: on this DEM it stands
+     * 706.4 m, 69 m clear of the channel beside it, well over the 33 m this preset demands (`shelterMargin` + the
+     * bake's own 3 m buffer). It is out because this bake's road graph has NO node within its 200 m search radius —
+     * the nearest three are 260 m away, at 706–709 m — so the shelter would fall back to the landmark point itself,
+     * off the road network, where the router cannot reach it and tests/data/presets.test.ts (40 m of a road node)
+     * refuses it. Widening one shelter's search radius until the answer came out right is the edit not to make.
+     *   (The number this comment used to carry — "the highest road node within 200 m stands 656.1 m, 31.3 m above the
+     *   Salankhu channel" — described a road node at 27.98371 N, 85.17876 E, 775 m from the school and beside the
+     *   Trishuli, not the Salankhu. It was the same class of error as the Kalika pin: a measurement of somewhere else.)
+     * Shree Ramchandra Ni Ma Vi, 15 m above the channel, was never a candidate.
      */
     shelters: [
-      { name: 'Shree Sundaradevi Pra Vi', at: [85.17697, 27.97627], search: 200 },
-      { name: 'Shree Sivalaya Ni Ma Vi', at: [85.19131, 27.98355], search: 200 },
-      { name: 'Kalika Community Hospital', at: [85.18091, 28.02053], search: 250 },
+      { name: 'Shree Sundaradevi Pra Vi', at: [85.1769728, 27.9762731], search: 200 },
+      { name: 'Shree Sivalaya Ni Ma.V', at: [85.1913123, 27.9835489], search: 200 },
     ],
     /*
      * The surge is on the scale of the valley, not of a floodplain: 30 m of clearance above the nearest channel
@@ -1024,6 +1083,18 @@ const PRESET_DEFS: PresetDef[] = [
      * The target is 27.97961 N, 85.18544 E — the Trishuli reach above Betrawati, not the confluence itself.
      */
     camera: { at: [85.18544, 27.97961], distance: 5000, yaw: 0.12, pitch: 0.72 },
+    /*
+     * OPENS IN THE DEPTH VIEW, and that is a truthfulness decision rather than a styling one. The photoreal water
+     * shader was built for a river that is already there: absorption and a sky reflection over a wet bed, with foam
+     * where the flow is fast. Here the channels start DRY (`prefill: 'none'`) and the surge arrives over bare rock at
+     * the solver's 15 m/s speed cap — every cell it covers is whitewater-fast — so the shading it produces is a pale
+     * grey-tan streak down the valley that reads as the gravel riverbed it is flowing over, not as water. There is no
+     * aerial photo under it to say otherwise either (`imagery: 'none'`). Compared side by side at the same instant of
+     * the same run (artifacts/demo-beats/shots/nepal-t400-realistic.png vs nepal-t400-depth.png, 0.79 km² wet,
+     * 21.4 m deepest): the depth view puts a blue ribbon down the gorge with the deepest water dark in the middle
+     * of it, and a judge reads it as a flood without being told. The realistic view stays one press of V away.
+     */
+    view: 'depth',
     description: () =>
       'Betrawati stands where the Phalakhu Khola meets the Trishuli on the Nuwakot–Rasuwa district line, and its ' +
       'bridge carried the Pasang Lhamu Highway — the only road into Rasuwa district. On the morning of 26 August ' +
@@ -1034,13 +1105,18 @@ const PRESET_DEFS: PresetDef[] = [
       `system, and this run releases that volume over 30 minutes — about ${TRISHULI_SURGE_INFLOW.toLocaleString('en-US')} m³/s, ` +
       'an average rather than a measured peak, because the gauge here ' +
       `(warning level ${BETRAWATI_WARNING_M} m, danger level ${BETRAWATI_DANGER_M} m) last read ` +
-      `${BETRAWATI_LAST_READING_M} m and was swept away before the crest arrived. The terrain is Copernicus 30 m ` +
-      'radar data, a surface model with canopy and buildings in it, filtered towards bare earth and still about a ' +
-      'metre or two high on the valley floor — one to three metres, where US lidar can measure the same filter — and '
-      + 'there is no aerial photograph here that this project may redistribute. ' +
+      `${BETRAWATI_LAST_READING_M} m and was swept away before the crest arrived; the inflow then stops, so the run ` +
+      'delivers that volume and no more. The terrain is Copernicus 30 m radar data, a surface model with canopy and ' +
+      'buildings in it. The bare-earth filter only runs on ground flatter than 20°, and 77 % of this domain is ' +
+      'steeper: the valley floor is filtered and still a metre or two high, the walls above it are the raw surface ' +
+      'model. No photograph is baked in — open satellite imagery of this valley could be redistributed, but ' +
+      'composing a cloud-free monsoon mosaic of it was beyond this bake and the ready-made cloud-free mosaics are ' +
+      'licensed against redistribution — so the ground is shaded by height instead. ' +
       'The rivers start dry, because no surviving gauge gives their flow that morning and this model cannot hold a ' +
-      'river that falls 167 m across the domain at a level — so every drop you see is the modelled surge. Watch which ' +
-      'roads go under and where the routes turn uphill, and do not read street-level depths.',
+      'river that falls 167 m across the domain at a level — so every drop you see is the modelled surge. The clock ' +
+      'is the model’s, not the flood’s: the front sits on the solver’s 15 m/s speed cap from the first half-minute ' +
+      'on, so these are not the real arrival times. Watch which roads go under and in what order, and where the ' +
+      'routes turn uphill, and do not read street-level depths.',
   },
 ];
 
@@ -1286,8 +1362,23 @@ async function bake(def: PresetDef) {
       const id = `${base}-${r.upstream && r.downstream ? `${which}-` : ''}${cfg.type}`;
       if (cfg.type === 'inflow') {
         const p = inflowPlacement(burn, ri, which, end, N);
-        sources.push({ id, type: 'inflow', gx: r2(p.gx), gy: r2(p.gy), radius: r1(p.radius), discharge: cfg.discharge, label: cfg.label });
-        log(def.id, `  source ${id} at (${p.gx.toFixed(1)}, ${p.gy.toFixed(1)}) r=${p.radius} edge=${end.edge}`);
+        sources.push({
+          id,
+          type: 'inflow',
+          gx: r2(p.gx),
+          gy: r2(p.gy),
+          radius: r1(p.radius),
+          discharge: cfg.discharge,
+          ...(cfg.stopAfter !== undefined ? { stopAfter: cfg.stopAfter } : {}),
+          label: cfg.label,
+        });
+        log(
+          def.id,
+          `  source ${id} at (${p.gx.toFixed(1)}, ${p.gy.toFixed(1)}) r=${p.radius} edge=${end.edge}` +
+            (cfg.stopAfter !== undefined
+              ? `, stops after ${cfg.stopAfter} s = ${((cfg.discharge * cfg.stopAfter) / 1e6).toFixed(2)} million m³ delivered`
+              : ''),
+        );
       } else {
         const along = end.edge === 'north' || end.edge === 'south' ? end.gx : end.gy;
         const runs = edgeRuns(end.edge, N, N, (k) => h0[k] > 0.01);
@@ -1459,12 +1550,12 @@ async function bake(def: PresetDef) {
     log(def.id, `stage: normal ${((stage.normalLevel - stage.gaugeDatum) / FT).toFixed(1)} ft, max ${((stage.normalLevel + stage.maxOffset - stage.gaugeDatum) / FT).toFixed(1)} ft`);
   }
 
-  // ── Evacuation start (the demo's opening pin), snapped to an ordinary street node
-  const evacStart = (() => {
-    if (!def.evacStart) return null;
-    const p = toGrid(def.evacStart.at);
-    // A home is on an ordinary street: the node has to carry a local or minor road, and must not also touch an
-    // interstate ramp or a bridge deck (the route would snap onto one of those instead of the street).
+  // ── Evacuation starts (the demo's opening pin and its cut-off second beat), snapped to ordinary street nodes.
+  // A home is on an ordinary street: the node has to carry a local or minor road, and must not also touch an
+  // interstate ramp or a bridge deck (the route would snap onto one of those instead of the street).
+  const snapEvac = (spot: { at: LonLat; label: string } | undefined, what: string) => {
+    if (!spot) return null;
+    const p = toGrid(spot.at);
     const streetNode = new Uint8Array(roads.nodes.length / 2);
     const blocked = new Uint8Array(roads.nodes.length / 2);
     for (const e of roads.edges) {
@@ -1485,11 +1576,13 @@ async function bake(def: PresetDef) {
     const at = best ?? { gx: p.gx, gy: p.gy };
     log(
       def.id,
-      `evac start "${def.evacStart.label}": gx ${at.gx.toFixed(1)} gy ${at.gy.toFixed(1)}, ground ${elevAt(at.gx, at.gy).toFixed(2)} m` +
+      `${what} "${spot.label}": gx ${at.gx.toFixed(1)} gy ${at.gy.toFixed(1)}, ground ${elevAt(at.gx, at.gy).toFixed(2)} m` +
         (best ? ` (street node ${(best.d * cellSize).toFixed(0)} m from the point)` : ' [no street node within 150 m — using the point itself]'),
     );
-    return { gx: r2(at.gx), gy: r2(at.gy), label: def.evacStart.label };
-  })();
+    return { gx: r2(at.gx), gy: r2(at.gy), label: spot.label };
+  };
+  const evacStart = snapEvac(def.evacStart, 'evac start');
+  const evacCutOff = snapEvac(def.evacCutOff, 'evac cut-off start');
 
   const scenario: ScenarioPreset = {
     description: def.description({ normalLevel, gaugeDatum: stage?.gaugeDatum ?? null }),
@@ -1502,6 +1595,8 @@ async function bake(def: PresetDef) {
     camera,
     ...(levee ? { levee } : {}),
     ...(evacStart ? { evacStart } : {}),
+    ...(evacCutOff ? { evacCutOff } : {}),
+    ...(def.view ? { defaultView: def.view } : {}),
   };
 
   // ── Imagery

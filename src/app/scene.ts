@@ -246,6 +246,9 @@ export class SceneManager {
       shelters: lists.shelters,
       stageOffset: 0,
       sim: { ...s.sim, rainRate: scenario?.rainRate ?? 0 },
+      // The view is part of the scenario's opening framing, like the camera: a scene that names one opens in it, and
+      // one that does not opens in the photoreal view whatever the last scene was showing (src/contracts.ts).
+      render: { ...s.render, waterMode: scenario?.defaultView ?? 'realistic' },
       evacStart: null,
       route: null,
       stats: null,

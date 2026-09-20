@@ -129,9 +129,26 @@ export interface ScenarioPreset {
   /**
    * Extension: where the scenario's evacuation story starts — a home the demo puts the evacuation pin on, chosen so
    * the route to a shelter re-plans as the flood rises rather than merely existing or merely failing (see
-   * artifacts/evac-story). The user can move the pin anywhere; this is only the opening position.
+   * artifacts/evac-story, artifacts/demo-beats). The user can move the pin anywhere; this is only the opening position.
+   *
+   * The demo shows this pin at the moment the flood is already up, so it is picked to STILL HAVE A ROUTE there where
+   * the scenario has one to give: a start that is blocked when the judge first sees it shows the re-planning once,
+   * invisibly, on the way. Where the flood leaves no such start (a flat coast), the story is the warning time
+   * instead and the pin is the home whose last route closes (RouteResult.closure).
    */
   evacStart?: { gx: number; gy: number; label?: string };
+  /**
+   * Extension: the evacuation story's second beat — a home that stays DRY and still loses every road out, so the
+   * route card turns red and explains itself with measured numbers ("830 m of the 1.9 km drive is flooded"). One
+   * click away from `evacStart` in the Try-it strip; only presets where such a start was measured carry one.
+   */
+  evacCutOff?: { gx: number; gy: number; label?: string };
+  /**
+   * Extension: the water view this scenario opens in (default 'realistic'). A site whose flood the photoreal view
+   * cannot tell the truth about names the view that can: on the Trishuli the water arrives on dry rock at the
+   * solver's speed cap, and the realistic shading reads as a grey-tan gravel bed until the depth colours are on it.
+   */
+  defaultView?: WaterViewMode;
   /**
    * Extension: a levee the "Build a levee" demo raises in one click. It is tied into high ground at both ends and every
    * segment reaches `crest`, so it holds the scenario's most dramatic flood (see src/ui/levee.ts).
@@ -180,6 +197,19 @@ export type WaterSource =
       radius: number;
       /** Volumetric discharge, m³/s. */
       discharge: number;
+      /**
+       * Simulated seconds after which this inflow delivers nothing more; omitted = it runs for ever.
+       *
+       * A scenario forced by a published VOLUME needs it. Nepal's surge is 20 million m³ released over 30 minutes;
+       * without a stop the same 11,100 m³/s kept arriving, so the run had put 2.07e7 m³ into the valley by 31
+       * simulated minutes and 5.15e7 m³ by 78 — two and a half times the event — and the number on screen stopped
+       * being the number that was reported.
+       *
+       * Exactly Q·stopAfter is delivered: the solver re-packs the forcing every frame while the stop is still ahead
+       * and scales the frame that straddles it by the fraction of itself that falls before it, so the total does not
+       * depend on the frame size (src/sim/forcing.ts inflowFactor).
+       */
+      stopAfter?: number;
       label?: string;
     }
   | {
