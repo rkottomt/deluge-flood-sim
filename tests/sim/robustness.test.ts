@@ -1,5 +1,6 @@
 /**
- * Robustness: positivity and finiteness under abuse, the naive-mode stability demo, and NaN recovery.
+ * Robustness: positivity and finiteness under abuse, the naive reference scheme (which must blow up where the
+ * robust one holds — that is what proves the safeguards do the work), and NaN recovery.
  */
 import { after, test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -80,7 +81,7 @@ test('robust mode survives a stale CFL estimate: huge dt on a sudden deep dam br
   solver.destroy();
 });
 
-test("stability demo: 'naive' mode with cfl 1.8 blows up on rough terrain while 'robust' does not", async () => {
+test("safeguards: 'naive' mode with cfl 1.8 blows up on rough terrain while 'robust' does not", async () => {
   const nx = 96;
   const ny = 96;
   const dx = 8;

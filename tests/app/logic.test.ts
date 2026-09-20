@@ -501,7 +501,7 @@ test('evac: updateFlood is throttled, route recomputed on inputs, store updated 
   assert.equal(store.get().route, null);
 });
 
-test('evac: stability-demo and diverged readbacks keep the last road status and route', () => {
+test('evac: non-physical and diverged readbacks keep the last road status and route', () => {
   const store = createStore(createInitialState());
   let floods = 0;
   const router: EvacuationRouter = {
@@ -536,11 +536,12 @@ test('evac: stability-demo and diverged readbacks keep the last road status and 
   assert.equal(evac.roadStatus, status);
   assert.equal(store.get().route, route, 'the route card is not re-planned from NaN water');
 
-  // The naive scheme's readbacks before it visibly diverges are not trusted either.
+  // Readbacks from a solver not running the robust scheme are not trusted either, even before they look wrong:
+  // that guard is what keeps a non-physical flood out of the router (src/app/evac.ts).
   store.set({ sim: { ...store.get().sim, stabilityMode: 'naive' } });
   evac.onSnapshot(snap(3), 10000);
   evac.tick(20000);
-  assert.equal(floods, 1, 'stability-demo readbacks never reach the router');
+  assert.equal(floods, 1, 'readbacks from a non-robust solver never reach the router');
   assert.equal(store.get().route, route);
 
   store.set({ sim: { ...store.get().sim, stabilityMode: 'robust' } });

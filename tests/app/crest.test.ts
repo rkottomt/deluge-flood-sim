@@ -212,7 +212,7 @@ test('crest: with an in-place solver op every raise lifts the channel, and R re-
   }
 });
 
-test('crest: the stability demo and loading states are left alone', () => {
+test('crest: a non-robust solver and loading states are left alone', () => {
   const { ground, initial } = valley();
   const solver = new FakeSolver(ground);
   const { store, setOffset } = setup(solver, initial);

@@ -5,7 +5,7 @@
  *   node scripts/e2e.mjs                    in-process Vite dev server on :5190 (or the next free port), all flows
  *   node scripts/e2e.mjs --prod             production build + `vite preview` (what `npm run demo` serves)
  *   E2E_URL=http://localhost:5173/ node scripts/e2e.mjs      use an already running server
- *   node scripts/e2e.mjs --only=1,2,6       run a subset (flows that need an earlier result compute it themselves)
+ *   node scripts/e2e.mjs --only=1,2,5       run a subset (flows that need an earlier result compute it themselves)
  *   node scripts/e2e.mjs --preset=sandbox   run the preset-specific flows on another preset (default pittsburgh)
  *   node scripts/e2e.mjs --live             also run the live-area flow (needs internet: USGS, Esri, TIGERweb)
  *   node scripts/e2e.mjs --browser=brave    run the flows in installed Brave (the demo browser) → artifacts/e2e-brave
@@ -22,9 +22,9 @@
  * Screenshots → artifacts/e2e/NN-name.png, machine-readable report → artifacts/e2e/report.json.
  * Prints a PASS/FAIL table with measured numbers and exits non-zero if any flow fails.
  * Console errors, page errors and window.__deluge.errors are collected per flow; any of them fails the flow, unless
- * the flow declares them in `expectedErrors` (flow 15 destroys the GPU device on purpose).
+ * the flow declares them in `expectedErrors` (flow 14 destroys the GPU device on purpose).
  *
- * Flow 15 destroys the GPU device and flow 14 pretends the tab was hidden; both put the page back afterwards.
+ * Flow 14 destroys the GPU device and flow 13 pretends the tab was hidden; both put the page back afterwards.
  */
 import { chromium } from 'playwright';
 import { build, createServer, preview } from 'vite';
@@ -50,7 +50,7 @@ const TOOL_KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0'];
 const ALL_TOOLS = ['orbit', 'wall', 'eraseWall', 'inflow', 'storm', 'water', 'dig', 'evac', 'shelter', 'probe'];
 /** The demo laptop presents in Brave, so the flows can be run there too (--browser=brave). */
 const BRAVE = '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser';
-/** Main preset for flows 1–6 and 9 (the demo is Pittsburgh; other presets are useful while developing). */
+/** Main preset for flows 1–5 and 8 (the demo is Pittsburgh; other presets are useful while developing). */
 const PRESET = String(args.preset ?? process.env.E2E_PRESET ?? 'pittsburgh');
 const OTHER_PRESETS = ['pittsburgh', 'sandbox', 'johnstown', 'ellicott'].filter((p) => p !== PRESET);
 
@@ -292,7 +292,7 @@ async function runFlow(flow, ctx) {
   r.seconds = (Date.now() - t0) / 1000;
   const appErrors = await delugeErrors(flow.resetsPage ? 0 : errBase);
   const all = [...consoleErrors, ...appErrors.filter((e) => !consoleErrors.some((c) => c.includes(e)))];
-  // A flow that breaks something on purpose (flow 15 destroys the GPU device) declares the errors that proves it
+  // A flow that breaks something on purpose (flow 14 destroys the GPU device) declares the errors that proves it
   // worked; they are reported but do not fail it. Everything else still does.
   const expected = flow.expectedErrors ? all.filter((e) => flow.expectedErrors.test(e)) : [];
   r.errors = all.filter((e) => !expected.includes(e));
@@ -398,7 +398,6 @@ async function crestOffset() {
 async function calm() {
   await D(() => {
     const d = window.__deluge;
-    if (d.isStabilityDemo()) d.actions.setStabilityDemo(false);
     d.store.set({ panels: { howItWorks: false, locationPicker: false, help: false } });
     d.actions.clearWalls();
     d.actions.restoreScenario();
@@ -474,7 +473,7 @@ const FLOWS = [
       if (PRESET === 'pittsburgh') {
         const order = await D(() => [...document.querySelectorAll('.dl-try-step')].map((b) => b.dataset.step));
         const labels = await D(() => [...document.querySelectorAll('.dl-try-step')].map((b) => b.textContent.trim()));
-        check(r, 'Try-it strip order: raise, evacuate, levee, rain, break', order.join(',') === 'flood,evac,levee,rain,break', labels.join(' · '));
+        check(r, 'Try-it strip order: raise, evacuate, levee, rain', order.join(',') === 'flood,evac,levee,rain', labels.join(' · '));
       }
       await sleep(2600); // camera fly-in
       await shot(`01-${PRESET}-loaded`);
@@ -807,120 +806,12 @@ const FLOWS = [
       check(r, 'route changes or becomes blocked at the crest', changed, `${before?.state} “${before?.message}” → ${after?.state} “${after?.message}”`);
       check(r, 'more roads flooded at the crest', (roadsAfter?.flooded ?? 0) > (roadsBefore?.flooded ?? 0), `${roadsBefore?.flooded ?? '?'} → ${roadsAfter?.flooded ?? '?'} of ${roadsAfter?.total ?? '?'}`);
       await shot('05b-evac-crest');
-    },
-  },
-  {
-    id: 6,
-    name: 'Stability demo breaks and recovers',
-    timeoutMs: 300_000,
-    async run(r) {
-      await calm();
-      await runFor(30);
-      // A flooded evacuation start first: the blow-up's NaN depths must not read as dry roads and "re-plan" a safe route.
-      const crest = await crestOffset();
-      let routeBefore = null;
-      if (crest) {
-        await D((o) => window.__deluge.setStageOffset(o), crest.offset);
-        await runFor(300);
-        // Deeply flooded streets near the centre (not the river channel), nearest first.
-        const starts = await D(() => {
-          const g = window.__deluge.sampleGrid('depth', 8);
-          const c = [];
-          for (let y = 0; y < g.h; y++)
-            for (let x = 0; x < g.w; x++) {
-              const dep = g.data[y * g.w + x];
-              if (dep >= 1.5 && dep <= 4) c.push({ gx: (x + 0.5) * 8, gy: (y + 0.5) * 8, dist: Math.hypot(x - g.w / 2, y - g.h / 2) });
-            }
-          return c.sort((p, q) => p.dist - q.dist).slice(0, 6);
-        });
-        for (const p of starts) {
-          await D((q) => window.__deluge.setEvacStart({ gx: q.gx, gy: q.gy }), p);
-          const blocked = await page
-            .waitForFunction(() => window.__deluge.getRoute()?.state === 'blocked', null, { timeout: 2500 })
-            .then(() => true)
-            .catch(() => false);
-          if (blocked) break;
-        }
-      }
-      await D(() => window.__deluge.actions.cameraFrameAll());
-      await sleep(1600); // camera flight
-      // Use the real UI: "How it works" → "Break it" (falls back to the debug API if the UI changed).
-      let via = 'debug API';
-      await D(() => window.__deluge.store.set({ panels: { ...window.__deluge.getState().panels, howItWorks: true } }));
-      const button = page.locator('button.dl-break-btn').first();
-      if (!(await button.isVisible({ timeout: 1500 }).catch(() => false))) {
-        // The explainer may be tabbed: open its "Break it" section first.
-        const tab = page.locator('button:has-text("Break it"):not(.dl-break-btn)').first();
-        if (await tab.isVisible().catch(() => false)) await tab.click();
-      }
-      await button.scrollIntoViewIfNeeded({ timeout: 2000 }).catch(() => {});
-      if (await button.isVisible({ timeout: 2000 }).catch(() => false)) {
-        await button.click();
-        via = 'How it works → Break it';
-      }
-      await sleep(600); // the dialog closes itself so the blow-up is visible
-      if (!(await D(() => window.__deluge.isStabilityDemo()))) {
-        await D(() => window.__deluge.actions.setStabilityDemo(true));
-        via = via === 'debug API' ? via : `${via} (did not toggle) → debug API`;
-      }
-      await D(() => window.__deluge.store.set({ panels: { ...window.__deluge.getState().panels, howItWorks: false } }));
-      const params = await D(() => window.__deluge.getState().sim);
-      check(r, 'naive mode active', params.stabilityMode === 'naive' && params.cfl > 1, `${params.stabilityMode}, CFL ${params.cfl} via ${via}`);
-      // The route the robust solver last planned (routing ignores the naive solver's readbacks from here on).
-      if (crest) {
-        routeBefore = await D(() => {
-          const rt = window.__deluge.getRoute();
-          return rt && { state: rt.state, message: rt.message };
-        });
-      }
-      let runNote = 'completed';
-      await runFor(60).catch((e) => {
-        runNote = `runFor: ${e.message}`;
-      });
-      const broken = await stats();
-      const blewUp =
-        !broken ||
-        !Number.isFinite(broken.maxSpeed) ||
-        !Number.isFinite(broken.volume) ||
-        !Number.isFinite(broken.maxDepth) ||
-        broken.maxSpeed > 50 ||
-        broken.massError > 0.05;
-      r.metrics.broken = broken;
-      check(r, 'instability evident', blewUp, `maxSpeed ${broken?.maxSpeed}, maxDepth ${broken?.maxDepth}, massError ${broken?.massError} (${runNote})`);
-      await sleep(800); // several route intervals of diverged readbacks
-      const routeBroken = await D(() => {
-        const rt = window.__deluge.getRoute();
-        return rt && { state: rt.state, message: rt.message };
-      });
-      check(
-        r,
-        'the blow-up does not re-plan the evacuation (NaN water is not dry road)',
-        !!routeBefore && routeBefore.state !== 'ok' && routeBroken?.state === routeBefore.state && routeBroken?.message === routeBefore.message,
-        `before “${routeBefore?.state}: ${routeBefore?.message ?? 'no route'}” → during blow-up “${routeBroken?.state}: ${routeBroken?.message ?? 'no route'}”`,
-      );
-      await shot('06a-stability-blowup');
-
-      // Restore through the banner's button (debug API fallback).
-      const restore = page.locator('.dl-naive-banner button').first();
-      let restoredVia = 'debug API';
-      if (await restore.isVisible({ timeout: 2000 }).catch(() => false)) {
-        await restore.click();
-        restoredVia = 'banner button';
-      }
-      if (await D(() => window.__deluge.isStabilityDemo())) await D(() => window.__deluge.actions.setStabilityDemo(false));
-      r.notes.push(`restored via ${restoredVia}`);
-      await runFor(60);
-      const healed = await stats();
-      r.metrics.recovered = healed;
-      const sim = await D(() => window.__deluge.getState().sim);
-      check(r, 'robust mode restored', sim.stabilityMode === 'robust' && sim.cfl <= 1, `${sim.stabilityMode}, CFL ${sim.cfl}`);
-      check(r, 'stats sane after recovery', statsFinite(healed) && healed.maxSpeed < 30 && healed.massError < 0.01, `maxSpeed ${num(healed?.maxSpeed)} m/s, maxDepth ${num(healed?.maxDepth)} m, massError ${num((healed?.massError ?? NaN) * 100, 4)} %`);
-      await shot('06b-stability-recovered');
+      // Leave no route behind: the later flows expect a clean map.
       await D(() => window.__deluge.setEvacStart(null));
     },
   },
   {
-    id: 7,
+    id: 6,
     name: 'Other presets load and run 300 s',
     timeoutMs: 600_000,
     async run(r) {
@@ -943,12 +834,12 @@ const FLOWS = [
         r.metrics[id] = { loadSeconds: loadS, runSeconds: secs, stats: s };
         check(r, `${id}: runs 300 s with sane stats`, statsFinite(s) && s.maxSpeed < 50, s ? `volume ${m3(s.volume)}, maxDepth ${num(s.maxDepth)} m, maxSpeed ${num(s.maxSpeed)} m/s, massErr ${num(s.massError * 100, 4)} % (${secs.toFixed(1)} s real)` : 'no stats');
         await sleep(2400); // camera fly-in
-        await shot(`07-${id}`);
+        await shot(`06-${id}`);
       }
     },
   },
   {
-    id: 8,
+    id: 7,
     name: 'Every tool selectable via keyboard 1…0',
     timeoutMs: 180_000,
     async run(r) {
@@ -974,7 +865,7 @@ const FLOWS = [
         }
         await page.mouse.up();
         await D(() => window.__deluge.waitFrames(4));
-        if (key === '0') await shot('08-probe-tool');
+        if (key === '0') await shot('07-probe-tool');
       }
       r.metrics.keyToTool = Object.fromEntries(TOOL_KEYS.map((k, i) => [k, seen[i]]));
       const distinct = new Set(seen);
@@ -992,7 +883,7 @@ const FLOWS = [
     },
   },
   {
-    id: 9,
+    id: 8,
     name: `Frame rate ≥ 30 fps at 1600×1000 (${PRESET}, 60× speed)`,
     timeoutMs: 180_000,
     async run(r) {
@@ -1022,11 +913,11 @@ const FLOWS = [
       const fps = (sample.frames * 1000) / sample.ms;
       r.metrics = { fps, emaFps: sample.ema, stepInfo: sample.step };
       check(r, 'fps ≥ 30 over 3 s', fps >= 30, `${fps.toFixed(1)} fps (EMA ${num(sample.ema, 1)}), ${sample.step?.substeps ?? '?'} substeps/frame, dt ${num(sample.step?.dt ?? NaN, 3)} s`);
-      await shot(`09-fps-${PRESET}`);
+      await shot(`08-fps-${PRESET}`);
     },
   },
   {
-    id: 10,
+    id: 9,
     name: 'Power: paused view goes idle, input wakes it',
     timeoutMs: 120_000,
     async run(r) {
@@ -1083,7 +974,7 @@ const FLOWS = [
     },
   },
   {
-    id: 11,
+    id: 10,
     name: 'Live area: real USGS data for any US location (network)',
     timeoutMs: 240_000,
     optIn: 'live',
@@ -1106,12 +997,12 @@ const FLOWS = [
       check(r, 'rain ponds on live terrain', (s?.volume ?? 0) > 0 && statsFinite(s), s ? `volume ${m3(s.volume)}, wet ${km2(s.wetArea)} (${secs.toFixed(1)} s real)` : 'no stats');
       await D(() => window.__deluge.setRain(0));
       await sleep(2000);
-      await shot('11-live-area');
+      await shot('10-live-area');
       r.metrics = { loadSeconds: loadS, requests: externalRequests.length };
     },
   },
   {
-    id: 12,
+    id: 11,
     name: 'Cancel a ?live= link while it loads → offline scenario',
     timeoutMs: 180_000,
     resetsPage: true,
@@ -1159,7 +1050,7 @@ const FLOWS = [
         after.retry ?? 'no retry button',
       );
       check(r, 'address bar points at the preset (a reload does not download again)', after.search === '?preset=pittsburgh', after.search);
-      await shot('12-startup-cancel');
+      await shot('11-startup-cancel');
       await releaseStalled();
       const held = externalRequests.length;
       await page.goto(page.url(), { waitUntil: 'domcontentloaded' });
@@ -1175,7 +1066,7 @@ const FLOWS = [
     },
   },
   {
-    id: 13,
+    id: 12,
     name: 'One-click levee keeps its land dry at the 1936 crest',
     timeoutMs: 300_000,
     async run(r) {
@@ -1233,7 +1124,7 @@ const FLOWS = [
       r.metrics = { protection: p, flooded: res.stats?.floodedArea };
       await D((c) => window.__deluge.setCamera(c), levee.camera);
       await sleep(800);
-      await shot('13-demo-levee');
+      await shot('12-demo-levee');
       // The step toggles: "Remove levee" clears the walls, the status line and the glow.
       const label = await page.locator('.dl-try-step[data-step="levee"]').textContent();
       await page.click('.dl-try-step[data-step="levee"]');
@@ -1254,7 +1145,7 @@ const FLOWS = [
     },
   },
   {
-    id: 14,
+    id: 13,
     name: 'Screen Wake Lock holds the display awake while the pitch runs',
     timeoutMs: 60_000,
     async run(r) {
@@ -1299,7 +1190,7 @@ const FLOWS = [
     },
   },
   {
-    id: 15,
+    id: 14,
     name: 'GPU lost while a scene loads → the load is abandoned, not run on a dead device',
     timeoutMs: 180_000,
     resetsPage: true,
@@ -1360,7 +1251,7 @@ const FLOWS = [
       );
       check(r, 'it waits for the user rather than reloading into the same loss', card?.countdown === null, card?.countdown ?? 'no countdown');
       check(r, 'the address bar still points at the scene that was loading', card?.search === before.search, `${card?.search}`);
-      await shot('15-device-lost-mid-load');
+      await shot('14-device-lost-mid-load');
 
       // Let the held downloads fail, which is what used to wake the abandoned load up: it gave up, ran its fallback
       // and rewrote the address bar behind the card. Nothing may happen now.
