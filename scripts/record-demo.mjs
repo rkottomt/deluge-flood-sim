@@ -309,6 +309,9 @@ function installRuntime() {
   doc.body.appendChild(root);
 
   const el = (id) => doc.getElementById(id);
+  let filmClock = 0; // simulated seconds this recording has advanced
+  // Pin the time scale: solver.step(dt) then means exactly dt simulated seconds.
+  d.app.sim.setOverride('film', { timeScale: 1 });
   const ft = (m) => (m + 216.3 - 211.409) / 0.3048; // stage offset (m) → Point-gauge feet
   const num = (n) => Math.round(n).toLocaleString('en-US');
 
@@ -359,6 +362,7 @@ function installRuntime() {
     },
     /** One deterministic frame: animation clock, camera, captions, render. Returns the live readout. */
     async frame(f) {
+      if (f.dtSim > 0) this.stepSim(f.dtSim);
       const v = live();
       const fill = (s) => (s ?? '').replace(/\{(\w+)\}/g, (m, k) => (v[k] !== undefined ? v[k] : m));
       const cap = el('f-cap');
@@ -382,19 +386,35 @@ function installRuntime() {
       return v;
     },
     live,
-    /** Advance to an exact sim clock: coarse first, then a low substep cap so the overshoot is < 1 sim s. */
-    async advanceTo(target) {
-      const coarse = target - 25;
-      if (d.getSimClock() < coarse) await d.runFor(coarse - d.getSimClock());
-      d.app.sim.setOverride('film', { maxSubstepsPerFrame: 6 });
-      let guard = 0;
-      while (d.getSimClock() < target - 1 && guard++ < 400) {
-        await d.runFor(Math.min(6, target - d.getSimClock()));
-      }
-      return d.getSimClock();
+    /**
+     * Deterministic stepping. The app is PAUSED, so the frame loop never touches the solver and this is the only
+     * thing advancing time: solver.step(dt) at timeScale 1 advances dt simulated seconds in whole CFL substeps,
+     * carrying the remainder, so N frames of dt advance exactly N·dt. No wall clock is involved anywhere.
+     *
+     * Why not the debug API's runFor(): it resolves only once a GPU READBACK containing the new sim time has
+     * arrived, which costs 0.3-3 s per call (measured 5.4 s/frame at 4K). The readbacks the overlays need —
+     * stats, road status, route, protected land — are polled by the frame loop every frame anyway, paused or not,
+     * so they keep up on their own while we render.
+     */
+    stepSim(dt) {
+      const solver = d.getSolver();
+      if (!solver || !(dt > 0)) return 0;
+      const info = solver.step(dt);
+      const adv = Number.isFinite(info.simSecondsAdvanced) ? info.simSecondsAdvanced : 0;
+      filmClock += adv;
+      d.app.advanceStage(adv, performance.now());
+      return adv;
     },
-    setSubstepCap(n) {
-      d.app.sim.setOverride('film', n ? { maxSubstepsPerFrame: n } : null);
+    getFilmClock: () => filmClock,
+    /** Reach a starting state: big steps, an occasional frame so the GPU queue drains. */
+    async warmTo(target) {
+      let guard = 0;
+      while (filmClock < target - 0.5 && guard++ < 3000) {
+        if (this.stepSim(Math.min(40, target - filmClock)) <= 0) break;
+        if (guard % 4 === 0) await new Promise((r) => requestAnimationFrame(r));
+      }
+      await d.waitFrames(3);
+      return filmClock;
     },
   };
 }
@@ -445,13 +465,12 @@ async function renderShot(shot, opt) {
       }
       if (sim.preWall) {
         // levee-b starts from the state levee-a ends in: the wall is up before the crest arrives.
-        if (sim.wallAtSim) await window.__film.advanceTo(sim.wallAtSim);
+        if (sim.wallAtSim) await window.__film.warmTo(sim.wallAtSim);
         d.drawWall(levee, crest);
       }
-      if (sim.warmTo > 0) await window.__film.advanceTo(sim.warmTo);
-      window.__film.setSubstepCap(sim.cap ?? 10);
+      if (sim.warmTo > 0) await window.__film.warmTo(sim.warmTo);
     }, { sim: { ...sim, wallAtSim: shot.id === 'levee-b' ? 210 : 0 }, levee: LEVEE, crest: LEVEE_CREST });
-    log(`warmed to sim ${(await page.evaluate('window.__deluge.getSimClock()')).toFixed(0)}s in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
+    log(`warmed to sim ${(await page.evaluate('window.__film.getFilmClock()')).toFixed(0)}s in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
 
     // ── full size + cinematic, only for captured frames ──
     await page.setViewportSize({ width: W, height: H });
@@ -463,22 +482,13 @@ async function renderShot(shot, opt) {
 
     // ── capture loop ──
     const wallStart = Date.now();
-    let simTarget = await page.evaluate('window.__deluge.getSimClock()');
     const done = new Set();
     let lastProbe = null;
     for (let f = 0; f < frames; f++) {
       const t = frames > 1 ? f / (frames - 1) : 0;
       const tSec = f / FILM.fps;
 
-      // 1. simulation: a fixed number of SIMULATED seconds per film frame (self-correcting target clock,
-      //    so a frame that oversteps is paid back by the next one — never a drift that depends on speed).
-      if (sim.perFrame > 0) {
-        simTarget += sim.perFrame;
-        const need = simTarget - (await page.evaluate('window.__deluge.getSimClock()'));
-        if (need > 0.02) await page.evaluate((n) => window.__deluge.runFor(n), need);
-      }
-
-      // 2. scripted state changes
+      // 1. scripted state changes (the simulation itself is advanced inside the frame call below)
       for (const [i, op] of (shot.ops ?? []).entries()) {
         if (op.kind === 'evacStart' && t >= (op.at ?? 0) && !done.has(i)) {
           done.add(i);
@@ -504,7 +514,7 @@ async function renderShot(shot, opt) {
         }
       }
 
-      // 3. caption for this moment, with short cross-fades
+      // 2. caption for this moment, with short cross-fades
       let caption = null, capOpacity = 1;
       for (const c of shot.captions ?? []) {
         if (tSec >= c.from && tSec < c.to) {
@@ -522,8 +532,9 @@ async function renderShot(shot, opt) {
         cardOpacity = Math.max(0, Math.min(1, Math.min(tSec / inT, (secs - tSec) / outT, 1)));
       }
 
-      // 4. render + capture
+      // 3. advance the sim by a fixed number of SIMULATED seconds, render, capture — one round trip
       lastProbe = await page.evaluate((f) => window.__film.frame(f), {
+        dtSim: sim.perFrame,
         pose: poseAt(shot.camera, t),
         animTime: (shot.start + f) / FILM.fps,
         caption, capOpacity, cardOpacity,
