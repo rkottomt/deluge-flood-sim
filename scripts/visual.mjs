@@ -1031,7 +1031,10 @@ async function buildAndServe(distDir, port, logFile) {
   build.stdout.pipe(log, { end: false });
   build.stderr.pipe(log, { end: false });
   const [code] = await once(build, 'exit');
-  if (code !== 0) throw new Error(`vite build failed (exit ${code}); see ${logFile}`);
+  if (code !== 0) {
+    log.end();
+    throw new Error(`vite build failed (exit ${code}); see ${logFile}`);
+  }
   console.log('ok');
   if (await portOpen(port)) throw new Error(`port ${port} is already in use — pass --port=<free port>`);
   const server = spawn('npx', ['vite', 'preview', '--outDir', distDir, '--port', String(port), '--strictPort'], {
@@ -1042,11 +1045,12 @@ async function buildAndServe(distDir, port, logFile) {
   server.stdout.pipe(log, { end: false });
   server.stderr.pipe(log, { end: false });
   for (let i = 0; i < 150; i++) {
-    if (await portOpen(port)) return { server, url: `http://localhost:${port}/` };
+    if (await portOpen(port)) return { server, log, url: `http://localhost:${port}/` };
     if (server.exitCode !== null) throw new Error(`vite preview exited (${server.exitCode}); see ${logFile}`);
     await sleep(100);
   }
   killTree(server);
+  log.end();
   throw new Error(`vite preview never came up on ${port}; see ${logFile}`);
 }
 
@@ -1238,6 +1242,7 @@ console.log(`viewport: ${VIEWPORT.width}x${VIEWPORT.height} @ DPR ${VIEWPORT.dpr
 console.log(`mode    : ${UPDATE ? 'UPDATE BASELINES' : ADVISORY ? 'ADVISORY (never fatal)' : 'strict'}${QUICK ? ' · quick' : ''}`);
 
 let server = null;
+let serverLog = null;
 let baseUrl = EXTERNAL_URL;
 const distDir = path.join(OUT_DIR, 'dist');
 const shotDir = path.join(OUT_DIR, 'shots');
@@ -1246,6 +1251,7 @@ try {
   if (!baseUrl) {
     const s = await buildAndServe(distDir, PORT, path.join(OUT_DIR, 'server.log'));
     server = s.server;
+    serverLog = s.log;
     baseUrl = s.url;
   }
   if (!baseUrl.endsWith('/')) baseUrl += '/';
@@ -1446,5 +1452,8 @@ try {
   process.exitCode = 1;
 } finally {
   killTree(server);
+  // Opened in buildAndServe and piped into with { end: false }, so nothing else ever closes it: while this
+  // fd is open node cannot exit, and the suite hangs after writing its report instead of finishing.
+  serverLog?.end();
   if (!KEEP_DIST && !EXTERNAL_URL && fs.existsSync(distDir)) fs.rmSync(distDir, { recursive: true, force: true });
 }

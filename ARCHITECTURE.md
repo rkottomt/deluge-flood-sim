@@ -590,7 +590,7 @@ marching squares, no geometry and no CPU work per frame. A translucent second ti
 third colour nobody can attribute; an outline beside the live shoreline is readable in a second.
 
 **It refuses rather than mislead.** The overlay is honest only over a live simulation that is still the scenario the
-manifest records, so `referenceFit` (`src/data/referenceOverlay.ts`) compares the two and returns one of fourteen
+manifest records, so `referenceFit` (`src/data/referenceOverlay.ts`) compares the two and returns one of thirteen
 mismatch reasons (`ReferenceMismatch` in `src/contracts.ts`): wrong `preset` or `grid`, the `naive` solver, terrain
 `edits` (walls drawn or ground dug), `rain`, `storms`, wrong `stage`, still `rising`, a `late-crest` (right stage,
 raised far later than the reference's own ramp — a different flood), different `friction` or `boundary`, and `early` or
