@@ -361,8 +361,11 @@ function installRuntime() {
       } else card.style.display = 'none';
     },
     /** One deterministic frame: animation clock, camera, captions, render. Returns the live readout. */
+    lastStep: null,
     async frame(f) {
+      const tA = performance.now();
       if (f.dtSim > 0) this.stepSim(f.dtSim);
+      const tB = performance.now();
       const v = live();
       const fill = (s) => (s ?? '').replace(/\{(\w+)\}/g, (m, k) => (v[k] !== undefined ? v[k] : m));
       const cap = el('f-cap');
@@ -383,6 +386,7 @@ function installRuntime() {
         await new Promise((r) => requestAnimationFrame(r));
       }
       d.app.pacer.animTime = f.animTime;
+      v.ms = { sim: Math.round(tB - tA), rest: Math.round(performance.now() - tB), step: this.lastStep };
       return v;
     },
     live,
@@ -399,7 +403,9 @@ function installRuntime() {
     stepSim(dt) {
       const solver = d.getSolver();
       if (!solver || !(dt > 0)) return 0;
+      const t0 = performance.now();
       const info = solver.step(dt);
+      this.lastStep = { substeps: info.substeps, dt: info.dt, ms: performance.now() - t0 };
       const adv = Number.isFinite(info.simSecondsAdvanced) ? info.simSecondsAdvanced : 0;
       filmClock += adv;
       d.app.advanceStage(adv, performance.now());
@@ -409,10 +415,13 @@ function installRuntime() {
     /** Reach a starting state: big steps, an occasional frame so the GPU queue drains. */
     async warmTo(target) {
       let guard = 0;
+      const t0 = performance.now();
       while (filmClock < target - 0.5 && guard++ < 3000) {
         if (this.stepSim(Math.min(40, target - filmClock)) <= 0) break;
         if (guard % 4 === 0) await new Promise((r) => requestAnimationFrame(r));
+        if (performance.now() - t0 > 120000) break;
       }
+      this.warmInfo = { calls: guard, ms: Math.round(performance.now() - t0), clock: filmClock };
       await d.waitFrames(3);
       return filmClock;
     },
@@ -470,7 +479,7 @@ async function renderShot(shot, opt) {
       }
       if (sim.warmTo > 0) await window.__film.warmTo(sim.warmTo);
     }, { sim: { ...sim, wallAtSim: shot.id === 'levee-b' ? 210 : 0 }, levee: LEVEE, crest: LEVEE_CREST });
-    log(`warmed to sim ${(await page.evaluate('window.__film.getFilmClock()')).toFixed(0)}s in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
+    log(`warm ${JSON.stringify(await page.evaluate('window.__film.warmInfo ?? null'))} → sim ${(await page.evaluate('window.__film.getFilmClock()')).toFixed(0)}s in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
 
     // ── full size + cinematic, only for captured frames ──
     await page.setViewportSize({ width: W, height: H });
@@ -533,18 +542,22 @@ async function renderShot(shot, opt) {
       }
 
       // 3. advance the sim by a fixed number of SIMULATED seconds, render, capture — one round trip
+      const tEval = Date.now();
       lastProbe = await page.evaluate((f) => window.__film.frame(f), {
         dtSim: sim.perFrame,
         pose: poseAt(shot.camera, t),
         animTime: (shot.start + f) / FILM.fps,
         caption, capOpacity, cardOpacity,
       });
+      const evalMs = Date.now() - tEval;
+      const tShot = Date.now();
       const n = String(shot.start + f).padStart(5, '0');
       await page.screenshot({ path: path.join(FRAMES, `${n}.jpg`), type: 'jpeg', quality: FILM.jpegQuality });
+      const shotMs = Date.now() - tShot;
 
-      if (f === 0 || (f + 1) % 30 === 0 || f === frames - 1) {
+      if (f < 3 || (f + 1) % 30 === 0 || f === frames - 1) {
         const ms = (Date.now() - wallStart) / (f + 1);
-        log(`frame ${f + 1}/${frames} (${n}.jpg) ${ms.toFixed(0)} ms/frame · stage ${lastProbe.stageFt} ft · ${lastProbe.floodedAcres} acres` +
+        log(`frame ${f + 1}/${frames} (${n}.jpg) ${ms.toFixed(0)} ms/frame [eval ${evalMs} (sim ${lastProbe.ms.sim}, ${lastProbe.ms.step ? lastProbe.ms.step.substeps + ' substeps dt ' + lastProbe.ms.step.dt.toFixed(3) : '-'}) + jpg ${shotMs}] · stage ${lastProbe.stageFt} ft · ${lastProbe.floodedAcres} acres` +
           (shot.id.startsWith('levee') ? ` · saved ${lastProbe.acres} acres` : '') +
           (shot.id.startsWith('evac') ? ` · ${lastProbe.routeVerdict}` : ''));
       }
