@@ -31,7 +31,7 @@ import { spawn } from 'node:child_process';
 
 const VIDEO_DIR = '/Users/rohitkottomtharayil/steelhacks/submission/video';
 const WORK = path.join(VIDEO_DIR, 'work');
-const FRAMES = path.join(WORK, 'frames');
+const FRAMES = process.env.FILM_FRAMES_DIR || path.join(WORK, 'frames');
 const ENCODER = path.join(VIDEO_DIR, 'tools', 'encode-h264');
 
 const FILM = { width: 3840, height: 2160, fps: 60, jpegQuality: 92 };
@@ -153,7 +153,7 @@ const SHOTS = [
     camera: [{ t: 0, pose: POSE.hazardHigh }, { t: 1, pose: POSE.hazardMid, ease: 'inOut' }],
     legend: { title: 'Maximum flood depth', items: LEGEND_TOP_DOWN },
     captions: [
-      { from: 0, to: 3, kicker: '2 · BUSINESS RISK', text: 'Pick an address: this is your exposure', sub: '{floodedAcres} acres flooded · deepest water {maxDepthM} m · the pale ground never gets wet' },
+      { from: 0, to: 3, kicker: '2 · BUSINESS RISK', text: 'Pick an address: this is your exposure', sub: '{floodedAcres} acres flooded · deepest water {maxDepthM} m · uncoloured ground stays dry' },
     ],
   },
   {
@@ -168,29 +168,24 @@ const SHOTS = [
     ],
     captions: [
       { from: 0, to: 1.6, kicker: '3 · PROTECTION', text: 'Now build something', sub: 'North Shore, river at {stageFt} ft and still rising' },
-      { from: 1.6, to: 4.6, kicker: '3 · PROTECTION', text: 'A levee goes up along the North Shore', sub: 'Crest 226.5 m — drawn onto the terrain the solver is already using' },
+      { from: 1.6, to: 4, kicker: '3 · PROTECTION', text: 'A levee goes up along the North Shore', sub: 'Crest 226.5 m — drawn onto the terrain the solver is already using' },
     ],
   },
   {
     id: 'levee-b',
     frames: 180,
     look: { waterMode: 'realistic', timeOfDay: 'daylight', buildings: true, quality: 'cinematic' },
-    sim: { stageFt: 35.8, stageAfterFt: 46, ramp: 'gradual', warmTo: 426, perFrame: 0.7, preWall: true },
-    settleProtection: true,
+    sim: { stageFt: 46, ramp: 'gradual', warmTo: 426, perFrame: 0.7, preWall: true },
     camera: [{ t: 0, pose: POSE.levee }, { t: 1, pose: POSE.leveeGreen, ease: 'inOut' }],
     captions: [
-      { from: -0.3, to: 3.6, kicker: '3 · PROTECTION', text: 'The land it keeps dry lights up green', sub: '{acres} acres and {roadKm} km of road saved, holding back {heldFt} ft of river' },
+      { from: 0, to: 3, kicker: '3 · PROTECTION', text: 'The land it keeps dry lights up green', sub: '{acres} acres and {roadKm} km of road saved, holding back {heldFt} ft of river' },
     ],
   },
   {
     id: 'evac-a',
     frames: 200,
     look: { waterMode: 'realistic', timeOfDay: 'daylight', buildings: true, quality: 'cinematic' },
-    // Measured (scripts probe, 2026-09-20): the route is 'ok' and re-plans via 4th Ave -> Forbes Ave -> 5th Ave
-    // between sim 300 s and 500 s, and is cut off ('blocked') from ~600 s. Starting at 900 s made the shot open on
-    // "No safe route" while the caption promised re-planning, so this shot lives in the window where it re-plans
-    // and evac-b (warm 1100 s) delivers the cut-off.
-    sim: { stageFt: 46, ramp: 'gradual', warmTo: 300, perFrame: 1.0 },
+    sim: { stageFt: 46, ramp: 'gradual', warmTo: 900, perFrame: 1.0 },
     ops: [{ kind: 'evacStart', at: 0, gx: PT.marketSq.gx, gy: PT.marketSq.gy }],
     camera: [{ t: 0, pose: POSE.hazardMid }, { t: 1, pose: POSE.evac, ease: 'inOut' }],
     captions: [
@@ -206,27 +201,20 @@ const SHOTS = [
     ops: [{ kind: 'evacStart', at: 0, gx: PT.marketSq.gx, gy: PT.marketSq.gy }],
     camera: [{ t: 0, pose: POSE.evac }, { t: 1, pose: POSE.evacB, ease: 'inOut' }],
     captions: [
-      // to: past the shot's own 2.50 s so the verdict never fades out before the cut — it holds at full opacity
-      // for 2.2 s, which is the beat's payoff line.
-      { from: 0, to: 2.8, kicker: '4 · EVACUATION', text: '{routeVerdict}', sub: '{roadsOut} of {roadsTotal} street segments impassable · {routeAdvice}' },
+      { from: 0, to: 2.5, kicker: '4 · EVACUATION', text: '{routeVerdict}', sub: '{roadsOut} of {roadsTotal} street segments impassable · {routeAdvice}' },
     ],
   },
   {
     id: 'end',
     frames: 120,
-    // Daylight, not goldenHour: the card's own scrim is already 0.72-0.92 alpha, and over a golden-hour scene the
-    // flooded city behind the end card went to near-black (and the cut from evac-b flipped the lighting). Daylight
-    // keeps the flood readable underneath and makes the cut continuous.
-    look: { waterMode: 'realistic', timeOfDay: 'daylight', buildings: true, quality: 'cinematic' },
+    look: { waterMode: 'realistic', timeOfDay: 'goldenHour', buildings: true, quality: 'cinematic' },
     sim: { stageFt: 46, ramp: 'gradual', warmTo: 1280, perFrame: 0.5 },
     camera: [{ t: 0, pose: POSE.evacB }, { t: 1, pose: POSE.endWide, ease: 'inOut' }],
     card: {
       kind: 'end', title: 'DELUGE',
       line: 'Predict the flood · price the risk · build the levee · plan the way out',
       foot: 'WebGPU compute shallow-water solver · USGS 3DEP elevation · NAIP imagery · TIGER/Line roads · OpenStreetMap buildings',
-      // fadeOut 0: the film ends ON the end card. With a 0.45 s fade the last frame was a bare city shot with a 4 %
-      // ghost of the card text over it — the worst possible freeze-frame and poster candidate.
-      fadeIn: 0.35, fadeOut: 0,
+      fadeIn: 0.35, fadeOut: 0.45,
     },
   },
 ];
@@ -477,6 +465,7 @@ async function renderShot(shot, opt) {
     await page.evaluate(({ look }) => {
       const d = window.__deluge;
       d.setLook({ ...look, presentation: true, quality: 'auto' }); // cinematic switched on after the warm-up
+      if (look.waterMode) d.setWaterMode(look.waterMode); // render slice, not look
       d.setAdaptiveBudget(false);
       d.setPaused(true);
     }, { look: shot.look });
@@ -494,12 +483,6 @@ async function renderShot(shot, opt) {
         // levee-b starts from the state levee-a ends in: the wall is up before the crest arrives.
         if (sim.wallAtSim) await window.__film.warmTo(sim.wallAtSim);
         d.drawWall(levee, crest);
-        // The crest arrives AFTER the wall is sealed, exactly as it does in levee-a, so the protected
-        // acreage carries across the cut instead of dropping.
-        if (sim.stageAfterFt != null) {
-          const o = d.stageOffsetForFeet(sim.stageAfterFt);
-          if (o != null) d.setStage(o, { instant: false });
-        }
       }
       if (sim.warmTo > 0) await window.__film.warmTo(sim.warmTo);
     }, { sim: { ...sim, wallAtSim: shot.id === 'levee-b' ? 210 : 0 }, levee: LEVEE, crest: LEVEE_CREST });
@@ -507,28 +490,15 @@ async function renderShot(shot, opt) {
 
     // ── full size + cinematic, only for captured frames ──
     await page.setViewportSize({ width: W, height: H });
-    await page.evaluate(({ look, shot }) => {
+    await page.evaluate(({ look, shot, hazardCity }) => {
       window.__deluge.setLook({ ...look, presentation: true });
+      if (look.waterMode) window.__deluge.setWaterMode(look.waterMode);
+      // The renderer hides the city in hazard modes by default (BuildingStyle.hazardCity). The film wants
+      // Pittsburgh's buildings in every beat, so ask for them back when HAZARD_CITY is on.
+      if (hazardCity && look.buildings) window.__deluge.getRenderer()?.setBuildings({ hazardCity: 1 });
       window.__film.setStatic(shot);
-    }, { look: shot.look, shot: { legend: shot.legend, card: shot.card, credit: 'USGS 3DEP · NAIP · TIGER/Line · OpenStreetMap' } });
+    }, { look: shot.look, hazardCity: process.env.HAZARD_CITY === '1', shot: { legend: shot.legend, card: shot.card, credit: 'USGS 3DEP · NAIP · TIGER/Line · OpenStreetMap' } });
     await page.evaluate('window.__deluge.waitFrames(12)');
-
-    // The protected-land analysis arrives on a GPU readback the frame loop polls, so on a fast, uncontended
-    // machine the FIRST captured frame can still carry the pre-levee figure (measured: 19 acres instead of 135).
-    // Wait, bounded, until the acreage has held steady. No sim time passes, so film timing is untouched.
-    if (shot.settleProtection) {
-      const settled = await page.evaluate(async () => {
-        const d = window.__deluge;
-        let last = -1, stable = 0, i = 0;
-        for (; i < 120 && stable < 6; i++) {
-          await d.waitFrames(1);
-          const a = Math.round((d.getProtection()?.areaM2 ?? 0) / 4046.856);
-          if (a === last && a > 0) stable++; else { stable = 0; last = a; }
-        }
-        return { acres: last, frames: i, stable };
-      });
-      log(`protection settled ${JSON.stringify(settled)}`);
-    }
 
     // ── capture loop ──
     const wallStart = Date.now();
@@ -570,7 +540,10 @@ async function renderShot(shot, opt) {
         if (tSec >= c.from && tSec < c.to) {
           caption = c;
           const fade = 0.28;
-          capOpacity = Math.min(1, Math.min((tSec - c.from) / fade, (c.to - tSec) / fade, 1));
+          const secsShot = frames / FILM.fps;
+          const fin = c.from <= 0.05 ? 1 : (tSec - c.from) / fade;
+          const fout = c.to >= secsShot - 0.05 ? 1 : (c.to - tSec) / fade;
+          capOpacity = Math.min(1, fin, fout, 1);
           capOpacity = Math.max(0, capOpacity);
           break;
         }
