@@ -1,0 +1,14 @@
+# Keep the deploy to what the build needs: src, public, index.html, configs.
+# Without this, the tracked demo videos (~480 MB) upload on every deploy.
+submission
+artifacts
+release
+docs
+tests
+dev
+scripts
+electron
+node_modules
+dist
+.git
+*.md
