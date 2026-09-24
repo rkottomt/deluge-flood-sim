@@ -34,7 +34,7 @@
     "@types/leaflet": "^1.9.22",
     "@types/node": "^22.20.3",
     "@webgpu/types": "^0.1.72",
-    "electron": "44.4.1",
+    "electron": "44.4.3",
     "playwright": "^1.63.0",
     "tsx": "^4.23.13",
     "typescript": "^7.0.2",
