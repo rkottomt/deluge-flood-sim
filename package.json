@@ -36,7 +36,7 @@
     "@webgpu/types": "^0.1.72",
     "electron": "44.4.1",
     "playwright": "^1.63.0",
-    "tsx": "^4.23.13",
+    "tsx": "^4.23.15",
     "typescript": "^7.0.2",
     "vite": "^8.3.0",
     "webgpu": "^0.6.1"
