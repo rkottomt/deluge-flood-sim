@@ -410,3 +410,4 @@ Resources Research*.
 ## License
 
 Code: MIT (see [LICENSE](LICENSE)). Data: see *Data and attribution* above.
+Authors: Rohit K., Aryan G., Nikesh P., Saathvik G., Cursor
