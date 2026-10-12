@@ -244,13 +244,13 @@ h3{font-size:13px;margin:12px 0 2px}.dl-rep-meta{color:#444;margin:0 0 8px}
 `;
 
 /** A complete, standalone HTML document for the report (all values already text nodes; serialisation escapes them). */
-export function reportHtmlDocument(report: HTMLElement, title: string): string {
+export function reportHtmlDocument(report: HTMLElement, title: string, extraCss = ''): string {
   const doc = document.implementation.createHTMLDocument(title);
   const meta = doc.createElement('meta');
   meta.setAttribute('charset', 'utf-8');
   doc.head.prepend(meta);
   const style = doc.createElement('style');
-  style.textContent = REPORT_CSS;
+  style.textContent = REPORT_CSS + extraCss;
   doc.head.append(style);
   doc.body.append(doc.importNode(report, true));
   return `<!doctype html>\n${doc.documentElement.outerHTML}`;

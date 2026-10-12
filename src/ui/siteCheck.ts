@@ -1,0 +1,836 @@
+/**
+ * The Site check panel section: due diligence on candidate parcels. The user drops a pin or outlines a parcel with the
+ * Site tool (tools.ts), describes the planned building, and gets
+ *   • a card for the flood on screen: depth at grade and above the planned floor, speed, AIDR class, arrival and lead
+ *     time, time under water, damage and loss, and egress — when the last road route to a shelter closes;
+ *   • a sweep: the same site run automatically against a ladder of event levels (NWS flood categories, FEMA / NOAA
+ *     frequency levels, historic crests — src/loss/ladders.ts — or multiples of the scenario's rain and inflows),
+ *     headless at full speed, cancellable, with the user's scenario put back afterwards; then EAL, a loss-exceedance
+ *     chart, an indicative finished-floor elevation, mitigation options with BCR, and a verdict in plain words;
+ *   • a printable / downloadable "Site assessment" report.
+ * All arithmetic is in src/loss (site.ts, egress.ts, eal.ts); this file reads the flood, drives the runs and lays out
+ * the answers.
+ *
+ * PRIVACY. Sites live in memory (sites.ts). "Share link" writes them into the address bar on request; nothing is
+ * stored or uploaded. Names are cleaned (cleanPlaceLabel) and only ever written as text.
+ */
+import type { FloodSolver, HazardFields, StageControl, TerrainData, WaterSource } from '../contracts';
+import { computeInitialWater } from '../data/initialWater';
+import { makeGeoToGrid } from '../data/geo';
+import { cleanPlaceLabel } from '../data/placeName';
+import {
+  assessSiteRun,
+  buildAccessIndex,
+  DEBRIS_FLOW_PRESETS,
+  decodeSites,
+  defaultFirstFloorHeight,
+  encodeSites,
+  FloodTimeline,
+  freeboardFor,
+  ladderFor,
+  LADDER_SOURCES,
+  mitigationOptions,
+  OCCUPANCY_PROFILES,
+  pickDesign,
+  recommendFfe,
+  regionForBounds,
+  SCALE_LADDER,
+  SITE_LIMITS,
+  SITE_OCCUPANCIES,
+  siteVerdict,
+  SnapshotHazardAccumulator,
+  summarizeSweep,
+  TYPICAL_FOOTPRINT_M2,
+  type FfeRecommendation,
+  type SiteMitigation,
+  type SiteOccupancy,
+  type SiteRun,
+  type SiteSpec,
+  type SweepLevelInfo,
+  type SweepRow,
+  type SweepSummary,
+} from '../loss';
+import { createRouter } from '../routing';
+import { bridgeFor } from './bridge';
+import { button } from './controls';
+import { h, setText, toggleClass, type UIContext } from './dom';
+import { downloadsBlocked, downloadText, safeFilename } from './download';
+import { fmtNum, formatClock, formatMoney } from './format';
+import { printReport, reportHtmlDocument } from './impactReport';
+import { createSiteOverlay } from './siteOverlay';
+import {
+  buildSiteReport,
+  exceedanceChart,
+  ffeRows,
+  kvList,
+  MITIGATION_HEAD,
+  mitigationTableRows,
+  simpleTable,
+  SITE_METHOD_NOTES,
+  SITE_REPORT_CSS,
+  siteRunRows,
+  siteSpecRows,
+  SWEEP_HEAD_COMPACT,
+  sweepRowsCompact,
+  type SiteReportInput,
+} from './siteReport';
+import { sitesFor } from './sites';
+import { selectTool } from './toolDefs';
+
+const FT = 0.3048;
+/** Simulated minutes per sweep level, default and range. */
+export const SWEEP_MINUTES_DEFAULT = 30;
+const SWEEP_MINUTES_MIN = 2;
+const SWEEP_MINUTES_MAX = 240;
+/** runFor chunk, simulated s: with solver accumulators only for cancelling; with snapshots it is the arrival resolution. */
+const CHUNK_GPU_S = 300;
+const CHUNK_SNAPSHOT_S = 60;
+/** URL parameter carrying the sites (src/loss/site.ts encodeSites). */
+export const SITES_PARAM = 'sites';
+
+interface LevelCfg {
+  id: string;
+  label: string;
+  ft: number;
+  scale: number;
+  sourceRp: number | null;
+  userRp: number | null;
+  source: string;
+  note: string;
+  on: boolean;
+  /** Beyond the stage slider's range for this scenario. */
+  outOfRange: boolean;
+}
+
+interface SweepState {
+  levels: SweepLevelInfo[];
+  rows: Map<string, SweepRow[]>;
+  /** Spec snapshot each site was swept with (to flag later edits). */
+  specs: Map<string, string>;
+  durationS: number;
+  source: 'gpu' | 'snapshots';
+  ladder: 'stage' | 'scale';
+  gaugeLabel: string;
+  sourceKeys: string[];
+  cancelled: boolean;
+  presetId: string | null;
+}
+
+export interface SiteSection {
+  body: HTMLElement[];
+  badge: HTMLElement;
+  overlay: HTMLElement;
+  activate(): void;
+}
+
+const specKey = (s: SiteSpec) => JSON.stringify([s.lon, s.lat, s.ring, s.occupancy, s.floors, s.value, s.footprintM2, s.firstFloorHeight, s.criticalElev]);
+
+function numField(opts: { label: string; unit: string; min: number; max: number; step: number; placeholder?: string; name: string; onChange(v: number | null): void }) {
+  const input = h('input', { type: 'number', class: 'dl-num-input', min: opts.min, max: opts.max, step: opts.step, inputmode: 'decimal', placeholder: opts.placeholder ?? null, 'aria-label': opts.label, 'data-site-field': opts.name });
+  const read = (): number | null => {
+    if (input.value.trim() === '') return null;
+    const v = Number(input.value);
+    return Number.isFinite(v) ? Math.min(opts.max, Math.max(opts.min, v)) : null;
+  };
+  input.addEventListener('change', () => opts.onChange(read()));
+  const el = h('label', { class: 'dl-num-field' }, h('span', { class: 'dl-num-label' }, opts.label), h('span', { class: 'dl-num-wrap' }, input, h('span', { class: 'dl-num-unit' }, opts.unit)));
+  return {
+    el,
+    input,
+    set(v: number | null, digits = 0) {
+      if (document.activeElement === input) return;
+      input.value = v === null || !Number.isFinite(v) ? '' : String(Math.round(v * 10 ** digits) / 10 ** digits);
+    },
+    placeholder(text: string) {
+      input.placeholder = text;
+    },
+  };
+}
+
+export function createSiteSection(ctx: UIContext): SiteSection {
+  const { store, actions } = ctx;
+  const bridge = bridgeFor(store);
+  const registry = sitesFor(store);
+  const getSolver = (): FloodSolver | null => bridge.scene?.getSolver() ?? null;
+  const getTerrain = (): TerrainData | null => bridge.scene?.getTerrain() ?? null;
+  const hasGpuFields = (s: FloodSolver | null) => !!s && typeof s.readHazardFields === 'function';
+
+  // ─── State ──────────────────────────────────────────────────────────────────────────────────────────────────
+  let terrainRef: TerrainData | null = null;
+  let router: ReturnType<typeof createRouter> | null = null;
+  let current: { fields: HazardFields; source: 'gpu' | 'snapshots'; endDepth: Float32Array | null; runs: Map<string, SiteRun>; alertTime: number } | null = null;
+  let sweep: SweepState | null = null;
+  let levels: LevelCfg[] = [];
+  let durationMin = SWEEP_MINUTES_DEFAULT;
+  let sweeping = false;
+  let cancelRequested = false;
+  let busy = false;
+  let designId: string | null = null;
+  let freeboardFt: number | null = null;
+  let active = false;
+  const liveAcc = new SnapshotHazardAccumulator();
+  let tracking = false;
+
+  // ─── DOM ────────────────────────────────────────────────────────────────────────────────────────────────────
+  const badge = h('span', { class: 'dl-sec-badge', hidden: true });
+  const intro = h(
+    'p',
+    { class: 'dl-impact-note' },
+    'Is this parcel a good place to build, and how do people get out? Drop a site, describe the planned building, then check it against the flood on screen or sweep it through a ladder of flood levels. Indicative screening — not engineering advice.',
+  );
+  const placeBtn = button('Place a site', () => selectTool(store, 'site'), { icon: 'site', variant: 'primary', className: 'dl-btn-sm', tip: 'Site tool (S): click the map for a pin, or drag around a parcel', side: 'top' });
+  const shareBtn = button('Share link', () => shareLink(), { className: 'dl-btn-sm', tip: 'Put the sites in the address bar (?sites=) so a copied link reopens them. Nothing is uploaded.', side: 'top' });
+  const listEl = h('div', { class: 'dl-site-list' });
+  const formEl = h('div', { class: 'dl-site-form' });
+  const status = h('p', { class: 'dl-impact-status', 'aria-live': 'polite' });
+  const assessBtn = button('Assess this run', () => void assessCurrent(), { icon: 'reset', className: 'dl-btn-sm', tip: 'Read the flood on screen and assess every site against it', side: 'top' });
+  const evacBtn = button('Follow on map', () => followOnMap(), { icon: 'route', className: 'dl-btn-sm', tip: 'Set the Evacuate start to the selected site: the live route card re-plans as roads flood', side: 'top' });
+  const cardEl = h('div', { class: 'dl-site-card' });
+
+  const sweepIntro = h('p', { class: 'dl-impact-fine' });
+  const ladderEl = h('div', { class: 'dl-impact-table dl-site-ladder' });
+  const durIn = numField({ label: 'Simulated time per level', unit: 'min', min: SWEEP_MINUTES_MIN, max: SWEEP_MINUTES_MAX, step: 1, name: 'duration', onChange: (v) => (durationMin = v ?? SWEEP_MINUTES_DEFAULT) });
+  durIn.set(durationMin);
+  const runBtn = button('Run sweep', () => void runSweep(), { icon: 'play', variant: 'primary', className: 'dl-btn-sm', tip: 'Run every ticked level headless at full speed; your scenario is put back afterwards', side: 'top' });
+  runBtn.dataset.site = 'run-sweep';
+  const cancelBtn = button('Cancel', () => (cancelRequested = true), { className: 'dl-btn-sm', tip: 'Stop after the current chunk and restore your scenario', side: 'top' });
+  cancelBtn.hidden = true;
+  const progress = h('progress', { class: 'dl-site-progress', max: 1, value: 0, hidden: true });
+  const sweepStatus = h('p', { class: 'dl-impact-status', 'aria-live': 'polite', 'data-site': 'sweep-status' });
+  const sweepOut = h('div', { class: 'dl-site-sweep-out' });
+
+  const printBtn = button('Print site assessment', () => doPrint(), { icon: 'book', className: 'dl-btn-sm', tip: 'Print-friendly site assessment (Save as PDF in the dialog)', side: 'top' });
+  const htmlBtn = button('Report .html', () => exportHtml(), { className: 'dl-btn-sm', tip: 'The site assessment as a standalone HTML file', side: 'top' });
+  htmlBtn.dataset.site = 'report-html';
+  const exportNote = h('p', { class: 'dl-impact-fine' });
+
+  const methods = h(
+    'details',
+    { class: 'dl-impact-methods' },
+    h('summary', null, 'How Site check works'),
+    ...SITE_METHOD_NOTES.map((n) => h('div', { class: 'dl-impact-method' }, h('b', null, n.title), h('p', null, n.text))),
+  );
+
+  const body = [
+    intro,
+    h('div', { class: 'dl-row dl-row-wrap' }, placeBtn, shareBtn),
+    listEl,
+    formEl,
+    h('div', { class: 'dl-impact-block' }, h('div', { class: 'dl-label-row' }, h('span', { class: 'dl-label' }, 'This run')), h('div', { class: 'dl-row dl-row-wrap' }, assessBtn, evacBtn), status, cardEl),
+    h(
+      'div',
+      { class: 'dl-impact-block' },
+      h('div', { class: 'dl-label-row' }, h('span', { class: 'dl-label' }, 'Scenario sweep')),
+      sweepIntro,
+      ladderEl,
+      durIn.el,
+      h('div', { class: 'dl-row dl-row-wrap' }, runBtn, cancelBtn),
+      progress,
+      sweepStatus,
+      sweepOut,
+    ),
+    h('div', { class: 'dl-impact-block' }, h('div', { class: 'dl-label-row' }, h('span', { class: 'dl-label' }, 'Export')), h('div', { class: 'dl-row dl-row-wrap' }, printBtn, htmlBtn), exportNote),
+    methods,
+  ];
+
+  const overlay = createSiteOverlay({
+    registry,
+    getCamera: () => bridge.scene?.getCamera?.() ?? null,
+    getTerrain,
+    getExaggeration: () => store.get().render.verticalExaggeration,
+    getCanvas: () => (typeof document !== 'undefined' ? (document.getElementById('deluge-canvas') as HTMLCanvasElement | null) : null),
+    onSelect: (id) => registry.select(id),
+  });
+  ctx.own(() => overlay.destroy());
+
+  // ─── Scene ──────────────────────────────────────────────────────────────────────────────────────────────────
+  function ensureScene(t: TerrainData | null) {
+    if (t === terrainRef) return;
+    terrainRef = t;
+    current = null;
+    sweep = null;
+    designId = null;
+    tracking = false;
+    liveAcc.reset();
+    router = null;
+    if (t?.roads && t.roads.edges.length) {
+      router = createRouter();
+      router.setNetwork(t.roads, t.cellSize, { nx: t.nx, ny: t.ny });
+    }
+    buildLadder();
+    overlay.refresh();
+    render();
+  }
+
+  function stageCtl(): StageControl | null {
+    return store.get().scenario?.stage ?? null;
+  }
+
+  function buildLadder() {
+    const st = stageCtl();
+    const ladder = ladderFor(store.get().presetId);
+    if (st && ladder) {
+      levels = ladder.map((l) => {
+        const off = l.ft * FT + st.gaugeDatum - st.normalLevel;
+        return { id: l.id, label: l.label, ft: l.ft, scale: NaN, sourceRp: l.returnPeriod, userRp: null, source: l.source, note: l.note ?? '', on: true, outOfRange: off < 0 || off > st.maxOffset };
+      });
+    } else if (st) {
+      // A stage scenario without a researched ladder: the slider's own marks.
+      levels = [
+        ...(st.floodStageFt != null ? [{ label: 'Flood stage', ft: st.floodStageFt }] : []),
+        ...(st.marks ?? []).map((m) => ({ label: m.label, ft: m.ft })),
+      ].map((m, i) => ({ id: `m${i}`, label: m.label, ft: m.ft, scale: NaN, sourceRp: null, userRp: null, source: '', note: '', on: true, outOfRange: false }));
+    } else {
+      levels = SCALE_LADDER.map((k) => ({ id: `x${k}`, label: `Scenario forcing × ${k}`, ft: NaN, scale: k, sourceRp: null, userRp: null, source: '', note: '', on: k === 0.5 || k === 1, outOfRange: false }));
+    }
+    for (const l of levels) if (l.outOfRange) l.on = false;
+  }
+
+  // ─── Reading the flood ──────────────────────────────────────────────────────────────────────────────────────
+  function startTracking() {
+    if (tracking) return;
+    const solver = getSolver();
+    const terrain = getTerrain();
+    if (!solver || !terrain || hasGpuFields(solver)) return;
+    tracking = true;
+    try {
+      liveAcc.setBaseline(computeInitialWater(terrain, store.get().scenario));
+    } catch {
+      liveAcc.setBaseline(null);
+    }
+    feed(liveAcc);
+  }
+
+  function feed(acc: SnapshotHazardAccumulator) {
+    const snap = getSolver()?.getSnapshot();
+    if (snap) acc.feed(snap.depth, snap.nx, snap.ny, snap.simTime);
+  }
+
+  async function readFields(acc: SnapshotHazardAccumulator): Promise<{ fields: HazardFields; source: 'gpu' | 'snapshots' } | null> {
+    const solver = getSolver();
+    if (!solver) return null;
+    if (hasGpuFields(solver)) return { fields: await solver.readHazardFields!(), source: 'gpu' };
+    feed(acc);
+    const f = acc.fields();
+    return f ? { fields: f, source: 'snapshots' } : null;
+  }
+
+  function runContext(fields: HazardFields, endDepth: Float32Array | null, timeline: FloodTimeline | undefined) {
+    const t = getTerrain()!;
+    const solver = getSolver();
+    const s = store.get();
+    return {
+      region: regionForBounds(t.bounds),
+      grid: { nx: t.nx, ny: t.ny, cellSize: t.cellSize },
+      toGrid: makeGeoToGrid(t),
+      ground: solver?.getGroundCPU() ?? t.elevation,
+      heightProfile: regionForBounds(t.bounds).iso === 'NP' ? ('nepal' as const) : ('us' as const),
+      debrisFlow: !!s.presetId && DEBRIS_FLOW_PRESETS.has(s.presetId),
+      alertTime: 0,
+      access: buildAccessIndex(t.roads ?? null, fields, t.cellSize),
+      router,
+      shelters: s.shelters,
+      hasRoads: !!router,
+      timeline,
+      endDepth,
+    };
+  }
+
+  function assessAll(fields: HazardFields, endDepth: Float32Array | null, specs: readonly SiteSpec[]): Map<string, SiteRun> {
+    const out = new Map<string, SiteRun>();
+    if (!specs.length) return out;
+    const tl = new FloodTimeline(fields);
+    const c = runContext(fields, endDepth, tl);
+    for (const s of specs) out.set(s.id, assessSiteRun(s, fields, c));
+    return out;
+  }
+
+  async function assessCurrent(): Promise<void> {
+    if (busy || sweeping) return;
+    const terrain = getTerrain();
+    if (!terrain || !getSolver()) return setStatus('Load a scene first.');
+    ensureScene(terrain);
+    if (!registry.sites.length) return setStatus('Place a site first (Site tool, S).');
+    busy = true;
+    assessBtn.disabled = true;
+    setStatus('Reading the flood…');
+    try {
+      startTracking();
+      const r = await readFields(liveAcc);
+      if (!r) return setStatus('Waiting for the first depth snapshot — try again in a moment.', 'warn');
+      if (getTerrain() !== terrain) return;
+      const t0 = performance.now();
+      const endDepth = getSolver()?.getSnapshot()?.depth.slice() ?? null;
+      current = { fields: r.fields, source: r.source, endDepth, runs: assessAll(r.fields, endDepth, registry.sites), alertTime: 0 };
+      setStatus(`Flood at ${formatClock(r.fields.simTime)} · ${registry.sites.length} site${registry.sites.length === 1 ? '' : 's'} in ${fmtNum(performance.now() - t0, 0)} ms${r.source === 'snapshots' ? ' · depth snapshots only (no speeds)' : ''}.`);
+      render();
+    } catch (err) {
+      setStatus(`Couldn’t assess the sites: ${err instanceof Error ? err.message : String(err)}`, 'warn');
+    } finally {
+      busy = false;
+      assessBtn.disabled = false;
+    }
+  }
+
+  /** A site was edited: re-assess against the flood already read (cheap; no GPU readback). */
+  function reassessCurrent() {
+    if (!current || getTerrain() !== terrainRef) return;
+    current.runs = assessAll(current.fields, current.endDepth, registry.sites);
+  }
+
+  // ─── The sweep ──────────────────────────────────────────────────────────────────────────────────────────────
+  function scaledForcing(k: number, base: { sources: WaterSource[]; storms: ReturnType<typeof store.get>['storms']; rainRate: number }) {
+    return {
+      sources: base.sources.map((s) =>
+        s.type === 'inflow' ? { ...s, discharge: s.discharge * k, ...(s.hydrograph ? { hydrograph: s.hydrograph.map((p) => ({ t: p.t, q: p.q * k })) } : {}) } : s,
+      ),
+      storms: base.storms.map((s) => ({ ...s, intensity: s.intensity * k })),
+      rainRate: base.rainRate * k,
+    };
+  }
+
+  async function runSweep(): Promise<void> {
+    if (sweeping || busy) return;
+    const terrain = getTerrain();
+    const solver = getSolver();
+    const sim = bridge.sim;
+    if (!terrain || !solver || !sim) return setSweepStatus('The simulation is not running yet.', 'warn');
+    ensureScene(terrain);
+    const specs = registry.sites.slice();
+    const todo = levels.filter((l) => l.on && !l.outOfRange);
+    if (!specs.length) return setSweepStatus('Place a site first (Site tool, S).', 'warn');
+    if (!todo.length) return setSweepStatus('Tick at least one level.', 'warn');
+    const st = stageCtl();
+    const s0 = store.get();
+    const saved = { stageOffset: s0.stageOffset, sources: s0.sources, storms: s0.storms, rainRate: s0.sim.rainRate, paused: s0.paused };
+    const gpu = hasGpuFields(solver);
+    const chunk = gpu ? CHUNK_GPU_S : CHUNK_SNAPSHOT_S;
+    const dur = Math.round(durationMin * 60);
+    const acc = new SnapshotHazardAccumulator();
+    const state: SweepState = {
+      levels: [],
+      rows: new Map(specs.map((s) => [s.id, []])),
+      specs: new Map(specs.map((s) => [s.id, specKey(s)])),
+      durationS: dur,
+      source: gpu ? 'gpu' : 'snapshots',
+      ladder: st ? 'stage' : 'scale',
+      gaugeLabel: st?.label ?? '',
+      sourceKeys: [...new Set(todo.map((l) => l.source).filter(Boolean))],
+      cancelled: false,
+      presetId: s0.presetId,
+    };
+    sweeping = true;
+    cancelRequested = false;
+    runBtn.disabled = true;
+    assessBtn.disabled = true;
+    cancelBtn.hidden = false;
+    progress.hidden = false;
+    progress.value = 0;
+    const t0 = performance.now();
+    store.set({ paused: true });
+    sim.setRenderHold(true);
+    let failed: string | null = null;
+    try {
+      for (let li = 0; li < todo.length; li++) {
+        if (cancelRequested) break;
+        const L = todo[li];
+        setSweepStatus(`Level ${li + 1} of ${todo.length}: ${L.label} — running ${fmtNum(durationMin)} simulated min…`);
+        if (st) {
+          store.set({ stageOffset: L.ft * FT + st.gaugeDatum - st.normalLevel });
+        } else {
+          const f = scaledForcing(L.scale, saved);
+          store.set({ sources: f.sources, storms: f.storms, sim: { ...store.get().sim, rainRate: f.rainRate } });
+        }
+        actions.resetWater();
+        acc.reset();
+        try {
+          acc.setBaseline(computeInitialWater(terrain, store.get().scenario));
+        } catch {
+          acc.setBaseline(null);
+        }
+        // Progress is read off the simulation clock, not summed from the requests: runFor keeps the solver going until
+        // a readback includes its target, so every chunk overshoots a little (more at high speed-ups).
+        let t = sim.simClock();
+        while (t < dur - 1 && !cancelRequested) {
+          await sim.runFor(Math.max(1, Math.min(chunk, dur - t)));
+          if (getTerrain() !== terrain) throw new Error('the scene changed during the sweep');
+          t = sim.simClock();
+          if (!gpu) feed(acc);
+          progress.value = (li + Math.min(1, t / dur)) / todo.length;
+        }
+        if (cancelRequested) break;
+        const r = await readFields(acc);
+        if (!r) throw new Error('no flood readback');
+        const endDepth = solver.getSnapshot()?.depth.slice() ?? null;
+        const info: SweepLevelInfo = {
+          id: L.id,
+          label: L.label,
+          ft: L.ft,
+          scale: L.scale,
+          returnPeriod: L.sourceRp ?? L.userRp,
+          rpFrom: L.sourceRp != null ? 'source' : L.userRp != null ? 'user' : null,
+          durationS: r.fields.simTime,
+        };
+        state.levels.push(info);
+        const runs = assessAll(r.fields, endDepth, specs);
+        for (const s of specs) {
+          const run = runs.get(s.id);
+          if (run) state.rows.get(s.id)!.push({ level: info, run });
+        }
+        sweep = { ...state };
+        renderSweep();
+      }
+    } catch (err) {
+      failed = err instanceof Error ? err.message : String(err);
+    } finally {
+      state.cancelled = cancelRequested;
+      // Put the user's scenario back: forcing, stage, then the water from its start, then play/pause as it was.
+      if (getTerrain() === terrain) {
+        store.set({ stageOffset: saved.stageOffset, sources: saved.sources, storms: saved.storms, sim: { ...store.get().sim, rainRate: saved.rainRate } });
+        actions.resetWater();
+      }
+      store.set({ paused: saved.paused });
+      sim.setRenderHold(false);
+      sweeping = false;
+      runBtn.disabled = false;
+      assessBtn.disabled = false;
+      cancelBtn.hidden = true;
+      progress.hidden = true;
+      if (state.levels.length) sweep = state;
+      const secs = (performance.now() - t0) / 1000;
+      if (failed) setSweepStatus(`Sweep stopped: ${failed}. Your scenario was restored (the water restarts from its beginning).`, 'warn');
+      else if (state.cancelled) setSweepStatus(`Cancelled after ${state.levels.length} of ${todo.length} levels (${fmtNum(secs, 0)} s). Your scenario was restored; the water restarts from its beginning.`, 'warn');
+      else setSweepStatus(`Done: ${todo.length} level${todo.length === 1 ? '' : 's'} in ${fmtNum(secs, 0)} s. Your scenario was restored; the water restarts from its beginning.`);
+      current = null;
+      render();
+    }
+  }
+
+  // ─── Derived results ────────────────────────────────────────────────────────────────────────────────────────
+  function summaryFor(id: string): SweepSummary | null {
+    const rows = sweep?.rows.get(id);
+    return rows && rows.length ? summarizeSweep(rows) : null;
+  }
+
+  function derived(spec: SiteSpec): { sum: SweepSummary | null; rec: FfeRecommendation | null; options: SiteMitigation[]; verdict: string[] } {
+    const sum = summaryFor(spec.id);
+    const money = (v: number) => formatMoney(v);
+    if (!sum) return { sum: null, rec: null, options: [], verdict: [] };
+    const design = pickDesign(sum.rows, designId);
+    const rec = design ? recommendFfe(design.row, design.basis, spec.occupancy, freeboardFt != null ? freeboardFt * FT : undefined) : null;
+    const t = getTerrain();
+    const country = t ? regionForBounds(t.bounds).costCountry : null;
+    const run0 = sum.rows[0]?.run;
+    const options = rec && run0 ? mitigationOptions(sum, { occ: spec.occupancy, rec, country, perimeterM: run0.geometry.perimeterM }) : [];
+    return { sum, rec, options, verdict: siteVerdict(spec.name || 'The site', sum, money) };
+  }
+
+  // ─── Rendering ──────────────────────────────────────────────────────────────────────────────────────────────
+  function setStatus(text: string, tone: 'info' | 'warn' = 'info') {
+    setText(status, text);
+    toggleClass(status, 'dl-warn', tone === 'warn');
+  }
+  function setSweepStatus(text: string, tone: 'info' | 'warn' = 'info') {
+    setText(sweepStatus, text);
+    toggleClass(sweepStatus, 'dl-warn', tone === 'warn');
+  }
+
+  function render() {
+    renderList();
+    renderForm();
+    renderCard();
+    renderLadder();
+    renderSweep();
+    const n = registry.sites.length;
+    badge.hidden = n === 0;
+    setText(badge, `${n} site${n === 1 ? '' : 's'}`);
+    shareBtn.disabled = n === 0;
+    evacBtn.disabled = !registry.selected;
+    const has = !!current || !!sweep;
+    printBtn.disabled = htmlBtn.disabled = !has || n === 0;
+    setText(exportNote, downloadsBlocked() ? 'The desktop app blocks downloads by design; use Print.' : has ? 'Generated in this tab; nothing is uploaded.' : 'Assess this run or run a sweep to enable export.');
+  }
+
+  function renderList() {
+    const sites = registry.sites;
+    if (!sites.length) {
+      listEl.replaceChildren(h('p', { class: 'dl-impact-fine' }, `No sites yet. Up to ${SITE_LIMITS.maxSites}; they stay in this tab.`));
+      return;
+    }
+    listEl.replaceChildren(
+      ...sites.map((s) => {
+        const on = s.id === registry.selectedId;
+        const run = current?.runs.get(s.id);
+        const tag = run?.outside ? 'outside this map' : run?.result?.reached ? `${fmtNum(run.result.depth, 2)} m` : run ? 'dry' : '';
+        return h(
+          'div',
+          { class: `dl-site-item${on ? ' dl-on' : ''}`, 'data-site-id': s.id },
+          h('button', { type: 'button', class: 'dl-site-pick', 'aria-pressed': String(on), onclick: () => registry.select(s.id) }, h('span', { class: 'dl-impact-name' }, s.name || s.id), h('span', { class: 'dl-impact-meta' }, `${OCCUPANCY_PROFILES[s.occupancy].label} · ${s.floors} fl${s.ring ? ' · outline' : ' · pin'}${tag ? ` · ${tag}` : ''}`)),
+          h('button', { type: 'button', class: 'dl-icon-btn dl-site-remove', 'aria-label': `Remove ${s.name || s.id}`, title: 'Remove', onclick: () => registry.remove(s.id) }, '×'),
+        );
+      }),
+    );
+  }
+
+  /** The form is rebuilt only for another site or use (rebuilding on every edit would steal focus mid-form). */
+  let formKey = '';
+  function renderForm() {
+    const s = registry.selected;
+    const key = s ? `${s.id}|${s.occupancy}|${!!s.ring}` : '';
+    if (key === formKey) return;
+    formKey = key;
+    if (!s) {
+      formEl.replaceChildren();
+      return;
+    }
+    const upd = (patch: Partial<SiteSpec>) => registry.update(s.id, patch);
+    const name = h('input', { type: 'text', class: 'dl-num-input dl-site-name', maxlength: SITE_LIMITS.nameChars, value: s.name, 'aria-label': 'Site name', 'data-site-field': 'name' });
+    name.addEventListener('change', () => upd({ name: cleanPlaceLabel(name.value, SITE_LIMITS.nameChars) }));
+    const use = h(
+      'select',
+      { class: 'dl-num-input dl-site-use', 'aria-label': 'Planned use', 'data-site-field': 'use' },
+      ...SITE_OCCUPANCIES.map((o) => h('option', { value: o, selected: o === s.occupancy }, OCCUPANCY_PROFILES[o].label)),
+    );
+    use.addEventListener('change', () => {
+      if ((SITE_OCCUPANCIES as readonly string[]).includes(use.value)) upd({ occupancy: use.value as SiteOccupancy });
+    });
+    const floors = numField({ label: 'Floors', unit: '', min: 1, max: SITE_LIMITS.maxFloors, step: 1, name: 'floors', onChange: (v) => upd({ floors: Math.round(v ?? 1) }) });
+    floors.set(s.floors);
+    const value = numField({ label: 'Planned value', unit: '$', min: 0, max: SITE_LIMITS.maxValue, step: 100000, name: 'value', placeholder: 'estimated', onChange: (v) => upd({ value: v }) });
+    value.set(s.value);
+    const fp = numField({ label: 'Footprint', unit: 'm²', min: 1, max: SITE_LIMITS.maxFootprintM2, step: 10, name: 'footprint', placeholder: s.ring ? 'outline' : `typ. ${fmtNum(TYPICAL_FOOTPRINT_M2[s.occupancy])}`, onChange: (v) => upd({ footprintM2: v }) });
+    fp.set(s.footprintM2);
+    const ffh = numField({ label: 'First floor above grade', unit: 'm', min: 0, max: SITE_LIMITS.maxFirstFloorM, step: 0.05, name: 'ffh', placeholder: String(defaultFirstFloorHeight(s.occupancy)), onChange: (v) => upd({ firstFloorHeight: v }) });
+    ffh.set(s.firstFloorHeight, 2);
+    const crit = numField({ label: 'Critical equipment above grade', unit: 'm', min: 0, max: SITE_LIMITS.maxCriticalM, step: 0.1, name: 'crit', placeholder: 'optional', onChange: (v) => upd({ criticalElev: v }) });
+    crit.set(s.criticalElev, 2);
+    formEl.replaceChildren(
+      h('label', { class: 'dl-num-field' }, h('span', { class: 'dl-num-label' }, 'Name'), name),
+      h('label', { class: 'dl-num-field' }, h('span', { class: 'dl-num-label' }, 'Planned use'), use),
+      h('div', { class: 'dl-impact-inputs' }, floors.el, value.el, fp.el),
+      h('div', { class: 'dl-impact-inputs' }, ffh.el, crit.el),
+      h('p', { class: 'dl-impact-fine' }, 'Blank fields use defaults: value = floor area × the unit cost for the use; first floor 0.3 m (slab on grade).'),
+    );
+  }
+
+  function renderCard() {
+    const s = registry.selected;
+    const run = s ? current?.runs.get(s.id) : undefined;
+    if (!s || !run) {
+      cardEl.replaceChildren(current ? h('p', { class: 'dl-impact-fine' }, 'Select a site.') : h('p', { class: 'dl-impact-fine' }, 'Press “Assess this run” to check the sites against the flood on screen.'));
+      overlay.setRoute(null, true);
+      return;
+    }
+    const money = (v: number) => formatMoney(v);
+    cardEl.replaceChildren(
+      kvList(siteRunRows(run, money, current!.alertTime), 'dl-site-kv'),
+      h('details', { class: 'dl-impact-methods' }, h('summary', null, 'Planned building, as assessed'), kvList(siteSpecRows(s, run, money), 'dl-site-kv')),
+    );
+    const e = run.egress;
+    overlay.setRoute(e?.routeAtPeak ?? e?.routeBefore ?? null, !!e?.openAtPeak);
+  }
+
+  function renderLadder() {
+    const st = stageCtl();
+    const ladder = ladderFor(store.get().presetId);
+    setText(
+      sweepIntro,
+      st
+        ? `${st.label}: each ticked level resets the water, raises the river to that gauge reading and runs the chosen simulated time headless${ladder ? '' : ' (this scenario has no researched ladder: the slider’s marks)'}. Return periods marked “source” are published; type one for any other level you know — it is labelled as your input.`
+        : 'No river stage here: the ladder scales the scenario’s rain, storm cells and inflows. No return period is known for any multiplier — type one per level (e.g. from NOAA Atlas 14), or the sweep gives levels without an EAL.',
+    );
+    if (!levels.length) {
+      ladderEl.replaceChildren();
+      return;
+    }
+    ladderEl.replaceChildren(
+      h(
+        'table',
+        null,
+        h('thead', null, h('tr', null, h('th', null, ''), h('th', null, 'Level'), h('th', null, 'Return period'))),
+        h(
+          'tbody',
+          null,
+          ...levels.map((l) => {
+            const box = h('input', { type: 'checkbox', checked: l.on, disabled: l.outOfRange || sweeping, 'aria-label': `Run ${l.label}`, 'data-level': l.id });
+            box.addEventListener('change', () => (l.on = box.checked));
+            let rp: HTMLElement;
+            if (l.sourceRp != null) {
+              rp = h('span', { class: 'dl-impact-meta', title: LADDER_SOURCES[l.source]?.text ?? '' }, `${fmtNum(l.sourceRp)} yr · source`);
+            } else {
+              const inp = h('input', { type: 'number', class: 'dl-num-input dl-site-rp', min: 1, max: 100000, step: 1, placeholder: 'yr?', value: l.userRp ?? '', 'aria-label': `Return period of ${l.label}, years (your input)` });
+              inp.addEventListener('change', () => {
+                const v = Number(inp.value);
+                l.userRp = inp.value.trim() !== '' && Number.isFinite(v) && v >= 1 ? Math.min(100000, v) : null;
+                if (sweep) {
+                  for (const lv of sweep.levels) if (lv.id === l.id && lv.rpFrom !== 'source') {
+                    lv.returnPeriod = l.userRp;
+                    lv.rpFrom = l.userRp != null ? 'user' : null;
+                  }
+                  renderSweep();
+                }
+              });
+              rp = inp;
+            }
+            return h(
+              'tr',
+              { class: l.outOfRange ? 'dl-site-off' : '' },
+              h('td', null, box),
+              h('td', null, h('span', { class: 'dl-impact-name' }, l.label), h('span', { class: 'dl-impact-meta' }, `${Number.isFinite(l.ft) ? `${fmtNum(l.ft, 2)} ft` : `× ${l.scale}`}${l.note ? ` · ${l.note}` : ''}${l.outOfRange ? ' · beyond this scenario’s stage range' : ''}`)),
+              h('td', null, rp),
+            );
+          }),
+        ),
+      ),
+    );
+  }
+
+  function renderSweep() {
+    const s = registry.selected;
+    if (!sweep || !s) {
+      sweepOut.replaceChildren();
+      return;
+    }
+    const d = derived(s);
+    if (!d.sum) {
+      sweepOut.replaceChildren(h('p', { class: 'dl-impact-fine' }, 'This site was added after the sweep — run it again to include it.'));
+      return;
+    }
+    const money = (v: number) => formatMoney(v);
+    const stale = sweep.specs.get(s.id) !== specKey(s);
+    const parts: Array<HTMLElement | null> = [];
+    if (stale) parts.push(h('p', { class: 'dl-impact-fine dl-warn' }, 'The site was edited after the sweep: these numbers are for the building as it was then. Run the sweep again.'));
+    parts.push(h('div', { class: 'dl-site-verdict', 'data-site': 'verdict' }, ...d.verdict.map((v) => h('p', null, v))));
+    parts.push(h('div', { class: 'dl-impact-table dl-site-table' }, simpleTable(SWEEP_HEAD_COMPACT, sweepRowsCompact(d.sum, money), '')));
+    const chart = exceedanceChart(d.sum, money);
+    if (chart) parts.push(h('figure', { class: 'dl-site-figure' }, chart, h('figcaption', { class: 'dl-impact-fine' }, 'Loss at the site against return period (log). Hover a point for its numbers; the table above has them all.')));
+    // Recommendations
+    const designSel = h('select', { class: 'dl-num-input', 'aria-label': 'Design event' }, h('option', { value: '' }, 'Auto: 1 % level if run, else the highest'), ...d.sum.rows.map((r) => h('option', { value: r.level.id, selected: r.level.id === designId }, r.level.label)));
+    designSel.addEventListener('change', () => {
+      designId = designSel.value || null;
+      renderSweep();
+    });
+    const fbAuto = freeboardFor(s.occupancy);
+    const fbSel = h('select', { class: 'dl-num-input', 'aria-label': 'Freeboard' }, h('option', { value: '' }, `Auto: ${fbAuto.ft} ft (ASCE 24-14)`), ...[1, 2, 3].map((f) => h('option', { value: String(f), selected: freeboardFt === f }, `${f} ft`)));
+    fbSel.addEventListener('change', () => {
+      freeboardFt = fbSel.value ? Number(fbSel.value) : null;
+      renderSweep();
+    });
+    parts.push(
+      h('div', { class: 'dl-label-row' }, h('span', { class: 'dl-label' }, 'Recommendations — indicative, not engineering advice')),
+      h('div', { class: 'dl-impact-inputs' }, h('label', { class: 'dl-num-field' }, h('span', { class: 'dl-num-label' }, 'Design event'), designSel), h('label', { class: 'dl-num-field' }, h('span', { class: 'dl-num-label' }, 'Freeboard'), fbSel)),
+    );
+    if (d.rec) {
+      parts.push(kvList(ffeRows(d.rec), 'dl-site-kv'));
+    }
+    if (d.rec && !Number.isFinite(d.rec.designWse)) {
+      parts.push(h('p', { class: 'dl-impact-fine' }, `The design event does not reach the site, so this model asks for no higher floor and no protection. To size them for a rarer event, choose it as the design event above.`));
+    } else if (d.rec) {
+      parts.push(h('div', { class: 'dl-impact-table dl-site-options' }, simpleTable(MITIGATION_HEAD, mitigationTableRows(d.options, money), '')));
+      const cav = [...new Set(d.options.flatMap((o) => o.caveats))];
+      parts.push(h('ul', { class: 'dl-impact-issues' }, ...cav.map((c) => h('li', null, c))));
+      if (!d.sum.eal) parts.push(h('p', { class: 'dl-impact-fine dl-warn' }, 'No EAL, so no BCR: give the levels return periods.'));
+    }
+    sweepOut.replaceChildren(...parts.filter((p): p is HTMLElement => !!p));
+  }
+
+  // ─── Map, link, export ──────────────────────────────────────────────────────────────────────────────────────
+  function followOnMap() {
+    const s = registry.selected;
+    const t = getTerrain();
+    if (!s || !t) return;
+    const [gx, gy] = makeGeoToGrid(t)(s.lon, s.lat);
+    if (!(gx >= 0 && gy >= 0 && gx < t.nx && gy < t.ny)) return setStatus('That site is outside this map.', 'warn');
+    store.set({ evacStart: { gx, gy } });
+  }
+
+  function shareLink() {
+    try {
+      const url = new URL(window.location.href);
+      const v = encodeSites(registry.sites);
+      if (v) url.searchParams.set(SITES_PARAM, v);
+      else url.searchParams.delete(SITES_PARAM);
+      window.history.replaceState(null, '', url);
+      void navigator.clipboard?.writeText(url.href).then(
+        () => setStatus('Link with the sites copied and put in the address bar. Anyone you send it to sees the sites and their planned values.'),
+        () => setStatus('Sites put in the address bar (?sites=). Anyone you send the link to sees them and their planned values.'),
+      );
+    } catch {
+      setStatus('Couldn’t write the address bar here.', 'warn');
+    }
+  }
+
+  function reportInput(): SiteReportInput | null {
+    const t = getTerrain();
+    if (!t || (!current && !sweep)) return null;
+    const region = regionForBounds(t.bounds);
+    return {
+      generatedAt: new Date(),
+      attribution: store.get().attribution,
+      terrainName: store.get().terrainName,
+      regionName: region.name,
+      currency: region.currency,
+      alertTime: current?.alertTime ?? 0,
+      current: current ? { simTime: current.fields.simTime, source: current.source } : null,
+      sweep: sweep ? { durationS: sweep.durationS, source: sweep.source, ladder: sweep.ladder, gaugeLabel: sweep.gaugeLabel, sourceKeys: sweep.sourceKeys, levels: sweep.levels.length, cancelled: sweep.cancelled } : null,
+      sites: registry.sites.map((spec) => {
+        const d = derived(spec);
+        return { spec, current: current?.runs.get(spec.id) ?? null, sweep: d.sum, rec: d.rec, options: d.options, verdict: d.verdict };
+      }),
+    };
+  }
+
+  function doPrint() {
+    const i = reportInput();
+    if (i) printReport(buildSiteReport(i));
+  }
+
+  function exportHtml() {
+    const i = reportInput();
+    if (!i) return;
+    const name = safeFilename(`deluge-site-assessment-${store.get().presetId ?? 'area'}`);
+    downloadText(reportHtmlDocument(buildSiteReport(i), `Deluge site assessment — ${store.get().terrainName}`, SITE_REPORT_CSS), `${name}.html`, 'text/html');
+  }
+
+  // ─── Wiring ─────────────────────────────────────────────────────────────────────────────────────────────────
+  ctx.own(
+    registry.on(() => {
+      reassessCurrent();
+      render();
+    }),
+  );
+  ctx.bind(
+    (s) => `${s.presetId}|${s.terrainName}`,
+    () => ensureScene(getTerrain()),
+  );
+  ctx.bind(
+    (s) => s.stats,
+    () => {
+      if (tracking && active && !sweeping && !hasGpuFields(getSolver())) feed(liveAcc);
+    },
+  );
+
+  // Sites from a shared link (read once; a bad value is dropped with a fixed sentence, never echoed).
+  try {
+    const raw = new URLSearchParams(window.location.search).get(SITES_PARAM);
+    if (raw) {
+      const { sites, warnings } = decodeSites(raw);
+      if (sites.length) registry.replace(sites);
+      for (const w of warnings) bridge.notify({ kind: 'info', key: 'sites-link', title: 'Site link', message: w });
+    }
+  } catch {
+    /* no location (tests) */
+  }
+
+  render();
+  return {
+    body,
+    badge,
+    overlay: overlay.el,
+    activate() {
+      active = true;
+      ensureScene(getTerrain());
+      startTracking();
+    },
+  };
+}
