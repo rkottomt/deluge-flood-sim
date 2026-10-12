@@ -7,7 +7,9 @@ WebGPU compute shaders, live in a browser tab. Raise the rivers to the 1936 cres
 keeps dry, crank the rain, and watch an evacuation route re-plan as roads go under.
 
 Built for SteelHacks, *No Wrapper* track: no language models anywhere in the product. How it works in depth:
-[ARCHITECTURE.md](ARCHITECTURE.md). Module contracts: [src/contracts.ts](src/contracts.ts).
+[ARCHITECTURE.md](ARCHITECTURE.md). Module contracts: [src/contracts.ts](src/contracts.ts). The business case — site
+due diligence, portfolios, glacier risk for hydropower, with worked numbers from the app — is in
+[BUSINESS.md](BUSINESS.md).
 
 ## Run it — three ways
 
@@ -61,6 +63,7 @@ URL options: `?preset=pittsburgh|johnstown|ellicott|asheville|nashville|houston|
 under *Scenario → Change*, and in [Seven cities, offline](#seven-cities-offline) below), or any US area with
 `?live=<lat>,<lon>,<km>`
 (e.g. `?live=29.95,-90.07,6` for New Orleans; this needs the internet for USGS, Esri and Census TIGERweb).
+`?usecase=site|glacier|portfolio` opens one of the business use cases below, set up with its demo data.
 
 ## Try this (30 seconds)
 
@@ -115,6 +118,16 @@ periods are only filled in where published; the rest are the user's input and la
 3-storey office pinned at the Point (40.4425, −80.0085) stays dry up to the 2004 Ivan crest, takes 0.98 m at FEMA's
 1 % level (35.4 ft) and 4.5 m at the 1936 crest, and loses its last dry route to a shelter as the water arrives; the
 indicative floor is 1.28 m above grade. Indicative screening, not engineering advice.
+
+**Use cases** (top bar, or *For business* in the Try-it strip; `?usecase=` links) set the three business questions
+up in one click: *check a site before you build* (Pittsburgh, two demo parcels in Site check — a North Shore lot and
+one on the higher ground of Allegheny Center), *glacier risk for hydropower* (Nepal 2026, the hazard chain and its
+early-warning designer) and *portfolio exposure* (Houston under Harvey's rain, with a demo portfolio loaded into Impact
+& loss). The same dialog has a printable one-page brief of what the app computes for a business and where those
+numbers stop. The demo portfolio, [public/demo/houston-portfolio.csv](public/demo/houston-portfolio.csv), is
+**fictional**: 19 made-up assets named "Demo …" and tagged `fictional-demo`, pinned to real building footprints with
+invented values (the CSV reader has no comment rows, so the note lives here). Worked numbers from all three:
+[BUSINESS.md §4](BUSINESS.md#4-three-worked-stories-with-the-apps-own-numbers).
 
 On the 1936 crest (30 simulated minutes, depth-only fallback) the panel books about 1,330 of Pittsburgh's 45,000
 buildings reached and **$5.5 B** (±1σ curve range $3.8–7.0 B); the one-click levee avoids about $1.0 B of it. These

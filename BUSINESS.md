@@ -1,0 +1,302 @@
+# Deluge for business
+
+*For the owner and for prospective customers. October 2026.*
+
+Deluge is a flood simulator that runs in a browser tab: real USGS terrain, real buildings and streets, and the 2-D
+shallow-water equations solved on the GPU fast enough to change something and watch the flood again. This document
+is the business case for it: who should pay, for which question, what it answers that the incumbents do not, and how
+far its numbers can be trusted.
+
+Market figures, competitor notes, regulation and the loss-model sources come from
+[docs/research/business-case.md](docs/research/business-case.md) (confidence-tagged: [V] verified, [S] secondary,
+[M] memory, [I] illustrative). The glacier modelling is in [docs/research/glacier-hazard-chain.md](docs/research/glacier-hazard-chain.md).
+Every number in [§4](#4-three-worked-stories-with-the-apps-own-numbers) was produced by the app itself, on the
+demo data that ships with it, and can be reproduced from the links given there.
+
+**Contents:** [1 The problem](#1-the-problem) · [2 Who buys, and why](#2-who-buys-and-why) ·
+[3 What Deluge does that incumbents don't](#3-what-deluge-does-that-incumbents-dont) ·
+[4 Worked stories](#4-three-worked-stories-with-the-apps-own-numbers) · [5 Pricing](#5-pricing-hypotheses) ·
+[6 Go-to-market](#6-go-to-market) · [7 Roadmap](#7-roadmap) · [8 Limitations](#8-honest-limitations) ·
+[9 Try it](#9-try-it)
+
+---
+
+## 1. The problem
+
+Floods are the most expensive disasters there are and most of the bill is uninsured. Harvey cost ≈ $125 B, Helene
+≈ $79.6 B with 219 deaths, and only ~1–5 % of homes in western North Carolina carried flood cover [S]. Downtime does
+more damage to a business than drywall: Harvey shut Houston warehouses for about a month, and one flooded plant
+(Baxter, Marion NC) took out ~60 % of US IV-fluid supply and an estimated $100–190 M of revenue in a quarter [S].
+Mountain valleys are the new frontier. The South Lhonak outburst destroyed the 1,200 MW Teesta-III dam in 2023, and
+the August 2026 Langtang flood severely damaged 431 MW of Nepali generation [S].
+
+The people who have to decide something about a specific place each ask a small, concrete question:
+
+* a **developer, lender or corporate real-estate team**: *is this parcel a good place to build, how do people get
+  out, and what would protection cost and save?*
+* an **insurer, lender or asset manager**: *what is our portfolio exposed to, asset by asset?*
+* a **hydropower owner or infrastructure lender**: *how many minutes of warning would a glacier flood give each
+  plant, and what would a sensor upstream buy?*
+* a **municipality or its engineer**: *does this wall pass a FEMA benefit–cost test, and who gets wetter?*
+
+Today they get a static answer: a flood-zone line, a 1–10 risk score, or a return-period raster from a hazard
+vendor. If they want to know what changes when the floor goes up 1 m, when a wall is built or when a sensor moves
+5 km up the valley, they commission a hydraulic study that takes weeks and costs five figures, for one design.
+
+## 2. Who buys, and why
+
+Ranked by fit with what the product does today, and by how directly the question turns into money.
+
+| # | Segment | The job | What Deluge gives them today | Fit |
+|---|---|---|---|---|
+| 1 | **Developers, site-selection and corporate real estate** (and the lenders who finance them) | Acquisition due diligence: depth at the planned floor, egress, a defensible floor level, what protection costs | **Site check**: a parcel swept through NWS / FEMA / historic levels → depth, arrival, egress closure, loss, EAL, indicative finished floor, mitigation BCR, printable assessment | **5** |
+| 2 | **Lenders, insurers, MGAs, asset managers** | Portfolio exposure, accumulation, event response; the lender's or insurer's question about one asset | **Impact & loss** with a portfolio CSV: per-asset depth, speed, hazard class, loss range, business interruption, insured loss after deductible and limit | 3–4 (they own cat models; they buy event views, new regions and explainability) |
+| 3 | **Hydropower and mountain infrastructure** (owners, IFC PS4 lenders, insurers with GLOF sub-limits) | How much warning each plant gets; where a sensor pays; what the headworks see | **Hazard chain + Early warning**: a lake outburst or avalanche routed down the valley, front times at each plant, lead time per sensor design, best sensor site, ensemble p10 | **5 — the wedge**: no mainstream vendor offers interactive GLOF routing |
+| 4 | **Municipalities, counties and their engineers** | A benefit–cost analysis for a FEMA HMA / BRIC / FMA application; visuals for a public meeting | Before/after loss with a drawn wall, wall cost, BCR at 7 % and 3.1 %, who gets wetter | 4–5 (BRIC was court-restored; a $1 B NOFO closed July 2026 [S]) |
+
+Why lead with segment 1: the decision is concrete and near-term (buy the parcel or not, set the floor height), a
+single seat can use the answer the same week, and the competing alternative is a consultant study, not a data
+licence. Lenders come with it, because the same assessment answers the lender's question.
+
+Regulation is a weak lever in the US (the SEC climate rule is dead, California SB 261 is enjoined) and a slower one
+abroad (ISSB / IFRS S2 in 35 jurisdictions, CSRD narrowed) [S]; sell on avoided loss, lender and insurer questions
+and grant money, not compliance ([business-case.md §A.3](docs/research/business-case.md#a3-regulatory-status-as-of-oct-2026-state-it-accurately-in-sales-material)).
+
+## 3. What Deluge does that incumbents don't
+
+The incumbents (Fathom/Swiss Re, First Street, Jupiter, ICEYE, Moody's RMS, Verisk, KatRisk, JBA, Floodbase, XDI,
+ClimateCheck; [business-case.md §B](docs/research/business-case.md#b-competitors-and-positioning)) sell precomputed
+hazard layers, scores, catastrophe models or observed footprints. Deluge is not trying to replace a catastrophe
+model. It sits at the moment *before* the decision, when someone needs to try options:
+
+1. **Interactive what-if.** Raise the river, add rain, move a wall, and the flood is solved again in seconds on the
+   user's own GPU. Not a lookup in a precomputed raster.
+2. **Mitigation design with a benefit–cost ratio in the browser.** Draw a wall or levee; Impact & loss books the
+   avoided loss, the buildings the wall makes *wetter*, the wall's planning cost and the BCR at 7 % (the FEMA default
+   again since June 2025) and 3.1 %. Site check sizes floor elevation, a perimeter wall, a levee and dry
+   floodproofing for one parcel, with FEMA TB-3 and ASCE 24-14 rules applied.
+3. **Egress and evacuation.** Each site gets the time its *last* dry road route to a shelter closes, against the time
+   the water arrives, from the road network and the simulated flood. A live evacuation route re-plans as streets go
+   under. Scores and rasters do not say when you can still leave.
+4. **Glacier hazard chains and early-warning design.** A lake outburst or ice-rock avalanche is routed tens of
+   kilometres down a valley in a worker, drives the 2-D flood at the map edge, and gives every town, bridge and
+   power plant a front time. Drop a sensor on the valley profile, and every place's lead time updates; the optimiser
+   finds the best single site.
+5. **Ensemble probability (in progress).** The glacier chain already runs a 27-member ensemble and shows p10 front
+   times. An ensemble mode for the 2-D flood, putting a spread on every site and portfolio number, is being built now;
+   until it lands, each Site check and Impact number is one run (see [§8](#8-honest-limitations)).
+6. **Nothing leaves the laptop.** Portfolios and sites are parsed in the tab; the app has no backend, and its
+   Content-Security-Policy would block an upload. The same static bundle can be hosted on a customer's intranet.
+7. **Built to be checked.** Open, cited damage curves (JRC 2017), hazard classes (AIDR, FD2321), named constants with
+   their sources, mass conservation shown on screen, and every report carries its methods and limits.
+
+## 4. Three worked stories, with the app's own numbers
+
+All three are set up by the in-app **Use cases** dialog or a `?usecase=` link (see [§9](#9-try-it)), on bundled demo
+data. They were run on this branch on a Windows desktop GPU in October 2026, through the dev harness
+(`window.__deluge`) and the app's own panels and exports; the scripts that drove them are summarised in each story.
+Re-running moves the last digit or two, and §4.1 notes one place where it moves much more.
+
+### 4.1 Developer: two candidate parcels in Pittsburgh (`?usecase=site`)
+
+*The planned building:* a 6-storey apartment block, $45 M replacement value, first floor 0.3 m above grade.
+*Parcel A* is a surface lot on the North Shore between the stadiums (outlined, ground ≈ 222.2 m). *Parcel B* is the
+same building on the higher ground of Allegheny Center, 700 m inland (ground ≈ 234.6 m). Both are fictional
+candidates on real terrain.
+
+**Run sweep** (the default ladder of seven levels, 30 simulated minutes each, both parcels at once) took **27–37 s**
+of wall-clock time. On the calm river Parcel A is dry, with a dry route to the Mount Washington shelter (Grandview Ave).
+
+| Level (Ohio River at the Point) | Return period | Parcel A — North Shore | Parcel B — Allegheny Center |
+|---|---|---|---|
+| NWS minor / moderate / major flood (22 / 25 / 28 ft) | — | dry, route open | dry, route open |
+| 2004 Ivan crest (31 ft) | — | dry, route open | dry, route open |
+| FEMA 1 % level (35.4 ft) | 100 yr (published) | dry, route open | dry, route open |
+| 1972 Agnes crest (35.8 ft) | — | dry, route open | dry, route open |
+| **1936 record crest (46 ft)** | none published | **4.0 m at the lowest grade, 3.7 m above the planned floor; last dry route to a shelter closes at T+3 min, as the water arrives, and stays cut ≥ 28 min; loss $7.5 M (15 % damage)** | dry, route open |
+
+What the verdict says, in the app's words for Parcel A: *"Expected annual loss $0: the one level with a return
+period does not damage the planned building. The level that does (1936 record crest) has no published return period
+— enter one to count it."* That is the honest answer, and it is the due-diligence point: the 1 % screen passes the
+North Shore parcel, while the flood of record puts 4 m of water in it and cuts its egress before anyone could leave.
+
+The user can then put a number on the record crest. **With a user-entered 500-year return period** for 1936 (an
+assumption, labelled "your input" in the app and in the report) and the 1936 crest as the design event:
+
+* expected annual loss **$30 k – $45 k per year** (without / with the tail beyond the rarest level);
+* indicative finished floor **4.32 m above the lowest grade** (design water 225.74 m + 0.30 m ASCE 24-14 freeboard),
+  4.02 m higher than planned;
+* **raising the floor** avoids $37 k/yr and pays at 7 % over 50 years if it costs **≤ $515 k**;
+* a 361 m perimeter **floodwall**, 4.3 m high: $14.6 M ($7.3–21.9 M), **BCR 0.0–0.1**; an earthen **levee**: $6.1 M,
+  BCR 0.1–0.2 (and it needs a 29 m strip all round);
+* **dry floodproofing**: not applicable (3.7 m of design water; FEMA TB-3 stops at 0.9 m, and at 5 ft/s).
+
+Parcel B stays dry at every level up to the 1936 record with its route open: EAL $0, no floor requirement. The
+comparison a developer takes away: **B needs nothing; A is fine for the 1 % event, takes 4 m and loses its egress in
+the record flood, and the only protection that pays is a higher floor.**
+
+*Run-to-run sensitivity, stated plainly:* in two of four sweeps, Parcel A's peak water speed at the 1936 crest crossed
+the fast-water threshold and the loss was booked as total, **$49.5 M (100 %)** instead of $7.5 M; with the same
+500-year assumption the EAL is then **$198 k – $297 k per year** instead of $30 k – $45 k (the screenshot below is one
+of those runs). The depth, the egress time and the parcel comparison did not change. A result that tips on a
+threshold like this is exactly what the ensemble mode in progress is for; until then a report quoting one run should
+be read as one run.
+
+![Site check after the sweep: Parcel A outlined on the North Shore with the 1936 crest on the map; the verdict, the level table and the loss-exceedance chart in the panel](docs/business/site-check.jpg)
+
+### 4.2 Insurer or lender: a 19-asset Houston portfolio under Harvey's worst hour (`?usecase=portfolio`)
+
+*The portfolio:* [public/demo/houston-portfolio.csv](public/demo/houston-portfolio.csv), **fictional**: six
+warehouses and light-industrial units (two dock-high), a distribution centre, a data centre, four retail stores,
+four apartment complexes, a clinic and two offices, every one pinned to a real footprint in the Houston preset and
+named "Demo …", with replacement and contents values, revenue, margin, deductible and limit. *The scenario:* the
+Houston preset's Harvey hour, 173 mm/h over the city with Buffalo Bayou at its 2017 crest, run for **one simulated
+hour** from a reset, then Recompute in Impact & loss and the per-asset CSV export.
+
+| Portfolio after one hour | |
+|---|---|
+| Assets reached by water | **15 of 19** (all 19 matched to a footprint, one of them to the nearest footprint 13 m away) |
+| Physical loss, structure + contents | **$17.3 M** (±1σ damage-curve range $8.9 – 26.0 M) |
+| Business interruption | **$7.9 M** |
+| Insured loss after each asset's deductible and limit (physical + BI) | **$23.6 M** |
+| First asset reached | Demo Apartments 2, at **T+5 min** |
+| The city around it (49,368 buildings) | $4.2 B (±1σ $1.3 – 7.8 B); 11,672 buildings reached ≥ 15 cm |
+
+What the asset table shows an underwriter that a score would not:
+
+* **Two apartment complexes carry most of it**: Demo Apartments 2 takes 1.36 m (AIDR H4) and $7.8 M; Demo
+  Apartments 3 takes 0.88 m and $4.3 M.
+* **Dock-high floors pay**: the distribution centre stands in 0.49 m and Warehouse 2 in 0.26 m, both below their
+  1.2 m floors: $0 damage. Warehouse 4, slab on grade, takes 0.45 m and $683 k.
+* **Dry is not the same as open**: the data centre stays dry (4 cm at the footprint, critical equipment dry) but its
+  access road is cut from T+5 min; the downtime heuristic books ~2 days and **$204 k of business interruption** with no
+  physical damage at all. Fourteen other assets lose their nearest road within the hour.
+
+A second run of the same hour gave 14 of 19 reached and $17.2 M ($8.8 – 26.0 M), with the same top six assets.
+
+![Impact & loss with the demo portfolio after one simulated hour of Harvey rain: the asset table sorted by loss, pins on the map](docs/business/portfolio.jpg)
+
+### 4.3 Hydropower: warning time down the Bhote Koshi, 26 August 2026 (`?usecase=glacier`)
+
+*The event* ([glacier-hazard-chain.md §G.1](docs/research/glacier-hazard-chain.md)): at 08:37 NPT rock and ice fell
+from Langtang Lirung into the Lhende Khola and a debris flood ran down the Bhote Koshi and the Trishuli past five
+hydropower schemes to Betrawati, where it took the only road bridge into Rasuwa. The first SMS alerts went out at
+09:15. The preset routes the wave down 60 km of valley and runs the 2-D flood at Betrawati.
+
+| Place (model front time) | Existing alert, 09:15 NPT | One automated gauge + SMS at Rasuwagadhi (2 min latency) | Optimiser's single sensor, 1 km below the source |
+|---|---|---|---|
+| Rasuwagadhi (08:54) | none — water first | none — water first | 9 min |
+| Rasuwagadhi HEP headworks (08:55) | none | none | 10 min |
+| Timure (08:58) | none | 2 min | 13 min |
+| Syafrubesi (09:11) | none | 15 min | 26 min |
+| Chilime HEP powerhouse (09:12) | none | 16 min | 27 min |
+| Upper Trishuli-1 HEP (09:33) | 18 min | 36 min | 48 min |
+| Upper Trishuli-3A HEP (09:42) | 27 min | 45 min | 57 min |
+| Upper Trishuli-3B HEP (09:47) | 33 min | 51 min | 1 h 3 min |
+| **Betrawati (09:52)** | **37 min** (ensemble p10: 25 min) | **56 min** (p10 44) | **1 h 7 min** (p10 55) |
+
+The read-out for an owner or lender: the existing alert reached none of the first five places, down to the Chilime
+powerhouse, before the water did; one gauge at the border town gives Chilime 16 minutes where it had none and every plant below it 18 minutes
+more; and the best single site gives every place on the river, the worst-off included, at least 9 minutes. The
+optimiser's own caveat appears
+next to its answer: *"On model times the furthest-upstream site always wins; what limits it in practice is access and
+survival."*
+
+*Read these as differences, not absolutes.* The model front reaches Betrawati at 09:52; the official account puts the
+flood there around 09:20 (about 09:00 in another reconstruction). On observed times the existing alert gave Betrawati
+minutes at most, and every lead time above is optimistic by the same margin. What a sensor *adds* over the existing
+alert (+19 min at Rasuwagadhi, +30 min at the best site, for Betrawati) is the more robust number.
+
+![The Early warning designer on the Nepal 2026 scene after Suggest best site: a lead-time chip per town and plant, and the valley timeline](docs/business/glacier-warning.jpg)
+
+## 5. Pricing hypotheses
+
+Hypotheses to test with design partners, not a price list ([business-case.md §E.5](docs/research/business-case.md#e5-pricing-tiers-hypotheses-to-test)).
+Public price points are rare; the anchors found were ICEYE Flood Insights from €34 k/yr and Climate X Spectra at
+$31.5 k/yr [S].
+
+| Tier | Hypothesis | For |
+|---|---|---|
+| Public / Explorer | Free: presets, live areas, levee tool, share links, the use cases on demo data | Visibility, education, the top of the funnel |
+| Pro | $149–399 per seat per month: Site check and portfolio CSV up to ~500 assets, reports, custom curves | Consultants, engineers, single-site owners, developers' acquisition teams |
+| Site / BCA pack | $5–15 k per project: a return-period suite, a FEMA-BCA-style appendix, public-meeting visuals, an hour of methods support | Municipalities and their engineers; a developer's lender package |
+| Team / Enterprise | $25–90 k per year, priced under the ICEYE / Climate X anchors to win pilots: unlimited assets, ensembles, SSO, a private static deployment, the glacier module | REITs, logistics, utilities, hydropower, lenders |
+| API / ensemble compute | Metered (e.g. $0.50–5 per asset per scenario suite, or per GPU-hour) | Batch portfolios, parametric trigger studies |
+
+The cost side is unusual and worth saying: the physics runs on the customer's GPU and the app is a static bundle, so
+serving a seat costs almost nothing. That supports a free tier that is genuinely useful and enterprise pricing set by
+value rather than by compute.
+
+## 6. Go-to-market
+
+1. **Site due diligence first.** Find 3–5 design partners among developers, site-selection consultants and the
+   lenders who finance them, in cities with baked scenes (Pittsburgh, Houston, Nashville, Asheville, Fort Myers …) and
+   anywhere in the US through live areas. The deliverable is the printable Site assessment; the hook is the
+   two-parcel comparison and the egress line, which no score gives.
+2. **Engineers as the channel.** Consultants run 100 what-ifs in Deluge before they open HEC-RAS, then hand the
+   client the scenario and the report. Price Pro for them; let the client view for free.
+3. **Event-driven content.** Within days of a major flood, publish a replay scene and a Site-check / portfolio view
+   of it (the Nepal 2026 preset is the model). That is the moment buyers are asking.
+4. **Glacier wedge through lenders.** Hydropower in the Himalaya is lender-financed under IFC PS4; 177 of ~257 plants
+   sit on potential GLOF paths [S]. Approach the E&S advisers and the plants hit in 2023–2026 (Teesta-III, Upper
+   Trishuli, Chilime) with the early-warning design story.
+5. **Portfolio and insurers second.** Event response and new-region views for MGAs and parametric brokers;
+   explainability of a vendor score (show the water behind a First Street or Fathom number).
+6. **Municipal BCA packs** around FEMA grant cycles, sold through the same engineers.
+
+## 7. Roadmap
+
+* **Ensemble mode (in progress):** many runs over terrain bias, roughness, inflow and timing, giving p10 / p50 / p90 on
+  every site and portfolio number and an exceedance probability rather than one run.
+* **Return periods that are not the user's guess:** import FEMA FIS profiles and NOAA Atlas 14 rainfall
+  frequencies for any area, so the sweep's EAL stands on published probabilities everywhere, not only on three
+  rivers.
+* **A FEMA-BCA appendix** that lists the BCA Toolkit inputs (useful life, discount rate, damages before / after per
+  return period) for an engineer to transcribe.
+* **Headless batch / API:** the same solver on a server GPU for portfolios of thousands and for parametric trigger
+  design (what fraction of insured sites is wet when the gauge reads X; basis risk).
+* **Watch mode:** ingest forecasts (NWS, GloFAS), re-run, and tell asset owners their lead time.
+* **Terrain that knows about buildings and drains:** building footprints as obstacles, culverts and a simple storm
+  sewer sink.
+* **Enterprise plumbing:** SSO, private deployments, saved projects.
+
+## 8. Honest limitations
+
+Say these before a customer finds them; the app says them in its panels and reports too.
+
+* **Bare-earth terrain.** Buildings, bridge decks, culverts and storm drains are not in the elevation model; water
+  flows through blocks and under viaducts, and embankments pond rain behind them. River channels are burned to a
+  nominal depth (3DEP has no bathymetry).
+* **Return periods are mostly uncalibrated.** The site sweep only has published return periods for some levels in
+  Pittsburgh, Nashville and Fort Myers; elsewhere probabilities are the user's input and labelled as such, and without
+  them there is no expected annual loss. §4.1 shows what that means in practice.
+* **One run at a time** until the ensemble mode lands. §4.1 shows a result tipping on the fast-water threshold
+  between runs. The ±1σ ranges shown are the damage-curve spread only.
+* **Screening-grade losses.** Global JRC depth–damage curves, values from footprint area × storeys × a national unit
+  cost where the user gives none, and a documented heuristic for downtime. Not an insurance valuation, an engineering
+  design or a catastrophe model.
+* **Model times for glacier floods.** The chain routes an uncertain source volume down a 1-D valley; at Betrawati the
+  model front is about 30 minutes later than the official account (§4.3).
+* **Egress is a road graph.** Census centre-lines, a road counts as cut at 0.3 m of water; traffic, debris on bridges
+  and late departures are not modelled.
+* **Coverage.** Full quality in the US (USGS 3DEP); elsewhere a coarse global elevation fallback, except for baked
+  scenes like Nepal and Sikkim.
+* **Time-lapse river rise** in the stage scenarios (the 1936 rise took ~30 hours; the app raises it in minutes, then
+  solves the flood at its real speed).
+
+The full list, with numbers, is in [README.md → Known limitations](README.md#known-limitations).
+
+## 9. Try it
+
+In the app: **Use cases** in the top bar (or *For business* in the Try-it strip) opens the three set-ups and the
+one-page *What Deluge answers for your business* brief, which prints. Or link straight to one:
+
+* `?usecase=site` — Pittsburgh with the two demo parcels in Site check (they are handed over as a `?sites=` value and
+  read by the same strict decoder as any shared link; your own `?sites=` link takes precedence)
+* `?usecase=glacier` — Nepal 2026 with the hazard chain and the Early warning designer
+* `?usecase=portfolio` — Houston with the fictional demo portfolio loaded into Impact & loss
+
+The value is matched exactly against those three words; anything else is ignored with a fixed message. The demo
+portfolio is a plain CSV in [public/demo/](public/demo/); load your own under *Impact & loss → Load sites / portfolio
+CSV*, with the schema in [business-case.md §E.1](docs/research/business-case.md#e1-asset-portfolio-csv-schema-parsed-client-side-nothing-uploaded).
+It is read in the tab and never uploaded.
