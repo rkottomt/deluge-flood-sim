@@ -22,7 +22,7 @@
  *  • Elevations are meters above the vertical datum (NAVD88 for USGS data).
  */
 
-import type { HazardChainSpec } from './hazard/types';
+import type { HazardChainSpec, Rheology } from './hazard/types';
 
 // ────────────────────────────────────────────────────────────────────────────────────────────
 // Geography / terrain data
@@ -484,6 +484,14 @@ export interface FloodSolver {
    * a cell that wets and dries again between two exports is missed (src/sim/shaders/exportState.ts).
    */
   readHazardFields?(): Promise<HazardFields>;
+
+  /**
+   * Extension (GpuFloodSolver): the flow's rheology and speed cap for the current scenario (src/hazard/types.ts Rheology).
+   * { kind: 'water' } with no uMax is today's Manning code path, bit for bit. A debris flood or debris flow adds its
+   * friction law in the momentum pass; uMax (m/s) replaces the default 15 m/s velocity cap — measured debris fronts ran
+   * 20–25 m/s. Takes effect from the next step; reset() keeps it. A scenario change sets it back to water.
+   */
+  setRheology?(rheology: Rheology, opts?: { uMax?: number }): void;
 
   /**
    * Extension (GpuFloodSolver): the same accumulators on the GPU, for the renderer's arrival-time and hazard-class views.
