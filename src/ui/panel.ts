@@ -38,6 +38,8 @@ import { blockedText, routeDetail } from './routeText';
 import { MAX_SOURCES, MAX_STORMS } from './tools';
 import { formatStage, hasGauge, stageSub, weatherBadge } from './stageText';
 import { createImpactSection } from './impact';
+import { createSiteSection } from './siteCheck';
+import { sitesFor } from './sites';
 
 export interface Panel {
   el: HTMLElement;
@@ -749,7 +751,26 @@ export function createPanel(ctx: UIContext): Panel {
     if (impactSec.classList.contains('dl-open')) impact.activate();
   });
 
-  const scroller = h('div', { class: 'dl-panel-scroll' }, scenarioSec, weatherSec, evacSec, impactSec, viewSec, advancedSec, attribution);
+  // ════════════════════════════════ Site check ════════════════════════════════
+  // Collapsed until asked for; a site dropped on the map opens it.
+  const site = createSiteSection(ctx);
+  const siteSec = section('Site check', 'site', site.body, { id: 'site', open: false, badge: site.badge });
+  siteSec.querySelector('.dl-sec-head')?.addEventListener('click', () => {
+    if (siteSec.classList.contains('dl-open')) site.activate();
+  });
+  let siteCount = sitesFor(ctx.store).sites.length;
+  ctx.own(
+    sitesFor(ctx.store).on(() => {
+      const n = sitesFor(ctx.store).sites.length;
+      if (n > siteCount) {
+        api.reveal('site');
+        site.activate();
+      }
+      siteCount = n;
+    }),
+  );
+
+  const scroller = h('div', { class: 'dl-panel-scroll' }, scenarioSec, weatherSec, evacSec, impactSec, siteSec, viewSec, advancedSec, attribution);
   const closeBtn = h(
     'button',
     { type: 'button', class: 'dl-icon-btn dl-panel-close', 'aria-label': 'Hide panel', onclick: () => api.setOpen(false) },
@@ -762,7 +783,7 @@ export function createPanel(ctx: UIContext): Panel {
   const listeners = new Set<() => void>();
   const api: Panel = {
     el,
-    overlays: [impact.overlay],
+    overlays: [impact.overlay, site.overlay],
     isOpen: () => open,
     setOpen(v: boolean) {
       open = v;

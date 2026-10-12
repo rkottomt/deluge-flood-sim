@@ -72,6 +72,19 @@ export interface WallSegment {
   height: number;
 }
 
+/**
+ * Automation the app lends the UI for long headless runs (the Site check sweep): the same runFor the debug API uses,
+ * and a render hold that drops the 3D view to a slow heartbeat so the GPU time goes to the solver.
+ */
+export interface SimControl {
+  /** Advance the simulation by `simSeconds` as fast as the GPU allows (even while paused); resolves once a readback includes it. */
+  runFor(simSeconds: number): Promise<void>;
+  /** Simulated seconds since the last water reset. */
+  simClock(): number;
+  /** While on, the view renders at most a couple of times a second. */
+  setRenderHold(on: boolean): void;
+}
+
 type Listener<T> = (v: T) => void;
 
 class Channel<T> {
@@ -97,6 +110,8 @@ class Channel<T> {
 export class UIBridge {
   hover: HoverInfo | null = null;
   scene: SceneAccess | null = null;
+  /** Set by the app once it runs (null in tests and before startup). */
+  sim: SimControl | null = null;
   readonly hoverChanged = new Channel<HoverInfo | null>();
   readonly wallDrawn = new Channel<void>();
   /** Latest scan of the walls on the map (null = no walls). Same data as the overtopping notices. */

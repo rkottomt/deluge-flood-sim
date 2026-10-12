@@ -1,0 +1,377 @@
+/**
+ * Site check (src/loss/site.ts, egress.ts, ladders.ts): egress closure timing, one site in one flood, the sweep
+ * summary and EAL, the finished-floor recommendation, mitigation BCR, the verdict sentences, and the ?sites= link
+ * format — including links written by an attacker.
+ * Run: node --import tsx --test tests/loss/site.test.ts
+ */
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import type { HazardFields, Shelter } from '../../src/contracts';
+import { analyzeEgress, FloodTimeline, type EgressRouter } from '../../src/loss/egress';
+import { ealRange, mitigationCost, upv, DISCOUNT_RATE_FEMA, USEFUL_LIFE_WALL_YEARS } from '../../src/loss/eal';
+import { ladderFor, LADDER_SOURCES, PRESET_LADDERS } from '../../src/loss/ladders';
+import { regionAt } from '../../src/loss/region';
+import {
+  assessSiteRun,
+  decodeSites,
+  DEFAULT_FIRST_FLOOR_M,
+  encodeSites,
+  exceedanceCurve,
+  freeboardFor,
+  lossAtFloor,
+  mitigationOptions,
+  newSite,
+  pickDesign,
+  recommendFfe,
+  ringAreaM2,
+  ringPerimeterM,
+  siteVerdict,
+  SITE_LIMITS,
+  summarizeSweep,
+  type SiteSpec,
+  type SweepLevelInfo,
+  type SweepRow,
+} from '../../src/loss/site';
+
+const NX = 64;
+const NY = 64;
+const CELL = 10;
+const N = NX * NY;
+const GROUND = 100;
+const ground = new Float32Array(N).fill(GROUND);
+const region = regionAt(-80, 40);
+const identity = (lon: number, lat: number): [number, number] => [lon, lat];
+const money = (v: number) => (Number.isFinite(v) ? `$${Math.round(v)}` : '—');
+
+/** Uniform flood of depth `d` everywhere, arriving at `fw` s. */
+function uniform(d: number, fw = 600, simTime = 1800): HazardFields {
+  return {
+    nx: NX,
+    ny: NY,
+    simTime,
+    maxDepth: new Float32Array(N).fill(d),
+    maxSpeed: new Float32Array(N).fill(d > 0 ? 0.5 : 0),
+    maxDV: new Float32Array(N).fill(d * 0.5),
+    firstWet: new Float32Array(N).fill(d >= 0.15 ? fw : -1),
+    wetSeconds: new Float32Array(N).fill(d >= 0.15 ? simTime - fw : 0),
+  };
+}
+
+const ctx = (fields: HazardFields) => ({ region, grid: { nx: NX, ny: NY, cellSize: CELL }, toGrid: identity, ground, alertTime: 0 });
+
+function site(patch: Partial<SiteSpec> = {}): SiteSpec {
+  return { ...newSite('s1', 32.5, 32.5), name: 'Lot 4', occupancy: 'office', floors: 3, footprintM2: 1000, ...patch };
+}
+
+// ─── Egress ──────────────────────────────────────────────────────────────────────────────────────────────────────
+
+/** A router over two "roads" (single cells): shelter A is reached along road cell 10, shelter B along cell 20. */
+function fakeRouter(): EgressRouter & { calls: number } {
+  let depth: Float32Array = new Float32Array(N);
+  const roadOf: Record<string, number> = { A: 10, B: 20 };
+  return {
+    calls: 0,
+    updateFlood(d) {
+      depth = d;
+    },
+    route(_start, shelters) {
+      this.calls++;
+      const open = shelters.filter((s) => depth[roadOf[s.name]] < 0.3);
+      if (open.length) return { state: 'ok', polyline: new Float32Array([0, 0, 1, 1]), lengthMeters: 1000, etaSeconds: 120, shelter: open[0], reason: null };
+      return { state: 'blocked', polyline: null, lengthMeters: 0, etaSeconds: 0, shelter: null, reason: 'cut-off' };
+    },
+  };
+}
+
+function roadFlood(): HazardFields {
+  const f = uniform(0);
+  f.firstWet.fill(-1);
+  // A river (wet at reset), irrelevant to the roads; road A floods at 100 s, road B at 300 s, a puddle at 200 s.
+  f.firstWet[0] = 0;
+  f.maxDepth[0] = 3;
+  f.firstWet[10] = 100;
+  f.maxDepth[10] = 0.5;
+  f.firstWet[20] = 300;
+  f.maxDepth[20] = 0.6;
+  f.firstWet[30] = 200;
+  f.maxDepth[30] = 0.1;
+  return f;
+}
+
+const shelters: Shelter[] = [
+  { name: 'A', gx: 1, gy: 1 },
+  { name: 'B', gx: 2, gy: 2 },
+];
+
+test('FloodTimeline: arrivals in order, seek forwards and back restores the field exactly', () => {
+  const f = roadFlood();
+  const tl = new FloodTimeline(f);
+  assert.deepEqual(Array.from(tl.times), [100, 200, 300]);
+  assert.equal(tl.seek(0)[0], 3); // water present at reset is always there
+  assert.equal(tl.seek(0)[10], 0);
+  assert.equal(tl.seek(1)[10], 0.5);
+  assert.equal(tl.seek(3)[20], Math.fround(0.6));
+  const back = tl.seek(1);
+  assert.equal(back[20], 0);
+  assert.equal(back[30], 0);
+  assert.equal(back[10], 0.5);
+});
+
+test('egress: per-shelter closure times and the last route, found by bisection over arrivals', () => {
+  const f = roadFlood();
+  const r = fakeRouter();
+  const e = analyzeEgress(r, f, { gx: 5, gy: 5 }, shelters);
+  assert.ok(e.known);
+  assert.ok(e.openAtStart);
+  assert.equal(e.openAtPeak, false);
+  assert.equal(e.lastRouteClosesAt, 300);
+  assert.deepEqual(e.shelters.map((s) => [s.name, s.closesAt]), [['A', 100], ['B', 300]]);
+  assert.ok(e.routerCalls < 20, `${e.routerCalls} router calls`);
+  // End-of-run depth: road B dry again → a route reopened; still flooded → cut off for at least end − closure.
+  const dry = new Float32Array(N);
+  assert.equal(analyzeEgress(fakeRouter(), f, { gx: 5, gy: 5 }, shelters, { endDepth: dry }).cutAtEnd, false);
+  const wet = new Float32Array(N).fill(1);
+  const still = analyzeEgress(fakeRouter(), f, { gx: 5, gy: 5 }, shelters, { endDepth: wet });
+  assert.equal(still.cutAtEnd, true);
+  assert.equal(still.cutOffAtLeastS, 1800 - 300);
+});
+
+test('egress: unknown without shelters or roads, open when roads stay dry', () => {
+  const f = roadFlood();
+  assert.equal(analyzeEgress(fakeRouter(), f, { gx: 5, gy: 5 }, []).known, false);
+  assert.equal(analyzeEgress(fakeRouter(), f, { gx: 5, gy: 5 }, shelters, { hasRoads: false }).known, false);
+  const e = analyzeEgress(fakeRouter(), uniform(0), { gx: 5, gy: 5 }, shelters);
+  assert.ok(e.openAtPeak);
+  assert.ok(Number.isNaN(e.lastRouteClosesAt));
+});
+
+// ─── One site ────────────────────────────────────────────────────────────────────────────────────────────────────
+
+test('one site in one flood: depth at grade and above the floor, water surface, value from floor area', () => {
+  const f = uniform(1.2);
+  const run = assessSiteRun(site(), f, ctx(f));
+  assert.ok(run.result);
+  assert.equal(run.result!.m.match, 'point');
+  assert.equal(run.grade, GROUND);
+  assert.ok(Math.abs(run.wse - (GROUND + 1.2)) < 1e-4);
+  assert.equal(run.firstFloorHeight, DEFAULT_FIRST_FLOOR_M);
+  assert.ok(Math.abs(run.result!.depthAboveFloor - (1.2 - DEFAULT_FIRST_FLOOR_M)) < 1e-6);
+  assert.equal(run.result!.valueSource, 'unit-cost');
+  assert.equal(run.result!.valueStructure, 1000 * 3 * 3000); // footprint × floors × office unit cost
+  assert.equal(run.geometry.footprintSource, 'given');
+  // Raising the floor above the water removes the loss; lowering it adds to it.
+  assert.equal(lossAtFloor(run, 2), 0);
+  assert.ok(lossAtFloor(run, 0) > run.result!.loss);
+  // A pin outside the map.
+  assert.equal(assessSiteRun(site({ lon: -3, lat: 5 }), f, ctx(f)).outside, true);
+});
+
+test('an outline: area, perimeter, cells, and a planned value that wins over the estimate', () => {
+  const ring = [20, 20, 30, 20, 30, 30, 20, 30];
+  assert.equal(ringAreaM2(ring, CELL), 100 * 100);
+  assert.equal(ringPerimeterM(ring, CELL), 400);
+  const f = uniform(0.5);
+  const run = assessSiteRun(site({ lon: 25, lat: 25, ring, footprintM2: null, value: 5e6 }), f, ctx(f));
+  assert.equal(run.result!.m.match, 'wkt');
+  assert.equal(run.result!.m.cells.length, 100);
+  assert.equal(run.geometry.footprintSource, 'outline');
+  assert.equal(run.geometry.perimeterM, 400);
+  assert.equal(run.result!.valueStructure, 5e6);
+});
+
+// ─── Sweep ───────────────────────────────────────────────────────────────────────────────────────────────────────
+
+function level(id: string, ft: number, T: number | null, rpFrom: SweepLevelInfo['rpFrom'] = T ? 'source' : null): SweepLevelInfo {
+  return { id, label: id, ft, scale: NaN, returnPeriod: T, rpFrom, durationS: 1800 };
+}
+
+function sweepRows(spec = site()): SweepRow[] {
+  const ladder: Array<[SweepLevelInfo, number]> = [
+    [level('minor', 22, 10), 0],
+    [level('major', 28, null), 0.2],
+    [level('rp100', 35, 100), 1.0],
+    [level('record', 46, 500, 'user'), 2.5],
+  ];
+  return ladder.map(([lv, d]) => {
+    const f = uniform(d);
+    return { level: lv, run: assessSiteRun(spec, f, ctx(f)) };
+  });
+}
+
+test('sweep summary: first level reached / inside, EAL from the levels with return periods only', () => {
+  const rows = sweepRows();
+  const sum = summarizeSweep([...rows].reverse());
+  assert.deepEqual(sum.rows.map((r) => r.level.id), ['minor', 'major', 'rp100', 'record']);
+  assert.equal(sum.firstReached?.level.id, 'major');
+  assert.equal(sum.firstInside?.level.id, 'rp100');
+  assert.equal(sum.points.length, 3); // 'major' has no return period
+  assert.ok(sum.userReturnPeriods);
+  const expect = ealRange(sum.points);
+  assert.deepEqual(sum.eal, expect);
+  assert.equal(sum.points[0].loss, 0);
+  assert.ok(sum.eal!.high > sum.eal!.low && sum.eal!.low > 0);
+  const curve = exceedanceCurve(sum.points);
+  assert.deepEqual(curve.map((c) => c.T), [10, 100, 500]);
+  assert.equal(curve[1].p, 0.01);
+});
+
+test('finished-floor recommendation: 100-yr water surface + ASCE 24 freeboard; the user can pick another design level', () => {
+  const sum = summarizeSweep(sweepRows());
+  const design = pickDesign(sum.rows, null)!;
+  assert.equal(design.row.level.id, 'rp100');
+  assert.equal(design.basis, '100-yr');
+  const rec = recommendFfe(design.row, design.basis, 'office')!;
+  assert.ok(Math.abs(rec.designWse - (GROUND + 1)) < 1e-4);
+  assert.ok(Math.abs(rec.freeboardM - 0.3048) < 1e-9);
+  assert.ok(Math.abs(rec.ffeAboveGrade - (1 + 0.3048)) < 1e-4);
+  assert.ok(Math.abs(rec.raiseBy - (1.3048 - DEFAULT_FIRST_FLOOR_M)) < 1e-4);
+  assert.equal(freeboardFor('hospital').ft, 2);
+  assert.match(freeboardFor('school').basis, /Class 3/);
+  const rec3 = recommendFfe(design.row, design.basis, 'office', 3 * 0.3048)!;
+  assert.match(rec3.freeboardBasis, /chosen by the user/);
+  const picked = pickDesign(sum.rows, 'record')!;
+  assert.equal(picked.basis, 'selected');
+  // A design level that does not reach the site: no requirement, the planned floor stands.
+  const dry = recommendFfe(sum.rows[0], 'selected', 'office')!;
+  assert.ok(Number.isNaN(dry.designWse));
+  assert.ok(Math.abs(dry.raiseBy) < 1e-9);
+});
+
+test('mitigation: wall height and cost from eal.ts, BCR = PV(avoided EAL)/cost, break-even capex, dry floodproofing rules', () => {
+  const sum = summarizeSweep(sweepRows());
+  const design = pickDesign(sum.rows, null)!;
+  const rec = recommendFfe(design.row, design.basis, 'office')!;
+  const perim = sum.rows[0].run.geometry.perimeterM;
+  const opts = mitigationOptions(sum, { occ: 'office', rec, country: 'US', perimeterM: perim });
+  const wall = opts.find((o) => o.kind === 'floodwall')!;
+  assert.ok(Math.abs(wall.heightM - 1.3048) < 1e-4);
+  const cost = mitigationCost('floodwall', perim, wall.heightM, 'US');
+  assert.equal(wall.cost!.mid, cost.mid);
+  // The wall tops the 100-yr level, not the record: only levels up to rp100 lose their loss.
+  const before = (sum.eal!.low + sum.eal!.high) / 2;
+  assert.ok(wall.ealAfter!.high > 0);
+  assert.ok(Math.abs(wall.deltaEal - (before - (wall.ealAfter!.low + wall.ealAfter!.high) / 2)) < 1e-6);
+  const f = upv(DISCOUNT_RATE_FEMA, USEFUL_LIFE_WALL_YEARS);
+  assert.ok(Math.abs(wall.bcr7!.mid - (wall.deltaEal * f) / cost.mid) < 1e-9);
+  assert.ok(wall.bcr7!.low < wall.bcr7!.mid && wall.bcr7!.mid < wall.bcr7!.high);
+  const elev = opts.find((o) => o.kind === 'elevate')!;
+  assert.equal(elev.cost, null);
+  assert.ok(Math.abs(elev.breakEvenCapex7 - elev.deltaEal * f) < 1e-6);
+  assert.ok(elev.applicable);
+  const dp = opts.find((o) => o.kind === 'dryproof')!;
+  assert.ok(dp.applicable); // 0.7 m above the floor at the design level: under 3 ft
+  // Homes cannot be dry floodproofed under the NFIP.
+  const res = mitigationOptions(sum, { occ: 'res', rec, country: 'US', perimeterM: perim }).find((o) => o.kind === 'dryproof')!;
+  assert.equal(res.applicable, false);
+  assert.ok(res.caveats.some((c) => /residential/.test(c)));
+});
+
+test('verdict: plain sentences with their numbers; no score; EAL caveats', () => {
+  const rows = sweepRows();
+  // Egress on the rp100 level closes 10 min before water reaches the site.
+  rows[2].run.egress = { known: true, note: '', openAtStart: true, openAtPeak: false, lastRouteClosesAt: 0, peakReason: 'cut-off', cutAtEnd: true, endTime: 1800, cutOffAtLeastS: 1800, shelters: [], routeBefore: null, routeAtPeak: null, peakShelter: '', routerCalls: 1 };
+  const v = siteVerdict('Lot 4', summarizeSweep(rows), money);
+  const text = v.join(' ');
+  assert.match(v[0], /Water reaches Lot 4 at the major \(28\.0 ft\): 0\.20 m at the lowest grade\. Dry at the minor \(22\.0 ft\) and below\./);
+  assert.match(text, /floods the planned floor \(0\.30 m above grade\) from the rp100 \(35\.0 ft\), with 0\.70 m inside/);
+  assert.match(text, /Dry access is lost from the rp100/);
+  assert.match(text, /10 min before water reaches the site/);
+  assert.match(text, /still cut off at the end of the run \(at least 30 min\)/);
+  assert.match(text, /Expected annual loss \$\d+ – \$\d+/);
+  assert.match(text, /some of them your input/);
+  assert.doesNotMatch(text, /score/i);
+  // A site that stays dry everywhere.
+  const dry = siteVerdict('', summarizeSweep(rows.slice(0, 1)), money);
+  assert.match(dry[0], /The site stays dry at every level run, up to the minor/);
+  // Return periods only on levels that do no damage: $0, and the damaging level without one is named.
+  const onlyDry = rows.map((r) => (r.level.id === 'minor' ? r : { ...r, level: { ...r.level, returnPeriod: null, rpFrom: null } }));
+  assert.match(siteVerdict('X', summarizeSweep(onlyDry), money).join(' '), /Expected annual loss \$0: the one level with a return period does not damage the planned building\. The levels that do \(rp100, record\) have no published return period/);
+  // No return periods → no EAL, and the user is told what to enter.
+  const noRp = rows.map((r) => ({ ...r, level: { ...r.level, returnPeriod: null, rpFrom: null } }));
+  assert.match(siteVerdict('X', summarizeSweep(noRp), money).join(' '), /No expected annual loss/);
+});
+
+// ─── Ladders ─────────────────────────────────────────────────────────────────────────────────────────────────────
+
+test('ladders: ordered, every level cites a known source, return periods only where published', () => {
+  for (const [id, ladder] of Object.entries(PRESET_LADDERS)) {
+    for (let i = 1; i < ladder.length; i++) assert.ok(ladder[i].ft >= ladder[i - 1].ft, `${id} ordered`);
+    for (const l of ladder) {
+      assert.ok(LADDER_SOURCES[l.source], `${id}/${l.id} source`);
+      if (l.returnPeriod != null) assert.equal(l.group, 'frequency', `${id}/${l.id}: a return period only on a frequency level`);
+    }
+  }
+  assert.equal(ladderFor('pittsburgh')?.find((l) => l.id === 'rp100')?.ft, 35.38);
+  assert.equal(ladderFor('houston'), null);
+  assert.equal(ladderFor('__proto__'), null);
+  assert.equal(ladderFor(null), null);
+});
+
+// ─── The link ────────────────────────────────────────────────────────────────────────────────────────────────────
+
+test('?sites= round trip: pins, outlines, values, defaults, names with separators', () => {
+  const sites: SiteSpec[] = [
+    { ...newSite('s1', -80.00123, 40.44123), name: 'Lot 4; "North" ~ <b>', occupancy: 'warehouse', floors: 1, value: 25e6, footprintM2: 12000, firstFloorHeight: 1.2, criticalElev: 2.5 },
+    { ...newSite('s2', -80.01, 40.45, [-80.011, 40.449, -80.009, 40.449, -80.009, 40.451, -80.011, 40.451]), name: 'Riverside', occupancy: 'apt', floors: 6 },
+  ];
+  const enc = encodeSites(sites);
+  assert.match(enc, /^v1:/);
+  // Survives URLSearchParams both ways.
+  const back = decodeSites(new URLSearchParams(new URLSearchParams({ sites: enc }).toString()).get('sites'));
+  assert.deepEqual(back.warnings, []);
+  assert.equal(back.sites.length, 2);
+  const [a, b] = back.sites;
+  assert.equal(a.name, 'Lot 4; "North" ~ <b>');
+  assert.equal(a.occupancy, 'warehouse');
+  assert.equal(a.value, 25e6);
+  assert.equal(a.firstFloorHeight, 1.2);
+  assert.equal(a.criticalElev, 2.5);
+  assert.equal(a.footprintM2, 12000);
+  assert.ok(Math.abs(a.lon + 80.00123) < 1e-9 && Math.abs(a.lat - 40.44123) < 1e-9);
+  assert.equal(a.ring, null);
+  assert.deepEqual(b.ring, sites[1].ring);
+  assert.equal(b.value, null);
+  assert.equal(b.firstFloorHeight, null);
+  assert.equal(encodeSites([]), '');
+});
+
+test('?sites= hostile input: bounded, strict, never echoed', () => {
+  const ok = encodeSites([newSite('s1', -80, 40)]);
+  const evil = [
+    '<script>alert(1)</script>',
+    'v2:40,-80~office~3~~~~~x',
+    'v1:40,-80~admin~3~~~~~x', // unknown occupancy
+    'v1:40,-80~office~0~~~~~x', // floors out of range
+    'v1:40,-80~office~3~-5~~~~x', // negative value
+    'v1:91,-80~office~3~~~~~x', // latitude out of range
+    'v1:40,-80~office~3~1e3~~~~x', // exponent notation is not accepted
+    'v1:40,-80~office~3~0x10~~~~x',
+    'v1:40,-80~office~3~Infinity~~~~x',
+    'v1:40,-80,41~office~3~~~~~x', // odd coordinate count
+    'v1:40,-80~office~3~~~~', // missing field
+    `v1:${'1,1,'.repeat(SITE_LIMITS.maxRing + 2)}1,1~office~3~~~~~x`, // too many corners
+    'v1:40,-80~office~3~~~~~%E0%A4%A', // malformed percent-encoding: kept, name dropped
+  ];
+  for (const raw of evil) {
+    const r = decodeSites(raw);
+    for (const w of r.warnings) {
+      assert.doesNotMatch(w, /script|admin|Infinity|0x10/, 'warnings are fixed sentences');
+    }
+  }
+  assert.equal(decodeSites(evil[0]).sites.length, 0);
+  assert.equal(decodeSites(evil[2]).sites.length, 0);
+  assert.equal(decodeSites(evil[6]).sites.length, 0);
+  const mal = decodeSites(evil[12]);
+  assert.equal(mal.sites.length, 1);
+  assert.equal(mal.sites[0].name, '');
+  // Control and bidi-override characters are stripped from names; names are capped.
+  const bidi = decodeSites(`v1:40,-80~office~3~~~~~${encodeURIComponent('A‮evil\u0000' + 'x'.repeat(100))}`);
+  assert.ok(!/[‮\u0000]/.test(bidi.sites[0].name));
+  assert.ok([...bidi.sites[0].name].length <= SITE_LIMITS.nameChars);
+  // Too long, too many.
+  assert.equal(decodeSites('v1:' + 'x'.repeat(SITE_LIMITS.maxParamChars)).sites.length, 0);
+  const many = decodeSites('v1:' + Array(SITE_LIMITS.maxSites + 3).fill(ok.slice(3)).join(';'));
+  assert.equal(many.sites.length, SITE_LIMITS.maxSites);
+  assert.ok(many.warnings.length === 1);
+  assert.deepEqual(decodeSites(null), { sites: [], warnings: [] });
+});

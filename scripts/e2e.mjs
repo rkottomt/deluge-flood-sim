@@ -1189,6 +1189,106 @@ const FLOWS = [
     },
   },
   {
+    id: 15,
+    name: 'Site check: drop a site in Pittsburgh, sweep two levels, export the assessment',
+    timeoutMs: 300_000,
+    async run(r) {
+      if (PRESET !== 'pittsburgh') {
+        r.notes.push(`${PRESET}: the flow is written for Pittsburgh's ladder: skipped`);
+        check(r, 'preset without the Pittsburgh ladder (nothing to check)', true, PRESET);
+        return;
+      }
+      await calm();
+      // A riverfront lot at the Point: dry at NWS minor flood, under about a metre at FEMA's 1 % level.
+      const site = { lat: 40.4425, lon: -80.0085 };
+      const g = await D((p) => window.__deluge.geoToGrid(p.lon, p.lat), site);
+      const before = await D(() => {
+        const s = window.__deluge.getState();
+        return { stageOffset: s.stageOffset, paused: s.paused, sources: s.sources.length };
+      });
+      await D((p) => {
+        const d = window.__deluge;
+        const ground = d.sampleAt(p.gx, p.gy).ground;
+        d.setCamera({ target: { gx: p.gx, gy: p.gy, elevation: ground }, distance: 900, yaw: 0, pitch: Math.PI / 2 - 0.01 });
+      }, g);
+      await D(() => window.__deluge.waitFrames(4));
+      await D(() => window.__deluge.selectTool('site'));
+      const box = await page.locator('#deluge-canvas').boundingBox();
+      await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+      const placed = await page
+        .waitForFunction(() => document.querySelectorAll('.dl-site-item').length === 1 && document.querySelector('[data-section="site"]')?.classList.contains('dl-open'), null, { timeout: 5000 })
+        .then(() => true, () => false);
+      check(r, 'a click with the Site tool drops a site and opens the Site check section', placed, placed ? '1 site' : 'none');
+      await D(() => window.__deluge.selectTool('orbit'));
+
+      // This run: assess the calm river (the site must be dry, and reach a shelter).
+      await page.click('[data-section="site"] button:has-text("Assess this run")');
+      await page.waitForFunction(() => /Flood at T\+/.test(document.querySelector('[data-section="site"] .dl-impact-status')?.textContent ?? ''), null, { timeout: 20_000 });
+      const card = await D(() => document.querySelector('.dl-site-card')?.textContent ?? '');
+      await D(() => document.querySelector('.dl-site-card')?.scrollIntoView({ block: 'center' }));
+      await sleep(400);
+      const cardShot = path.join(OUT, '15-site-card.png');
+      await page.locator('.dl-panel').screenshot({ path: cardShot });
+      console.log(`  [shot] ${path.relative(ROOT, cardShot)}`);
+      check(r, 'site card renders for the flood on screen (dry, with egress)', /Water at the site/.test(card) && /Egress to a shelter/.test(card), card.slice(0, 160));
+
+      // Sweep: NWS minor flood and FEMA's 1 % (100-yr) level only, 4 simulated minutes each (the river ramps at ~3 m/min).
+      await page.fill('[data-site-field="duration"]', '4');
+      await page.dispatchEvent('[data-site-field="duration"]', 'change');
+      await D(() => {
+        for (const box of document.querySelectorAll('.dl-site-ladder input[type=checkbox]')) {
+          const want = box.dataset.level === 'minor' || box.dataset.level === 'rp100';
+          if (box.checked !== want) box.click();
+        }
+      });
+      const t0 = Date.now();
+      await page.click('[data-site="run-sweep"]');
+      const done = await page
+        .waitForFunction(() => /^(Done|Sweep stopped|Cancelled)/.test(document.querySelector('[data-site="sweep-status"]')?.textContent ?? ''), null, { timeout: 240_000 })
+        .then(() => true, () => false);
+      const sweepS = (Date.now() - t0) / 1000;
+      const out = await D(() => ({
+        status: document.querySelector('[data-site="sweep-status"]')?.textContent ?? '',
+        verdict: [...document.querySelectorAll('[data-site="verdict"] p')].map((p) => p.textContent),
+        rows: document.querySelectorAll('.dl-site-sweep-out table tbody tr').length,
+        chart: !!document.querySelector('.dl-site-sweep-out svg.dl-site-chart'),
+        state: (() => {
+          const s = window.__deluge.getState();
+          return { stageOffset: s.stageOffset, paused: s.paused, sources: s.sources.length };
+        })(),
+      }));
+      check(r, 'two-level sweep completes', done && /^Done: 2 levels/.test(out.status), `${out.status.slice(0, 90)} (${num(sweepS, 1)} s wall)`);
+      check(r, 'sweep table has both levels and a verdict', out.rows >= 2 && out.verdict.length >= 3, `${out.rows} rows; ${out.verdict[0] ?? ''}`);
+      check(r, 'the user’s scenario is put back (stage, play state, sources)', JSON.stringify(out.state) === JSON.stringify(before), `${JSON.stringify(before)} → ${JSON.stringify(out.state)}`);
+      r.metrics.sweepSeconds = sweepS;
+      r.metrics.verdict = out.verdict;
+      await D(() => document.querySelector('[data-site="verdict"]')?.scrollIntoView({ block: 'start' }));
+      await sleep(400);
+      const panelShot = path.join(OUT, '15-site-sweep.png');
+      await page.locator('.dl-panel').screenshot({ path: panelShot });
+      console.log(`  [shot] ${path.relative(ROOT, panelShot)}`);
+      await shot('15-site-map');
+
+      // Export: the standalone report, as a download.
+      const [dl] = await Promise.all([page.waitForEvent('download', { timeout: 20_000 }), page.click('[data-site="report-html"]')]);
+      const file = path.join(OUT, '15-site-assessment.html');
+      await dl.saveAs(file);
+      const html = fs.readFileSync(file, 'utf8');
+      const has = ['site assessment', 'Verdict', 'Sweep', 'Expected annual loss', 'Egress timeline', 'Recommendations (indicative)', 'Limitations', 'NWS minor flood', 'FEMA 1 % (100-yr)', 'ASCE 24-14', 'Freeboard', 'BCR 7 %'];
+      const missing = has.filter((s) => !html.includes(s));
+      check(r, 'site assessment report renders every section', missing.length === 0, missing.length ? `missing: ${missing.join(', ')}` : `${(html.length / 1024).toFixed(0)} KB`);
+      check(r, 'report carries no script', !/<script/i.test(html), 'no <script>');
+      // Render the downloaded report for a screenshot.
+      const rp = await page.context().newPage();
+      await rp.setContent(html);
+      const reportShot = path.join(OUT, '15-site-report.png');
+      await rp.screenshot({ path: reportShot, fullPage: true });
+      await rp.close();
+      console.log(`  [shot] ${path.relative(ROOT, reportShot)}`);
+      await calm();
+    },
+  },
+  {
     id: 13,
     name: 'Screen Wake Lock holds the display awake while the pitch runs',
     timeoutMs: 60_000,

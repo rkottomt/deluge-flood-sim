@@ -39,6 +39,7 @@ const TOOL_ICONS: Record<ToolId, IconName> = {
   evac: 'evac',
   shelter: 'shelter',
   probe: 'probe',
+  site: 'site',
 };
 
 export function toolIcon(id: ToolId): IconName {

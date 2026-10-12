@@ -11,6 +11,9 @@
  *   portfolio.ts  the user's CSV of assets: parse, match to footprints, assess, export
  *   eal.ts        expected annual loss, benefit–cost ratio, mitigation unit costs
  *   fallback.ts   depth-only HazardFields from snapshots, for a solver without readHazardFields
+ *   egress.ts     when every road route from a site to a shelter closes (router over the arrival-ordered flood)
+ *   site.ts       site check: one planned building across a ladder of events, FFE, mitigation options, verdict, link
+ *   ladders.ts    sourced event ladders (NWS categories, FEMA/NOAA frequency levels, historic crests) per preset
  *
  * analyze() below strings them together for the UI.
  */
@@ -34,6 +37,9 @@ export * from './portfolio';
 export * from './csv';
 export * from './eal';
 export * from './fallback';
+export * from './egress';
+export * from './site';
+export * from './ladders';
 
 /**
  * Presets whose flood is debris-laden (a glacial-lake outburst): the heuristic dv × 1.5 rule applies by default

@@ -100,6 +100,22 @@ uploaded — and exported results come as a CSV or a print-ready report with the
 behind it is pure TypeScript in [`src/loss`](src/loss), every assumption a named constant with its source, tested in
 `tests/loss`.
 
+**Site check** (the panel section of the same name, and the Site tool, `S`) is the due-diligence view of one parcel:
+click to drop a site or drag around the parcel to outline it, describe the planned building (use, floors, value,
+first-floor height, critical equipment), and it reports depth at grade and above the planned floor, speed, AIDR class,
+arrival and time under water, damage and loss, and **egress** — when the last road route from the site to a shelter
+closes, against when the water arrives (the evacuation router over the flood rebuilt from the run's arrival times).
+**Run sweep** replays the scenario headless at full speed for a ladder of levels — NWS flood categories, FEMA / NOAA
+1 %-type levels and historic crests for Pittsburgh, Nashville and Fort Myers, each with its source
+([src/loss/ladders.ts](src/loss/ladders.ts)), or multiples of the rain and inflows elsewhere — then puts the user's
+scenario back and adds EAL with a loss-exceedance chart, an indicative finished-floor elevation (design water + ASCE
+24-14 freeboard), wall / levee / elevation / dry-floodproofing options with BCR, and a verdict in plain sentences. Return
+periods are only filled in where published; the rest are the user's input and labelled so. Sites stay in the tab
+(**Share link** writes them to `?sites=` on request) and export as a print / HTML "Site assessment". On Pittsburgh, a
+3-storey office pinned at the Point (40.4425, −80.0085) stays dry up to the 2004 Ivan crest, takes 0.98 m at FEMA's
+1 % level (35.4 ft) and 4.5 m at the 1936 crest, and loses its last dry route to a shelter as the water arrives; the
+indicative floor is 1.28 m above grade. Indicative screening, not engineering advice.
+
 On the 1936 crest (30 simulated minutes, depth-only fallback) the panel books about 1,330 of Pittsburgh's 45,000
 buildings reached and **$5.5 B** (±1σ curve range $3.8–7.0 B); the one-click levee avoids about $1.0 B of it. These
 are screening numbers for one simulated event on bare-earth terrain: not a flood study, not an insurance valuation,
@@ -219,7 +235,7 @@ every ~300 ms, never blocking: stats reduction pass ─▶ mapAsync ─▶ HUD +
 | [`src/render`](src/render) | terrain LOD, water, hazard maps, walls, roads/route ribbons, camera, picking |
 | [`src/data`](src/data) | USGS 3DEP / imagery / roads loaders, hydro-conditioning, presets, live areas |
 | [`src/routing`](src/routing) | road graph, flood status per edge, travel-time Dijkstra |
-| [`src/loss`](src/loss) | impact & loss: damage curves, values, hazard classes, access loss, sites/portfolio CSV, EAL/BCR (pure, no DOM) |
+| [`src/loss`](src/loss) | impact & loss: damage curves, values, hazard classes, access loss, sites/portfolio CSV, EAL/BCR, site check (egress timing, event ladders, FFE, verdict) (pure, no DOM) |
 | [`src/ui`](src/ui) | panels, tools, HUD, How it works, location picker |
 | [`src/app`](src/app) | scene loading, store → solver sync, stage ramp, protected-land analysis, frame pacing, screen wake lock, debug API (`window.__deluge`, dev and flagged builds only) |
 

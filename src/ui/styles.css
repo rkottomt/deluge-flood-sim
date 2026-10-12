@@ -4980,3 +4980,233 @@ html[data-deluge-presentation='on'] .dl-tutorial {
     break-inside: auto;
   }
 }
+
+/* ── Site check (src/ui/siteCheck.ts, siteOverlay.ts, siteReport.ts) ─────────────────────────────────────────── */
+.dl-site-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+.dl-site-svg {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+}
+.dl-ui.dl-modal-open .dl-site-layer {
+  display: none;
+}
+.dl-site-pin {
+  pointer-events: auto;
+  cursor: pointer;
+}
+.dl-site-pin circle {
+  fill: #ffd84d;
+  stroke: rgba(10, 16, 24, 0.9);
+  stroke-width: 2;
+}
+.dl-site-pin.dl-on circle {
+  fill: #fff2a8;
+  stroke: #ffd84d;
+}
+.dl-site-pin text {
+  font: 650 11.5px var(--dl-font);
+  fill: #fff;
+  paint-order: stroke;
+  stroke: rgba(8, 12, 18, 0.85);
+  stroke-width: 3px;
+}
+.dl-site-parcel {
+  fill: rgba(255, 216, 77, 0.12);
+  stroke: #ffd84d;
+  stroke-width: 1.5;
+  stroke-dasharray: 5 3;
+}
+.dl-site-parcel.dl-on {
+  fill: rgba(255, 216, 77, 0.2);
+  stroke-width: 2;
+}
+.dl-site-draft {
+  fill: rgba(255, 216, 77, 0.1);
+  stroke: #ffd84d;
+  stroke-width: 2;
+  stroke-dasharray: 4 3;
+}
+.dl-site-route {
+  fill: none;
+  stroke: var(--dl-ok);
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.85;
+}
+.dl-site-route.dl-cut {
+  stroke: var(--dl-danger);
+  stroke-dasharray: 7 5;
+}
+.dl-site-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 8px 0;
+}
+.dl-site-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+}
+.dl-site-item.dl-on {
+  background: var(--dl-accent-bg);
+}
+.dl-site-pick {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  text-align: left;
+  padding: 5px 8px;
+  background: none;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+}
+.dl-site-remove {
+  width: 26px;
+  height: 26px;
+  font-size: 16px;
+  line-height: 1;
+}
+.dl-site-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.dl-site-form .dl-num-field > .dl-num-input,
+.dl-impact-inputs select.dl-num-input,
+.dl-site-form select.dl-num-input {
+  width: 100%;
+}
+select.dl-num-input {
+  padding-right: 4px;
+}
+.dl-site-kv {
+  display: grid;
+  grid-template-columns: minmax(96px, 38%) 1fr;
+  gap: 3px 10px;
+  margin: 6px 0;
+  font-size: 12px;
+}
+.dl-site-kv dt {
+  color: var(--dl-text-2);
+}
+.dl-site-kv dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+.dl-site-ladder td:first-child {
+  width: 22px;
+}
+.dl-site-ladder .dl-site-off {
+  opacity: 0.5;
+}
+.dl-site-rp {
+  width: 64px;
+}
+.dl-site-progress {
+  width: 100%;
+  height: 6px;
+  margin: 6px 0 2px;
+  accent-color: var(--dl-accent);
+}
+.dl-site-verdict {
+  border-left: 3px solid var(--dl-accent);
+  background: var(--dl-accent-bg);
+  border-radius: 0 8px 8px 0;
+  padding: 6px 10px;
+  margin: 8px 0;
+  font-size: 12.5px;
+}
+.dl-site-verdict p {
+  margin: 3px 0;
+}
+.dl-site-figure {
+  margin: 6px 0;
+}
+.dl-site-chart {
+  max-width: 100%;
+  height: auto;
+}
+.dl-site-chart .dl-chart-line {
+  fill: none;
+  stroke: var(--dl-accent);
+  stroke-width: 2;
+}
+.dl-site-chart .dl-chart-dot {
+  fill: var(--dl-accent);
+  stroke: #0c131c;
+  stroke-width: 2;
+}
+.dl-site-chart .dl-chart-hit {
+  fill: transparent;
+  cursor: default;
+}
+.dl-site-chart .dl-chart-pt:hover .dl-chart-dot {
+  r: 5.5;
+}
+.dl-site-chart .dl-chart-grid {
+  stroke: rgba(255, 255, 255, 0.07);
+}
+.dl-site-chart .dl-chart-base {
+  stroke: rgba(255, 255, 255, 0.25);
+}
+.dl-site-chart text {
+  font: 10px var(--dl-font);
+  fill: var(--dl-text-2);
+}
+.dl-site-options td:nth-child(2) {
+  font-size: 11px;
+  color: var(--dl-text-2);
+}
+@media print {
+  .dl-rep-verdict {
+    border-left: 3px solid #2b6cb0;
+    padding: 4px 10px;
+    margin: 6px 0;
+  }
+  .dl-print-report .dl-site-chart .dl-chart-line {
+    fill: none;
+    stroke: #2b6cb0;
+    stroke-width: 2;
+  }
+  .dl-print-report .dl-site-chart .dl-chart-dot {
+    fill: #2b6cb0;
+  }
+  .dl-print-report .dl-site-chart .dl-chart-hit {
+    fill: none;
+  }
+  .dl-print-report .dl-site-chart .dl-chart-grid {
+    stroke: #ddd;
+  }
+  .dl-print-report .dl-site-chart .dl-chart-base {
+    stroke: #999;
+  }
+  .dl-print-report .dl-site-chart text {
+    font-size: 9px;
+    fill: #555;
+  }
+}
+.dl-site-ladder th:nth-child(2),
+.dl-site-ladder td:nth-child(2),
+.dl-site-table th:first-child,
+.dl-site-table td:first-child,
+.dl-site-options th,
+.dl-site-options td {
+  text-align: left;
+}
+.dl-site-options table {
+  font-size: 11px;
+}
