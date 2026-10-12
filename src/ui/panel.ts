@@ -38,6 +38,7 @@ import { blockedText, routeDetail } from './routeText';
 import { MAX_SOURCES, MAX_STORMS } from './tools';
 import { formatStage, hasGauge, stageSub, weatherBadge } from './stageText';
 import { createImpactSection } from './impact';
+import { createChainSection } from './chainPanel';
 
 export interface Panel {
   el: HTMLElement;
@@ -749,7 +750,13 @@ export function createPanel(ctx: UIContext): Panel {
     if (impactSec.classList.contains('dl-open')) impact.activate();
   });
 
-  const scroller = h('div', { class: 'dl-panel-scroll' }, scenarioSec, weatherSec, evacSec, impactSec, viewSec, advancedSec, attribution);
+  // ════════════════════════════════ Hazard chain ════════════════════════════════
+  // Only on presets whose flood starts upstream of the map (a glacial lake, an avalanche): see chainPanel.ts.
+  const chain = createChainSection(ctx);
+  const chainSec = section('Hazard chain', 'mountain', chain.body, { id: 'chain', badge: chain.badge });
+  chain.onVisible((v) => (chainSec.hidden = !v));
+
+  const scroller = h('div', { class: 'dl-panel-scroll' }, scenarioSec, chainSec, weatherSec, evacSec, impactSec, viewSec, advancedSec, attribution);
   const closeBtn = h(
     'button',
     { type: 'button', class: 'dl-icon-btn dl-panel-close', 'aria-label': 'Hide panel', onclick: () => api.setOpen(false) },

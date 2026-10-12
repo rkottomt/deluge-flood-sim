@@ -71,6 +71,7 @@ export const ICON_PATHS = {
   gpu: '<rect x="2.5" y="6.5" width="19" height="11" rx="1.8"/><circle cx="9" cy="12" r="2.6"/><path d="M14.5 10h4M14.5 14h4M5 17.5v2M8 17.5v2M11 17.5v2"/>',
   arrowRight: '<path d="M4.5 12h15M13.5 6l6 6-6 6"/>',
   location: '<circle cx="12" cy="12" r="3.2"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3"/><circle cx="12" cy="12" r="7.2"/>',
+  mountain: '<path d="M2.5 19.5 9 8l4 6.5 2.5-3.5 6 8.5z"/><path d="m7.2 11.2 1.8 1.3 1.6-1.2"/>',
 } as const;
 
 export type IconName = keyof typeof ICON_PATHS;
