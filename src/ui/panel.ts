@@ -37,6 +37,7 @@ import { selectTool } from './toolDefs';
 import { blockedText, routeDetail } from './routeText';
 import { MAX_SOURCES, MAX_STORMS } from './tools';
 import { formatStage, hasGauge, stageSub, weatherBadge } from './stageText';
+import { createImpactSection } from './impact';
 
 export interface Panel {
   el: HTMLElement;
@@ -46,6 +47,8 @@ export interface Panel {
   onChange(fn: () => void): void;
   /** Open the panel, expand a section and scroll it into view. */
   reveal(sectionId: string): void;
+  /** Layers the panel's sections draw over the canvas (the Impact section's map pins); mounted by mountUI. */
+  overlays: HTMLElement[];
 }
 
 function section(
@@ -728,7 +731,15 @@ export function createPanel(ctx: UIContext): Panel {
     attribution.hidden = !v;
   });
 
-  const scroller = h('div', { class: 'dl-panel-scroll' }, scenarioSec, weatherSec, evacSec, viewSec, advancedSec, attribution);
+  // ════════════════════════════════ Impact ════════════════════════════════
+  // Collapsed by default: the flood demo never needs it, and nothing in it runs until it is asked to.
+  const impact = createImpactSection(ctx);
+  const impactSec = section('Impact & loss', 'shield', impact.body, { id: 'impact', open: false, badge: impact.badge });
+  impactSec.querySelector('.dl-sec-head')?.addEventListener('click', () => {
+    if (impactSec.classList.contains('dl-open')) impact.activate();
+  });
+
+  const scroller = h('div', { class: 'dl-panel-scroll' }, scenarioSec, weatherSec, evacSec, impactSec, viewSec, advancedSec, attribution);
   const closeBtn = h(
     'button',
     { type: 'button', class: 'dl-icon-btn dl-panel-close', 'aria-label': 'Hide panel', onclick: () => api.setOpen(false) },
@@ -741,6 +752,7 @@ export function createPanel(ctx: UIContext): Panel {
   const listeners = new Set<() => void>();
   const api: Panel = {
     el,
+    overlays: [impact.overlay],
     isOpen: () => open,
     setOpen(v: boolean) {
       open = v;

@@ -84,7 +84,7 @@ export function mountUI(root: HTMLElement, store: Store, actions: AppActions): v
 
   installSceneReset(ctx);
 
-  const layer = h('div', { class: 'dl-layer' }, topbar.el, toolbar, options, hud, panel.el, notices.top, notices.bottom, probe.el);
+  const layer = h('div', { class: 'dl-layer' }, ...panel.overlays, topbar.el, toolbar, options, hud, panel.el, notices.top, notices.bottom, probe.el);
   root.append(layer, loading, help.el, how.el, picker.el, tutorial.el);
 
   const removeTooltips = installTooltips(root);
