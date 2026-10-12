@@ -301,7 +301,8 @@ export function createChainSection(ctx: UIContext): ChainSection {
       const key = `${v.sceneKey}|${!!v.file}`;
       if (key !== sceneKey) {
         sceneKey = key;
-        build(v);
+        if (v.file) build(v);
+        else root.replaceChildren(statusText);
       }
       sync(v);
     }),
