@@ -351,6 +351,126 @@ export const CHAIN_DEFS: ChainDef[] = [
       ],
     },
   },
+  {
+    id: 'chamoli',
+    name: 'Ronti Gad → Rishiganga → Dhauliganga',
+    // Shugar et al. 2021: the failure at 04:51 UTC = 10:21 IST on 7 February 2021.
+    clockZero: '2021-02-07T10:21:00+05:30',
+    // OSM ways 682961414 ("Raunthi Gadhera" = Ronti Gad) → 1074462194 ("Rishi Ganga") → 297368686 ("Dhauli Ganga"),
+    // down to the Dhauliganga–Alaknanda confluence at Vishnuprayag below Joshimath.
+    route: [
+      [79.7503, 30.3894], [79.7322, 30.4665], [79.7114, 30.4697], [79.6902, 30.4877], [79.6304, 30.4929], [79.6226, 30.4965],
+      [79.6092, 30.5222], [79.5984, 30.5383], [79.5756, 30.5625],
+    ],
+    corridorDeg: 0.03,
+    /*
+     * s = 0 is the head of OSM's Raunthi Gadhera (way 682961414, 30.3894 N, 79.7503 E): the Ronti Gad below the Ronti
+     * glacier, which the avalanche from Ronti Peak's north face ran down. Where exactly the rock-ice mass "became" a
+     * debris flow is not a point anyone measured; the head of the mapped stream is this bake's choice of where the
+     * 1-D model takes it over, and the trigger below says so.
+     */
+    source: { at: [79.7503, 30.3894], wayName: /Raunthi|Ronti/ },
+    // The Dhauliganga's last OSM node at its confluence with the Alaknanda (Vishnuprayag), 16 km below Raini.
+    end: [79.5756, 30.5625],
+    stations: [
+      { name: 'Ronti Gad (avalanche runout, head of the mapped stream)', kind: 'source', at: [0, 0], atSource: true },
+      /*
+       * The Rishiganga plant (13.2 MW; research spec §G.4, Shugar et al. 2021) stood on the Rishiganga at Raini, just
+       * above its confluence with the Dhauliganga. Its site is not mapped in OSM, so the station is placed at OSM node
+       * 7833070518 (place=village "Reni", alt_name "Raini") — a position good to a few hundred metres, as the chain
+       * needs for an arrival time, and no better.
+       */
+      { name: 'Rishiganga HEP, Raini (position approximate)', kind: 'hydro', at: [79.691091, 30.485222], capacityMW: 13.2 },
+      // OSM way 905613418 "Reni Bridge (Destroyed)", NH107B, "Washed away in floods on February 8" (sic, OSM).
+      { name: 'Reni bridge (NH107B)', kind: 'bridge', at: [79.69423, 30.48549] },
+      /*
+       * OSM way 683265980 "Tapovan Vishnugad Hydropower Plant (Destroyed)" (landuse=construction), centroid — the
+       * barrage site. 520 MW, under construction in 2021 (research spec §G.4). No barrage height was found in anything
+       * this bake read, so the barrage is a STATION, not a ChainStructure (an invented crest would read as measured).
+       */
+      { name: 'Tapovan-Vishnugad HEP barrage (under construction)', kind: 'hydro', at: [79.63042, 30.4929], capacityMW: 520 },
+      // OSM node 7833070513 (place=village "Tapoban"), on the slope just below the barrage.
+      { name: 'Tapovan', kind: 'town', at: [79.625267, 30.488531], maxOffset: 800 },
+      /*
+       * OSM node 2376466294 (place=hamlet "Vishnuprayāg", tagged "Location approximate") at the Dhauliganga–Alaknanda
+       * confluence below Joshimath — the downstream end of Shugar et al.'s "Raini → Joshimath, 16 km". Joshimath town
+       * (OSM node 342105699) stands on the slope ~1.6 km west of the river and ~500 m above it.
+       */
+      { name: 'Joshimath (Vishnuprayag confluence)', kind: 'town', at: [79.57915, 30.56264] },
+    ],
+    structures: [],
+    domainEntry: { sourceId: 'rishiganga-inflow', name: 'Raini–Tapovan 2-D domain (east edge)' },
+    attribution:
+      'Event: Shugar et al. 2021, Science 373:300–306, doi:10.1126/science.abh4455 (volumes, ice fraction, front speeds, discharges, losses). ' +
+      'Tapovan arrival: Cook et al. 2021, Science 374:87–92, doi:10.1126/science.abj1227 (seismic), via The Landslide Blog. ' +
+      'Station positions: OpenStreetMap elements listed in scripts/chain-defs.ts.',
+    hazardChain: {
+      /*
+       * Research spec §C.3 branch 2 / §G.4 — DIRECT TRANSFORMATION: the avalanche itself became the debris flow; no dam.
+       *   volume      26.9 Mm³ detached (95 % CI 26.5–27.3; Shugar et al. 2021).
+       *   iceFraction 0.2 — Shugar's ~80 % rock / 20 % ice; the 5–6 Mm³ of ice melted almost entirely (frictional heat),
+       *               which is the melt directFlow() turns into water (src/hazard/mass.ts).
+       *   fallHeight  1,400 m — from the ~5,500 m failure zone (Shugar) to the bed at s = 0 on this DEM (4,094 m raw,
+       *               chain.json zBed[0]; the bake prints it). pathLength 3,700 m is an ASSUMPTION: the map distance
+       *               from Raunthi Peak (OSM node 6764534673, 6,063 m) to s = 0. H/L 0.38 — the mass is far steeper than
+       *               it needs to be to reach the stream (Shugar: H/L 0.16 all the way to Tapovan).
+       *   baseflow    20 m³/s — ASSUMPTION: a winter low flow (February) of the right order for the Rishiganga; no
+       *               gauge record for that morning was read.
+       */
+      trigger: {
+        kind: 'massIntoRiver',
+        mass: { volume: 26.9e6, iceFraction: 0.2, fallHeight: 1400, pathLength: 3700 },
+        mode: 'directFlow',
+        baseflow: 20,
+      },
+      profile: 'chain.json',
+      /*
+       * Research spec §I.6 #3: a DEBRIS FLOW, O'Brien–Julien quadratic at Cv 0.45 (top of the FLO-2D mud-flood band,
+       * bottom of mudflow). Material: Glenwood 1, the FLUID end of O'Brien & Julien's 1988 table (src/hazard/defaults.ts
+       * MATERIAL_GLENWOOD_1) — τ_y ≈ 29 Pa, η ≈ 8.9 Pa·s at Cv 0.45. The stiff end (Aspen Pit 1: τ_y ≈ 1.9 kPa,
+       * η ≈ 75 Pa·s) gives a viscous friction slope of 0.2–0.5 at 5–10 m depth, ten times the Dhauliganga's 2.3 %
+       * bed slope — it would stop the flow below Raini, which is not what happened. K = 2,285 (FLO-2D default).
+       * MEASURED on the GPU with this preset's terrain and the routed inflow (artifacts/chamoli-build/tools/physics.mjs,
+       * ARCHITECTURE.md §3 caveat): Glenwood 1 at Cv 0.45 reaches the Tapovan barrage 1,140 s after the inflow starts
+       * (water: 960 s) and runs on out of the map; Aspen Pit 1 is down to 1–2 m/s 3–4 km below Raini after 25 min;
+       * Voellmy μ 0.05 stops ~1 km below Raini. So Cv stays at the spec's 0.45 — it did not need lowering.
+       */
+      rheology: { kind: 'quadratic', cv: 0.45, material: { name: 'Glenwood 1', a2: 0.0345, b2: 20.1, a1: 0.00283, b1: 23.0 } },
+      // Shugar et al.: the front ran ~25 m/s near the Rishiganga plant.
+      solver: { uMax: 25 },
+      observations: [
+        {
+          station: 'Ronti Gad (avalanche runout, head of the mapped stream)',
+          tFront: 0,
+          note: '04:51 UTC (10:21 IST): ~26.9 Mm³ of rock and ice (~80/20 %) detached from the north face of Ronti Peak at ~5,500 m — a slab up to ~550 m wide and ~80 m thick; ~8 Mm³ was deposited near the Ronti Gad–Rishiganga confluence.',
+          source: 'Shugar et al. 2021, Science 373:300–306, doi:10.1126/science.abh4455',
+        },
+        {
+          station: 'Rishiganga HEP, Raini (position approximate)',
+          qPeak: 11200,
+          note: 'RECONSTRUCTED mean discharge 8,200–14,200 m³/s at the Rishiganga plant (centre of the band shown), passing in 10–20 min; front ~25 m/s here, ~15 km from the source. The 13.2 MW plant was destroyed.',
+          source: 'Shugar et al. 2021, Science (research spec §G.4)',
+        },
+        {
+          station: 'Tapovan-Vishnugad HEP barrage (under construction)',
+          tFront: 15 * 60,
+          note: 'Seismic records put the debris flow at the Tapovan project ~15 min after the failure (Shugar et al.: ~16 m/s just upstream of Tapovan). Most of those lost that morning were workers at the two hydropower projects, many of them in the Tapovan tunnels (casualty figures are kept off screen, as in every preset).',
+          source: 'Cook et al. 2021, Science 374:87–92 (via The Landslide Blog); Shugar et al. 2021',
+        },
+        {
+          station: 'Tapovan',
+          qPeak: 3900,
+          note: 'RECONSTRUCTED mean discharge 2,900–4,900 m³/s below Tapovan (centre of the band shown); front ~12 m/s.',
+          source: 'Shugar et al. 2021, Science (research spec §G.4)',
+        },
+        {
+          station: 'Joshimath (Vishnuprayag confluence)',
+          note: 'Mean front speed ~10 m/s over the 16 km from Raini to Joshimath — about 27 min, a derived figure, not a timed arrival.',
+          source: 'Shugar et al. 2021, Science (research spec §G.4)',
+        },
+      ],
+    },
+  },
 ];
 
 /** HazardChainSpec for a preset id, for scripts/bake-presets.ts. */

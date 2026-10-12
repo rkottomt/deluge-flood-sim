@@ -77,7 +77,7 @@ const FILL = process.argv.includes('--fill') ? true : process.argv.includes('--n
  * one- to three-storey masonry and timber than US stock is, and like Betrawati none of its OSM buildings is tagged
  * with a height or a level count to fit a profile of its own to.
  */
-const HEIGHT_PROFILE_BY_PRESET: Record<string, HeightProfile> = { nepal: 'nepal', chungthang: 'nepal' };
+const HEIGHT_PROFILE_BY_PRESET: Record<string, HeightProfile> = { nepal: 'nepal', chungthang: 'nepal', chamoli: 'nepal' };
 const PROFILE_ARG = argValue('profile') as HeightProfile | undefined;
 if (PROFILE_ARG && PROFILE_ARG !== 'us' && PROFILE_ARG !== 'nepal') {
   throw new Error(`--profile must be 'us' or 'nepal', got '${PROFILE_ARG}'`);

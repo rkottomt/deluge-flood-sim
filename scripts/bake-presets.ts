@@ -226,6 +226,50 @@ const CHUNGTHANG_DESCRIPTION =
   'place on the road network stands clear of the river. The rivers start dry, so every drop you see is the modelled ' +
   'flood. Watch which ground goes under and in what order, and do not read street-level depths.';
 
+/**
+ * Raini–Tapovan, Chamoli district, Uttarakhand — the rock-ice avalanche and debris flow of 7 February 2021.
+ *
+ * At 04:51 UTC (10:21 IST) ~26.9 million m³ of rock and glacier ice (~80/20 %) fell from the north face of Ronti Peak
+ * at ~5,500 m. The ice melted almost entirely on the way (frictional heating) and the mass became a debris flow down
+ * the Ronti Gad, the Rishiganga and the Dhauliganga; it destroyed the 13.2 MW Rishiganga plant at Raini and the
+ * barrage of the 520 MW Tapovan-Vishnugad project, under construction (Shugar et al. 2021, Science 373:300–306,
+ * doi:10.1126/science.abh4455; research spec §G.4).
+ *
+ * WHAT IS RECONSTRUCTED: Shugar et al. give a MEAN discharge of 8,200–14,200 m³/s at the Rishiganga plant over a
+ * passage of 10–20 minutes — a band, not a gauged hydrograph (no gauge on either river survived). The standalone
+ * inflow is therefore the spec's §B.4 gamma SHAPE (a = 3) with the band's top as its peak and the volume the chain's
+ * direct-flow source produces from the published numbers (src/hazard/mass.ts directFlow): 26.9 Mm³ × 20 % ice × 0.917
+ * (ice → water) = 4.93 Mm³ of melt water, carried at Cv 0.4 (DIRECT_FLOW_CV) = 8.2 Mm³ of mixture. That puts the
+ * curve's mean over its central 10–20 minutes inside the published band (the bake logs it). It is a placeholder for the
+ * routed hydrograph the hazard chain puts at this edge (public/presets/chamoli/chain.json), labelled as such.
+ */
+const CHAMOLI_PEAK_M3S = 14200;
+const CHAMOLI_MIXTURE_M3 = Math.round((26.9e6 * 0.2 * 0.917) / (1 - 0.4) / 1e5) * 1e5;
+const CHAMOLI_HYDROGRAPH = gammaHydrograph(CHAMOLI_PEAK_M3S, CHAMOLI_MIXTURE_M3);
+/** Share of the Raini–Tapovan domain steeper than the bare-earth filter's 20° gate, measured on the shipped DEM. */
+const CHAMOLI_STEEP_PCT = 90;
+const CHAMOLI_DESCRIPTION =
+  'Raini stands where the Rishiganga meets the Dhauliganga, and the 13.2 MW Rishiganga hydropower plant stood beside ' +
+  'it; 6 km downstream, at Tapovan, the barrage of the 520 MW Tapovan-Vishnugad project was being built. At 10:21 on ' +
+  'the morning of 7 February 2021 about 27 million m³ of rock and glacier ice broke from the north face of Ronti Peak, ' +
+  '5,500 m up and some 15 km away. Its ice melted on the way down, and the avalanche became a debris flow that ran ' +
+  'down the Ronti Gad and the Rishiganga at about 25 m/s, destroyed the Rishiganga plant, reached the Tapovan barrage ' +
+  'about a quarter of an hour after the collapse and destroyed it too. Most of the people it took were workers at ' +
+  'the two projects (Shugar et al., Science, 2021). Nothing gauged the flow; the published reconstruction gives a mean ' +
+  'discharge of 8,200 to 14,200 m³/s at the Rishiganga plant over 10–20 minutes. This run brings ' +
+  `${CHAMOLI_PEAK_M3S.toLocaleString('en-US')} m³/s at its peak and ${(CHAMOLI_MIXTURE_M3 / 1e6).toFixed(1)} million m³ in all ` +
+  '(the melted ice and the rock it carried) in through the east edge on a smooth rise and fall — a parametric ' +
+  'placeholder, not a measured hydrograph — and the clock starts as the front reaches the east edge of the map, not at ' +
+  'the collapse. The flow moves as one fluid under a uniform debris-flow friction law (O’Brien–Julien, 45 % solids by ' +
+  'volume) with a 25 m/s speed cap; it neither picks up nor drops sediment, so the 8 million m³ the real flow left ' +
+  'near the Ronti Gad and the mud it laid down at Tapovan are not here, and the arrival times are the model’s, not ' +
+  'the flood’s. The terrain is Copernicus 30 m radar data, a surface model with canopy and buildings in it, acquired ' +
+  'in 2011–2015, before the Tapovan barrage was finished. The bare-earth filter only runs on ground flatter than 20°, ' +
+  `and ${CHAMOLI_STEEP_PCT} % of this domain is steeper: the valley floor is filtered and still a metre or two high, ` +
+  'the walls above it are the raw surface model. No photograph is baked in, so the ground is shaded by height ' +
+  'instead. OpenStreetMap maps the Joshimath–Malari road and a few village lanes here. The rivers start dry, so every ' +
+  'drop you see is the modelled flow. Watch where it goes and in what order, and do not read street-level depths.';
+
 type LonLat = [number, number];
 
 interface RiverDef {
@@ -242,6 +286,21 @@ interface RiverDef {
    * a metre or more up the side of the thalweg; on the gentler Trishuli it does not matter and is left alone.
    */
   inflowOnThalweg?: boolean;
+  /**
+   * GORGE FLOOR: after the burn, set a floor (2·halfWidth + 1) cells wide along the river's traced centreline to its
+   * fitted water level minus `depth` — the burn's own monotone level profile, so the floor never rises downstream.
+   * Within that strip it both CUTS the false sills and FILLS the false pits between them (a pit in a DSM gorge is the
+   * same radar artefact as a sill, and a 15 m pit is a pond the flood has to fill before it moves on); outside the
+   * strip nothing changes. The bake logs how many cells it cut and filled, and the deepest of each.
+   *
+   * Why: a radar DSM cannot see the floor of a slot gorge. In the Rishiganga gorge (Chamoli) Copernicus puts false
+   * sills 10–40 m high across the channel (layover off the walls; bake-chain.ts logs them on the same river: +41 m at
+   * 13.8 km) and narrows the floor to one or two cells, where the burn's smooth-bank ramp then burns almost nothing.
+   * Measured on the GPU (artifacts/chamoli-build/tools/physics.mjs): without the floor even CLEAR WATER ponds 48 m deep
+   * behind those sills and creeps down the Rishiganga at 5–8 m/s, where the real debris flow ran ~25 m/s. A burn that
+   * is not monotone is the bug; the floor is the spec's "minimum gorge floor width" applied to the 2-D grid.
+   */
+  carve?: { halfWidth: number };
   /**
    * Source created where the UPSTREAM end meets the domain edge. An inflow may carry `stopAfter` (simulated
    * seconds): a scenario forced by a published VOLUME rather than by a gauge record has to stop, or the run keeps
@@ -1341,6 +1400,140 @@ const PRESET_DEFS: PresetDef[] = [
     view: 'depth',
     description: () => CHUNGTHANG_DESCRIPTION,
   },
+  {
+    /*
+     * Raini–Tapovan — 12 km square centred 30.4900 N, 79.6600 E, 1024² cells of 11.72 m (NOT the 8 km / 7.81 m grid of
+     * the other presets). The two plants are what the event is about and they are 6.1 km apart in a straight line
+     * (Raini 79.691 E, Tapovan barrage 79.630 E); the Rishiganga has to enter the map ABOVE the first and the
+     * Dhauliganga leave it well BELOW the second for Shugar et al.'s "below Tapovan" discharge to be inside it. That
+     * is 79.597–79.723 E: 9.6 km is the minimum, and 8 km would put the inflow on top of the Rishiganga plant. 12 km
+     * buys 3.0 km of Rishiganga above Raini (the inflow enters 1 km below the Ronti Gad confluence, which sits 1 km
+     * outside the east edge) and 5.5 km of Dhauliganga below the barrage, out through the north-west corner. The cost
+     * is the cell: 11.7 m instead of 7.8 m — still 2.6 cells per 30 m Copernicus posting, so the terrain loses nothing
+     * it had, while the gorge is resolved by fewer cells (the Rishiganga floor is 30–60 m wide: 3–5 cells). The bonus
+     * is the time step: CFL scales with the cell, so a 12 km domain runs a simulated minute in about the same wall
+     * time as the 8 km grid with half the cell count wet. 16 km (15.6 m cells) would add Joshimath, which stands on the
+     * slope ~500 m above the river and is not what the flood touched, at 2 cells across the Rishiganga gorge.
+     * Measured on the probe DEM (artifacts/chamoli-build/tools/probe-dem.ts): the Rishiganga falls 2,224 → 1,931 m over
+     * its 4 km inside (7 %), the Dhauliganga 1,931 → 1,790 m from Raini to Tapovan (2.3 %) and → 1,626 m at the exit.
+     */
+    id: 'chamoli',
+    center: { lat: 30.49, lon: 79.66 },
+    sizeMeters: 12000,
+    n: 1024,
+    global: {
+      // Aligned 0.03° OSM API tiles shared with the chain bake (scripts/osm-fetch.ts `tiles`, scripts/bake-chain.ts).
+      osmXml: ['artifacts/chamoli-build/chain-osm'],
+      imagery: 'none',
+    },
+    rivers: [
+      {
+        /*
+         * OSM ways 1074462194 ("Rishi Ganga") + 297368686 ("Dhauli Ganga"), clipped to the domain with one vertex
+         * outside each end and simplified to 25 m (artifacts/chamoli-build/tools/extract-rivers.ts). The Rishiganga
+         * meets the Dhauliganga at Raini (30.4877 N, 79.6902 E) and is called the Dhauliganga below it.
+         */
+        name: 'Rishiganga',
+        path: [
+          [79.72257, 30.46961], [79.72114, 30.46963], [79.71974, 30.46883], [79.71719, 30.46874], [79.71539, 30.46779],
+          [79.71409, 30.46797], [79.71308, 30.46896], [79.70827, 30.47028], [79.7045, 30.47362], [79.70349, 30.4741],
+          [79.69868, 30.47893], [79.69761, 30.47951], [79.69705, 30.4801], [79.69649, 30.4823], [79.69574, 30.4832],
+          [79.69449, 30.48402], [79.69379, 30.48536], [79.69024, 30.48774], [79.6894, 30.48748], [79.6876, 30.48815],
+          [79.68594, 30.48797], [79.68432, 30.48832], [79.68264, 30.48781], [79.68069, 30.48784], [79.67818, 30.48906],
+          [79.67181, 30.48871], [79.66711, 30.48993], [79.66535, 30.48985], [79.66375, 30.48911], [79.66144, 30.48988],
+          [79.65967, 30.4896], [79.65831, 30.49], [79.65577, 30.48976], [79.653, 30.49019], [79.65154, 30.49128],
+          [79.6481, 30.49213], [79.64161, 30.49285], [79.6397, 30.49393], [79.63668, 30.49333], [79.63499, 30.49244],
+          [79.63282, 30.49239], [79.63116, 30.49275], [79.62999, 30.49347], [79.6281, 30.49326], [79.62394, 30.49519],
+          [79.62256, 30.49654], [79.62367, 30.49946], [79.62325, 30.5002], [79.62096, 30.50264], [79.61951, 30.50518],
+          [79.6183, 30.506], [79.61766, 30.50754], [79.61644, 30.50847], [79.6159, 30.50977], [79.61512, 30.51046],
+          [79.61466, 30.51297], [79.61363, 30.51375], [79.61228, 30.5166], [79.60963, 30.52016], [79.60918, 30.52225],
+          [79.60925, 30.52535], [79.60604, 30.52877], [79.60433, 30.53158], [79.60365, 30.53193], [79.60309, 30.53425],
+          [79.60153, 30.53662], [79.59839, 30.53828], [79.59726, 30.53955],
+        ],
+        depth: 4,
+        bankCells: 3,
+        snapRadius: 8,
+        maxHalfWidth: 8,
+        inflowOnThalweg: true,
+        // ~59 m: the floor the flow had (see RiverDef.carve for the GPU measurement that made this necessary).
+        carve: { halfWidth: 2 },
+        upstream: {
+          type: 'inflow',
+          discharge: CHAMOLI_PEAK_M3S,
+          hydrograph: CHAMOLI_HYDROGRAPH,
+          stopAfter: CHAMOLI_HYDROGRAPH[CHAMOLI_HYDROGRAPH.length - 1].t,
+          label:
+            `Rishiganga — placeholder hydrograph: peak ${CHAMOLI_PEAK_M3S.toLocaleString('en-US')} m³/s (top of the published ` +
+            `8,200–14,200 m³/s band), ${(CHAMOLI_MIXTURE_M3 / 1e6).toFixed(1)} million m³ on a parametric rise-and-fall (not a measured hydrograph)`,
+        },
+      },
+      {
+        /*
+         * OSM way 297279727 ("Dhauli Ganga") above Raini, from Lata. It STARTS INSIDE the domain, ~230 m in from the
+         * east edge, for the same reason as the Betrawati and Chungthang tributaries: no discharge for it that morning
+         * is published, and a wet channel touching an open boundary without an inflow just drains out of it. The real
+         * flow ran some way UP this valley from the confluence before turning downstream; here it can too.
+         */
+        name: 'Dhauliganga above Raini',
+        path: [
+          [79.72011, 30.5021], [79.71793, 30.50127], [79.7154, 30.4994], [79.71083, 30.49936], [79.70967, 30.4983],
+          [79.7062, 30.49674], [79.70489, 30.497], [79.70292, 30.49574], [79.70107, 30.49581], [79.69927, 30.49441],
+          [79.69504, 30.49257], [79.6947, 30.49105], [79.6919, 30.48861], [79.69057, 30.48797],
+        ],
+        depth: 2,
+        bankCells: 2,
+        snapRadius: 8,
+        maxHalfWidth: 8,
+      },
+    ],
+    /*
+     * TWO SHELTERS, each a node in the OSM tiles this preset ships with (artifacts/chamoli-build/chain-osm), with name,
+     * spelling and position read out of the XML, snapped by the bake to a high node of the road GRAPH (which keeps
+     * only junctions and way ends — OSM maps 33 drivable ways here, 30 km of road and 22 graph nodes in 144 km²):
+     *   Dhak                 node 5519535106 (place=village)      30.498861 N, 79.611343 E → the Joshimath–Malari road
+     *                        junction 46 m away, 2,068 m on the shipped DEM, ~270 m above the Dhauliganga below it.
+     *   SubCentre, Topoban   node 8229553590 (healthcare=centre)  30.490821 N, 79.626933 E → the Joshimath–Malari road
+     *                        junction 202 m away (30.49073 N, 79.62903 E), 1,903 m, ~110 m above the barrage site.
+     *                        Its search is 250 m, not 200, and that is the one widening this preset makes: the junction
+     *                        is where the lane up to the sub-centre leaves the main road; the next graph node out is
+     *                        410 m off. The spelling "Topoban" is OSM's (the village node beside it is "Tapoban").
+     * NOT shipped, with the measured reason:
+     *   • SubCentre, Lata (node 8230258764, 2,142 m) — no road graph node within 900 m; the main road runs past it
+     *     as one unbroken way from the Reni bridge to the east edge.
+     *   • Reni/Raini village (node 7833070518) — the only road node near it is the west end of the destroyed Reni
+     *     bridge, 260 m off and 45 m above the river, which is what the flood took.
+     *   • Tapoban village (node 7833070513) and the Bhavishya Badri temple — footpaths only, which this graph does not
+     *     carry.
+     * So the map gives no refuge on the Raini side, and that is true to the road network: the way west from Raini was
+     * the bridge.
+     */
+    shelters: [
+      { name: 'Dhak', at: [79.611343, 30.498861], search: 200 },
+      { name: 'SubCentre, Topoban', at: [79.626933, 30.490821], search: 250 },
+    ],
+    /*
+     * The barrage site itself: the end of the unnamed access road at the river below Tapovan (road graph node at
+     * 30.49339 N, 79.62892 E, 1,785 m on this DEM — at river level, 90 m from the barrage outline, OSM way 683265980).
+     * This is the warning-time story, not a re-planning one: the route uphill to the sub-centre exists from the moment
+     * the pin goes down and closes when the front arrives, and the route card names how long there had been one.
+     */
+    evacStart: { at: [79.62892, 30.49339], label: 'Tapovan barrage site (access road)' },
+    shelterMargin: 30,
+    prefill: 'none',
+    storms: [],
+    rainRate: 0,
+    /*
+     * Looking WEST, down the valley, from above Raini: the Rishiganga comes in at the bottom right, the Dhauliganga runs
+     * up the frame to the Tapovan barrage. Measured against screenshots (artifacts/chamoli-build/physics): the first
+     * framing, looking north across the valley at pitch 0.75, put the 3,000 m south wall between the camera and the
+     * river — a green hillside with no water in it. The gorge is 2–5 cells wide, so the camera has to look down into
+     * it (pitch 1.0) and along it, not across it. And close: from 7 km out the 5-cell channel's water no longer
+     * draws (the flow was there by the probe, not on screen); 5.5 km shows it from Raini down towards Tapovan.
+     */
+    camera: { at: [79.672, 30.488], distance: 5500, yaw: -1.5, pitch: 1.0 },
+    view: 'depth',
+    description: () => CHAMOLI_DESCRIPTION,
+  },
 ];
 
 // ────────────────────────────────────────────────────────────────────────────────────────────────
@@ -1488,6 +1681,49 @@ async function bake(def: PresetDef) {
     burn = burnRivers(raw, N, N, cellSize, specsFor());
   }
   const elevation = burn.elevation;
+  // Gorge floor (RiverDef.carve): a monotone floor of minimum width along the centreline (sills cut, pits filled).
+  def.rivers.forEach((r, ri) => {
+    if (!r.carve) return;
+    const { centerline: cl, levels } = burn.rivers[ri];
+    const R = r.carve.halfWidth;
+    let floor = Infinity;
+    const floorAt = new Map<number, number>();
+    for (let q = 0; q < levels.length; q++) {
+      floor = Math.min(floor, levels[q] - r.depth);
+      const ci = Math.floor(cl[2 * q]);
+      const cj = Math.floor(cl[2 * q + 1]);
+      for (let dj = -R; dj <= R; dj++) {
+        for (let di = -R; di <= R; di++) {
+          if (di * di + dj * dj > R * R + R) continue;
+          const i = ci + di;
+          const j = cj + dj;
+          if (i < 0 || j < 0 || i >= N || j >= N) continue;
+          const k = j * N + i;
+          // A cell under two stretches of the centreline takes the lower floor.
+          floorAt.set(k, Math.min(floorAt.get(k) ?? Infinity, floor));
+        }
+      }
+    }
+    let cut = 0;
+    let filled = 0;
+    let deepest = 0;
+    let highest = 0;
+    for (const [k, f] of floorAt) {
+      if (elevation[k] > f) {
+        cut++;
+        deepest = Math.max(deepest, elevation[k] - f);
+      } else if (elevation[k] < f) {
+        filled++;
+        highest = Math.max(highest, f - elevation[k]);
+      }
+      elevation[k] = f;
+    }
+    log(
+      def.id,
+      `  ${r.name}: gorge floor ${2 * R + 1} cells wide (${r1((2 * R + 1) * cellSize)} m): cut ${cut} cells (deepest ${deepest.toFixed(1)} m), ` +
+        `filled ${filled} (highest ${highest.toFixed(1)} m)`,
+    );
+  });
   for (const r of burn.rivers) {
     log(def.id, `  ${r.name}: ${r.cells} channel cells, surface ${r.maxLevel.toFixed(2)} → ${r.minLevel.toFixed(2)} m, burn ${r.depth} m`);
   }
