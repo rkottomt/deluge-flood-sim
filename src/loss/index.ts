@@ -17,7 +17,7 @@
 import type { HazardFields, TerrainData } from '../contracts';
 import type { HeightProfile } from '../data/buildings';
 import { makeGeoToGrid } from '../data/geo';
-import { buildingAccess, type AccessResult } from './access';
+import { buildAccessIndex, type AccessIndex } from './access';
 import { footprintIndex, type FootprintIndex } from './footprints';
 import { computeBuildingImpacts, type ImpactReport } from './impact';
 import { assessPortfolio, matchAssets, type MatchedAsset, type PortfolioAsset, type PortfolioResult, type PortfolioSummary } from './portfolio';
@@ -59,7 +59,8 @@ export interface Analysis {
   report: ImpactReport | null;
   portfolio: { results: PortfolioResult[]; summary: PortfolioSummary; matched: MatchedAsset[] } | null;
   footprints: FootprintIndex | null;
-  access: AccessResult | null;
+  /** Nearest-road access for any grid point in this flood (null without road data). */
+  access: AccessIndex | null;
   /** CPU time of the analysis, ms. */
   elapsedMs: number;
 }
@@ -72,7 +73,7 @@ export function analyze(input: AnalysisInput): Analysis {
   const heightProfile: HeightProfile = region.iso === 'NP' ? 'nepal' : 'us';
   const set = terrain.buildings ?? null;
   const fp = set ? footprintIndex(set, terrain.nx, terrain.ny, terrain.cellSize) : null;
-  const access = fp ? buildingAccess(terrain.roads ?? null, fp, fields, terrain.cellSize) : null;
+  const access = buildAccessIndex(terrain.roads ?? null, fields, terrain.cellSize);
   const opts = { region, heightProfile, debrisFlow: input.debrisFlow, alertTime: input.alertTime ?? 0, velocityKnown: input.velocityKnown };
   const report = set && fp ? computeBuildingImpacts(fields, set, fp, opts, access) : null;
   let portfolio: Analysis['portfolio'] = null;

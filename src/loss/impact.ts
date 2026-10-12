@@ -13,7 +13,7 @@
  */
 import type { BuildingSet, HazardFields } from '../contracts';
 import { BUILDING_KINDS, HEIGHT_SOURCES, type HeightProfile } from '../data/buildings';
-import { ACCESS_CUT, type AccessResult } from './access';
+import { ACCESS_CUT, ACCESS_NO_ROAD, type AccessIndex, type AccessInfo, type AccessResult } from './access';
 import type { Curve } from './curves';
 import type { FootprintIndex } from './footprints';
 import {
@@ -49,10 +49,19 @@ export const REACHED_DEPTH = 0.15;
  * presentation choice, not physics — every building with water above its floor carries some loss in the totals.
  */
 export const DAMAGED_MIN_FRACTION = 0.2;
+/**
+ * Below this depth above the ground floor nothing is booked as damage, m. The JRC North-American curves start at
+ * 20 % (residential) at 0 m — they inherit HAZUS's first-floor datum — so without a threshold a film of water on a
+ * bare-earth footprint would cost a house a fifth of its value. 15 cm (ankle-deep, the solver's arrival depth) is a
+ * convention, not a measurement: water below it at the footprint is taken not to enter. [I]
+ */
+export const DAMAGE_MIN_DEPTH = 0.15;
 
 export interface CellSample {
   /** Cells sampled (cells wet at reset excluded). */
   sampled: number;
+  /** Sampled cells with at least REACHED_DEPTH of water at some point. */
+  reachedCells: number;
   maxDepth: number;
   /** NaN when the fields carry no velocity. */
   maxSpeed: number;
@@ -63,7 +72,7 @@ export interface CellSample {
 }
 
 export function sampleCells(f: HazardFields, cells: ArrayLike<number>, start = 0, end = cells.length): CellSample {
-  const s: CellSample = { sampled: 0, maxDepth: 0, maxSpeed: 0, maxDV: 0, firstWet: -1, wetSeconds: 0 };
+  const s: CellSample = { sampled: 0, reachedCells: 0, maxDepth: 0, maxSpeed: 0, maxDV: 0, firstWet: -1, wetSeconds: 0 };
   let speedNaN = false;
   for (let q = start; q < end; q++) {
     const c = cells[q];
@@ -72,6 +81,7 @@ export function sampleCells(f: HazardFields, cells: ArrayLike<number>, start = 0
     s.sampled++;
     const d = f.maxDepth[c];
     if (d > s.maxDepth) s.maxDepth = d;
+    if (d >= REACHED_DEPTH) s.reachedCells++;
     const v = f.maxSpeed[c];
     if (Number.isNaN(v)) speedNaN = true;
     else if (v > s.maxSpeed) s.maxSpeed = v;
@@ -116,6 +126,11 @@ export interface AssessContext {
 
 export interface AssetResult {
   sampled: number;
+  /**
+   * Share of the sampled footprint cells that reached REACHED_DEPTH. Depth is the worst cell, so a building with
+   * water only along one edge (a riverside wall, a footprint a levee cuts through) shows a small share here.
+   */
+  wetFraction: number;
   /** Max water depth at the asset, m. */
   depth: number;
   /** Max depth above the ground floor, m. */
@@ -147,21 +162,29 @@ export interface AssetResult {
   insuredLoss: number;
   /** Critical equipment under water (max depth > critical elevation), null when no elevation was given. */
   criticalWet: boolean | null;
+  /** The nearest road (within ACCESS_SNAP_M) reached 0.3 m: egress lost at the peak. */
   accessCut: boolean;
+  /** A road was found near the asset (false: no road data, or none within ACCESS_SNAP_M). */
+  accessKnown: boolean;
+  /** Cut roads: when water first arrived on the stretch that closed it, s since reset (NaN otherwise). */
+  accessCutAt: number;
+  /** Cut roads: accessCutAt − alert time, s. */
+  accessLeadTime: number;
+  accessRoad: string;
 }
 
 export function assessAsset(
   s: CellSample,
   spec: AssetSpec,
   ctx: AssessContext,
-  access?: { cut: boolean; roadWetSeconds: number } | null,
+  access?: AccessInfo | null,
 ): AssetResult {
   const depth = s.maxDepth;
   const above = depth - Math.max(0, spec.firstFloorHeight || 0);
   const state = structuralState(s.maxSpeed, s.maxDV, { construction: spec.construction, debrisFlow: ctx.debrisFlow });
   const effState: StructuralState = depth >= REACHED_DEPTH ? state : state === 'unknown' ? 'unknown' : 'none';
   const dmg = storeyDamage({
-    depth: above,
+    depth: above >= DAMAGE_MIN_DEPTH ? above : 0,
     floors: spec.floors,
     storeyHeight: spec.storeyHeight,
     curve: ctx.curve,
@@ -171,9 +194,10 @@ export function assessAsset(
     state: effState,
   });
   const prof = OCCUPANCY_PROFILES[spec.occ];
-  const accessCut = !!access?.cut;
+  const accessCut = access?.status === ACCESS_CUT;
   const accessDays = accessCut ? ACCESS_CLEARING_DAYS + (access?.roadWetSeconds ?? 0) / 86400 : 0;
-  const downtime = downtimeDays({ depth: Math.max(0, above), damage: dmg.fraction, rebuildDays: prof.rebuildDays, accessDays });
+  // Like damage, clean-up starts once water is above DAMAGE_MIN_DEPTH over the floor (a film outside does not enter).
+  const downtime = downtimeDays({ depth: above >= DAMAGE_MIN_DEPTH ? above : 0, damage: dmg.fraction, rebuildDays: prof.rebuildDays, accessDays });
   const gp = spec.dailyGrossProfit;
   const recapture = spec.recapture ?? prof.recapture;
   const biLoss = gp != null && Number.isFinite(gp) ? downtime * gp * (1 - Math.min(1, Math.max(0, recapture))) : NaN;
@@ -187,6 +211,7 @@ export function assessAsset(
   const hr = fd2321HR(depth, s.maxSpeed);
   return {
     sampled: s.sampled,
+    wetFraction: s.sampled ? s.reachedCells / s.sampled : 0,
     depth,
     depthAboveFloor: above,
     speed: s.maxSpeed,
@@ -211,6 +236,10 @@ export function assessAsset(
     insuredLoss: insured,
     criticalWet: spec.criticalElev != null && Number.isFinite(spec.criticalElev) ? depth > spec.criticalElev : null,
     accessCut,
+    accessKnown: !!access && access.status !== ACCESS_NO_ROAD,
+    accessCutAt: accessCut ? access!.roadCutAt : NaN,
+    accessLeadTime: accessCut ? access!.roadCutAt - ctx.alertTime : NaN,
+    accessRoad: access?.roadName ?? '',
   };
 }
 
@@ -290,8 +319,9 @@ export function computeBuildingImpacts(
   set: BuildingSet,
   fp: FootprintIndex,
   opts: ImpactOptions,
-  access?: AccessResult | null,
+  access?: AccessResult | AccessIndex | null,
 ): ImpactReport {
+  const accessIndex = access ? (('query' in access ? access : access.index) ?? null) : null;
   const region = opts.region;
   const profile = opts.heightProfile ?? 'us';
   const ctxBase = { debrisFlow: !!opts.debrisFlow, alertTime: opts.alertTime ?? 0 };
@@ -353,7 +383,7 @@ export function computeBuildingImpacts(
         firstFloorHeight: 0,
       },
       { ...ctxBase, curve: curve(occ) },
-      access ? { cut: access.status[k] === ACCESS_CUT, roadWetSeconds: access.roadWetSeconds[k] } : null,
+      accessIndex ? accessIndex.query(fp.cx[k], fp.cy[k]) : null,
     );
     const heightEstimated = set.heightSource[k] === estimatedSrc;
     const b: BuildingImpact = {

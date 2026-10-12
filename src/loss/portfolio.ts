@@ -18,7 +18,7 @@
 import type { BuildingSet, HazardFields } from '../contracts';
 import { pointInRing, type HeightProfile } from '../data/buildings';
 import { cleanPlaceLabel } from '../data/placeName';
-import { ACCESS_CUT, type AccessResult } from './access';
+import type { AccessIndex, AccessResult } from './access';
 import { parseCsv, toCsv, type CsvValue } from './csv';
 import type { FootprintIndex } from './footprints';
 import { ringCells } from './footprints';
@@ -450,9 +450,10 @@ export function assessPortfolio(
     heightProfile?: HeightProfile;
     debrisFlow?: boolean;
     alertTime?: number;
-    access?: AccessResult | null;
+    access?: AccessResult | AccessIndex | null;
   },
 ): { results: PortfolioResult[]; summary: PortfolioSummary } {
+  const accessIndex = ctx.access ? (('query' in ctx.access ? ctx.access : ctx.access.index) ?? null) : null;
   const results: PortfolioResult[] = [];
   const sum: PortfolioSummary = { assets: matched.length, outside: 0, reached: 0, destroyed: 0, loss: 0, lossLo: 0, lossHi: 0, bi: 0, insured: 0, unvalued: 0, otherCurrency: 0, earliest: null };
   const profile = ctx.heightProfile ?? 'us';
@@ -500,7 +501,7 @@ export function assessPortfolio(
         limit: a.limit,
       },
       { curve: curveForOccupancy(occ, ctx.region.continent), debrisFlow: !!ctx.debrisFlow, alertTime: ctx.alertTime ?? 0 },
-      k >= 0 && ctx.access ? { cut: ctx.access.status[k] === ACCESS_CUT, roadWetSeconds: ctx.access.roadWetSeconds[k] } : null,
+      accessIndex ? accessIndex.query(m.gx, m.gy) : null,
     );
     results.push({ ...r, m, occ, floors, gfaM2: gfa, valueStructure: value.structure, valueContents: value.contents, valueSource: value.source, currency });
     if (r.reached) sum.reached++;
@@ -521,18 +522,100 @@ export function assessPortfolio(
   return { results, summary: sum };
 }
 
+// ─── One site (due diligence) ─────────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * A single site — a parcel a developer is weighing, a planned building, one asset typed in by hand — assessed exactly
+ * like a portfolio row. Give its position in grid coordinates (gx, gy) or as lon/lat, and optionally its outline
+ * (gridRing in grid coords, or ring in lon/lat). By default a site is NOT matched to an existing footprint
+ * (a planned building is not the shed standing there today); set matchFootprint to value it from the building
+ * under the point instead. Planned values (replacement_value, floors, gfa_m2, occupancy …) are the same fields as the
+ * CSV schema. Pure: call it for every candidate site against one HazardFields.
+ */
+export interface SiteInput extends Partial<Omit<PortfolioAsset, 'row' | 'id'>> {
+  id?: string;
+  gx?: number;
+  gy?: number;
+  /** Outline in grid coords [gx, gy, …], open ring. */
+  gridRing?: number[] | null;
+  matchFootprint?: boolean;
+}
+
+export function siteAsset(site: SiteInput): PortfolioAsset {
+  return {
+    row: 0,
+    id: cleanPlaceLabel(site.id ?? 'site', MAX_ID_CHARS) || 'site',
+    name: cleanPlaceLabel(site.name ?? '', MAX_NAME_CHARS),
+    lat: site.lat ?? null,
+    lon: site.lon ?? null,
+    ring: site.ring ?? null,
+    occupancy: site.occupancy ?? null,
+    replacementValue: site.replacementValue ?? null,
+    contentsValue: site.contentsValue ?? null,
+    currency: site.currency ?? null,
+    floors: site.floors ?? null,
+    gfaM2: site.gfaM2 ?? null,
+    firstFloorHeight: site.firstFloorHeight ?? null,
+    criticalElev: site.criticalElev ?? null,
+    basement: site.basement ?? null,
+    construction: site.construction ?? null,
+    dailyRevenue: site.dailyRevenue ?? null,
+    grossMargin: site.grossMargin ?? null,
+    recapture: site.recapture ?? null,
+    deductible: site.deductible ?? null,
+    limit: site.limit ?? null,
+    tags: cleanPlaceLabel(site.tags ?? '', MAX_NAME_CHARS),
+  };
+}
+
+export function assessSite(
+  site: SiteInput,
+  fields: HazardFields,
+  ctx: Parameters<typeof assessPortfolio>[2] & { grid: { nx: number; ny: number; cellSize: number }; toGrid: (lon: number, lat: number) => [number, number] },
+): PortfolioResult | null {
+  const asset = siteAsset(site);
+  const { nx, ny } = ctx.grid;
+  let m: MatchedAsset;
+  if (site.gridRing && site.gridRing.length >= 6) {
+    const g = site.gridRing;
+    let sx = 0;
+    let sy = 0;
+    for (let i = 0; i < g.length; i += 2) {
+      sx += g[i];
+      sy += g[i + 1];
+    }
+    const cells = ringCells(g, nx, ny);
+    m = { asset, gx: sx / (g.length / 2), gy: sy / (g.length / 2), match: cells.length ? 'wkt' : 'outside', building: -1, distanceM: 0, cells };
+  } else if (site.gx !== undefined && site.gy !== undefined && !site.ring) {
+    const gx = site.gx;
+    const gy = site.gy;
+    const inside = gx >= 0 && gy >= 0 && gx < nx && gy < ny;
+    if (inside && site.matchFootprint) {
+      // Match through the same rules as a CSV point, by way of a lon/lat-free shim.
+      m = matchAssets([asset], ctx.set, ctx.fp, ctx.grid, () => [gx, gy])[0];
+    } else {
+      m = { asset, gx, gy, match: inside ? 'point' : 'outside', building: -1, distanceM: NaN, cells: inside ? [Math.floor(gy) * nx + Math.floor(gx)] : [] };
+    }
+  } else {
+    m = matchAssets([asset], site.matchFootprint ? ctx.set : null, site.matchFootprint ? ctx.fp : null, ctx.grid, ctx.toGrid)[0];
+  }
+  const r = assessPortfolio([m], fields, ctx);
+  return r.results[0] ?? null;
+}
+
 // ─── Export ──────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 const r2 = (v: number) => (Number.isFinite(v) ? Math.round(v * 100) / 100 : NaN);
 const r0 = (v: number) => (Number.isFinite(v) ? Math.round(v) : NaN);
 const minutes = (s: number) => (s >= 0 && Number.isFinite(s) ? Math.round((s / 60) * 10) / 10 : NaN);
+const minutesSigned = (s: number) => (Number.isFinite(s) ? Math.round((s / 60) * 10) / 10 : NaN);
 
 export const RESULT_COLUMNS = [
-  'asset_id', 'name', 'source', 'occupancy', 'match', 'match_distance_m', 'max_depth_m', 'depth_above_floor_m', 'max_velocity_ms',
+  'asset_id', 'name', 'source', 'occupancy', 'match', 'match_distance_m', 'max_depth_m', 'wet_share_pct', 'depth_above_floor_m', 'max_velocity_ms',
   'max_dv_m2s', 'aidr_class', 'fd2321_hr', 'fd2321_class', 'first_wet_min', 'lead_time_min', 'wet_duration_min', 'structural_state',
   'damage_pct', 'value_structure', 'value_contents', 'value_source', 'loss_structure', 'loss_contents', 'loss_total',
   'loss_low_1sigma', 'loss_high_1sigma', 'downtime_days_heuristic', 'bi_loss', 'insured_loss', 'critical_equipment_wet',
-  'access_road_cut', 'currency',
+  'access_road_cut', 'access_road', 'access_cut_from_min', 'access_lead_time_min', 'currency',
 ] as const;
 
 export interface ResultRowInput {
@@ -559,6 +642,7 @@ export function resultRow(x: ResultRowInput): CsvValue[] {
     x.match,
     r2(x.matchDistanceM),
     r2(r.depth),
+    r2(r.wetFraction * 100),
     r2(r.depthAboveFloor),
     r2(r.speed),
     r2(r.dv),
@@ -566,7 +650,7 @@ export function resultRow(x: ResultRowInput): CsvValue[] {
     r2(r.hr),
     r.hrClass,
     minutes(r.firstWet),
-    minutes(r.leadTime),
+    minutesSigned(r.leadTime),
     minutes(r.wetSeconds),
     r.state,
     r2(r.damage * 100),
@@ -582,7 +666,10 @@ export function resultRow(x: ResultRowInput): CsvValue[] {
     r0(r.biLoss),
     r0(r.insuredLoss),
     r.criticalWet === null ? '' : r.criticalWet,
-    r.accessCut,
+    r.accessKnown ? r.accessCut : '',
+    r.accessRoad,
+    minutes(r.accessCutAt),
+    minutesSigned(r.accessLeadTime),
     x.currency,
   ];
 }

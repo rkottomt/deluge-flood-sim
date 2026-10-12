@@ -150,6 +150,21 @@ test('a flooded block: losses, hazard classes, collapse, earliest arrival and th
   assert.equal(paris.summary.destroyed, 1);
 });
 
+test('a film of water books nothing; an edge-only wetting is flagged by its wet share', () => {
+  const set = buildings([
+    [10, 10, 14, 14, 'house', 6],
+    [30, 10, 40, 20, 'office', 6],
+  ]);
+  const f = fields((i, j) => (i >= 10 && i < 14 && j >= 10 && j < 14 ? { d: 0.1 } : i === 30 && j >= 10 && j < 20 ? { d: 0.6 } : {}));
+  const { impacts } = computeBuildingImpacts(f, set, rasterizeFootprints(set, NX, NY, CELL), { region: US });
+  const house = impacts.find((b) => b.k === 0)!;
+  assert.equal(house.loss, 0); // NA residential is 0.24 at 0.1 m in the table — below DAMAGE_MIN_DEPTH it is not booked
+  assert.equal(house.reached, false);
+  const office = impacts.find((b) => b.k === 1)!;
+  assert.ok(Math.abs(office.wetFraction - 0.1) < 1e-9);
+  assert.ok(office.loss > 0);
+});
+
 test('without velocity (snapshot fallback) nothing is called collapsed and classes are depth-only', () => {
   const set = buildings([[30, 10, 34, 14, 'house', 6]]);
   const f = fields((i, j) => (j >= 10 && j < 14 && i >= 30 && i < 34 ? { d: 2.5, v: NaN } : {}));
@@ -175,8 +190,19 @@ test("access: a building whose street floods is cut off; one whose street stays 
   assert.equal(acc.status[0], ACCESS_CUT);
   assert.equal(acc.status[1], ACCESS_OPEN);
   assert.ok(acc.roadWetSeconds[0] > 0);
-  const r = computeBuildingImpacts(f, set, fp, { region: US }, acc);
+  assert.equal(acc.roadCutAt[0], 600);
+  assert.ok(Number.isNaN(acc.roadCutAt[1]));
+  const r = computeBuildingImpacts(f, set, fp, { region: US, alertTime: 120 }, acc);
   assert.equal(r.summary.accessCut, 1);
+  const b0 = r.impacts.find((b) => b.k === 0);
+  // The cut building is listed only if it has water on it; query the index directly for the dry one.
+  const q = acc.index!.query(22, 37.5);
+  assert.equal(q.status, ACCESS_OPEN);
+  assert.ok(q.distanceM > 0 && q.distanceM < 30);
+  if (b0) {
+    assert.equal(b0.accessCut, true);
+    assert.equal(b0.accessLeadTime, 480);
+  }
 });
 
 test('analyze() through a mocked solver.readHazardFields, and the depth-only fallback accumulator', async () => {

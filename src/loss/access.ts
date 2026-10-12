@@ -1,34 +1,56 @@
 /**
- * Access loss: is the road in front of each building cut at the flood's peak?
+ * Access / egress loss: is the road in front of an asset cut by the flood, and from when?
  *
  * Reuses the evacuation router's per-edge flood status (src/routing): the router samples every road along its cells,
  * bridges spans over water that was there at reset (and their approaches), and calls an edge flooded at ≥ 0.3 m — the
  * depth at which trucks and cars stop (spec §C.5: impassable for trucks at 0.3 m). Here it is fed the MAXIMUM depth
  * field instead of the current one, so the answer is "was this road impassable at some point", not "is it now".
  *
- * Each building is tied to the nearest road within ACCESS_SNAP_M of its centroid. That is a proxy for "the building's
- * access road", not a route: a building whose own street stays dry can still be cut off further away, which the
- * evacuation route card shows for one start at a time. The time the road is under water comes from the wet-duration
- * accumulator and is capped by the simulated time, so it is a lower bound.
+ * An asset (a footprint, a portfolio point, a planned site) is tied to the nearest road within ACCESS_SNAP_M. That is
+ * a proxy for "the site's access road", not a route: an asset whose own street stays dry can still be cut off further
+ * away, which the evacuation route card shows for one start at a time.
+ *
+ * Times: `roadCutAt` is the earliest arrival (≥ 0.15 m) on a stretch of that road that later reached 0.3 m — an
+ * early estimate of when it closes, since the accumulators record when water arrived, not when it got deep.
+ * `roadWetSeconds` is how long that stretch held water, capped by the simulated time, so a lower bound.
  */
 import type { HazardFields, RoadNetwork } from '../contracts';
 import { createRouter, ROAD_FLOODED_DEPTH } from '../routing';
 import type { FootprintIndex } from './footprints';
 
-/** Furthest a building may be from "its" road, m. */
+/** Furthest an asset may be from "its" road, m. */
 export const ACCESS_SNAP_M = 120;
 
 export const ACCESS_NO_ROAD = 0;
 export const ACCESS_OPEN = 1;
 export const ACCESS_CUT = 2;
 
+/** Access of one asset. */
+export interface AccessInfo {
+  status: typeof ACCESS_NO_ROAD | typeof ACCESS_OPEN | typeof ACCESS_CUT;
+  /** Road edge index (TerrainData.roads.edges), −1 for none. */
+  edge: number;
+  /** Distance from the asset to that road, m (NaN without one). */
+  distanceM: number;
+  /** Street name when the road data has one. */
+  roadName: string;
+  /** Peak depth on the road, m (bridges over standing water excluded). */
+  roadPeakDepth: number;
+  /** Cut roads: earliest arrival on a stretch that reached 0.3 m, s since reset (NaN unless cut). */
+  roadCutAt: number;
+  /** Cut roads: simulated seconds that stretch held ≥ 0.15 m. Lower bound. */
+  roadWetSeconds: number;
+}
+
 export interface AccessResult {
   /** Per building: ACCESS_NO_ROAD / ACCESS_OPEN / ACCESS_CUT. */
   status: Uint8Array;
-  /** Per building: simulated seconds its road had water ≥ 0.15 m on some cell (0 unless cut). Lower bound. */
+  /** Per building: see AccessInfo. */
   roadWetSeconds: Float32Array;
-  /** Per building: index of the road edge used, −1 for none. */
+  roadCutAt: Float32Array;
   edge: Int32Array;
+  /** The index the per-building answers came from, for querying any other point (a site, a portfolio asset). */
+  index: AccessIndex | null;
 }
 
 type Router = ReturnType<typeof createRouter>;
@@ -55,12 +77,17 @@ export function edgePeakDepths(net: RoadNetwork, fields: HazardFields, cellSize:
   return d && d.length === net.edges.length ? d.slice() : null;
 }
 
-export function buildingAccess(net: RoadNetwork | null, fp: FootprintIndex, fields: HazardFields, cellSize: number): AccessResult {
-  const n = fp.count;
-  const out: AccessResult = { status: new Uint8Array(n), roadWetSeconds: new Float32Array(n), edge: new Int32Array(n).fill(-1) };
-  if (!net || net.edges.length === 0) return out;
+/** Nearest-road lookup over one flood (one HazardFields), answering for any grid point. */
+export interface AccessIndex {
+  query(gx: number, gy: number): AccessInfo;
+}
+
+const NO_ROAD: AccessInfo = { status: ACCESS_NO_ROAD, edge: -1, distanceM: NaN, roadName: '', roadPeakDepth: NaN, roadCutAt: NaN, roadWetSeconds: 0 };
+
+export function buildAccessIndex(net: RoadNetwork | null, fields: HazardFields, cellSize: number): AccessIndex | null {
+  if (!net || net.edges.length === 0) return null;
   const depths = edgePeakDepths(net, fields, cellSize);
-  if (!depths) return out;
+  if (!depths) return null;
   const { nx, ny } = fields;
 
   // Spatial hash of road sample points (about one per cell along every polyline).
@@ -84,9 +111,11 @@ export function buildingAccess(net: RoadNetwork | null, fp: FootprintIndex, fiel
     head[b] = px.length - 1;
   };
   const edgeWet = new Float32Array(net.edges.length);
+  const edgeCut = new Float32Array(net.edges.length).fill(NaN);
   net.edges.forEach((edge, e) => {
     const pts = edge.pts;
     let wet = 0;
+    let cut = NaN;
     for (let i = 0; i + 3 < pts.length; i += 2) {
       const x0 = pts[i];
       const y0 = pts[i + 1];
@@ -101,41 +130,71 @@ export function buildingAccess(net: RoadNetwork | null, fp: FootprintIndex, fiel
         const cj = Math.floor(y);
         if (ci < 0 || cj < 0 || ci >= nx || cj >= ny) continue;
         const c = cj * nx + ci;
-        if (fields.firstWet[c] > 0 && fields.maxDepth[c] >= ROAD_FLOODED_DEPTH && fields.wetSeconds[c] > wet) wet = fields.wetSeconds[c];
-      }
-    }
-    edgeWet[e] = wet;
-  });
-
-  const r = ACCESS_SNAP_M / cellSize;
-  const r2 = r * r;
-  const span = Math.ceil(r / B);
-  for (let k = 0; k < n; k++) {
-    const x = fp.cx[k];
-    const y = fp.cy[k];
-    if (!Number.isFinite(x)) continue;
-    const bi = Math.floor(x / B);
-    const bj = Math.floor(y / B);
-    let best = r2;
-    let bestE = -1;
-    for (let j = bj - span; j <= bj + span; j++) {
-      if (j < 0 || j >= bh) continue;
-      for (let i = bi - span; i <= bi + span; i++) {
-        if (i < 0 || i >= bw) continue;
-        for (let p = head[j * bw + i]; p !== -1; p = next[p]) {
-          const d2 = (px[p] - x) ** 2 + (py[p] - y) ** 2;
-          if (d2 < best) {
-            best = d2;
-            bestE = pe[p];
-          }
+        const fw = fields.firstWet[c];
+        if (fw > 0 && fields.maxDepth[c] >= ROAD_FLOODED_DEPTH) {
+          if (fields.wetSeconds[c] > wet) wet = fields.wetSeconds[c];
+          if (!(fw >= cut)) cut = fw;
         }
       }
     }
-    if (bestE < 0) continue;
-    out.edge[k] = bestE;
-    const cut = depths[bestE] >= ROAD_FLOODED_DEPTH;
-    out.status[k] = cut ? ACCESS_CUT : ACCESS_OPEN;
-    if (cut) out.roadWetSeconds[k] = edgeWet[bestE];
+    edgeWet[e] = wet;
+    edgeCut[e] = cut;
+  });
+
+  const r = ACCESS_SNAP_M / cellSize;
+  const span = Math.ceil(r / B);
+  return {
+    query(x: number, y: number): AccessInfo {
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return NO_ROAD;
+      const bi = Math.floor(x / B);
+      const bj = Math.floor(y / B);
+      let best = r * r;
+      let bestE = -1;
+      for (let j = bj - span; j <= bj + span; j++) {
+        if (j < 0 || j >= bh) continue;
+        for (let i = bi - span; i <= bi + span; i++) {
+          if (i < 0 || i >= bw) continue;
+          for (let p = head[j * bw + i]; p !== -1; p = next[p]) {
+            const d2 = (px[p] - x) ** 2 + (py[p] - y) ** 2;
+            if (d2 < best) {
+              best = d2;
+              bestE = pe[p];
+            }
+          }
+        }
+      }
+      if (bestE < 0) return NO_ROAD;
+      const cut = depths[bestE] >= ROAD_FLOODED_DEPTH;
+      return {
+        status: cut ? ACCESS_CUT : ACCESS_OPEN,
+        edge: bestE,
+        distanceM: Math.sqrt(best) * cellSize,
+        roadName: net.edges[bestE].name ?? '',
+        roadPeakDepth: depths[bestE],
+        roadCutAt: cut ? edgeCut[bestE] : NaN,
+        roadWetSeconds: cut ? edgeWet[bestE] : 0,
+      };
+    },
+  };
+}
+
+export function buildingAccess(net: RoadNetwork | null, fp: FootprintIndex, fields: HazardFields, cellSize: number): AccessResult {
+  const n = fp.count;
+  const index = buildAccessIndex(net, fields, cellSize);
+  const out: AccessResult = {
+    status: new Uint8Array(n),
+    roadWetSeconds: new Float32Array(n),
+    roadCutAt: new Float32Array(n).fill(NaN),
+    edge: new Int32Array(n).fill(-1),
+    index,
+  };
+  if (!index) return out;
+  for (let k = 0; k < n; k++) {
+    const a = index.query(fp.cx[k], fp.cy[k]);
+    out.status[k] = a.status;
+    out.edge[k] = a.edge;
+    out.roadWetSeconds[k] = a.roadWetSeconds;
+    out.roadCutAt[k] = a.roadCutAt;
   }
   return out;
 }

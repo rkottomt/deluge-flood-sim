@@ -11,6 +11,7 @@ import { csvField, parseCsv, toCsv } from '../../src/loss/csv';
 import { rasterizeFootprints } from '../../src/loss/footprints';
 import {
   assessPortfolio,
+  assessSite,
   matchAssets,
   parseNumber,
   parsePortfolio,
@@ -194,6 +195,37 @@ test('matching: inside a footprint, nearest within 30 m, a bare point, outside t
   assert.ok(Math.abs(m[1].distanceM - 20) < 1e-3);
   assert.equal(m[2].cells.length, 1);
   assert.equal(m[4].cells.length, 100);
+});
+
+test('one site (due diligence): a planned parcel or point is assessed like a CSV row, footprints ignored by default', () => {
+  const B = set();
+  const fp = rasterizeFootprints(B, NX, NY, CELL);
+  const n = NX * NY;
+  const f: HazardFields = {
+    nx: NX,
+    ny: NY,
+    simTime: 3600,
+    maxDepth: new Float32Array(n).fill(0.8),
+    maxSpeed: new Float32Array(n).fill(0.3),
+    maxDV: new Float32Array(n).fill(0.24),
+    firstWet: new Float32Array(n).fill(1200),
+    wetSeconds: new Float32Array(n).fill(600),
+  };
+  const ctx = { region: regionAt(-80, 40), set: B, fp, grid: terrain, toGrid, alertTime: 600 };
+  const parcel = assessSite({ id: 'P1', name: 'Parcel 7', gridRing: [30, 30, 40, 30, 40, 40, 30, 40], occupancy: 'apt', floors: 4, gfaM2: 4 * 2500 }, f, ctx)!;
+  assert.equal(parcel.m.match, 'wkt');
+  assert.equal(parcel.m.cells.length, 100);
+  assert.equal(parcel.valueSource, 'unit-cost');
+  assert.equal(parcel.valueStructure, 4 * 2500 * 2000);
+  assert.equal(parcel.leadTime, 600);
+  assert.ok(parcel.loss > 0);
+  // A point on an existing building: not matched unless asked.
+  const pt = assessSite({ gx: 15, gy: 12, occupancy: 'office', replacementValue: 1e6 }, f, ctx)!;
+  assert.equal(pt.m.match, 'point');
+  const matched = assessSite({ gx: 15, gy: 12, matchFootprint: true }, f, ctx)!;
+  assert.equal(matched.m.match, 'inside');
+  assert.equal(matched.occ, 'industrial');
+  assert.equal(assessSite({ gx: -5, gy: 3 }, f, ctx), null); // outside the map
 });
 
 test('assessment: given values win, foreign currencies stay out of the USD totals, BI and insured loss', () => {
