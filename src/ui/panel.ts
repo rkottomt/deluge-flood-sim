@@ -41,6 +41,7 @@ import { createImpactSection } from './impact';
 import { createSiteSection } from './siteCheck';
 import { sitesFor } from './sites';
 import { createChainSection } from './chainPanel';
+import { createClimateBlock, createClimateNote } from './climatePanel';
 
 export interface Panel {
   el: HTMLElement;
@@ -426,7 +427,7 @@ export function createPanel(ctx: UIContext): Panel {
   const weatherSec = section(
     'Weather & rivers',
     'rain',
-    [rain.el, stageSlot, label('Water sources', sourcesCount), sourcesList, sourcesEmpty],
+    [rain.el, createClimateNote(ctx), stageSlot, label('Water sources', sourcesCount), sourcesList, sourcesEmpty, createClimateBlock(ctx)],
     { id: 'weather', badge: rainBadge },
   );
 
