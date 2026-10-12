@@ -388,8 +388,13 @@ test('arrival and hazard legends: AIDR 2017 classes, keyed bands, WGSL from the 
     const f = (x: number) => (Number.isInteger(x) ? `${x}.0` : String(x));
     assert.ok(PREP_CELLS_WGSL.includes(`dv <= ${f(L.dv)} && d <= ${f(L.d)} && v <= ${f(L.v)}`), JSON.stringify(L));
   }
-  // Every swatch must be told apart from every other mode's by the visual suite's nearest-swatch check.
+  // Every swatch must be told apart from every other mode's by the visual suite's nearest-swatch check, and none may
+  // look like the blown-up-cell sentinel to its NaN-magenta detector (scripts/visual.mjs frameStats).
   const rgb = (h: string) => [1, 3, 5].map((k) => parseInt(h.slice(k, k + 2), 16));
+  for (const b of [...ARRIVAL_BANDS, ...HAZARD_BANDS]) {
+    const [r, g, bl] = rgb(b.color);
+    assert.ok(!(r > 150 && bl > 110 && g < 0.6 * Math.min(r, bl)), `${b.color} reads as NaN magenta`);
+  }
   const modes = { depth: DEPTH_BANDS, maxDepth: MAX_DEPTH_BANDS, velocity: VELOCITY_BANDS.slice(1), arrival: ARRIVAL_BANDS, hazard: HAZARD_BANDS };
   for (const [ma, ba] of Object.entries(modes)) {
     for (const [mb, bb] of Object.entries(modes)) {

@@ -12,7 +12,9 @@
  *                water (it is most of any flood), so the dangerous fast cores stand out.
  *  • arrival   — viridis (dark purple → yellow-green; the brightest yellow is replaced by the nearest one the tone
  *                mapper reproduces): earliest = darkest, the places with the least warning.
- *  • hazard    — ColorBrewer "PuRd"-derived (pale lilac → near-black maroon) for the AIDR H1–H6 classes.
+ *  • hazard    — sand → umber (lightness-sequential browns) for the AIDR H1–H6 classes: darker = more dangerous.
+ *                Browns because every other hue is taken: pinks trip the visual suite's NaN-magenta detector and
+ *                dark crimsons, once lit and shaded, read as the max-depth and arrival purples.
  * Every swatch is ≥ 45 sRGB units from every swatch of the other modes, so the legend-vs-pixels check of
  * scripts/visual.mjs can tell the modes apart.
  *
@@ -99,12 +101,12 @@ export function aidrHazardClass(d: number, v: number, dv: number): number {
 
 /** Hazard classes H1–H6 (AIDR 2017). Band k covers the class value k (min/max are the half-way points). */
 export const HAZARD_BANDS: HazardBand[] = [
-  { min: 0, max: 1.5, color: '#cfa6d2', label: 'H1', note: 'Generally safe' },
-  { min: 1.5, max: 2.5, color: '#df65b0', label: 'H2', note: 'Unsafe for small vehicles' },
-  { min: 2.5, max: 3.5, color: '#e7298a', label: 'H3', note: 'Unsafe for vehicles, children, the elderly' },
-  { min: 3.5, max: 4.5, color: '#ce1256', label: 'H4', note: 'Unsafe for vehicles and people' },
-  { min: 4.5, max: 5.5, color: '#8c0043', label: 'H5', note: 'Buildings vulnerable to damage' },
-  { min: 5.5, max: Infinity, color: '#4a0012', label: 'H6', note: 'Buildings vulnerable to failure' },
+  { min: 0, max: 1.5, color: '#c6b2a6', label: 'H1', note: 'Generally safe' },
+  { min: 1.5, max: 2.5, color: '#b6977a', label: 'H2', note: 'Unsafe for small vehicles' },
+  { min: 2.5, max: 3.5, color: '#9a6d47', label: 'H3', note: 'Unsafe for vehicles, children, the elderly' },
+  { min: 3.5, max: 4.5, color: '#77482a', label: 'H4', note: 'Unsafe for vehicles and people' },
+  { min: 4.5, max: 5.5, color: '#4f2c15', label: 'H5', note: 'Buildings vulnerable to damage' },
+  { min: 5.5, max: Infinity, color: '#24130a', label: 'H6', note: 'Buildings vulnerable to failure' },
 ];
 
 /**
