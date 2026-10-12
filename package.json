@@ -44,5 +44,9 @@
   "dependencies": {
     "geotiff": "^3.0.5",
     "leaflet": "^1.9.4"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true,
+    "webgpu@0.6.1": true
   }
 }
