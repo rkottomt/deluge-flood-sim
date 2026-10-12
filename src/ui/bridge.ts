@@ -128,6 +128,8 @@ export interface ChainView {
   origin: 'baked' | 'worker';
   /** Worker time of the last run, ms. */
   ms: number | null;
+  /** Future-climate lake growth applied on top of the what-if (src/climate); null/absent = today. */
+  climate?: { label: string; volumeFactor: number } | null;
 }
 
 /**

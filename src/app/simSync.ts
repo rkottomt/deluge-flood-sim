@@ -1,6 +1,7 @@
 import type { AppState, FloodSolver, SimParams, Store } from '../contracts';
 import { errorMessage, type ErrorReporter } from './errors';
 import type { StageLevels } from './stage';
+import { scaleRain, scaleSources, scaleStorms, type ClimateForcing } from '../climate/apply';
 
 export interface SimSyncDeps {
   store: Store;
@@ -11,6 +12,11 @@ export interface SimSyncDeps {
   getSolver(): FloodSolver | null;
   /** Start point or shelters changed → re-plan the evacuation route. */
   onRouteInputsChanged(): void;
+  /**
+   * The future-climate layer (src/climate): rain, storm cells and rain-fed inflows are scaled on their way to the solver,
+   * never in the store. Null or identity = pass through.
+   */
+  getClimate?(): ClimateForcing | null;
 }
 
 /**
@@ -69,21 +75,31 @@ export class SimSync {
         else (out as unknown as Record<string, unknown>)[key] = value;
       }
     }
+    out.rainRate = scaleRain(out.rainRate, this.climate());
     return out;
   }
 
   /** Push the complete current state into the solver (new solver). */
   pushAll(): void {
-    const s = this.deps.store.get();
     this.pushParams();
     this.pushSources();
-    this.guard('setStorms', (solver) => solver.setStorms(s.storms));
+    this.pushStorms();
   }
 
-  /** Sources to the solver, stage levels at the applied (ramped) offset. */
+  private climate(): ClimateForcing | null {
+    return this.deps.getClimate?.() ?? null;
+  }
+
+  /** Storm cells to the solver (climate-scaled). */
+  pushStorms(): void {
+    const storms = scaleStorms(this.deps.store.get().storms, this.climate());
+    this.guard('setStorms', (solver) => solver.setStorms(storms));
+  }
+
+  /** Sources to the solver, stage levels at the applied (ramped) offset, rain-fed inflows climate-scaled. */
   pushSources(): void {
     const { stage, store } = this.deps;
-    const sources = stage.apply(store.get().sources, this.deps.getAppliedStageOffset());
+    const sources = scaleSources(stage.apply(store.get().sources, this.deps.getAppliedStageOffset()), this.climate());
     this.guard('setSources', (solver) => solver.setSources(sources));
   }
 
@@ -107,7 +123,7 @@ export class SimSync {
       if (sources !== s.sources) store.set({ sources });
     }
 
-    if (s.storms !== prev.storms) this.guard('setStorms', (solver) => solver.setStorms(s.storms));
+    if (s.storms !== prev.storms) this.pushStorms();
     if (s.sim !== prev.sim) this.pushParams();
     if (s.evacStart !== prev.evacStart || s.shelters !== prev.shelters) this.deps.onRouteInputsChanged();
   }

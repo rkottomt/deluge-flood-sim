@@ -10,6 +10,8 @@ import { FrameDriver } from './driver';
 import { errorMessage, ErrorReporter } from './errors';
 import { EvacController, snapshotIsPhysical } from './evac';
 import { HazardChainController } from './hazardChain';
+import { ClimateLayer } from './climate';
+import type { ClimateForcing } from '../climate/apply';
 import { WorkBudget, type BudgetMode } from './governor';
 import { FrameCeiling } from './frameCeiling';
 import { GpuLatencyProbe } from './latency';
@@ -73,6 +75,8 @@ export class App {
   readonly protection: ProtectionController;
   /** The glacier hazard chain behind a chain preset's inflow (worker run, routed hydrograph, bands; see hazardChain.ts). */
   readonly chain: HazardChainController;
+  /** The future-climate layer on the solver's forcing (see climate.ts; the store keeps today's forcing). */
+  readonly climate: ClimateLayer;
   readonly sim: SimSync;
   /** Stage raises lift the water in the river channels at once (see crest.ts). */
   readonly crest: CrestFill;
@@ -139,19 +143,22 @@ export class App {
         this.requestRender();
       },
     }, 1000, createProtectionWorker);
+    this.climate = new ClimateLayer({ store: this.store, onChange: (next, prev) => this.onClimateChange(next, prev) });
     this.sim = new SimSync({
       store: this.store,
       stage: this.stage,
       errors: this.errors,
       getSolver: () => this.scenes?.scene?.solver ?? null,
-      getAppliedStageOffset: () => this.stageRamp.applied,
+      // The sea boundary sits above the slider's level by the climate's sea-level rise (0 everywhere else).
+      getAppliedStageOffset: () => this.stageRamp.applied + this.climate.stageShift,
       onRouteInputsChanged: () => this.evac.recomputeRoute(),
+      getClimate: () => this.climate.get(),
     });
     this.crest = new CrestFill({
       store: this.store,
       errors: this.errors,
       getScene: () => this.scenes?.scene ?? null,
-      getStageOffset: () => this.stageRamp.applied,
+      getStageOffset: () => this.stageRamp.applied + this.climate.stageShift,
       onWaterReset: () => {
         this.driver.onSolverReset();
         this.braceBudget();
@@ -245,6 +252,7 @@ export class App {
 
     this.probe = new ProbeSampler(store, gpu.device);
     this.probe.install();
+    this.climate.install();
     this.sim.install();
     this.store.subscribe((s, prev) => {
       if (s.stageOffset === prev.stageOffset) return;
@@ -525,7 +533,20 @@ export class App {
     const offset = this.stageRamp.applied;
     this.stagePushed = offset;
     this.sim.pushSources();
-    this.crest.onStageOffset(offset);
+    this.crest.onStageOffset(offset + this.climate.stageShift);
+  }
+
+  /**
+   * A new climate selection or scene: re-push the scaled forcing; move the sea boundary by the change in sea-level rise
+   * (a rise lifts the connected water at once, like a stage raise — see crest.ts); grow or restore the chain's lake.
+   */
+  private onClimateChange(next: ClimateForcing, prev: ClimateForcing): void {
+    this.sim.pushParams();
+    this.sim.pushStorms();
+    if (next.seaRiseM !== prev.seaRiseM) this.pushStage();
+    else this.sim.pushSources();
+    this.chain.setClimateVolumeFactor(next.lake?.volumeFactor ?? 1, next.lake ? next.label : null);
+    this.requestRender();
   }
 
   private publishStage(now: number): void {
