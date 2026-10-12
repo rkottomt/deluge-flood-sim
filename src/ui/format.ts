@@ -282,3 +282,19 @@ export function formatStageFt(ft: number | null | undefined): string {
   if (b) return b;
   return `${fmtNum(ft, 1)}${THIN}ft`;
 }
+
+/**
+ * Money, rounded the way a screening estimate deserves: "$850", "$12 k", "$3.4 M", "$1.2 B". Unknown (null / NaN) is
+ * "—", never "$0". Only US dollars get a symbol; any other ISO code is written after the number.
+ */
+export function formatMoney(v: number | null | undefined, currency = 'USD'): string {
+  if (v === null || v === undefined || !Number.isFinite(v)) return DASH;
+  const a = Math.abs(v);
+  const sign = v < 0 ? '−' : '';
+  let num: string;
+  if (a >= 1e9) num = `${fmtNum(a / 1e9, a >= 1e11 ? 0 : 1)}${NBSP}B`;
+  else if (a >= 1e6) num = `${fmtNum(a / 1e6, a >= 1e8 ? 0 : 1)}${NBSP}M`;
+  else if (a >= 1e4) num = `${fmtNum(a / 1e3, 0)}${NBSP}k`;
+  else num = fmtNum(a >= 1000 ? Math.round(a / 10) * 10 : Math.round(a), 0);
+  return currency === 'USD' ? `${sign}$${num}` : `${sign}${num}${NBSP}${currency}`;
+}

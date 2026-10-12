@@ -4592,3 +4592,386 @@ html[data-deluge-presentation='on'] .dl-tutorial {
     transition: none;
   }
 }
+
+/* ── Impact & loss (src/ui/impact.ts) ─────────────────────────────────────────────────────── */
+.dl-impact-note,
+.dl-impact-source,
+.dl-impact-status,
+.dl-impact-fine {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--dl-text-2);
+}
+.dl-impact-source,
+.dl-impact-fine {
+  color: var(--dl-text-3);
+  font-size: 11.5px;
+}
+.dl-impact-status {
+  font-variant-numeric: tabular-nums;
+}
+.dl-impact-status:empty,
+.dl-impact-source:empty,
+.dl-impact-fine:empty {
+  display: none;
+}
+.dl-ui .dl-warn {
+  color: var(--dl-warn-text);
+}
+.dl-impact-results,
+.dl-impact-block {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.dl-impact-block {
+  padding-top: 12px;
+  border-top: 1px solid var(--dl-line);
+}
+.dl-impact-cards {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.dl-impact-card {
+  padding: 10px 11px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.07);
+  min-width: 0;
+}
+.dl-impact-wide {
+  grid-column: 1 / -1;
+}
+.dl-impact-label {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--dl-text-3);
+}
+.dl-impact-value {
+  margin-top: 2px;
+  font-size: 19px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+}
+.dl-impact-wide .dl-impact-value {
+  font-size: 24px;
+}
+.dl-impact-sub {
+  margin-top: 2px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--dl-text-3);
+}
+.dl-impact-hbar {
+  display: flex;
+  height: 10px;
+  border-radius: 5px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.06);
+}
+.dl-impact-hbar .dl-aidr {
+  flex-basis: 0;
+  min-width: 0;
+}
+.dl-impact-hlegend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  font-size: 11px;
+  color: var(--dl-text-2);
+  font-variant-numeric: tabular-nums;
+}
+.dl-impact-hlegend i {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 4px;
+  border-radius: 2px;
+}
+.dl-aidr1 {
+  background: #4fbf8f;
+}
+.dl-aidr2 {
+  background: #a8cf5a;
+}
+.dl-aidr3 {
+  background: #f2c94c;
+}
+.dl-aidr4 {
+  background: #f2994a;
+}
+.dl-aidr5 {
+  background: #eb5757;
+}
+.dl-aidr6 {
+  background: #9b1c3a;
+}
+.dl-impact-table table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.dl-impact-table th {
+  text-align: left;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--dl-text-3);
+  padding: 0 4px 4px;
+}
+.dl-impact-table th:not(:first-child),
+.dl-impact-table td:not(:first-child) {
+  text-align: right;
+  white-space: nowrap;
+}
+.dl-impact-table td {
+  padding: 5px 4px;
+  border-top: 1px solid var(--dl-line);
+  vertical-align: top;
+}
+.dl-impact-table tbody tr {
+  cursor: pointer;
+}
+.dl-impact-table tbody tr:hover,
+.dl-impact-table tbody tr:focus-visible {
+  background: rgba(255, 255, 255, 0.05);
+}
+.dl-impact-name,
+.dl-impact-meta {
+  display: block;
+  max-width: 190px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dl-impact-meta {
+  font-size: 10.5px;
+  color: var(--dl-text-3);
+}
+.dl-impact-inputs {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1.3fr;
+  gap: 8px;
+}
+.dl-num-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.dl-num-label {
+  font-size: 10.5px;
+  color: var(--dl-text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dl-num-wrap {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.dl-num-input {
+  width: 100%;
+  min-width: 0;
+  height: 28px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 7px;
+  font: inherit;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--dl-text);
+  background: rgba(0, 0, 0, 0.32);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+  outline: none;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.dl-num-input:focus {
+  box-shadow:
+    inset 0 0 0 1px rgba(90, 185, 255, 0.8),
+    0 0 0 3px rgba(58, 168, 255, 0.2);
+}
+.dl-num-unit {
+  font-size: 11px;
+  color: var(--dl-text-3);
+}
+.dl-impact-block > .dl-num-field {
+  max-width: 180px;
+}
+.dl-impact-compare {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.dl-impact-compare:empty {
+  display: none;
+}
+.dl-impact-kv {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  column-gap: 8px;
+  font-size: 12px;
+  color: var(--dl-text-2);
+  font-variant-numeric: tabular-nums;
+}
+.dl-impact-kv b {
+  color: var(--dl-text);
+  text-align: right;
+}
+.dl-impact-kv small {
+  grid-column: 2;
+  text-align: right;
+  font-size: 10.5px;
+  color: var(--dl-text-3);
+}
+.dl-impact-issues {
+  margin: 0;
+  padding-left: 16px;
+  font-size: 11px;
+  color: var(--dl-text-3);
+}
+.dl-file-input {
+  display: none;
+}
+.dl-impact-methods summary {
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--dl-accent-2);
+}
+.dl-impact-method {
+  margin-top: 8px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--dl-text-2);
+}
+.dl-impact-method b {
+  color: var(--dl-text);
+}
+.dl-asset-pins {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+.dl-asset-pin {
+  position: absolute;
+  left: -6px;
+  top: -6px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  pointer-events: auto;
+  box-shadow:
+    0 0 0 2px rgba(10, 14, 20, 0.85),
+    0 2px 6px rgba(0, 0, 0, 0.5);
+}
+:where(.dl-ui) .dl-pin-portfolio {
+  background: #c18cff;
+}
+:where(.dl-ui) .dl-pin-top {
+  background: #ffb547;
+  width: 9px;
+  height: 9px;
+  left: -4.5px;
+  top: -4.5px;
+}
+.dl-ui.dl-modal-open .dl-asset-pins {
+  display: none;
+}
+
+/* The printable impact report (src/ui/impactReport.ts): only in print, and only while one is being printed. */
+.dl-print-report {
+  display: none;
+}
+@media print {
+  html.dl-printing,
+  html.dl-printing body {
+    background: #fff !important;
+    color: #111;
+    height: auto;
+    overflow: visible;
+  }
+  html.dl-printing body > *:not(.dl-print-report) {
+    display: none !important;
+  }
+  html.dl-printing .dl-print-report {
+    display: block;
+    font: 11.5px/1.45 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
+    color: #111;
+  }
+  .dl-print-report h1 {
+    font-size: 22px;
+    margin: 4px 0 6px;
+  }
+  .dl-print-report h2 {
+    font-size: 14px;
+    margin: 16px 0 6px;
+    border-bottom: 1px solid #bbb;
+    padding-bottom: 3px;
+  }
+  .dl-print-report h3 {
+    font-size: 12px;
+    margin: 10px 0 2px;
+  }
+  .dl-rep-kicker {
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #555;
+  }
+  .dl-rep-meta,
+  .dl-rep-note {
+    color: #444;
+    margin: 4px 0;
+  }
+  .dl-rep-warn {
+    border-left: 3px solid #c08000;
+    padding: 4px 8px;
+    margin: 6px 0;
+  }
+  .dl-rep-kv {
+    display: grid;
+    grid-template-columns: 40% 1fr;
+    gap: 2px 14px;
+    margin: 0;
+  }
+  .dl-rep-kv dd {
+    margin: 0;
+  }
+  .dl-rep-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 6px 0;
+    font-size: 10.5px;
+  }
+  .dl-rep-table th,
+  .dl-rep-table td {
+    border-bottom: 1px solid #ccc;
+    padding: 2px 5px;
+    text-align: left;
+    vertical-align: top;
+  }
+  .dl-rep-cites {
+    font-size: 10.5px;
+    padding-left: 18px;
+  }
+  .dl-rep-url {
+    color: #555;
+    word-break: break-all;
+  }
+  .dl-print-report section {
+    break-inside: avoid-page;
+  }
+  .dl-print-report section:has(.dl-rep-wide) {
+    break-inside: auto;
+  }
+}
