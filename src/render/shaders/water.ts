@@ -337,8 +337,12 @@ fn fsWater(in: WOut) -> @location(0) vec4f {
   let thickGrad = vec2f(dpdx(thick), dpdy(thick));
   let uvDx = dpdx(uv);
   let uvDy = dpdy(uv);
+  // The value the hazard bands are keyed on: depth (1), max depth (2), or what the prep pass put in misc.b — speed (3),
+  // arrival minutes premultiplied by their coverage misc.a (4: divided back out, so filtering toward land the water
+  // never reached keeps the reached cell's time), AIDR hazard class 1…6 (5).
   let valueDepth = select(s.r, misc.g, mode == 2);
-  let hazardValue = select(valueDepth, misc.b, mode == 3);
+  let arrivalMin = misc.b / max(misc.a, 1e-3);
+  let hazardValue = select(select(valueDepth, misc.b, mode == 3 || mode == 5), arrivalMin, mode == 4);
   let hazardFw = fwidth(hazardValue);
   let pixelFoot = dist * F.elev.w;
 
@@ -568,7 +572,9 @@ fn fsWater(in: WOut) -> @location(0) vec4f {
   // against a levee or any other barrier, and converging flow), and the moving shoreline under this fragment.
   let foamNoise = rA.z * 0.55 + rB.z * 0.3 * fineFade + rM.z * 0.35;
   let shoreFoam = (1.0 - smoothstep(0.0, 0.18, thick)) * (0.25 + 0.75 * smoothstep(0.2, 1.2, speed)) * 0.7;
-  let foamAmt = clamp(s.a * 0.8 + shoreFoam + misc.a * 0.8, 0.0, 0.92) * select(1.0, 0.0, in.skirt > 0.5);
+  // (misc.a is the mapped value's coverage, not whitewater, in the arrival and hazard views.)
+  let collected = select(misc.a, 0.0, mode >= 4);
+  let foamAmt = clamp(s.a * 0.8 + shoreFoam + collected * 0.8, 0.0, 0.92) * select(1.0, 0.0, in.skirt > 0.5);
   let foamMask = smoothstep(1.1 - foamAmt, 1.3 - foamAmt * 0.7, foamNoise) * foamAmt;
   // Same exposure convention as the body above, so foam does not go grey when the flood does not.
   let foamCol = vec3f(0.62, 0.59, 0.53) * (skyAmbient(n) * skyOcc + F.sunColor * max(dot(n, F.sunDir), 0.0) * sunVis * F.shade.w);
@@ -598,10 +604,11 @@ fn fsWater(in: WOut) -> @location(0) vec4f {
   if (mode != 0) {
     // ── Hazard colormap: discrete bands (anti-aliased edges), gently lit, over the photoreal water ──────
     // Band colours arrive as HDR inputs solved on the CPU so they tone-map to exactly the legend colours.
-    // Depth / max depth colour only land that was dry before the flood; the normal river stays plain water. The
-    // colours fade in between 2 and 10 cm so thin rain sheet-flow does not blanket hillsides. Speed colours all
-    // moving water, but the slowest band (ponding) is left as plain water so the fast cores stand out.
-    let hDepth = select(s.r, misc.g, mode == 2);
+    // Depth / max depth / arrival / hazard class colour only land that was dry before the flood; the normal river
+    // stays plain water. The colours fade in between 2 and 10 cm so thin rain sheet-flow does not blanket hillsides.
+    // Speed colours all moving water, but the slowest band (ponding) is left as plain water so the fast cores stand
+    // out. Arrival leaves land the water never reached ARRIVAL_DEPTH on (its coverage, misc.a) as plain water too.
+    let hDepth = select(s.r, misc.g, mode == 2 || mode >= 4);
     var weight = smoothstep(0.02, 0.10, hDepth);
     if (mode == 3) {
       let t0 = F.bands[0].a;
@@ -609,6 +616,9 @@ fn fsWater(in: WOut) -> @location(0) vec4f {
       weight *= smoothstep(t0 - w0, t0 + w0, misc.b);
     } else {
       weight *= smoothstep(0.35, 0.65, floodLand);
+    }
+    if (mode == 4) {
+      weight *= smoothstep(0.3, 0.7, misc.a);
     }
     let band = hazardColor(hazardValue, hazardFw);
     let mn = normalize(vec3f(-macroSlope.x, 1.0, -macroSlope.y));

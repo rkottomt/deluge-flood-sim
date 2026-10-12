@@ -9,7 +9,19 @@ import { cameraRay, intersectHeightfield, pickTerrain } from '../../src/render/p
 import { minCameraDistance, OrbitController, type CameraEnvironment } from '../../src/render/camera';
 import { transformPoint4 } from '../../src/render/math';
 import { frustumPlanes, LodTree, LOD_INSTANCE_FLOATS, LOD_PATCH } from '../../src/render/lod';
-import { bandsForMode, cssToLinear, DEPTH_BANDS, MAX_DEPTH_BANDS, VELOCITY_BANDS } from '../../src/render/legend';
+import {
+  aidrHazardClass,
+  AIDR_HAZARD_LIMITS,
+  ARRIVAL_BANDS,
+  bandsForMode,
+  cssToLinear,
+  DEPTH_BANDS,
+  HAZARD_BANDS,
+  MAX_DEPTH_BANDS,
+  showsNormalWater,
+  VELOCITY_BANDS,
+} from '../../src/render/legend';
+import { PREP_CELLS_WGSL } from '../../src/render/shaders/prep';
 import type { SimSnapshot } from '../../src/contracts';
 
 const N = 256;
@@ -333,7 +345,7 @@ test('CDLOD selection covers the domain once, with ≤ 1 level between neighbour
 });
 
 test('legend bands are ordered, contiguous and valid colors', () => {
-  for (const bands of [DEPTH_BANDS, MAX_DEPTH_BANDS, VELOCITY_BANDS]) {
+  for (const bands of [DEPTH_BANDS, MAX_DEPTH_BANDS, VELOCITY_BANDS, ARRIVAL_BANDS, HAZARD_BANDS]) {
     assert.ok(bands.length >= 4 && bands.length <= 8);
     for (let i = 0; i < bands.length; i++) {
       assert.match(bands[i].color, /^#[0-9a-f]{6}$/i);
@@ -348,4 +360,46 @@ test('legend bands are ordered, contiguous and valid colors', () => {
   const [r, g, b] = cssToLinear('#ffffff');
   assert.ok(Math.abs(r - 1) < 1e-9 && Math.abs(g - 1) < 1e-9 && Math.abs(b - 1) < 1e-9);
   assert.ok(Math.abs(cssToLinear('#808080')[0] - 0.2158605) < 1e-5);
+});
+
+test('arrival and hazard legends: AIDR 2017 classes, keyed bands, WGSL from the same limits, distinct palettes', () => {
+  assert.equal(bandsForMode('arrival'), ARRIVAL_BANDS);
+  assert.equal(bandsForMode('hazard'), HAZARD_BANDS);
+  assert.ok(showsNormalWater('arrival') && showsNormalWater('hazard') && !showsNormalWater('velocity'));
+  assert.deepEqual(ARRIVAL_BANDS.map((b) => b.max), [5, 15, 30, 60, 120, Infinity]);
+  // AIDR 2017 (Handbook 7, guideline 7-3): H1 d·v ≤ 0.3, d ≤ 0.3, v ≤ 2; H2 0.6/0.5/2; H3 0.6/1.2/2; H4 1/2/2; H5 4/4/4.
+  assert.equal(aidrHazardClass(0, 0, 0), 1);
+  assert.equal(aidrHazardClass(0.3, 1, 0.3), 1);
+  assert.equal(aidrHazardClass(0.31, 0.5, 0.155), 2);
+  assert.equal(aidrHazardClass(0.2, 2, 0.4), 2, 'd·v decides');
+  assert.equal(aidrHazardClass(0.2, 2.01, 0.4), 5, 'v > 2 skips H1–H4');
+  assert.equal(aidrHazardClass(1.2, 0.5, 0.6), 3);
+  assert.equal(aidrHazardClass(1.5, 0.5, 0.75), 4);
+  assert.equal(aidrHazardClass(2.5, 1, 2.5), 5);
+  assert.equal(aidrHazardClass(4.5, 0.1, 0.45), 6, 'd > 4');
+  assert.equal(aidrHazardClass(1, 4.5, 4.5), 6, 'v > 4');
+  // Band k covers class value k: the hazard map's bands are keyed on the class number.
+  for (let k = 1; k <= 6; k++) {
+    const b = HAZARD_BANDS[k - 1];
+    assert.ok(k >= b.min && k < b.max && b.label === `H${k}`);
+  }
+  // The prep pass classifies with WGSL generated from the very same limits.
+  for (const L of AIDR_HAZARD_LIMITS) {
+    const f = (x: number) => (Number.isInteger(x) ? `${x}.0` : String(x));
+    assert.ok(PREP_CELLS_WGSL.includes(`dv <= ${f(L.dv)} && d <= ${f(L.d)} && v <= ${f(L.v)}`), JSON.stringify(L));
+  }
+  // Every swatch must be told apart from every other mode's by the visual suite's nearest-swatch check.
+  const rgb = (h: string) => [1, 3, 5].map((k) => parseInt(h.slice(k, k + 2), 16));
+  const modes = { depth: DEPTH_BANDS, maxDepth: MAX_DEPTH_BANDS, velocity: VELOCITY_BANDS.slice(1), arrival: ARRIVAL_BANDS, hazard: HAZARD_BANDS };
+  for (const [ma, ba] of Object.entries(modes)) {
+    for (const [mb, bb] of Object.entries(modes)) {
+      if (ma >= mb || (ma !== 'arrival' && ma !== 'hazard' && mb !== 'arrival' && mb !== 'hazard')) continue;
+      for (const x of ba) {
+        for (const y of bb) {
+          const d = Math.hypot(...rgb(x.color).map((v, k) => v - rgb(y.color)[k]));
+          assert.ok(d >= 45, `${ma} ${x.color} vs ${mb} ${y.color}: ${d.toFixed(0)}`);
+        }
+      }
+    }
+  }
 });

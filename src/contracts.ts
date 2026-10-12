@@ -527,7 +527,18 @@ export type WaterViewMode =
   /** Hazard colormap by maximum depth reached since reset (flood extent map). */
   | 'maxDepth'
   /** Colormap by flow speed (0 … 5+ m/s). */
-  | 'velocity';
+  | 'velocity'
+  /**
+   * Arrival time: minutes after reset that water first stood deeper than ARRIVAL_DEPTH (HazardFields.firstWet), on
+   * the max-depth surface; land never reached that deep is not coloured. Needs FloodSolver.hazardBuffer (no colour
+   * without it).
+   */
+  | 'arrival'
+  /**
+   * Flood hazard class H1–H6 (AIDR 2017) from the maxima since reset of depth, speed and depth × speed
+   * (HazardFields), on the max-depth surface. Uses FloodSolver.hazardBuffer (classed by max depth alone without it).
+   */
+  | 'hazard';
 
 export interface CameraPose {
   /** Orbit target in grid coords + elevation in meters. */

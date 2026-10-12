@@ -1,6 +1,7 @@
 /**
  * GPU test of the render prep compute passes (Dawn): per-vertex bed/water surface, shoreline plane extension,
- * no visible water behind a wall, and the wet pyramid used to cull dry water geometry.
+ * no visible water behind a wall, the wet pyramid used to cull dry water geometry, and the arrival / hazard-class
+ * fields read from the solver's hazard accumulators.
  */
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -44,6 +45,11 @@ async function readTexture(device: GPUDevice, tex: GPUTexture, w: number, h: num
   buf.unmap();
   buf.destroy();
   return out;
+}
+
+/** Stand-in for FloodSolver.hazardBuffer (the renderer's dummy): the prep's hazard field is off in these tests. */
+function noHazard(device: GPUDevice): GPUBuffer {
+  return device.createBuffer({ size: 16, usage: GPUBufferUsage.STORAGE });
 }
 
 test('prep: water surface, shoreline extension, walls and wet pyramid', async () => {
@@ -129,6 +135,7 @@ test('prep: water surface, shoreline extension, walls and wet pyramid', async ()
         { binding: 5, resource: norm.createView() },
         { binding: 6, resource: misc.createView() },
         { binding: 7, resource: cells.createView() },
+        { binding: 8, resource: { buffer: noHazard(device) } },
       ],
     }),
   );
@@ -289,6 +296,7 @@ test('prep: water surface, shoreline extension, walls and wet pyramid', async ()
         { binding: 5, resource: out('rgba16float', N, N).createView() },
         { binding: 6, resource: miscMax.createView() },
         { binding: 7, resource: out('rg32float', N, N).createView() },
+        { binding: 8, resource: { buffer: noHazard(device) } },
       ],
     }),
   );
@@ -446,6 +454,7 @@ test('prep: blown-up cells never reach the geometry and are flagged for the glit
         { binding: 5, resource: norm.createView() },
         { binding: 6, resource: misc.createView() },
         { binding: 7, resource: cells.createView() },
+        { binding: 8, resource: { buffer: noHazard(device) } },
       ],
     }),
   );
@@ -494,5 +503,121 @@ test('prep: blown-up cells never reach the geometry and are flagged for the glit
     assert.ok(Number.isFinite(d) && d >= 1 && d <= 10, `${what}: displayed depth ${d} is not a bounded spike`);
   }
 
+  assert.deepEqual(errors, []);
+});
+
+test('prep: arrival and hazard views map the solver hazard accumulators into misc.b / misc.a', async () => {
+  const { createPipelines } = await import('../../src/render/pipelines');
+  const { aidrHazardClass } = await import('../../src/render/legend');
+  const device = await getDevice();
+  const errors: string[] = [];
+  device.onuncapturederror = (e) => errors.push(e.error.message);
+  const P = await createPipelines(device, 'bgra8unorm');
+
+  // Flat bed; every cell wet (h = 0.5, u = 0.3) with a max depth growing eastward. Accumulators: max speed growing
+  // southward, max d·v = 0.8·d·v, arrival (i·60 + j) s, except a scatter of cells the water never reached.
+  const bed = new Float32Array(N * N).fill(100);
+  const state = new Float32Array(N * N * 4);
+  const hz = new Float32Array(N * N * 4);
+  const neverWet = (i: number, j: number) => (i + 3 * j) % 7 === 0;
+  for (let j = 0; j < N; j++) {
+    for (let i = 0; i < N; i++) {
+      const c = j * N + i;
+      const d = (i / N) * 5;
+      const v = (j / N) * 5;
+      state.set([0.5, 0.3, 0, d], c * 4);
+      hz.set([v, 0.8 * d * v, neverWet(i, j) ? -1 : i * 60 + j, 10], c * 4);
+    }
+  }
+  const tex = (format: GPUTextureFormat, data: Float32Array, bpp: number) => {
+    const t = device.createTexture({ size: [N, N], format, usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
+    device.queue.writeTexture({ texture: t }, data as Float32Array<ArrayBuffer>, { bytesPerRow: N * bpp }, [N, N]);
+    return t;
+  };
+  const bedTex = tex('r32float', bed, 4);
+  const barrierTex = tex('r32float', new Float32Array(N * N), 4);
+  const stateTex = tex('rgba32float', state, 16);
+  const hazardBuf = device.createBuffer({ size: hz.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+  device.queue.writeBuffer(hazardBuf, 0, hz);
+  const out = (format: GPUTextureFormat) =>
+    device.createTexture({ size: [N, N], format, usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.COPY_SRC });
+  const surf = out('rgba16float');
+  const norm = out('rgba16float');
+  const misc = out('rgba16float');
+  const cells = out('rg32float');
+  const params = device.createBuffer({ size: 48, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+
+  const run = async (field: number, hasHazard: boolean) => {
+    const pb = new ArrayBuffer(48);
+    const pi = new Int32Array(pb);
+    const pf = new Float32Array(pb);
+    pi.set([N, N, N + 1, N + 1, 1, field === 0 ? 0 : 1]);
+    pf[6] = 0.01;
+    pf[7] = 8;
+    pf[8] = 0.05;
+    pi[10] = field;
+    pi[11] = hasHazard ? 1 : 0;
+    device.queue.writeBuffer(params, 0, pb);
+    const enc = device.createCommandEncoder();
+    const cp = enc.beginComputePass();
+    cp.setPipeline(P.prepCells);
+    cp.setBindGroup(
+      0,
+      device.createBindGroup({
+        layout: P.prepCells.getBindGroupLayout(0),
+        entries: [
+          { binding: 0, resource: { buffer: params } },
+          { binding: 1, resource: bedTex.createView() },
+          { binding: 2, resource: barrierTex.createView() },
+          { binding: 3, resource: stateTex.createView() },
+          { binding: 4, resource: surf.createView() },
+          { binding: 5, resource: norm.createView() },
+          { binding: 6, resource: misc.createView() },
+          { binding: 7, resource: cells.createView() },
+          { binding: 8, resource: { buffer: hasHazard ? hazardBuf : noHazard(device) } },
+        ],
+      }),
+    );
+    cp.dispatchWorkgroups(N / 16, N / 16);
+    cp.end();
+    device.queue.submit([enc.finish()]);
+    return readTexture(device, misc, N, N);
+  };
+
+  // Arrival: minutes premultiplied by coverage (b), coverage (a); nothing where the water never arrived.
+  const arr = await run(1, true);
+  const classes = new Set<number>();
+  for (let j = 0; j < N; j++) {
+    for (let i = 0; i < N; i++) {
+      const c = j * N + i;
+      const [b, a] = [arr[c * 4 + 2], arr[c * 4 + 3]];
+      if (neverWet(i, j)) {
+        assert.deepEqual([b, a], [0, 0], `never-wet cell (${i}, ${j})`);
+      } else {
+        assert.equal(a, 1);
+        const want = (i * 60 + j) / 60;
+        assert.ok(Math.abs(b - want) <= 2e-3 * want + 1e-3, `arrival (${i}, ${j}): ${b} min, want ${want}`);
+      }
+    }
+  }
+  // Hazard class: AIDR from (max depth, max speed, max d·v), exactly the CPU classifier's answer, full coverage.
+  const cls = await run(2, true);
+  for (let c = 0; c < N * N; c++) {
+    const want = aidrHazardClass(state[c * 4 + 3], hz[c * 4], hz[c * 4 + 1]);
+    // Cells sitting on a threshold may land either side of it in Float32: only compare cells clear of every limit.
+    const d = state[c * 4 + 3];
+    const v = hz[c * 4];
+    const dv = hz[c * 4 + 1];
+    const onEdge = [0.3, 0.5, 1.2, 2, 4].some((t) => Math.abs(d - t) < 1e-4) || [2, 4].some((t) => Math.abs(v - t) < 1e-4) || [0.3, 0.6, 1, 4].some((t) => Math.abs(dv - t) < 1e-4);
+    if (!onEdge) assert.equal(cls[c * 4 + 2], want, `cell ${c}: class ${cls[c * 4 + 2]}, want ${want}`);
+    assert.equal(cls[c * 4 + 3], 1);
+    classes.add(cls[c * 4 + 2]);
+  }
+  assert.deepEqual([...classes].sort(), [1, 2, 3, 4, 5, 6], 'the scene spans every class');
+  // Without the solver's accumulators the arrival view shows nothing, and the default view still carries speed.
+  const none = await run(1, false);
+  assert.ok(none.every((x, k) => k % 4 < 2 || x === 0), 'arrival without a hazard buffer');
+  const plain = await run(0, true);
+  assert.ok(Math.abs(plain[2] - 0.3) < 1e-3, `speed ${plain[2]}`);
   assert.deepEqual(errors, []);
 });

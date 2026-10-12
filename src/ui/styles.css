@@ -509,6 +509,11 @@
   flex: 1 1 0;
   padding: 0 4px;
 }
+/* A full-width segmented control in rows of three (the water view modes). */
+.dl-seg-grid3 {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+}
 .dl-speed .dl-seg-btn {
   min-width: 42px;
 }

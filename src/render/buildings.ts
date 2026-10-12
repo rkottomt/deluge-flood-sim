@@ -834,7 +834,7 @@ export class BuildingLayer {
   /**
    * Write the per-frame uniform. `eff` carries the values the quality tier and the style have already been
    * combined into (see `effectiveBuildingStyle`) — the shader's LOD cut MUST be the same number the CPU used to
-   * truncate the chunks, or buildings pop at the boundary. `hazard` is 1 in the depth / max-depth / velocity modes.
+   * truncate the chunks, or buildings pop at the boundary. `hazard` is 1 in every hazard map (any mode but realistic).
    */
   writeUniform(eff: EffectiveBuildingStyle, style: BuildingStyle, hazard: number, imageryOn: boolean): void {
     const u = this.uniformData;
