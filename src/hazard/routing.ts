@@ -73,6 +73,21 @@ const SLOPE_MIN = 1e-4;
 const ROUTING_DRAINED = 0.01;
 /** …or once the discharge excess at the furthest point read is back under this fraction of its peak excess. */
 const ROUTING_PASSED = 0.05;
+/**
+ * Quiescent-reach window: nodes this many beyond the furthest disturbed face stay active; the rest of the valley
+ * (still at its spun-up baseflow) is not stepped until the flood comes within this distance. A disturbance moves at
+ * most one node per step in this explicit scheme, so a margin of 8 checked every step can never be overtaken.
+ */
+const WINDOW_MARGIN = 8;
+/** Tolerances: a face is "at baseflow" within 0.1 % + 0.01 m³/s (the spin-up's steadiness test), and disturbed once it
+ * leaves its baseflow by 1.5 × its own spin-up fluctuation plus that (route()). */
+const WINDOW_REL = 1e-3;
+const WINDOW_ABS = 1e-2;
+/** The baseflow spin-up stops early once every face carries its baseflow to 0.1 % + 0.01 m³/s (checked every 20
+ * steps, after at least SPINUP_MIN s); ROUTING_SPINUP remains the upper bound. */
+const SPINUP_MIN = 300;
+/** Last part of the spin-up over which each face's fluctuation about its baseflow is measured for the window, s. */
+const SPINUP_TAIL = 600;
 
 // ────────────────────────────────────────────────────────────────────────────────────────────
 // Prepared network
@@ -429,6 +444,14 @@ export interface RoutingOptions {
   stopWhenPassed?: boolean;
   /** Start the river dry instead of at baseflow normal depth (tests). */
   dryStart?: boolean;
+  /**
+   * Without tEnd and with stopWhenPassed: the fraction of its peak excess the flow at the furthest point read must
+   * fall back under before the run stops (default 0.05). An ensemble member, which only needs each station's front and
+   * peak, can stop far earlier on the recession (0.5); a run whose entry hydrograph feeds the 2-D solver should not.
+   */
+  stopFraction?: number;
+  /** Step only the reach the flood has reached (plus a margin); default true. Off: every node every step. */
+  window?: boolean;
 }
 
 export interface ProbeSeries {
@@ -469,6 +492,8 @@ export interface RoutingResult {
   entry: { t: Float64Array; q: Float64Array; cv: Float64Array; volume: number; face: number };
   massBalance: MassBalance;
   steps: number;
+  /** Node updates actually performed after t = 0 (Σ active nodes over steps): the work, independent of the machine. */
+  nodeSteps: number;
   tEnd: number;
   dtMin: number;
   dtMean: number;
@@ -531,6 +556,11 @@ class RouterState {
   readonly constNodes: Int32Array;
   readonly qBaseNode: Float64Array;
   inflows: Array<{ node: number; series: Series; cv: number }> = [];
+  /**
+   * Active nodes [0, nAct): beyond them the valley still holds its t = 0 baseflow and is not stepped. The face into
+   * the first inactive node passes its water straight to the outlet (that reach is steady: what enters it leaves).
+   */
+  nAct: number;
   theta = ROUTING_THETA;
   uMax = ROUTING_U_MAX;
   cfl = ROUTING_CFL;
@@ -543,8 +573,8 @@ class RouterState {
   entryFluxS = 0;
   capped = 0;
   uPeak = 0;
-  /** max over faces of |u|/Δx in the last step (0 before the first). */
-  uFaceMaxDx = 0;
+  /** |u| at each face in the last step (0 where dry or a weir), m/s: the advective part of each node's CFL rate. */
+  readonly uFace: Float64Array;
   wIn = 0;
   wOut = 0;
   sIn = 0;
@@ -554,6 +584,7 @@ class RouterState {
   constructor(readonly net: Network, opts: RoutingOptions) {
     const N = net.n;
     this.N = N;
+    this.nAct = N;
     this.W = new Float64Array(N);
     this.S = new Float64Array(N);
     this.h = new Float64Array(N);
@@ -569,6 +600,7 @@ class RouterState {
     this.nFac = new Float64Array(N).fill(1);
     this.cvNow = new Float64Array(N);
     this.srcRate = new Float64Array(N);
+    this.uFace = new Float64Array(N);
     const lf = net.lf;
     this.invLmin = Float64Array.from({ length: N }, (_, i) => 1 / Math.min(i > 0 ? lf[i - 1] : Infinity, i < N - 1 ? lf[i] : Infinity));
     this.qConst = new Float64Array(N);
@@ -610,12 +642,13 @@ function faceNear(net: Network, sx: number): number {
 
 /**
  * The per-node pass that closes a step: depth from volume, the flow area and width there, each node's Manning
- * multiplier for its sediment load, and the stable step for the next advance — dt = C / max[(|u| + c)/Δx] with |u| the
- * face speeds of the last step and c = √(g·A/W) at the nodes, bounded by max(|u|/Δx) + √max(c²/Δx²) (never larger
- * than the exact CFL step; one square root instead of one per node). Returns that dt.
+ * multiplier for its sediment load, and the stable step for the next advance — dt = C / max_i[(|u|_i + c_i)/Δx_i] with
+ * |u|_i the faster of node i's two face speeds in the last step and c_i = √(g·A/W) at the node. Exact per node: the
+ * earlier bound max(|u|/Δx) + max(c/Δx) added the fastest face anywhere (a steep gorge) to the deepest node anywhere
+ * (a reservoir) and cost ~30 % in step count on Chungthang for one square root per node saved. Returns that dt.
  */
 function nodePass(st: RouterState): number {
-  const { net, N, W, S, h, hint, Anode, Wnode, nFac, invLmin } = st;
+  const { net, W, S, h, hint, Anode, Wnode, nFac, invLmin, uFace } = st;
   const HY = net.hyd;
   const J = TABLE_POINTS;
   const Jm1 = J - 1;
@@ -626,9 +659,8 @@ function nodePass(st: RouterState): number {
   // The advective part comes from the FACE speeds of the step just taken (capped at uMax and Froude 8 there), not from
   // Q/A at the nodes: a node all but drained by the positivity limiter has A → 0 under a finite flux, and that "speed"
   // drove dt to microseconds on the first real DEM profile.
-  const uMaxDx = st.uFaceMaxDx;
-  let c2MaxDx2 = 0;
-  for (let i = 0; i < N; i++) {
+  let rateMax = 0;
+  for (let i = 0; i < st.nAct; i++) {
     const m = W[i] + S[i];
     // Depth from volume (depthOf, inlined): walk from last step's table index — levels move little per step.
     let hh = 0;
@@ -661,14 +693,17 @@ function nodePass(st: RouterState): number {
     Anode[i] = A;
     Wnode[i] = Wd;
     nFac[i] = S[i] > 0 ? ntdFactor(S[i] / m) : 1;
-    if (!(hh > ROUTING_H_MIN) || !(A > 0)) continue;
-    // Running maximum of c²/Δx², compared cross-multiplied so the division happens only on a new maximum.
-    const ilf = invLmin[i];
-    const gai = g * A * ilf * ilf;
-    if (gai > c2MaxDx2 * Wd) c2MaxDx2 = gai / Wd;
+    const ua = i > 0 && uFace[i - 1] > uFace[i] ? uFace[i - 1] : uFace[i];
+    if (!(hh > ROUTING_H_MIN) || !(A > 0)) {
+      // A dry node still bounds the step by the speed through its faces (a drained donor next to a fast face).
+      const r = ua * invLmin[i];
+      if (r > rateMax) rateMax = r;
+      continue;
+    }
+    const r = (ua + Math.sqrt((g * A) / Wd)) * invLmin[i];
+    if (r > rateMax) rateMax = r;
   }
-  const c = uMaxDx + Math.sqrt(c2MaxDx2);
-  return c > 0 ? Math.min(st.dtMax, st.cfl / c) : st.dtMax;
+  return rateMax > 0 ? Math.min(st.dtMax, st.cfl / rateMax) : st.dtMax;
 }
 
 /**
@@ -676,7 +711,7 @@ function nodePass(st: RouterState): number {
  * (off during the spin-up). Four passes: sources; face fluxes; per-node limiter; transport; then nodePass.
  */
 function advance(st: RouterState, t: number, dt: number, flood: boolean): number {
-  const { net, N, W, S, h, Q, Qn, outV, lim, cvNow, srcRate, AfLast, MF, Anode, nFac, qConst, constNodes, qBaseNode } = st;
+  const { net, N, W, S, h, Q, Qn, outV, lim, cvNow, srcRate, AfLast, MF, Anode, nFac, qConst, constNodes, qBaseNode, uFace } = st;
   const ZB = net.zb;
   const ILF = net.invLf;
   const IDX = net.invDx;
@@ -692,13 +727,24 @@ function advance(st: RouterState, t: number, dt: number, flood: boolean): number
   const uMax = st.uMax;
   const FR2 = ROUTING_FROUDE_MAX * ROUTING_FROUDE_MAX;
   const entryFace = st.entryFace;
+  // The active reach (RouterState.nAct): nodes [0, NA), faces [0, fEnd) — the last of them, when the window is not the
+  // whole valley, feeds the steady reach beyond and passes its water to the outlet.
+  const NA = st.nAct;
+  const full = NA >= N;
+  const fEnd = full ? N - 1 : NA;
 
   // 1. Sources: water with its sediment, booked into the balance; srcRate keeps each node's source rate this step.
+  //    A constant source beyond the window is part of that reach's steady state: what it adds leaves at the outlet.
   srcRate.fill(0);
   let wIn = 0;
   let sIn = 0;
+  let wPass = 0;
   for (let c = 0; c < constNodes.length; c++) {
     const i = constNodes[c];
+    if (i >= NA) {
+      wPass += qConst[i] * dt;
+      continue;
+    }
     const v = qConst[i] * dt;
     W[i] += v;
     srcRate[i] = qConst[i];
@@ -722,9 +768,7 @@ function advance(st: RouterState, t: number, dt: number, flood: boolean): number
   outV.fill(0);
   let nCap = 0;
   let uTop = st.uPeak;
-  /** Largest face speed / face length this step (the CFL estimate's advective part). */
-  let uDx = 0;
-  for (let f = 0; f < N - 1; f++) {
+  for (let f = 0; f < fEnd; f++) {
     const i = f;
     const k = f + 1;
     const zi = ZB[i];
@@ -752,10 +796,12 @@ function advance(st: RouterState, t: number, dt: number, flood: boolean): number
         if (ek > ei) q = -q;
       }
       AfLast[f] = 0;
+      uFace[f] = 0;
     } else {
       const hf = (ei > ek ? ei : ek) - (zi > zk ? zi : zk);
       if (!(hf > ROUTING_H_MIN)) {
         AfLast[f] = 0;
+        uFace[f] = 0;
       } else {
         // Face geometry: the mean of the two sections at the face's flow depth. A·R^{4/3} is averaged as a whole
         // (tabulated per node) — identical to computing it from the mean A and P in a prismatic reach.
@@ -806,18 +852,19 @@ function advance(st: RouterState, t: number, dt: number, flood: boolean): number
         }
         const qa2 = q >= 0 ? q : -q;
         if (qa2 > uTop * Af) uTop = qa2 / Af;
-        if (qa2 * ILF[f] > uDx * Af) uDx = (qa2 * ILF[f]) / Af;
+        uFace[f] = qa2 / Af;
       }
     }
+    // The steady reach beyond the window gives nothing back upstream.
+    if (!full && k === NA && q < 0) q = 0;
     Qn[f] = q;
     if (q > 0) outV[i] += q * dt;
     else if (q < 0) outV[k] -= q * dt;
   }
   st.capped += nCap;
   st.uPeak = uTop;
-  st.uFaceMaxDx = uDx;
   // Outlet: normal flow on the last reach's slope.
-  {
+  if (full) {
     const i = N - 1;
     const hh = h[i];
     let q = 0;
@@ -827,12 +874,13 @@ function advance(st: RouterState, t: number, dt: number, flood: boolean): number
       q = (A * Math.cbrt(R * R) * Math.sqrt(st.outletSlope)) / (MAN[i] * nFac[i]);
     }
     Qn[N - 1] = q;
+    uFace[N - 1] = hh > ROUTING_H_MIN ? q / areaAt(net, i, hh) : 0;
     outV[N - 1] += q * dt;
   }
 
   // 3. Positivity: each donor gives at most what it holds (its outflows scaled together), and its composition before
   //    anything moves.
-  for (let i = 0; i < N; i++) {
+  for (let i = 0; i < NA; i++) {
     const m = W[i] + S[i];
     lim[i] = outV[i] > m ? (m > 0 ? m / outV[i] : 0) : 1;
     cvNow[i] = m > 0 ? S[i] / m : 0;
@@ -841,7 +889,7 @@ function advance(st: RouterState, t: number, dt: number, flood: boolean): number
   // 4. Transport: each (limited) flux carries its donor's composition; momentum fluxes for the next advection.
   let wOut = 0;
   let sOut = 0;
-  for (let f = 0; f < N; f++) {
+  for (let f = 0; f < (full ? N : fEnd); f++) {
     const q0 = Qn[f];
     if (q0 === 0) {
       Q[f] = 0;
@@ -856,8 +904,13 @@ function advance(st: RouterState, t: number, dt: number, flood: boolean): number
     const dW = v - dS;
     W[d] -= dW;
     S[d] -= dS;
-    if (f === entryFace) st.entryFluxS = q > 0 ? dS / dt : -dS / dt;
-    if (f === N - 1) {
+    if (f === entryFace || (!full && f === fEnd - 1 && entryFace >= fEnd)) st.entryFluxS = q > 0 ? dS / dt : -dS / dt;
+    if (f === N - 1 || (f === fEnd - 1 && !full)) {
+      // Out of the valley, or into the steady reach beyond the window (which passes it on unchanged).
+      if (f < N - 1) {
+        const a = AfLast[f];
+        MF[f] = a > 0 ? (q * q) / a : 0;
+      }
       wOut += dW;
       sOut += dS;
     } else {
@@ -873,7 +926,7 @@ function advance(st: RouterState, t: number, dt: number, flood: boolean): number
   let sEnt = 0;
   const relax = st.relax && flood; // no bed exchange during the baseflow spin-up
   const relaxL = st.relaxL;
-  for (let i = 0; i < N; i++) {
+  for (let i = 0; i < NA; i++) {
     // Rounding can leave −1e-12 in a drained cell: clear it, and leave the trace in the balance's residual.
     if (W[i] < 0) W[i] = 0;
     if (S[i] < 0) S[i] = 0;
@@ -905,9 +958,9 @@ function advance(st: RouterState, t: number, dt: number, flood: boolean): number
     sEnt += sNew - S[i];
     S[i] = sNew;
   }
-  st.wIn += wIn;
+  st.wIn += wIn + wPass;
   st.sIn += sIn;
-  st.wOut += wOut;
+  st.wOut += wOut + wPass;
   st.sOut += sOut;
   st.sEnt += sEnt;
 
@@ -930,6 +983,18 @@ export function route(file: ChainFile, opts: RoutingOptions): RoutingResult {
     while (k < s.t.length - 1 && s.cum[k] < 0.99 * s.total) k++;
     return Math.max(m, s.t[k]);
   }, 0);
+  // For an early stop (stopFraction above the default): the time after which every inflow has fallen for good under
+  // that fraction of its own peak — a slow breach still rising behind a first pulse holds the run open.
+  const stopFracOpt = opts.stopFraction ?? ROUTING_PASSED;
+  const inflowLow = st.inflows.reduce((m, f) => {
+    const s = f.series;
+    let pk = 0;
+    for (let k = 0; k < s.q.length; k++) if (s.q[k] > pk) pk = s.q[k];
+    let k = s.q.length - 1;
+    while (k > 0 && s.q[k] < stopFracOpt * pk) k--;
+    return Math.max(m, s.t[Math.min(s.t.length - 1, k + 1)]);
+  }, 0);
+  const sourceDone = stopFracOpt > ROUTING_PASSED ? Math.min(inflowEnd, inflowLow) : inflowEnd;
 
   // Initial state: baseflow at normal depth, pools behind structures filled to spilling.
   if (!opts.dryStart && st.constNodes.length > 0) {
@@ -948,13 +1013,32 @@ export function route(file: ChainFile, opts: RoutingOptions): RoutingResult {
   let dtNext = nodePass(st);
 
   // Spin-up on baseflow alone; the balance is counted from t = 0.
+  // Adaptive: it ends as soon as every face carries its baseflow (WINDOW_REL / WINDOW_ABS, checked every 20 steps
+  // after SPINUP_MIN s); the river then is steady and the rest of the 30 minutes would change nothing that counts.
+  // Only an explicit opts.spinUp is run in full.
   const spin = opts.dryStart ? 0 : (opts.spinUp ?? ROUTING_SPINUP);
-  for (let t = -spin; t < 0; ) {
+  /** Every face carries its baseflow to WINDOW_REL + WINDOW_ABS. */
+  const isSteady = (): boolean => {
+    for (let f = 0; f < N; f++) if (Math.abs(Q[f] - qBaseNode[f]) > WINDOW_REL * qBaseNode[f] + WINDOW_ABS) return false;
+    return true;
+  };
+  const adaptive = opts.spinUp === undefined;
+  // Fluctuation of each face about its baseflow over the last SPINUP_TAIL s of the spin-up (what the window ignores).
+  const amp = new Float64Array(N);
+  for (let t = -spin, k = 0; t < 0; k++) {
     const dt = Math.min(dtNext, -t);
     dtNext = advance(st, t, dt, false);
     t += dt;
+    if (t >= -SPINUP_TAIL) for (let f = 0; f < N; f++) amp[f] = Math.max(amp[f], Math.abs(Q[f] - qBaseNode[f]));
+    if (adaptive && k % 20 === 19 && t + spin >= SPINUP_MIN && isSteady()) break;
   }
   st.wIn = st.wOut = st.sIn = st.sOut = st.sEnt = 0;
+  // The window starts just below the furthest inflow and grows ahead of the flood (see the main loop).
+  // A face counts as reached by the flood once its discharge leaves its baseflow by more than the spin-up's own
+  // fluctuation there (steep reaches carry roll waves at baseflow: Nepal's 10 % Lhende swings 100 → 190 m³/s) times
+  // 1.5, plus WINDOW_REL + WINDOW_ABS.
+  const noise = Float64Array.from(amp, (a, f) => 1.5 * a + WINDOW_REL * qBaseNode[f] + WINDOW_ABS);
+  if ((opts.window ?? true) && st.inflows.length > 0) st.nAct = Math.min(N, st.inflows.reduce((m, f) => Math.max(m, f.node), 0) + 1 + 2 * WINDOW_MARGIN);
   let w0 = 0;
   let s0 = 0;
   for (let i = 0; i < N; i++) {
@@ -988,6 +1072,7 @@ export function route(file: ChainFile, opts: RoutingOptions): RoutingResult {
   const tStop = tFixed ?? tMax;
   let t = 0;
   let steps = 0;
+  let nodeSteps = 0;
   let dtMin = Infinity;
   let nextCheck = 60;
   let binV = 0;
@@ -1004,6 +1089,21 @@ export function route(file: ChainFile, opts: RoutingOptions): RoutingResult {
   }
   const watchBase = watchFace >= 0 ? qBaseNode[Math.min(watchFace, N - 1)] : 0;
   let watchPeak = 0;
+  const stopFrac = opts.stopFraction ?? ROUTING_PASSED;
+  let maxExcess = 0;
+  /**
+   * Discharge through the entry face this step. Beyond the window the steady reach passes on what enters it at once, so
+   * a frozen entry carries the window's boundary flux plus the constant sources between it and the entry (exactly the
+   * water the balance books as leaving), not its frozen t = 0 value.
+   */
+  const entryFlux = (): number => {
+    const ef = st.entryFace;
+    const NA = st.nAct;
+    if (NA >= N || ef < NA) return Q[ef];
+    let q = Q[NA - 1];
+    for (let i = NA; i <= ef && i < N; i++) q += st.qConst[i];
+    return q;
+  };
 
   while (t < tStop - 1e-9) {
     let dt = Math.min(dtNext, tStop - t);
@@ -1014,8 +1114,9 @@ export function route(file: ChainFile, opts: RoutingOptions): RoutingResult {
     dtNext = advance(st, t, dt, true);
     t += dt;
     steps++;
+    nodeSteps += st.nAct;
     if (dt < dtMin) dtMin = dt;
-    binV += Q[st.entryFace] * dt;
+    binV += entryFlux() * dt;
     binS += st.entryFluxS * dt;
     if (t >= binEnd - 1e-9) {
       entryV.push(binV);
@@ -1025,21 +1126,36 @@ export function route(file: ChainFile, opts: RoutingOptions): RoutingResult {
       binEnd += entryDt;
     }
     record(t);
+    if (st.nAct < N) {
+      // Grow the window while the flood is within WINDOW_MARGIN nodes of its end.
+      const lo = Math.max(0, st.nAct - WINDOW_MARGIN);
+      for (let f = st.nAct - 1; f >= lo; f--) {
+        if (Math.abs(Q[f] - qBaseNode[f]) > noise[f]) {
+          st.nAct = Math.min(N, f + 1 + 2 * WINDOW_MARGIN);
+          break;
+        }
+      }
+    }
     if (watchFace >= 0) {
       const ex = Q[watchFace] - watchBase;
       if (ex > watchPeak) watchPeak = ex;
     }
     if (tFixed === undefined && t >= nextCheck) {
       nextCheck += 60;
-      if (t > inflowEnd) {
-        // Done when the flood has passed the furthest point anyone reads (its excess back under 5 % of its peak
-        // excess) …
-        if (watchFace >= 0 && watchPeak > FRONT_Q_MIN && Q[watchFace] - watchBase < ROUTING_PASSED * watchPeak) break;
+      let m = 0;
+      for (let i = 0; i < N; i++) m += W[i] + S[i];
+      const excess = m - stored0;
+      if (excess > maxExcess) maxExcess = excess;
+      if (t > sourceDone) {
+        // Done when the flood has passed the furthest point anyone reads (its excess back under stopFrac — 5 % by
+        // default — of its peak excess). An early stop (stopFrac above the default) must also see the valley holding
+        // less than that share of the most flood water it held, so a second wave still on its way (an overtopping
+        // pulse ahead of the breach peak) cannot end the run …
+        const passed = watchFace >= 0 && watchPeak > FRONT_Q_MIN && Q[watchFace] - watchBase < stopFrac * watchPeak;
+        if (passed && (stopFrac <= ROUTING_PASSED || excess < stopFrac * maxExcess)) break;
         // … or what it added to the valley has drained past the outlet (to 1 %): the recession's tail is exponential
         // and carries nothing a warning depends on.
-        let m = 0;
-        for (let i = 0; i < N; i++) m += W[i] + S[i];
-        if (m - stored0 <= ROUTING_DRAINED * Math.max(injectedFlood, 1)) break;
+        if (excess <= ROUTING_DRAINED * Math.max(injectedFlood, 1)) break;
       }
     }
   }
@@ -1098,6 +1214,7 @@ export function route(file: ChainFile, opts: RoutingOptions): RoutingResult {
       sedimentResidual: st.sIn - st.sOut + st.sEnt - (s1 - s0),
     },
     steps,
+    nodeSteps,
     tEnd: t,
     dtMin: Number.isFinite(dtMin) ? dtMin : 0,
     dtMean: steps > 0 ? t / steps : 0,

@@ -184,10 +184,13 @@ test('performance: 100 km at 100 m spacing (measured and logged; the bound is ge
   route(file, opts); // warm the JIT
   const r = route(file, opts);
   const coarse = route(resampleProfile(file, 250), opts);
-  const nsPerNodeStep = (r.ms * 1e6) / (r.steps * file.s.length);
+  const nsPerNodeStep = (r.ms * 1e6) / r.nodeSteps;
+  // An ensemble member: same run, stopped once the flood is half past the last probe (chain.ts MEMBER_STOP_FRACTION).
+  const member = route(file, { ...opts, stopFraction: 0.5 });
   t.diagnostic(
     `100 km @ 100 m: ${r.ms.toFixed(0)} ms, ${r.steps} steps (dt ${r.dtMean.toFixed(2)} s, ${(r.tEnd / 3600).toFixed(1)} h simulated), ` +
-      `${nsPerNodeStep.toFixed(0)} ns/node-step; @ 250 m: ${coarse.ms.toFixed(0)} ms`,
+      `${(r.nodeSteps / 1e6).toFixed(2)} M node updates (${((100 * r.nodeSteps) / (r.steps * file.s.length)).toFixed(0)} % of every node every step), ` +
+      `${nsPerNodeStep.toFixed(0)} ns each; as an ensemble member (early stop): ${member.ms.toFixed(0)} ms, ${(member.tEnd / 3600).toFixed(1)} h; @ 250 m: ${coarse.ms.toFixed(0)} ms`,
   );
   assert.ok(r.ms < 5000, `${r.ms} ms`);
   // The coarse grid gives the same picture: peak at the end within 15 %.
@@ -195,6 +198,40 @@ test('performance: 100 km at 100 m spacing (measured and logged; the bound is ge
   const crs = readProbe(coarse.t, coarse.probes[0]);
   close(crs.qPeak / fine.qPeak, 1, 0.15, 'coarse vs fine peak');
   close(crs.tFront / fine.tFront, 1, 0.1, 'coarse vs fine front');
+});
+
+test('quiescent-reach window and early stop: same fronts and peaks for less work, water still conserved', () => {
+  const file = syntheticValley({
+    reaches: [
+      { length: 20000, drop: 1000, bottomWidth: 25, sideSlope: 1, n: 0.05 },
+      { length: 40000, drop: 800, bottomWidth: 40, sideSlope: 1.5, n: 0.05 },
+    ],
+    z0: 3000,
+    tableDepth: 60,
+  });
+  const src = weirErosionBreach({ volume: 5e6, depth: 18, erosionRate: 100 });
+  const probes = [10000, 30000, 59000].map((s) => ({ name: `${s}`, s }));
+  const base = { inflows: [{ s: 0, series: src.series }], baseflow: 50, tributaries: [{ s: 40000, q: 30 }], probes, entryS: 50000 };
+  const full = route(file, { ...base, window: false });
+  const win = route(file, base);
+  const early = route(file, { ...base, stopFraction: 0.5 });
+  assert.ok(win.nodeSteps < 0.85 * full.nodeSteps, `window: ${win.nodeSteps} vs ${full.nodeSteps} node-steps`);
+  assert.ok(early.tEnd < 0.8 * win.tEnd, `early stop at ${early.tEnd} s vs ${win.tEnd} s`);
+  for (let k = 0; k < probes.length; k++) {
+    const a = readProbe(full.t, full.probes[k]);
+    for (const r of [win, early]) {
+      const b = readProbe(r.t, r.probes[k]);
+      close(b.tFront, a.tFront, 10, `${probes[k].name}: front`);
+      close(b.qPeak / a.qPeak, 1, 0.01, `${probes[k].name}: peak`);
+    }
+  }
+  // The steady reach beyond the window passes on what enters it, so the books still close to rounding, and the entry
+  // series (its face beyond the window at first) carries that water.
+  for (const r of [win, early]) {
+    const m = r.massBalance;
+    assert.ok(Math.abs(m.waterResidual) < 1e-9 * (m.waterIn + m.waterStored0), `water residual ${m.waterResidual}`);
+  }
+  close(win.entry.volume / full.entry.volume, 1, 2e-3, 'entry volume');
 });
 
 test('trapezoid helper matches the closed forms the routing tables are built from', () => {
