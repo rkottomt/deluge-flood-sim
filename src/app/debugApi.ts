@@ -13,6 +13,7 @@ import type {
   WaterSource,
 } from '../contracts';
 import { geoToGrid, gridToGeo } from '../data';
+import { bridgeFor } from '../ui/bridge';
 import type { App } from './App';
 import { wallRadiusCells } from './defaults';
 import { stageOffsetForFeet } from './stage';
@@ -79,6 +80,20 @@ export interface DelugeDebugExtras {
   getWakeLock(): WakeLockStatus;
   /** Latest protected-land analysis (src/app/protection.ts) without its mask, and how long it took (ms). */
   getProtection(): { wallCells: number; cells: number; areaM2: number; roadMeters: number; roadEdges: number; level: number | null; ms: number } | null;
+  /**
+   * The hazard chain of the scene on screen (src/app/hazardChain.ts), summarised: null on scenes without one. `offset`
+   * is the chain time at the solver's t = 0; station fronts are chain times (s after the trigger).
+   */
+  getHazardChain(): {
+    status: string;
+    inflow: string;
+    offset: number;
+    entryFront: number | null;
+    entryPeak: number | null;
+    bands: boolean;
+    stations: Array<{ name: string; s: number; tFront: number }>;
+    error: string | null;
+  } | null;
   waitFrames(n: number): Promise<void>;
 }
 
@@ -261,6 +276,22 @@ export function createDebugApi(app: App, ready: Promise<void>): DelugeDebug {
       if (!r) return null;
       const { wallCells, cells, areaM2, roadMeters, roadEdges, level } = r;
       return { wallCells, cells, areaM2, roadMeters, roadEdges, level, ms: app.protection.lastMs };
+    },
+
+    getHazardChain() {
+      const c = bridgeFor(store).chain;
+      if (!c) return null;
+      const r = c.result;
+      return {
+        status: c.status,
+        inflow: c.inflow,
+        offset: c.offset,
+        entryFront: r ? r.entryFront : null,
+        entryPeak: r ? r.entryPeak : null,
+        bands: !!c.bands,
+        stations: r ? r.stations.map((s) => ({ name: s.name, s: s.s, tFront: s.tFront })) : [],
+        error: c.error,
+      };
     },
 
     waitFrames(n) {
