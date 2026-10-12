@@ -34,13 +34,17 @@
  *
  * 4. THALWEG — min elevation in a ±THALWEG_HALF = 90 m window across the centreline (OSM lines in these gorges sit
  *    tens of metres off the channel), sampled every 15 m. Then a 5-node running median (removes single-node spikes:
- *    a bridge deck, a DSM blunder), then MONOTONE: an isotonic (pool-adjacent-violators) least-squares fit of a
- *    non-increasing bed. The fit is exact — zBed never rises downstream, tolerance 0 m after rounding to 1 cm,
- *    which tests/data/presets.test.ts asserts. Isotonic rather than a running minimum because DSM noise goes both
- *    ways: a running minimum ("carving") lets one false pit drag the whole reach below it down, a running maximum
- *    ("filling") lets one false sill drown it; the least-squares fit splits the difference and the bake logs the
- *    largest sill it removed and the largest pit it filled (SILL_REPORT = 10 m and up are listed by chainage, so a
- *    real dam or a landslide barrier shows up in the log rather than vanishing silently).
+ *    a bridge deck, a DSM blunder), then MONOTONE AND SMOOTH (scripts/chain-profile.ts monotoneSmooth): an isotonic
+ *    (pool-adjacent-violators) least-squares fit of a non-increasing bed, its pooled blocks replaced by the
+ *    piecewise-linear curve through their centroids, then a ±300 m moving average. The fit is exact — zBed never
+ *    rises downstream, tolerance 0 m after rounding to 1 cm, which tests/data/presets.test.ts asserts. Isotonic
+ *    rather than a running minimum because DSM noise goes both ways: a running minimum ("carving") lets one false pit
+ *    drag the whole reach below it down, a running maximum ("filling") lets one false sill drown it; the
+ *    least-squares fit splits the difference and the bake logs the largest sill it removed and the largest pit it
+ *    filled (SILL_REPORT = 10 m and up are listed by chainage, so a real dam or a landslide barrier shows up in the
+ *    log rather than vanishing silently). The block interpolation is what the first bake lacked: plain isotonic
+ *    output is a staircase (Nepal: 158 of 638 faces exactly flat, drops up to 45 m per 100 m node) that the router
+ *    reads as a chain of pools and waterfalls.
  *
  * 5. CROSS-SECTIONS — a DEM transect perpendicular to the centreline (direction from the nodes ±300 m away) through
  *    the thalweg point, sampled every 15 m out to TRANSECT_HALF = 1,500 m each side, or until the ground stands
@@ -49,7 +53,10 @@
  *    transect connected to the thalweg below that stage: area by trapezoids, top width, and wetted perimeter along
  *    the ground. Where a transect runs out still wet the section gets a vertical wall there (counted in the
  *    perimeter); the bake logs how many nodes needed one. Transects at sharp bends may overlap their neighbours —
- *    the 1-D model accepts that, as every 1-D model built from cross-sections does.
+ *    the 1-D model accepts that, as every 1-D model built from cross-sections does. Finally every section's floor is
+ *    widened to at least MIN_FLOOR_WIDTH = 25 m, one DEM cell (scripts/chain-profile.ts withFloor): the DEM cannot
+ *    resolve a narrower channel, and the V-slot it returns instead (3 m wide at 5 m of stage in the first bake) caps
+ *    the hydraulic radius of a deep flood.
  *
  * 6. MANNING n — 0.05 at every node (research spec §I.3, steep mountain rivers, clear water). The rheology of a
  *    debris flood lives in HazardChainSpec, not here.
@@ -73,6 +80,7 @@ import { boundsToMercator, gridToGeo, makeGeoToGrid } from '../src/data/geo';
 import type { PresetMeta } from '../src/data/presets';
 import type { ChainFile, ChainSection, ChainStation, ChainStructure } from '../src/hazard/types';
 import { CHAIN_DEFS, type ChainDef, type LonLat } from './chain-defs';
+import { flatFaces, isotonicNonIncreasing, MIN_FLOOR_WIDTH, monotoneSmooth, withFloor } from './chain-profile';
 import { osmMapTile, parseOsmDocs, REPO_ROOT, TILE_DEG, type OsmDoc } from './osm-fetch';
 
 export const NODE_SPACING = 100;
@@ -395,23 +403,7 @@ function median(v: number[], w: number): number[] {
   });
 }
 
-/** Least-squares non-increasing fit (pool adjacent violators), weights = node spacing. */
-export function isotonicNonIncreasing(v: number[], w: number[]): number[] {
-  const blocks: Array<{ sum: number; wt: number; n: number }> = [];
-  for (let i = 0; i < v.length; i++) {
-    blocks.push({ sum: v[i] * w[i], wt: w[i], n: 1 });
-    // Non-increasing: merge while the later block's mean exceeds the earlier one's.
-    while (blocks.length > 1) {
-      const b = blocks[blocks.length - 1];
-      const a = blocks[blocks.length - 2];
-      if (b.sum / b.wt <= a.sum / a.wt) break;
-      blocks.splice(blocks.length - 2, 2, { sum: a.sum + b.sum, wt: a.wt + b.wt, n: a.n + b.n });
-    }
-  }
-  const out: number[] = [];
-  for (const b of blocks) for (let k = 0; k < b.n; k++) out.push(b.sum / b.wt);
-  return out;
-}
+export { isotonicNonIncreasing };
 
 // ── 5. Sections
 interface Transect {
@@ -529,8 +521,14 @@ async function bakeChain(def: ChainDef): Promise<void> {
   const rawZ = raw.map((t) => t.z);
   const med = median(rawZ, 5);
   const wts = s.map((_, i) => (i === 0 ? s[1] - s[0] : i === n - 1 ? s[n - 1] - s[n - 2] : (s[i + 1] - s[i - 1]) / 2));
-  const fit = isotonicNonIncreasing(med, wts).map((z) => r(z, 2));
+  const stair = isotonicNonIncreasing(med, wts).map((z) => r(z, 2));
+  const fit = monotoneSmooth(s, med, wts).map((z) => r(z, 2));
   for (let i = 1; i < n; i++) if (fit[i] > fit[i - 1]) fit[i] = fit[i - 1]; // rounding cannot break monotonicity, but be exact
+  {
+    let ss = 0;
+    for (let i = 0; i < n; i++) ss += (fit[i] - med[i]) ** 2;
+    log(def.id, `thalweg: ${flatFaces(stair)} of ${n - 1} faces flat in the plain isotonic fit, ${flatFaces(fit)} after block interpolation and ±300 m smoothing; RMS from the median-filtered samples ${Math.sqrt(ss / n).toFixed(1)} m`);
+  }
   let maxSill = 0;
   let maxPit = 0;
   const sills: string[] = [];
@@ -548,6 +546,7 @@ async function bakeChain(def: ChainDef): Promise<void> {
   const centres = pts.map((p, i) => [p[0] + N[i][0] * raw[i].off, p[1] + N[i][1] * raw[i].off] as [number, number]);
   const sections: ChainSection[] = [];
   let openCount = 0;
+  let widened = 0;
   let sumWidth10 = 0;
   for (let i = 0; i < n; i++) {
     const bed = fit[i];
@@ -560,12 +559,15 @@ async function bakeChain(def: ChainDef): Promise<void> {
       }
       return out;
     };
-    const { section, open } = stageTable(bed, { left: side(-1), right: side(1) }, TRANSECT_STEP);
-    if (open) openCount++;
+    const st = stageTable(bed, { left: side(-1), right: side(1) }, TRANSECT_STEP);
+    if (st.open) openCount++;
+    const fl = withFloor(st.section, bed);
+    if (fl.added > 0) widened++;
+    const section = fl.section;
     sumWidth10 += sectionAt(section, 'width', bed + 10);
     sections.push(section);
   }
-  log(def.id, `sections: mean top width at 10 m ${(sumWidth10 / n).toFixed(0)} m; ${openCount} of ${n} transects run out of DEM before 30 m of stage (vertical wall at ${TRANSECT_HALF} m)`);
+  log(def.id, `sections: mean top width at 10 m ${(sumWidth10 / n).toFixed(0)} m; ${openCount} of ${n} transects run out of DEM before 30 m of stage (vertical wall at ${TRANSECT_HALF} m); ${widened} floors widened to ${MIN_FLOOR_WIDTH} m`);
 
   const lonlat = pts.map((p) => fr.toLL(p[0], p[1]).map((v) => r(v, 5)) as [number, number]);
   const project = (ll: LonLat) => {
