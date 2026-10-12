@@ -133,6 +133,8 @@ export class GpuFloodSolver implements FloodSolver {
   private readonly cellArea: number;
   private readonly originalGround: Float32Array;
   private readonly ground: Float32Array;
+  /** Ensemble DEM perturbation currently added to `ground` (setBedPerturbation), or null. */
+  private bedPerturb: Float32Array | null = null;
   private readonly barrier: Float32Array;
   private readonly groundTex: GPUTexture;
   private readonly stateTex: [GPUTexture, GPUTexture];
@@ -834,6 +836,7 @@ export class GpuFloodSolver implements FloodSolver {
     if (this.destroyed) return;
     if (opts?.resetTerrain) {
       this.ground.set(this.originalGround);
+      this.bedPerturb = null;
       this.barrier.fill(0);
       this.wallRect = null;
       this.uploadTerrain();
@@ -902,6 +905,35 @@ export class GpuFloodSolver implements FloodSolver {
     const map = this.maybeEncodeReadback(enc, true);
     this.device.queue.submit([enc.finish()]);
     map?.();
+  }
+
+  /**
+   * Ensemble members' DEM error (FloodSolver.setBedPerturbation; src/sim/demNoise.ts builds the field): ground += δ,
+   * replacing any previous perturbation (that one is subtracted first, so the user's own terrain edits survive), or
+   * removing it with null. The bed and the CPU ground mirror change together; the reset state is rebuilt from them on
+   * the next reset(), which the caller must issue before stepping (water standing on the old bed is not moved).
+   * Barriers stay a separate layer on top. δ must be 0 under the initial water — otherwise the "lake at rest" is not
+   * at rest any more — which is the caller's job (demPerturbation masks it). The mass ledger is unaffected: the
+   * initial volume is the initial depth, which a bed change does not touch. reset({ resetTerrain }) drops it.
+   */
+  setBedPerturbation(delta: Float32Array | null): void {
+    if (this.destroyed) return;
+    if (delta && delta.length !== this.N) throw new Error(`setBedPerturbation: expected ${this.N} values, got ${delta.length}`);
+    const old = this.bedPerturb;
+    if (!old && !delta) return;
+    for (let c = 0; c < this.N; c++) {
+      const d = delta ? delta[c] : 0;
+      const g = this.ground[c] - (old ? old[c] : 0) + (Number.isFinite(d) ? d : 0);
+      this.ground[c] = g;
+    }
+    this.bedPerturb = delta ? Float32Array.from(delta, (d) => (Number.isFinite(d) ? d : 0)) : null;
+    this.uploadTerrain();
+    this.forcingDirty = true;
+  }
+
+  /** The bed perturbation in force (setBedPerturbation), or null. */
+  get bedPerturbation(): Float32Array | null {
+    return this.bedPerturb;
   }
 
   setInitialWater(depth: Float32Array): void {
