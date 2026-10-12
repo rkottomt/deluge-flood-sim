@@ -413,7 +413,9 @@ export const CHAIN_DEFS: ChainDef[] = [
        *   fallHeight  1,400 m — from the ~5,500 m failure zone (Shugar) to the bed at s = 0 on this DEM (4,094 m raw,
        *               chain.json zBed[0]; the bake prints it). pathLength 3,700 m is an ASSUMPTION: the map distance
        *               from Raunthi Peak (OSM node 6764534673, 6,063 m) to s = 0. H/L 0.38 — the mass is far steeper than
-       *               it needs to be to reach the stream (Shugar: H/L 0.16 all the way to Tapovan).
+       *               it needs to be to reach the stream (Shugar: H/L 0.16 all the way to Tapovan). travelSpeed is
+       *               left at the chain's default 50 m/s (74 s over the 3.7 km): no speed for the avalanche itself was
+       *               in the sources read.
        *   baseflow    20 m³/s — ASSUMPTION: a winter low flow (February) of the right order for the Rishiganga; no
        *               gauge record for that morning was read.
        */
@@ -424,6 +426,7 @@ export const CHAIN_DEFS: ChainDef[] = [
         baseflow: 20,
       },
       profile: 'chain.json',
+      result: 'chain-result.json',
       /*
        * Research spec §I.6 #3: a DEBRIS FLOW, O'Brien–Julien quadratic at Cv 0.45 (top of the FLO-2D mud-flood band,
        * bottom of mudflow). Material: Glenwood 1, the FLUID end of O'Brien & Julien's 1988 table (src/hazard/defaults.ts
@@ -431,11 +434,12 @@ export const CHAIN_DEFS: ChainDef[] = [
        * η ≈ 75 Pa·s) gives a viscous friction slope of 0.2–0.5 at 5–10 m depth, ten times the Dhauliganga's 2.3 %
        * bed slope — it would stop the flow below Raini, which is not what happened. K = 2,285 (FLO-2D default).
        * MEASURED on the GPU with this preset's terrain and the routed inflow (artifacts/chamoli-build/tools/physics.mjs,
-       * ARCHITECTURE.md §3 caveat): Glenwood 1 at Cv 0.45 reaches the Tapovan barrage 1,140 s after the inflow starts
-       * (water: 960 s) and runs on out of the map; Aspen Pit 1 is down to 1–2 m/s 3–4 km below Raini after 25 min;
-       * Voellmy μ 0.05 stops ~1 km below Raini. So Cv stays at the spec's 0.45 — it did not need lowering.
+       * ARCHITECTURE.md §3 caveat): Glenwood 1 at Cv 0.45 reaches the Tapovan barrage 1,080 s after the solver starts
+       * (water 900 s, Glenwood 1 at Cv 0.3 960 s) and runs on out of the map; Aspen Pit 1 never reaches the barrage
+       * (2.6 m/s at most after 25 min, 600 m short); Voellmy μ 0.05 stops ~1.3 km below Raini. So Cv stays at the
+       * spec's 0.45 — it did not need lowering.
        */
-      rheology: { kind: 'quadratic', cv: 0.45, material: { name: 'Glenwood 1', a2: 0.0345, b2: 20.1, a1: 0.00283, b1: 23.0 } },
+      rheology: { kind: 'quadratic', cv: 0.45, material: { ...MATERIAL_GLENWOOD_1 } },
       // Shugar et al.: the front ran ~25 m/s near the Rishiganga plant.
       solver: { uMax: 25 },
       observations: [

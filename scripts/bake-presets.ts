@@ -240,8 +240,10 @@ const CHUNGTHANG_DESCRIPTION =
  * inflow is therefore the spec's §B.4 gamma SHAPE (a = 3) with the band's top as its peak and the volume the chain's
  * direct-flow source produces from the published numbers (src/hazard/mass.ts directFlow): 26.9 Mm³ × 20 % ice × 0.917
  * (ice → water) = 4.93 Mm³ of melt water, carried at Cv 0.4 (DIRECT_FLOW_CV) = 8.2 Mm³ of mixture. That puts the
- * curve's mean over its central 10–20 minutes inside the published band (the bake logs it). It is a placeholder for the
- * routed hydrograph the hazard chain puts at this edge (public/presets/chamoli/chain.json), labelled as such.
+ * curve's mean over its central 10–20 minutes inside the published band. It is a placeholder for the routed
+ * hydrograph the hazard chain puts at this edge, labelled as such, and it only ships on a first bake: once chain.json
+ * exists, applyChainResult (scripts/bake-chain-result.ts) replaces it — and this description — with the chain's median
+ * member, as for the other glacier presets.
  */
 const CHAMOLI_PEAK_M3S = 14200;
 const CHAMOLI_MIXTURE_M3 = Math.round((26.9e6 * 0.2 * 0.917) / (1 - 0.4) / 1e5) * 1e5;

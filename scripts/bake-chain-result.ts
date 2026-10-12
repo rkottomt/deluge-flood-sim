@@ -228,9 +228,49 @@ const DESCRIPTIONS: Record<string, (r: BakedChainResult) => string> = {
       'is the modelled flood. Watch which ground goes under and in what order, and do not read street-level depths.'
     );
   },
+  chamoli: (r) => {
+    const cz = r.clockZero!;
+    const raini = station(r, 'Rishiganga HEP, Raini (position approximate)');
+    const tap = station(r, 'Tapovan-Vishnugad HEP barrage (under construction)');
+    const below = station(r, 'Tapovan');
+    const b = tap.band!;
+    const start = clockAt(cz, r.domain.offset);
+    return (
+      'Raini stands where the Rishiganga meets the Dhauliganga, and the 13.2 MW Rishiganga hydropower plant stood ' +
+      'beside it; 6 km downstream, at Tapovan, the barrage of the 520 MW Tapovan-Vishnugad project was being built. ' +
+      'At 10:21 on the morning of 7 February 2021 about 27 million m³ of rock and glacier ice broke from the north ' +
+      'face of Ronti Peak, 5,500 m up and some 15 km away. Its ice melted on the way down, and the avalanche became a ' +
+      'debris flow that ran down the Ronti Gad and the Rishiganga at about 25 m/s, destroyed the Rishiganga plant, ' +
+      'reached the Tapovan barrage about a quarter of an hour after the collapse and destroyed it too. Most of the ' +
+      'people it took were workers at the two projects (Shugar et al., Science, 2021). Nothing gauged the flow; the ' +
+      'published reconstruction gives a mean discharge of 8,200 to 14,200 m³/s at the Rishiganga plant over 10–20 ' +
+      'minutes, and 2,900 to 4,900 m³/s below Tapovan. The flood entering this map is modelled, not measured: a 1-D ' +
+      `hazard-chain model turns the avalanche's melted ice into a debris flow — about ${fmt(r.source.volume / 1e6)} ` +
+      `million m³ of it, ${fmt((r.source.volume * (1 - r.source.cv)) / 1e6)} million m³ of that water — and routes it ` +
+      `${Math.round(r.entry.s / 1000)} km down the Ronti Gad and the Rishiganga; this is the median of its ` +
+      `${r.run.members} runs, peaking at about ${fmt(r.domain.inflowPeak)} m³/s at the east edge, ` +
+      `${fmt(raini.qPeak)} m³/s at Raini and ${fmt(below.qPeak)} m³/s below Tapovan. The clock is the event's: the run ` +
+      `starts at ${start}, five minutes before the modelled front reaches the east edge. The model puts the front at ` +
+      `the Tapovan barrage at ${clockAt(cz, tap.tFront ?? 0)} (its runs span ${clockAt(cz, b.tFront[0] ?? 0)}–` +
+      `${b.tFront[2] === null ? 'later' : clockAt(cz, b.tFront[2])}) against about 10:36 observed — later than the ` +
+      'real flow, and that gap is the model’s error: its valley comes from a 30 m elevation model and its channel ' +
+      'roughness is a textbook value. Inside the map the flow moves as one fluid under a uniform debris-flow friction ' +
+      'law (O’Brien–Julien, 45 % solids by volume) with a 25 m/s speed cap; it neither picks up nor drops sediment, so ' +
+      'the 8 million m³ the real flow left near the Ronti Gad and the mud it laid down at Tapovan are not here. The ' +
+      'terrain is Copernicus 30 m radar data, a surface model with canopy and buildings in it, acquired in 2011–2015, ' +
+      'before the Tapovan barrage was finished. The radar cannot see the floor of the Rishiganga gorge and puts false ' +
+      'dams across it, so a 60 m wide floor has been cut along the river for the flow to run on. The bare-earth filter ' +
+      'only runs on ground flatter than 20°, and 90 % of this domain is steeper: the valley floor is filtered and still ' +
+      'a metre or two high, the walls above it are the raw surface model. No photograph is baked in, so the ground is ' +
+      'shaded by height instead. OpenStreetMap maps the Joshimath–Malari road and a few village lanes here. The rivers ' +
+      'start dry and get five minutes of the modelled baseflow before the front, so almost every drop you see is the ' +
+      'modelled flow. Watch where it goes and in what order, and do not read street-level depths.'
+    );
+  },
 };
 
 const LABELS: Record<string, string> = {
+  chamoli: 'Rishiganga — routed debris flow from the Ronti Peak avalanche (modelled: hazard-chain median member, not a measured hydrograph)',
   nepal: 'Trishuli — routed debris flood from the Lhende avalanche (modelled: hazard-chain median member, not a measured hydrograph)',
   chungthang: 'Lachen Chu — routed South Lhonak outburst (modelled: hazard-chain median member, not a measured hydrograph)',
 };
