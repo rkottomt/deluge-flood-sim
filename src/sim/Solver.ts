@@ -14,7 +14,8 @@
  * ── Per frame ──────────────────────────────────────────────────────────────────────────────────────────
  *   Export  state ──▶ stateTexture (h, u, v, maxDepth)   for the renderer, LAZILY: on the first read of stateTexture
  *            after a step (a renderer refreshing its water every other frame pays for every other export), or
- *            before a stats readback
+ *            before a stats readback. Also folds the export into the hazard accumulators (max speed, max h·|u|,
+ *            arrival time, wet seconds; hazardBuffer / readHazardFields), interpolating between exports.
  *   Readback (every ~300 ms, never blocking): a reduction pass (shaders/stats.ts) writes depth + per-16×16-block
  *            sums/maxima of the accounting buffer and state, the accounting buffer is ZEROED IN THE SAME ENCODER
  *            (no substep lost or counted twice), both are copied to MAP_READ buffers → mapAsync → Float64 stats.
@@ -41,6 +42,7 @@ import {
   DEFAULT_SIM_PARAMS,
   type BrushOp,
   type FloodSolver,
+  type HazardFields,
   type SimParams,
   type SimSnapshot,
   type SimStats,
@@ -65,6 +67,7 @@ import { footprintRadius, inflowVariesUntil, packForcing, peakInflow, sourceFoot
 
 /** How far ahead (simulated s) the CFL estimate looks along an inflow hydrograph for the flow it is about to reach. */
 const HYDROGRAPH_LOOKAHEAD_S = 120;
+import { HAZARD_PER_CELL, unpackHazardFields } from './hazard';
 import { brushWGSL, BRUSH_UNIFORM_BYTES } from './shaders/brush';
 import { ACC_PER_CELL, FORCING_UNIFORM_BYTES, SIM_UNIFORM_BYTES } from './shaders/common';
 import { continuityWGSL } from './shaders/continuity';
@@ -85,6 +88,13 @@ const now = () => (typeof performance !== 'undefined' ? performance.now() : Date
 interface StagingSet {
   depth: GPUBuffer;
   blocks: GPUBuffer;
+  busy: boolean;
+}
+
+/** readHazardFields' MAP_READ buffers: the hazard accumulators and the exported state (for max depth). */
+interface HazardStaging {
+  hazard: GPUBuffer;
+  state: GPUBuffer;
   busy: boolean;
 }
 
@@ -127,6 +137,8 @@ export class GpuFloodSolver implements FloodSolver {
   private readonly fluxTex: GPUTexture;
   private readonly exportTex: [GPUTexture, GPUTexture];
   private readonly accBuf: GPUBuffer;
+  /** Hazard accumulators, vec4f per cell (src/sim/hazard.ts), updated in place by the export pass. */
+  private readonly hazardBuf: GPUBuffer;
   /** Readback reduction outputs (shaders/stats.ts) and the dry-at-reset bitmask it reads. */
   private readonly depthBuf: GPUBuffer;
   private readonly blocksBuf: GPUBuffer;
@@ -221,6 +233,15 @@ export class GpuFloodSolver implements FloodSolver {
   /** Largest stored volume seen since reset (normalizes SimStats.massError), m³. */
   private peakVolume = 0;
   private resetMaxPending = true;
+  /**
+   * Hazard accumulator clock (shaders/exportState.ts): the simulated time the latest export described, and the one the
+   * Sim uniform currently carries for the next export (writeSimUniform; encodeExport adopts it). The export's interval
+   * is their difference.
+   */
+  private hazardTime = 0;
+  private hazardTimePending = 0;
+  /** readHazardFields' reusable staging pair (a call finding it busy maps a temporary pair of its own). */
+  private hazardStaging: HazardStaging | null = null;
 
   private simTime = 0;
   /** Requested simulated time not yet covered by a whole substep (carried between frames), s. */
@@ -334,6 +355,12 @@ export class GpuFloodSolver implements FloodSolver {
       size: this.N * ACC_PER_CELL * 4,
       usage: B.STORAGE | B.COPY_SRC | B.COPY_DST,
     });
+    // Written in full by the first export (reset() runs one before anything can read it).
+    this.hazardBuf = device.createBuffer({
+      label: 'sim.hazard',
+      size: this.N * HAZARD_PER_CELL * 4,
+      usage: B.STORAGE | B.COPY_SRC,
+    });
     this.depthBuf = device.createBuffer({ label: 'sim.readback.depth', size: this.N * 4, usage: B.STORAGE | B.COPY_SRC });
     this.blocksBuf = device.createBuffer({
       label: 'sim.readback.blocks',
@@ -395,6 +422,7 @@ export class GpuFloodSolver implements FloodSolver {
             { binding: 1, resource: this.stateTex[p].createView() },
             { binding: 2, resource: this.exportTex[e].createView() },
             { binding: 3, resource: this.exportTex[1 - e].createView() },
+            { binding: 4, resource: ub(this.hazardBuf) },
           ],
         }),
       ),
@@ -440,6 +468,9 @@ export class GpuFloodSolver implements FloodSolver {
     if (nx > lim || ny > lim) throw new Error(`createSolver: grid ${nx}×${ny} exceeds maxTextureDimension2D ${lim}`);
     if (nx * ny * 8 > device.limits.maxStorageBufferBindingSize) {
       throw new Error('createSolver: grid too large for the accounting storage buffer on this device');
+    }
+    if (nx * ny * HAZARD_PER_CELL * 4 > device.limits.maxStorageBufferBindingSize) {
+      throw new Error('createSolver: grid too large for the hazard storage buffer on this device');
     }
 
     const C = GPUShaderStage.COMPUTE;
@@ -498,7 +529,7 @@ export class GpuFloodSolver implements FloodSolver {
         storageTex(4, 'rgba32float'),
         storageBuf(5),
       ]),
-      make('sim.export', exportWGSL, [uniform(0, SIM_UNIFORM_BYTES), sampled(1), sampled(2), storageTex(3, 'rgba32float')]),
+      make('sim.export', exportWGSL, [uniform(0, SIM_UNIFORM_BYTES), sampled(1), sampled(2), storageTex(3, 'rgba32float'), storageBuf(4)]),
       make('sim.brush', brushWGSL, [
         uniform(0, BRUSH_UNIFORM_BYTES),
         sampled(1),
@@ -820,6 +851,8 @@ export class GpuFloodSolver implements FloodSolver {
     this.readSpan = 0;
     this.peakVolume = this.initialVolume;
     this.resetMaxPending = true;
+    // The reset's own export restarts the hazard accumulators from the initial water over a zero interval.
+    this.hazardTime = 0;
     // All sources start acting on the initial water: the first window must not run on the calm reset state's dt.
     // A timed inflow runs again from the top, so the gate has to be re-packed — the buffer may hold its stopped 0.
     this.forcingWindow = null;
@@ -871,6 +904,73 @@ export class GpuFloodSolver implements FloodSolver {
     return this.barrier;
   }
 
+  /**
+   * The hazard accumulators as the export pass keeps them: nx·ny vec4f (max speed while wet, max h·|u|, first-wet time
+   * or −1, wet seconds; src/sim/hazard.ts), STORAGE | COPY_SRC. Updated by exports, so it is current as of the latest
+   * one: read stateTexture first (which exports if needed), as the renderer's prep pass does. Never replaced.
+   */
+  get hazardBuffer(): GPUBuffer {
+    return this.hazardBuf;
+  }
+
+  /**
+   * Read back the hazard accumulators (contracts.ts HazardFields) as of the latest step: exports first if the state has
+   * moved on, then copies the accumulators and the exported state (for max depth, stateTexture.a) to MAP_READ buffers
+   * in one command buffer — ~32 B/cell, so on demand only. Independent of the snapshot readbacks: its own staging
+   * buffers, and the accounting buffer is not touched. Concurrent calls each get a consistent copy (one reusable
+   * staging pair; a call that finds it busy maps a temporary pair). Rejects once the solver is destroyed.
+   */
+  async readHazardFields(): Promise<HazardFields> {
+    if (this.destroyed) throw new Error('solver destroyed');
+    const { device, nx, ny, N } = this;
+    const bytes = N * HAZARD_PER_CELL * 4;
+    let set = this.hazardStaging;
+    let temporary = false;
+    if (!set || set.busy) {
+      const mk = (label: string) => device.createBuffer({ label, size: bytes, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
+      const fresh: HazardStaging = { hazard: mk('sim.staging.hazard'), state: mk('sim.staging.hazardState'), busy: false };
+      if (set) temporary = true;
+      else this.hazardStaging = fresh;
+      set = fresh;
+    }
+    set.busy = true;
+    const enc = device.createCommandEncoder({ label: 'sim.hazardRead' });
+    if (this.exportDirty) {
+      this.writeSimUniform(this.lastDt);
+      this.encodeExport(enc);
+    }
+    const simTime = this.hazardTime;
+    enc.copyBufferToBuffer(this.hazardBuf, 0, set.hazard, 0, bytes);
+    // nx is a multiple of 16, so a 16 B/texel row is a multiple of 256 B: no row padding to strip.
+    enc.copyTextureToBuffer({ texture: this.exportTex[this.exportCur] }, { buffer: set.state, bytesPerRow: nx * 16 }, { width: nx, height: ny });
+    device.queue.submit([enc.finish()]);
+    const results = await Promise.allSettled([set.hazard.mapAsync(GPUMapMode.READ), set.state.mapAsync(GPUMapMode.READ)]);
+    const release = () => {
+      for (const b of [set.hazard, set.state]) if (b.mapState === 'mapped') b.unmap();
+      set.busy = false;
+      // Destroyed only once the map has settled (destroying a buffer mid-map crashes Dawn-for-Node; see destroy()).
+      if (temporary || this.destroyed) {
+        set.hazard.destroy();
+        set.state.destroy();
+      }
+    };
+    if (this.destroyed || results.some((r) => r.status === 'rejected')) {
+      release();
+      throw new Error(this.destroyed ? 'solver destroyed' : 'readHazardFields: mapping failed (device lost?)');
+    }
+    try {
+      return unpackHazardFields(
+        new Float32Array(set.hazard.getMappedRange()),
+        new Float32Array(set.state.getMappedRange()),
+        nx,
+        ny,
+        simTime,
+      );
+    } finally {
+      release();
+    }
+  }
+
   destroy(): void {
     if (this.destroyed) return;
     this.destroyed = true;
@@ -881,9 +981,15 @@ export class GpuFloodSolver implements FloodSolver {
     this.raiseRes?.tex.destroy();
     this.raiseRes?.buf.destroy();
     this.resetTex?.destroy();
-    for (const b of [this.accBuf, this.simBuf, this.forcingBuf, this.brushBuf, this.depthBuf, this.blocksBuf, this.dryMaskBuf]) {
+    for (const b of [this.accBuf, this.hazardBuf, this.simBuf, this.forcingBuf, this.brushBuf, this.depthBuf, this.blocksBuf, this.dryMaskBuf]) {
       b.destroy();
     }
+    // A hazard readback in flight destroys its staging pair itself once its map settles.
+    if (this.hazardStaging && !this.hazardStaging.busy) {
+      this.hazardStaging.hazard.destroy();
+      this.hazardStaging.state.destroy();
+    }
+    this.hazardStaging = null;
     // Staging buffers with a readback in flight are destroyed by mapReadback once the map settles (destroying a
     // buffer mid-map rejects the promise: harmless in browsers, a crash in Dawn-for-Node).
     for (const s of this.staging) {
@@ -1092,7 +1198,8 @@ export class GpuFloodSolver implements FloodSolver {
   private encodeFrame(n: number, dt: number, fromStep: boolean): void {
     const { device } = this;
     this.gateTimedInflow(n * dt);
-    this.writeSimUniform(dt);
+    // An export in this command buffer (a readback below) describes the state after the n substeps.
+    this.writeSimUniform(dt, this.simTime + n * dt);
     const enc = device.createCommandEncoder({ label: 'sim.frame' });
     // Frames driven by step() are timed on the GPU to keep the substep budget current (see shouldProbe).
     const probe = fromStep && this.shouldProbe() ? this.budget.beginFrame(n) : null;
@@ -1144,6 +1251,7 @@ export class GpuFloodSolver implements FloodSolver {
     // resetMax only applies to the first export after a reset; the uniform already carried it.
     this.resetMaxPending = false;
     this.exportDirty = false;
+    this.hazardTime = this.hazardTimePending;
   }
 
   private userSubstepCap(): number {
@@ -1196,7 +1304,12 @@ export class GpuFloodSolver implements FloodSolver {
     return Math.min(userCap, budget);
   }
 
-  private writeSimUniform(dt: number): void {
+  /**
+   * Write the Sim uniform for the command buffer about to be encoded. `exportTime` is the simulated time an export
+   * encoded under it describes (the end of the frame's substeps for encodeFrame, the current time everywhere else);
+   * the hazard accumulators integrate over exportTime − the previous export's time (shaders/exportState.ts).
+   */
+  private writeSimUniform(dt: number, exportTime = this.simTime): void {
     const p = this.params;
     const o = this.options;
     const robust = p.stabilityMode !== 'naive';
@@ -1231,6 +1344,9 @@ export class GpuFloodSolver implements FloodSolver {
     fv[23] = o.smoothingDepthRatio;
     fv[24] = o.boundaryFroudeMax;
     fv[25] = Math.min(1, Math.max(0, o.wallAdvection));
+    fv[26] = exportTime;
+    fv[27] = Math.max(0, exportTime - this.hazardTime);
+    this.hazardTimePending = exportTime;
     this.device.queue.writeBuffer(this.simBuf, 0, this.simBytes);
   }
 

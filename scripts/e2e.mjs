@@ -675,6 +675,39 @@ const FLOWS = [
       await D(() => window.__deluge.setWaterMode('maxDepth'));
       await sleep(400);
       await shot('03b-levee-max-depth');
+      // The solver's hazard accumulators (readHazardFields) after the same 900 s at the crest, and the two views
+      // drawn from them.
+      const hz = await D(async () => {
+        const s = window.__deluge.getSolver();
+        if (!s?.readHazardFields) return null;
+        const f = await s.readHazardFields();
+        let arrived = 0;
+        let never = 0;
+        let bad = 0;
+        let latest = 0;
+        for (let k = 0; k < f.firstWet.length; k++) {
+          const t = f.firstWet[k];
+          if (![t, f.maxSpeed[k], f.maxDV[k], f.wetSeconds[k]].every(Number.isFinite)) bad++;
+          else if (t > 0) {
+            arrived++;
+            latest = Math.max(latest, t);
+          } else if (t < 0) never++;
+        }
+        return { simTime: f.simTime, arrived, never, bad, latest };
+      });
+      r.metrics.hazard = hz;
+      check(
+        r,
+        'hazard fields: water arrived on land dry at reset, every value finite',
+        !!hz && hz.arrived > 0 && hz.bad === 0 && hz.latest <= hz.simTime,
+        hz ? `${hz.arrived} cells reached since reset (latest at ${num(hz.latest / 60, 1)} of ${num(hz.simTime / 60, 1)} min), ${hz.never} never wet, ${hz.bad} non-finite` : 'readHazardFields missing',
+      );
+      await D(() => window.__deluge.setWaterMode('arrival'));
+      await sleep(400);
+      await shot('03c-levee-arrival');
+      await D(() => window.__deluge.setWaterMode('hazard'));
+      await sleep(400);
+      await shot('03d-levee-hazard');
       await D(() => window.__deluge.setWaterMode('realistic'));
     },
   },

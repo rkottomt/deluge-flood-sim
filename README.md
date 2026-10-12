@@ -72,7 +72,8 @@ under *Scenario → Change*, and in [Seven cities, offline](#seven-cities-offlin
 3. Click **Build a levee**: a floodwall goes up along the North Shore and the 1936 rise replays with it in place. The
    land it keeps dry turns green and the strip counts it (about 139 acres and 11 km of streets at the crest), while
    the evacuation route re-plans as the water comes back. Or press **2** and drag your own wall, tying both ends into
-   high ground; press **V** to step through Depth / Max depth / Speed (or scroll the side panel to View).
+   high ground; press **V** to step through Depth / Max depth / Speed / Arrival (minutes until the water came) /
+   Hazard (AIDR H1–H6 classes from depth × speed), or scroll the side panel to View.
 
 ![The one-click levee along the North Shore at the 1936 crest: the land it keeps dry is green, the Try-it strip counts the acres and streets it saves](docs/levee-north-shore.jpg)
 
@@ -208,7 +209,7 @@ underpasses, depressed roadways, underground stations). Full table: [ARCHITECTUR
 
 ```
 solver.step ─▶ N substeps in one compute pass:  momentum pass ─▶ continuity pass   (CFL dt each)
-renderer    ─▶ (every other frame) export pass (h, u, v, max depth) + prep ──▶ MSAA HDR → ACES
+renderer    ─▶ (every other frame) export pass (h, u, v, max depth; hazard accumulators) + prep ──▶ MSAA HDR → ACES
 every ~300 ms, never blocking: stats reduction pass ─▶ mapAsync ─▶ HUD + road flood status ─▶ evacuation route
 ```
 

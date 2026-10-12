@@ -3,7 +3,9 @@
  *
  *  cells  (nx×ny)  → surfTex rgba16float: h, u, v, foam source          (filterable)
  *                    normTex rgba16float: ∂bed/∂x, ∂bed/∂z, ∂η/∂x, ∂η/∂z (filterable, wet-only η differences)
- *                    miscTex rgba16float: barrier, max depth, speed, collected whitewater (filterable)
+ *                    miscTex rgba16float: barrier, max depth, speed, collected whitewater (filterable); in the arrival
+ *                                         and hazard views b, a = the mapped value and its coverage instead (from
+ *                                         the solver's hazard accumulators)
  *                    cellTex rg32float:   displayed depth d, water surface bed + d (full precision, for verts)
  *  vtxBed (vx×vy)  → vtxBedTex r32float: vertex bed (mean ground of its 4 cells + max barrier); only rebuilt when
  *                    the terrain changes (walls, digging), not every frame
@@ -14,6 +16,8 @@
  * The vertex texture lets both the terrain and water vertex shaders use a single textureLoad per base-grid
  * vertex; the wet pyramid lets the water pass cull dry LOD nodes and sink far-from-water vertices.
  */
+
+import { AIDR_HAZARD_LIMITS } from '../legend';
 
 export const PREP_WGSL = /* wgsl */ `
 struct Prep {
@@ -27,8 +31,8 @@ struct Prep {
   cellSize: f32,
   collapse: f32,   // how far dry vertices sink below the bed (m)
   wetHint: f32,    // 1 → the previous frame's wet pyramid is valid for this field (lets dry areas skip work)
-  pad1: f32,
-  pad2: f32,
+  field: i32,      // what misc.b/.a carry: 0 speed + collected whitewater, 1 arrival, 2 AIDR hazard class (cells pass)
+  hasHazard: i32,  // 1 → hazardBuf holds the solver's hazard accumulators (else a stand-in: nothing recorded)
 }
 
 @group(0) @binding(0) var<uniform> P: Prep;
@@ -75,11 +79,25 @@ fn depthOf(s: vec4f) -> f32 {
 }
 `;
 
+const f = (x: number) => (Number.isInteger(x) ? `${x}.0` : String(x));
+
+/** AIDR hazard class 1…6 in WGSL, generated from the same limits as the legend (src/render/legend.ts). */
+const AIDR_CLASS_WGSL = /* wgsl */ `
+fn aidrClass(d: f32, v: f32, dv: f32) -> f32 {
+${AIDR_HAZARD_LIMITS.map((L, k) => `  if (dv <= ${f(L.dv)} && d <= ${f(L.d)} && v <= ${f(L.v)}) { return ${f(k + 1)}; }`).join('\n')}
+  return ${f(AIDR_HAZARD_LIMITS.length + 1)};
+}
+`;
+
 export const PREP_CELLS_WGSL = /* wgsl */ `
 @group(0) @binding(4) var surfOut: texture_storage_2d<rgba16float, write>;
 @group(0) @binding(5) var normOut: texture_storage_2d<rgba16float, write>;
 @group(0) @binding(6) var miscOut: texture_storage_2d<rgba16float, write>;
 @group(0) @binding(7) var cellOut: texture_storage_2d<rg32float, write>;
+// The solver's hazard accumulators (FloodSolver.hazardBuffer): nx·ny vec4f (max speed while wet, max depth × speed,
+// first-wet time s or −1, wet seconds). Read only by the arrival and hazard views (P.field), and only if P.hasHazard.
+@group(0) @binding(8) var<storage, read> hazardBuf: array<vec4f>;
+${AIDR_CLASS_WGSL}
 
 /**
  * One 4-neighbour of a cell, loaded once. The bed slope, the water-surface slope and the whitewater term below
@@ -179,7 +197,26 @@ fn cells(@builtin(global_invocation_id) gid: vec3u) {
   textureStore(surfOut, c, vec4f(h, vel, foamOut));
   textureStore(normOut, c, vec4f(clamp(sbx, -60.0, 60.0), clamp(sbz, -60.0, 60.0), sex, sez));
   let barrier = textureLoad(barrierTex, c, 0).r;
-  textureStore(miscOut, c, vec4f(max(barrier, 0.0), max(s.a, 0.0), speed, collect));
+  // misc.b / misc.a: speed and collected whitewater, or in the accumulator views the mapped value and its coverage
+  // (those views show the max-depth surface, where collect is 0 anyway: see live above).
+  var mapped = speed;
+  var cover = collect;
+  if (P.field != 0) {
+    var hz = vec4f(0.0, 0.0, -1.0, 0.0);
+    if (P.hasHazard != 0) { hz = hazardBuf[u32(c.y) * u32(P.nx) + u32(c.x)]; }
+    if (P.field == 1) {
+      // Arrival in minutes, PREMULTIPLIED by coverage (1 where the water ever arrived): the water shader divides the
+      // filtered pair back out, so between a reached cell and a never-reached one the time stays the reached cell's
+      // instead of blending toward 0 ("just arrived") as the coverage fades out.
+      let reached = hz.z >= 0.0;
+      cover = select(0.0, 1.0, reached);
+      mapped = select(0.0, hz.z * (1.0 / 60.0), reached);
+    } else {
+      mapped = aidrClass(max(s.a, 0.0), hz.x, hz.y);
+      cover = 1.0;
+    }
+  }
+  textureStore(miscOut, c, vec4f(max(barrier, 0.0), max(s.a, 0.0), mapped, cover));
   textureStore(cellOut, c, vec4f(h, b + h, 0.0, 0.0));
 }
 `;

@@ -12,6 +12,10 @@ export function legendTitle(mode: WaterViewMode): string {
       return 'Deepest water since reset — the flood extent';
     case 'depth':
       return 'Current water depth';
+    case 'arrival':
+      return 'When the water arrived — minutes after the start, deeper than 15 cm';
+    case 'hazard':
+      return 'Flood hazard since reset — depth × speed (AIDR 2017)';
     default:
       return '';
   }

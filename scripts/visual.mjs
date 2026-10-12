@@ -188,6 +188,26 @@ const SCENES = [
     hazard: true,
   },
   {
+    id: 'pittsburgh-arrival',
+    label: 'hazard mode: arrival time',
+    preset: 'pittsburgh',
+    camera: { kind: 'scenario' },
+    mode: 'arrival',
+    actions: [{ crestFeet: 46 }],
+    simSeconds: 900,
+    hazard: true,
+  },
+  {
+    id: 'pittsburgh-hazard',
+    label: 'hazard mode: AIDR hazard class',
+    preset: 'pittsburgh',
+    camera: { kind: 'scenario' },
+    mode: 'hazard',
+    actions: [{ crestFeet: 46 }],
+    simSeconds: 900,
+    hazard: true,
+  },
+  {
     id: 'johnstown',
     label: 'Johnstown, scenario camera',
     preset: 'johnstown',
@@ -833,7 +853,7 @@ async function readLegendPalettes() {
   };
   const out = {};
   const before = d.getState().render.waterMode;
-  for (const mode of ['depth', 'maxDepth', 'velocity']) {
+  for (const mode of ['depth', 'maxDepth', 'velocity', 'arrival', 'hazard']) {
     d.setWaterMode(mode);
     await new Promise((r) => setTimeout(r, 120));
     const swatches = [...document.querySelectorAll('.dl-legend-bar span')];

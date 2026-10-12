@@ -9,7 +9,7 @@ import { isTypingTarget, type UIContext } from './dom';
 import { selectTool, scaleBrush, toolForKey } from './toolDefs';
 
 /** Water views in the order V cycles through them (the View section's segmented control order). */
-export const VIEW_CYCLE: WaterViewMode[] = ['realistic', 'depth', 'maxDepth', 'velocity'];
+export const VIEW_CYCLE: WaterViewMode[] = ['realistic', 'depth', 'maxDepth', 'velocity', 'arrival', 'hazard'];
 
 export function nextViewMode(mode: WaterViewMode, backwards = false): WaterViewMode {
   const k = VIEW_CYCLE.indexOf(mode);

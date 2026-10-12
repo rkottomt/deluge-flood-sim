@@ -55,7 +55,7 @@ export { OrbitController } from './camera';
 export { LIGHTING_PRESETS, type LightingPreset, type LightingSettings } from './atmosphere';
 export type { RendererQuality, SimPressure } from './quality';
 
-const WATER_MODE_INDEX = { realistic: 0, depth: 1, maxDepth: 2, velocity: 3 } as const;
+const WATER_MODE_INDEX = { realistic: 0, depth: 1, maxDepth: 2, velocity: 3, arrival: 4, hazard: 5 } as const;
 /** Cells over which the detail-imagery inset fades into the base photo, so its rectangle never reads as an edge. */
 const DETAIL_FEATHER_CELLS = 8;
 /**
@@ -274,7 +274,7 @@ interface SceneGPU {
   waterBG: GPUBindGroup;
   overlayBG: GPUBindGroup;
   prepParams: GPUBuffer;
-  prepCache: Map<GPUTexture, { bed: GPUTexture; barrier: GPUTexture; cells: GPUBindGroup }>;
+  prepCache: Map<GPUTexture, { bed: GPUTexture; barrier: GPUTexture; hazard: GPUBuffer; cells: GPUBindGroup }>;
   /** Per-cell (depth, water surface) written by the cells pass for the verts pass. */
   cellTex: GPUTexture;
   /** Per-vertex bed, rebuilt only when the terrain changes (see terrainKey). */
@@ -353,6 +353,7 @@ class DelugeRenderer implements DelugeRendererAPI {
   /** Solver state key (see stateKey) the derived textures were last built from. */
   private lastPrepKey = -1;
   private lastPrepUseMax = -1;
+  private lastPrepField = -1;
   private lastPrepUseMaxBuilt = -1;
   private framesSincePrep = 1e9;
   private ctx: GPUCanvasContext;
@@ -371,6 +372,8 @@ class DelugeRenderer implements DelugeRendererAPI {
   private dummyImagery: GPUTexture;
   /** 1x1 r32float zero: what the scene bind groups bind at the building-height slot when there are none. */
   private dummyHeights: GPUTexture;
+  /** Stands in for FloodSolver.hazardBuffer in the prep pass when the solver has none (prep then reads nothing). */
+  private dummyHazard: GPUBuffer;
   /**
    * 1x1 multisampled depth, bound into the tonemap group whenever depth of field is off. The real depth
    * attachment then keeps usage RENDER_ATTACHMENT only, which is what lets this GPU keep it in tile memory and
@@ -532,6 +535,7 @@ class DelugeRenderer implements DelugeRendererAPI {
     this.rippleTex = createRippleTexture(device);
     this.dummyImagery = createSolidTexture(device, [0.3, 0.35, 0.25, 1]);
     this.dummyHeights = device.createTexture({ label: 'no-buildings', size: [1, 1], format: 'r32float', usage: GPUTextureUsage.TEXTURE_BINDING });
+    this.dummyHazard = device.createBuffer({ label: 'no-hazard', size: 16, usage: GPUBufferUsage.STORAGE });
     this.skyBG = device.createBindGroup({ layout: P.sky.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer: this.frameBuf } }] });
     this.rainBG = device.createBindGroup({ layout: P.rain.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer: this.frameBuf } }] });
 
@@ -1398,8 +1402,9 @@ class DelugeRenderer implements DelugeRendererAPI {
     const state = solver.stateTexture;
     const bed = solver.bedTexture;
     const barrier = solver.barrierTexture;
+    const hazard = solver.hazardBuffer ?? this.dummyHazard;
     const cached = s.prepCache.get(state);
-    if (cached && cached.bed === bed && cached.barrier === barrier) return cached;
+    if (cached && cached.bed === bed && cached.barrier === barrier && cached.hazard === hazard) return cached;
     if (s.prepCache.size >= 4) s.prepCache.clear();
     const d = this.device;
     const common = [
@@ -1417,9 +1422,10 @@ class DelugeRenderer implements DelugeRendererAPI {
         { binding: 5, resource: s.normTex.createView() },
         { binding: 6, resource: s.miscTex.createView() },
         { binding: 7, resource: s.cellTex.createView() },
+        { binding: 8, resource: { buffer: hazard } },
       ],
     });
-    const entry = { bed, barrier, cells };
+    const entry = { bed, barrier, hazard, cells };
     s.prepCache.set(state, entry);
     return entry;
   }
@@ -1575,22 +1581,27 @@ class DelugeRenderer implements DelugeRendererAPI {
 
     if (s) {
       const mode = WATER_MODE_INDEX[settings.waterMode] ?? 0;
-      const useMax = mode === 2 ? 1 : 0;
+      // Max depth, arrival and hazard class are all maps of the flood since reset: drawn on the max-depth surface.
+      const useMax = mode === 2 || mode === 4 || mode === 5 ? 1 : 0;
+      // What misc.b/.a carry (shaders/prep.ts): 1 arrival, 2 hazard class, 0 speed + whitewater.
+      const field = mode === 4 ? 1 : mode === 5 ? 2 : 0;
       const key = this.stateKey(s.solver);
       this.framesSincePrep++;
       // Derived textures only change when the solver state (or the displayed field) changes. The real solver
       // bumps its state version after every step and brush edit; a periodic refresh covers solvers that edit bed
       // textures in place. stateTexture is only read when a rebuild is due (reading it makes the solver export).
-      const changed = key !== this.lastPrepKey || useMax !== this.lastPrepUseMax;
+      const fieldChanged = useMax !== this.lastPrepUseMax || field !== this.lastPrepField;
+      const changed = key !== this.lastPrepKey || fieldChanged;
       const due =
         this.forcePrep ||
-        (changed ? this.framesSincePrep >= preset.prepInterval || useMax !== this.lastPrepUseMax : this.framesSincePrep >= 30);
+        (changed ? this.framesSincePrep >= preset.prepInterval || fieldChanged : this.framesSincePrep >= 30);
       if (due && !this.debugSkip.has('prep')) {
         const editPrep = this.forcePrep || !changed;
         this.forcePrep = false;
         this.framesSincePrep = 0;
         this.lastPrepKey = key;
         this.lastPrepUseMax = useMax;
+        this.lastPrepField = field;
         const prep = new ArrayBuffer(48);
         const pi = new Int32Array(prep);
         const pf = new Float32Array(prep);
@@ -1605,6 +1616,8 @@ class DelugeRenderer implements DelugeRendererAPI {
         pf[8] = 0.05;
         // The previous wet pyramid is a valid hint only if it was built from the same displayed field.
         pf[9] = s.wetValid && this.lastPrepUseMaxBuilt === useMax ? 1 : 0;
+        pi[10] = field;
+        pi[11] = s.solver.hazardBuffer ? 1 : 0;
         s.wetValid = true;
         this.lastPrepUseMaxBuilt = useMax;
         d.queue.writeBuffer(s.prepParams, 0, prep);
@@ -2094,7 +2107,7 @@ class DelugeRenderer implements DelugeRendererAPI {
     this.patchIndex.destroy();
     this.nodeBuf.destroy();
     for (const t of [this.msaaColor, this.msaaDepth, this.hdr, this.bloomTex, this.rippleTex, this.dummyImagery, this.dummyHeights, this.dummyDepth]) t?.destroy();
-    for (const b of [this.frameBuf, this.overlayBuf, this.postBuf, ...this.bloomBufs]) b.destroy();
+    for (const b of [this.frameBuf, this.overlayBuf, this.postBuf, this.dummyHazard, ...this.bloomBufs]) b.destroy();
     for (const b of [this.dynRibbons, this.dynRibbonIdx, this.markerOpaqueV, this.markerOpaqueI, this.markerBlendV, this.markerBlendI]) b.destroy();
     this.timer.destroy();
   }

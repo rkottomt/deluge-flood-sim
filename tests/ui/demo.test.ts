@@ -109,8 +109,8 @@ test('V cycles the water views both ways; Play the flood zooms in on the scenari
   let m = VIEW_CYCLE[0];
   const seen = [m];
   for (let k = 0; k < VIEW_CYCLE.length; k++) seen.push((m = nextViewMode(m)));
-  assert.deepEqual(seen, ['realistic', 'depth', 'maxDepth', 'velocity', 'realistic']);
-  assert.equal(nextViewMode('realistic', true), 'velocity');
+  assert.deepEqual(seen, ['realistic', 'depth', 'maxDepth', 'velocity', 'arrival', 'hazard', 'realistic']);
+  assert.equal(nextViewMode('realistic', true), 'hazard');
   const pose = { target: { gx: 573.8, gy: 550.8, elevation: 75.9 }, distance: 1900, yaw: 1.571, pitch: 0.5 };
   const close = closeUpPose(pose);
   assert.equal(close.distance, 1500, 'not below the close-up floor');

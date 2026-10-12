@@ -92,7 +92,7 @@ export function createHelp(ctx: UIContext): Modal {
             shortcutRow(['R'], 'Reset water'),
             shortcutRow(['F'], 'Frame the whole map'),
             shortcutRow(['T'], 'Top-down view'),
-            shortcutRow(['V'], 'Next water view: realistic, depth, max depth, speed'),
+            shortcutRow(['V'], 'Next water view: realistic, depth, max depth, speed, arrival, hazard'),
             shortcutRow(['[', ']'], 'Smaller / larger brush'),
             shortcutRow(['Shift'], 'Drain, raise ground, or continue a wall'),
             shortcutRow(['Esc'], 'Cancel a wall · close dialogs'),

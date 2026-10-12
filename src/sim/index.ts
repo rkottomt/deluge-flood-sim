@@ -13,6 +13,9 @@
  *   solver.computeDt()          the timestep the next substep would use
  *   solver.runSubsteps(n, dt?)  run exactly n substeps (tests/benchmarks; bypasses timeScale and budget)
  *   solver.readbackNow()        force a readback and await the snapshot (tests/automation)
+ *   solver.readHazardFields()   per-cell max speed, max depth × speed, arrival time, wet duration (contract extension;
+ *                               accumulated by the export pass, see hazard.ts and shaders/exportState.ts)
+ *   solver.hazardBuffer         the same accumulators on the GPU (the renderer's arrival and hazard-class views)
  *   solver.options              numerical tunables (see SolverOptions / DEFAULT_SOLVER_OPTIONS)
  */
 import type { SimParams, SolverTerrainInput } from '../contracts';

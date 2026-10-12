@@ -25,7 +25,7 @@
  *     wet band above it, moving foam at the contact line, muddy attenuation below it, and a thin stain at the
  *     high-water mark the cell has ever reached.
  *
- * READABILITY. In the hazard modes (depth / max depth / velocity) the facades collapse to neutral grey so nothing
+ * READABILITY. In the hazard modes (every mode but realistic) the facades collapse to neutral grey so nothing
  * competes with the legend's hues — the water still blends over the submerged part of every wall, which is what
  * makes "two metres deep" legible as a height against something of known size.
  */

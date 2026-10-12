@@ -534,7 +534,14 @@ export function createPanel(ctx: UIContext): Panel {
   );
 
   // ════════════════════════════════ View ════════════════════════════════
-  const modeNames: Record<WaterViewMode, string> = { realistic: 'Realistic', depth: 'Depth', maxDepth: 'Max depth', velocity: 'Speed' };
+  const modeNames: Record<WaterViewMode, string> = {
+    realistic: 'Realistic',
+    depth: 'Depth',
+    maxDepth: 'Max depth',
+    velocity: 'Speed',
+    arrival: 'Arrival',
+    hazard: 'Hazard',
+  };
   const viewBadge = h('span', { class: 'dl-sec-badge' });
   const modes = segmented<WaterViewMode>(
     [
@@ -542,15 +549,18 @@ export function createPanel(ctx: UIContext): Panel {
       { value: 'depth', label: 'Depth', tip: 'Hazard map of current depth' },
       { value: 'maxDepth', label: 'Max depth', tip: 'Deepest water reached since reset — the flood extent' },
       { value: 'velocity', label: 'Speed', tip: 'How fast the water moves' },
+      { value: 'arrival', label: 'Arrival', tip: 'How many minutes after the start the water arrived — the warning time' },
+      { value: 'hazard', label: 'Hazard', tip: 'Flood hazard class H1–H6 from depth × speed (AIDR 2017)' },
     ],
     (v) => ctx.setRender({ waterMode: v }),
-    { label: 'Water display mode', className: 'dl-seg-full', tipSide: 'top' },
+    // Six modes do not fit one row of the panel: three per row.
+    { label: 'Water display mode', className: 'dl-seg-full dl-seg-grid3', tipSide: 'top' },
   );
   const legend = h('div', { class: 'dl-legend' });
   const renderLegend = (mode: WaterViewMode) => {
     if (mode === 'realistic') {
       legend.replaceChildren(
-        h('div', { class: 'dl-legend-note' }, icon('eye', 14), h('span', null, 'Photoreal water. Switch to ', h('b', null, 'Depth'), ' or ', h('b', null, 'Speed'), ' for a hazard map.')),
+        h('div', { class: 'dl-legend-note' }, icon('eye', 14), h('span', null, 'Photoreal water. Switch to ', h('b', null, 'Depth'), ', ', h('b', null, 'Speed'), ' or ', h('b', null, 'Arrival'), ' for a hazard map.')),
       );
       return;
     }

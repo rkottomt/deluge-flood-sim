@@ -10,9 +10,17 @@
  *                with the live depth map.
  *  • velocity  — ColorBrewer "YlOrRd" (yellow → dark red): faster = hotter. The slowest band is drawn as plain
  *                water (it is most of any flood), so the dangerous fast cores stand out.
+ *  • arrival   — viridis (dark purple → yellow-green; the brightest yellow is replaced by the nearest one the tone
+ *                mapper reproduces): earliest = darkest, the places with the least warning.
+ *  • hazard    — sand → umber (lightness-sequential browns) for the AIDR H1–H6 classes: darker = more dangerous.
+ *                Browns because every other hue is taken: pinks trip the visual suite's NaN-magenta detector and
+ *                dark crimsons, once lit and shaded, read as the max-depth and arrival purples.
+ * Every swatch is ≥ 45 sRGB units from every swatch of the other modes, so the legend-vs-pixels check of
+ * scripts/visual.mjs can tell the modes apart.
  *
- * Depth and max depth colour only land that was dry before the flood; the normal river / lake is drawn as muted
- * plain water (NORMAL_WATER_LEGEND).
+ * Depth, max depth, arrival and hazard colour only land that was dry before the flood; the normal river / lake is
+ * drawn as muted plain water (NORMAL_WATER_LEGEND). Arrival and hazard are read from the solver's hazard
+ * accumulators (FloodSolver.hazardBuffer) and drawn on the max-depth water surface, like the max-depth map.
  */
 
 export interface HazardBand {
@@ -56,6 +64,52 @@ export const VELOCITY_BANDS: HazardBand[] = [
 ];
 
 /**
+ * Arrival time: minutes after reset that water first stood deeper than ARRIVAL_DEPTH (0.15 m, HazardFields.firstWet).
+ * Land the water never reached that deep carries no colour.
+ */
+export const ARRIVAL_BANDS: HazardBand[] = [
+  { min: 0, max: 5, color: '#440154', label: '< 5 min', note: 'No time to leave' },
+  { min: 5, max: 15, color: '#414487', label: '5–15 min', note: 'Minutes of warning' },
+  { min: 15, max: 30, color: '#21918c', label: '15–30 min' },
+  { min: 30, max: 60, color: '#35b779', label: '30–60 min' },
+  { min: 60, max: 120, color: '#90d743', label: '1–2 h' },
+  { min: 120, max: Infinity, color: '#d0d84a', label: '2 h +', note: 'Time to evacuate' },
+];
+
+/**
+ * Australian Institute for Disaster Resilience (AIDR 2017, Handbook 7 guideline 7-3) flood hazard thresholds, from the
+ * maxima since reset of depth d (m), speed v (m/s) and d·v (m²/s, HazardFields.maxDV): a cell is the first class
+ * whose three limits it is within, H6 when none. Single source of truth for the legend, the CPU classifier and the
+ * WGSL of the prep pass (src/render/shaders/prep.ts).
+ */
+export const AIDR_HAZARD_LIMITS: ReadonlyArray<{ dv: number; d: number; v: number }> = [
+  { dv: 0.3, d: 0.3, v: 2 },
+  { dv: 0.6, d: 0.5, v: 2 },
+  { dv: 0.6, d: 1.2, v: 2 },
+  { dv: 1.0, d: 2, v: 2 },
+  { dv: 4, d: 4, v: 4 },
+];
+
+/** AIDR hazard class 1…6 of a cell (see AIDR_HAZARD_LIMITS); the value the hazard map's bands are keyed on. */
+export function aidrHazardClass(d: number, v: number, dv: number): number {
+  for (let k = 0; k < AIDR_HAZARD_LIMITS.length; k++) {
+    const L = AIDR_HAZARD_LIMITS[k];
+    if (dv <= L.dv && d <= L.d && v <= L.v) return k + 1;
+  }
+  return AIDR_HAZARD_LIMITS.length + 1;
+}
+
+/** Hazard classes H1–H6 (AIDR 2017). Band k covers the class value k (min/max are the half-way points). */
+export const HAZARD_BANDS: HazardBand[] = [
+  { min: 0, max: 1.5, color: '#c6b2a6', label: 'H1', note: 'Generally safe' },
+  { min: 1.5, max: 2.5, color: '#b6977a', label: 'H2', note: 'Unsafe for small vehicles' },
+  { min: 2.5, max: 3.5, color: '#9a6d47', label: 'H3', note: 'Unsafe for vehicles, children, the elderly' },
+  { min: 3.5, max: 4.5, color: '#77482a', label: 'H4', note: 'Unsafe for vehicles and people' },
+  { min: 4.5, max: 5.5, color: '#4f2c15', label: 'H5', note: 'Buildings vulnerable to damage' },
+  { min: 5.5, max: Infinity, color: '#24130a', label: 'H6', note: 'Buildings vulnerable to failure' },
+];
+
+/**
  * Legend entry for the normal river / lake in the depth and max-depth maps: water that was there before the flood
  * is not coloured by depth (its depth is not a hazard), only shown as muted plain water.
  */
@@ -63,7 +117,7 @@ export const NORMAL_WATER_LEGEND = { color: '#3c454b', label: 'Normal river', no
 
 /** Whether a mode's map leaves the normal river uncoloured (and the legend should show NORMAL_WATER_LEGEND). */
 export function showsNormalWater(mode: string): boolean {
-  return mode === 'depth' || mode === 'maxDepth';
+  return mode === 'depth' || mode === 'maxDepth' || mode === 'arrival' || mode === 'hazard';
 }
 
 /** Bands used by a given water view mode (null for 'realistic'). */
@@ -75,6 +129,10 @@ export function bandsForMode(mode: string): HazardBand[] | null {
       return MAX_DEPTH_BANDS;
     case 'velocity':
       return VELOCITY_BANDS;
+    case 'arrival':
+      return ARRIVAL_BANDS;
+    case 'hazard':
+      return HAZARD_BANDS;
     default:
       return null;
   }
