@@ -148,7 +148,7 @@ export function createUseCases(ctx: UIContext, deps: { panel: Pick<Panel, 'revea
   const toggleBtn = h('button', { type: 'button', class: 'dl-btn dl-btn-subtle dl-btn-sm', 'data-uc': 'toggle', onclick: () => show(view === 'cards' ? 'brief' : 'cards') });
   const printBtn = h(
     'button',
-    { type: 'button', class: 'dl-btn dl-btn-sm', 'data-uc': 'print', hidden: true, onclick: () => printReport(briefReport()) },
+    { type: 'button', class: 'dl-btn dl-btn-subtle dl-btn-sm', 'data-uc': 'print', hidden: true, onclick: () => printReport(briefReport()) },
     icon('book', 14),
     h('span', null, 'Print'),
   );
