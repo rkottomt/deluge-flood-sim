@@ -278,7 +278,7 @@ export function createWarningBlock(ctx: UIContext): { el: HTMLElement } {
       svg('line', { class: 'dl-ew-axis-line', x1: box.x0, x2: box.x1, y1: r1(y(0)), y2: r1(y(0)) }),
       svg('text', { class: 'dl-ew-axis', x: box.x0 - 4, y: r1(y(yMaxRaw)) + 3, 'text-anchor': 'end' }, mins(yMaxRaw)),
       svg('text', { class: 'dl-ew-axis', x: box.x0 - 4, y: r1(y(0)) + 3, 'text-anchor': 'end' }, '0'),
-      svg('text', { class: 'dl-ew-axis', x: 2, y: box.y0 + 2 }, 'min'),
+      svg('text', { class: 'dl-ew-axis', x: box.x0 - 4, y: r1(y(yMaxRaw)) + 13, 'text-anchor': 'end' }, 'min'),
       svg('text', { class: 'dl-ew-axis', x: box.x0, y: H - 4 }, `source · km ${(c.s[0] / 1000).toFixed(0)}`),
       svg('text', { class: 'dl-ew-axis', x: box.x1, y: H - 4, 'text-anchor': 'end' }, `${target.short} · km ${(c.s[c.s.length - 1] / 1000).toFixed(0)}`),
       svg('path', { class: 'dl-ew-curve', d: pts.length ? `M${pts.join(' L')}` : '' }),
@@ -299,7 +299,7 @@ export function createWarningBlock(ctx: UIContext): { el: HTMLElement } {
       if (!Number.isFinite(own)) return;
       root.append(svg('circle', { class: 'dl-ew-pt', cx: r1(x(sn.s)), cy: r1(y(own)), r: 3.5 }, svg('title', {}, `Sensor ${i + 1}: ${leadText(own)}`)));
     });
-    chartHost.append(root, h('div', { class: 'dl-ew-note' }, `One ${presetById(d.presetId).label.toLowerCase()} anywhere from the source down to ${target.short}: the further upstream, the more warning.`));
+    chartHost.append(root, h('div', { class: 'dl-ew-note' }, `One sensor (${presetById(d.presetId).label}) anywhere from the source down to ${target.short}: the further upstream, the more warning.`));
   }
 
   function render() {

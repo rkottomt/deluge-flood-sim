@@ -1492,7 +1492,7 @@ const FLOWS = [
           await sleep(250);
           const ew1 = await ewRead();
           const lead1 = Number(ew1.sensorLead);
-          check(r, 'nepal: a sensor placed on the profile at Rasuwagadhi gives Betrawati a sensor lead time', !!rasu && ew1.sensors === 1 && ew1.markers === 1 && Number.isFinite(lead1) && lead1 > 0 && /sensors: d/.test(ew1.timelineChip), `${ew1.sensors} sensor, Betrawati ${num(lead1 / 60, 1)} min (combined ${num(Number(ew1.lead) / 60, 1)} min); timeline chip “${ew1.timelineChip}”`);
+          check(r, 'nepal: a sensor placed on the profile at Rasuwagadhi gives Betrawati a sensor lead time', !!rasu && ew1.sensors === 1 && ew1.markers === 1 && Number.isFinite(lead1) && lead1 > 0 && /sensors: [0-9]/.test(ew1.timelineChip), `${ew1.sensors} sensor, Betrawati ${num(lead1 / 60, 1)} min (combined ${num(Number(ew1.lead) / 60, 1)} min); timeline chip “${ew1.timelineChip}”`);
           // Drag it downstream to Syafrubesi.
           const mk = await D(() => {
             const b = document.querySelector('.dl-cl-sensor .dl-cl-sensor-mark')?.getBoundingClientRect();

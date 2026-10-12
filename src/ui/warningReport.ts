@@ -26,7 +26,7 @@ export function buildWarningSection(view: ChainView | null, design: WarningDesig
   });
   const best = suggestSite(m, d ?? { sceneKey: view.sceneKey, sensors: [], objective: 'maxMin', maxElevation: null, presetId: 'auto', target: null, placing: false });
   if (Number.isFinite(best.s)) {
-    kv.push([`Best single site (${presetById(d?.presetId ?? 'auto').label.toLowerCase()})`, `${whereLabel(m.file, best.s)} — ${d?.objective === 'weighted' ? 'weighted mean' : 'worst-off place'} ${leadText(best.value)}${d?.maxElevation ? ` (bed ≤ ${d.maxElevation} m)` : ''}`]);
+    kv.push([`Best single site (${presetById(d?.presetId ?? 'auto').label})`, `${whereLabel(m.file, best.s)} — ${d?.objective === 'weighted' ? 'weighted mean' : 'worst-off place'} ${leadText(best.value)}${d?.maxElevation ? ` (bed ≤ ${d.maxElevation} m)` : ''}`]);
   }
   const head = ['Place', 'Modelled front', 'Existing alert', ...(sensors.length ? ['Sensors alone', 'Combined'] : []), ...(m.bands ? ['Combined p10 (ensemble)'] : [])];
   const rows = m.targets.map((t, i) => [
