@@ -1458,6 +1458,72 @@ const FLOWS = [
         check(r, `${id}: the real event clock in the top bar`, /\d{4} \d\d:\d\d.(NPT|IST)$/.test(ui.eventClock.replace(/\u00a0/g, ' ')), ui.eventClock);
         check(r, `${id}: Try-it offers the glacier steps, no hurricane rain or levee`, ui.steps.flood && ui.steps.arrival && ui.steps.evac && !ui.steps.rain && !ui.steps.levee && /Release the flood/.test(ui.floodLabel), JSON.stringify(ui.steps));
 
+        // Early warning (src/ui/warningPanel.ts + the sensors on the timeline): add a sensor by clicking the profile at
+        // Rasuwagadhi, see Betrawati's lead-time chip get a sensor lead, drag the sensor downstream (less warning), then
+        // let the optimiser place one.
+        if (id === 'nepal') {
+          const ewRead = () =>
+            D(() => {
+              const chip = document.querySelector('.dl-ew-chip[data-station="Betrawati"]');
+              const blk = document.querySelector('[data-ew="block"]');
+              return {
+                block: !!blk && !blk.hidden,
+                chips: document.querySelectorAll('.dl-ew-chip').length,
+                lead: chip?.getAttribute('data-lead') ?? null,
+                sensorLead: chip?.getAttribute('data-sensor-lead') ?? null,
+                sensors: document.querySelectorAll('.dl-ew-sensor').length,
+                markers: document.querySelectorAll('.dl-cl-sensor').length,
+                timelineChip: document.querySelector('.dl-cl-chipbox[data-station="Betrawati"] .dl-cl-chip-ew:not([hidden])')?.textContent ?? '',
+                suggestion: document.querySelector('.dl-ew-suggestion')?.textContent ?? '',
+              };
+            });
+          const stationX = (name) =>
+            D((n) => {
+              const g = [...document.querySelectorAll('.dl-cl-st')].find((e) => (e.getAttribute('data-tip') ?? '').startsWith(`${n} —`));
+              const m = g?.querySelector('.dl-cl-mark')?.getBoundingClientRect();
+              const s = g?.ownerSVGElement?.getBoundingClientRect();
+              return m && s ? { x: m.left + m.width / 2, y: s.top + s.height / 2 } : null;
+            }, name);
+          const ew0 = await ewRead();
+          check(r, 'nepal: Early warning block with a lead-time chip per town / plant', ew0.block && ew0.chips >= 5 && ew0.lead !== null && ew0.sensorLead === null, JSON.stringify(ew0));
+          await page.locator('.dl-ew-add').click();
+          const rasu = await stationX('Rasuwagadhi');
+          if (rasu) await page.mouse.click(rasu.x, rasu.y);
+          await sleep(250);
+          const ew1 = await ewRead();
+          const lead1 = Number(ew1.sensorLead);
+          check(r, 'nepal: a sensor placed on the profile at Rasuwagadhi gives Betrawati a sensor lead time', !!rasu && ew1.sensors === 1 && ew1.markers === 1 && Number.isFinite(lead1) && lead1 > 0 && /sensors: d/.test(ew1.timelineChip), `${ew1.sensors} sensor, Betrawati ${num(lead1 / 60, 1)} min (combined ${num(Number(ew1.lead) / 60, 1)} min); timeline chip “${ew1.timelineChip}”`);
+          // Drag it downstream to Syafrubesi.
+          const mk = await D(() => {
+            const b = document.querySelector('.dl-cl-sensor .dl-cl-sensor-mark')?.getBoundingClientRect();
+            return b ? { x: b.left + b.width / 2, y: b.top + b.height / 2 } : null;
+          });
+          const syaf = await stationX('Syafrubesi');
+          if (mk && syaf) {
+            await page.mouse.move(mk.x, mk.y);
+            await page.mouse.down();
+            await page.mouse.move(syaf.x, mk.y, { steps: 8 });
+            await page.mouse.up();
+          }
+          await sleep(250);
+          const ew2 = await ewRead();
+          const lead2 = Number(ew2.sensorLead);
+          check(r, 'nepal: dragging the sensor downstream shortens the warning (chip updates live)', Number.isFinite(lead2) && lead2 < lead1 - 60, `Betrawati ${num(lead1 / 60, 1)} → ${num(lead2 / 60, 1)} min`);
+          await page.locator('.dl-ew-suggest').click();
+          await sleep(250);
+          const ew3 = await ewRead();
+          check(r, 'nepal: Suggest best site places a sensor and says where', ew3.sensors === 2 && ew3.markers === 2 && /km \d/.test(ew3.suggestion) && Number(ew3.sensorLead) >= lead1 - 1, `${ew3.suggestion.slice(0, 120)} · Betrawati ${num(Number(ew3.sensorLead) / 60, 1)} min`);
+          r.metrics[id].warning = { atRasuwagadhiMin: lead1 / 60, atSyafrubesiMin: lead2 / 60, best: ew3.suggestion, bestBetrawatiMin: Number(ew3.sensorLead) / 60 };
+          await page.locator('.dl-chainline').screenshot({ path: path.join(OUT, '16-nepal-warning-strip.png') });
+          await D(() => document.querySelector('[data-ew="block"]')?.scrollIntoView());
+          await sleep(300);
+          await page.locator('[data-section="chain"]').screenshot({ path: path.join(OUT, '16-nepal-warning-panel.png') });
+          await D(() => document.querySelector('.dl-ew-caveats')?.scrollIntoView({ block: 'end' }));
+          await sleep(300);
+          await page.locator('[data-section="chain"]').screenshot({ path: path.join(OUT, '16-nepal-warning-chart.png') });
+          await shot('16-nepal-warning');
+        }
+
         // Advance the flood until every station the front reaches inside the map has been passed.
         const runS = Math.min(3600, Math.max(300, ...chain.stations.filter((s) => Number.isFinite(s.tFront)).map((s) => s.tFront - chain.offset + 60)));
         await D(() => {
