@@ -29,6 +29,8 @@ export interface ReportInput {
   comparison: Comparison | null;
   bcr: BcrView | null;
   mitigation: { label: string; lengthM: number; heightM: number; returnPeriod: number | null } | null;
+  /** Chain presets: the Early warning section (warningReport.ts), placed before the appendix. */
+  earlyWarning?: HTMLElement | null;
 }
 
 /** Rows in the report's building table. */
@@ -211,6 +213,8 @@ export function buildReport(i: ReportInput): HTMLElement {
       ),
     );
   }
+
+  if (i.earlyWarning) sections.push(i.earlyWarning);
 
   sections.push(
     h('section', { class: 'dl-rep-appendix' },
