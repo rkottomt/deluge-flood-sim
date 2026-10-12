@@ -179,6 +179,11 @@ function sourceOf(trigger: HazardTrigger, file: ChainFile, ov: ChainOverrides, b
       const k = ov.erosionRate ?? EROSION_RATE_AVALANCHE_DAM;
       const b: Hydrograph = breachHydrograph(imp.volume, { model: 'weirErosion', erosionRate: k, finalDepth: H, widthRatio: 2, sideSlope: 1, hypsometry: p });
       notes.push(`avalanche dam ${H.toFixed(0)} m high impounds ${(imp.volume / 1e6).toFixed(2)} Mm³ over ${(imp.length / 1000).toFixed(1)} km; fills in ${(fill / 3600).toFixed(1)} h at ${qIn.toFixed(0)} m³/s, then breaches at ${k} m/h`);
+      // Say when the answer rests on extrapolation: a dam taller than the surveyed transect (vertical walls assumed
+      // above it), or a source at the profile's upstream end, where there is no valley in the file to pond.
+      const sec = file.sections[node];
+      if (H > sec.stage[sec.stage.length - 1] - file.zBed[node]) notes.push('warning: the dam is taller than the surveyed valley section — its height and the impoundment are extrapolated');
+      if (imp.length < 2 * (file.s[1] - file.s[0])) notes.push('warning: no valley upstream of the impact in the profile — the impoundment is not represented; consider mode directFlow');
       if (!Number.isFinite(fill)) return { series: zeroSeries(), info: info(0, false, { runout: ro, dam: { height: H, impounded: imp.volume, fillTime: fill } }), extraBase: 0 };
       // The river's own baseflow keeps flowing in the routing while the lake fills (simplification: the dry river bed
       // below a blockage — itself a warning sign — is not modelled), so the breach ODE takes no inflow.

@@ -543,6 +543,8 @@ class RouterState {
   entryFluxS = 0;
   capped = 0;
   uPeak = 0;
+  /** max over faces of |u|/Δx in the last step (0 before the first). */
+  uFaceMaxDx = 0;
   wIn = 0;
   wOut = 0;
   sIn = 0;
@@ -608,12 +610,12 @@ function faceNear(net: Network, sx: number): number {
 
 /**
  * The per-node pass that closes a step: depth from volume, the flow area and width there, each node's Manning
- * multiplier for its sediment load, and the stable step for the next advance — dt = C / max_i[(|u_i| + c_i)/Δx_i],
- * c = √(g·A/W), bounded by max(|u|/Δx) + √max(c²/Δx²) ≥ the true maximum (never larger than the exact CFL step, one
- * square root instead of one per node). Returns that dt.
+ * multiplier for its sediment load, and the stable step for the next advance — dt = C / max[(|u| + c)/Δx] with |u| the
+ * face speeds of the last step and c = √(g·A/W) at the nodes, bounded by max(|u|/Δx) + √max(c²/Δx²) (never larger
+ * than the exact CFL step; one square root instead of one per node). Returns that dt.
  */
 function nodePass(st: RouterState): number {
-  const { net, N, W, S, h, hint, Q, Anode, Wnode, nFac, invLmin } = st;
+  const { net, N, W, S, h, hint, Anode, Wnode, nFac, invLmin } = st;
   const HY = net.hyd;
   const J = TABLE_POINTS;
   const Jm1 = J - 1;
@@ -621,7 +623,10 @@ function nodePass(st: RouterState): number {
   const g = G;
   const VOL = net.vol;
   const dh = net.dh;
-  let uMaxDx = 0;
+  // The advective part comes from the FACE speeds of the step just taken (capped at uMax and Froude 8 there), not from
+  // Q/A at the nodes: a node all but drained by the positivity limiter has A → 0 under a finite flux, and that "speed"
+  // drove dt to microseconds on the first real DEM profile.
+  const uMaxDx = st.uFaceMaxDx;
   let c2MaxDx2 = 0;
   for (let i = 0; i < N; i++) {
     const m = W[i] + S[i];
@@ -657,13 +662,8 @@ function nodePass(st: RouterState): number {
     Wnode[i] = Wd;
     nFac[i] = S[i] > 0 ? ntdFactor(S[i] / m) : 1;
     if (!(hh > ROUTING_H_MIN) || !(A > 0)) continue;
-    const a = i > 0 ? Q[i - 1] : 0;
-    const b = Q[i];
-    const qNode = (a >= 0 ? a : -a) > (b >= 0 ? b : -b) ? (a >= 0 ? a : -a) : b >= 0 ? b : -b;
-    // Running maxima of |u|/Δx and c²/Δx², compared cross-multiplied so the division happens only on a new maximum.
+    // Running maximum of c²/Δx², compared cross-multiplied so the division happens only on a new maximum.
     const ilf = invLmin[i];
-    const qi = qNode * ilf;
-    if (qi > uMaxDx * A) uMaxDx = qi / A;
     const gai = g * A * ilf * ilf;
     if (gai > c2MaxDx2 * Wd) c2MaxDx2 = gai / Wd;
   }
@@ -722,6 +722,8 @@ function advance(st: RouterState, t: number, dt: number, flood: boolean): number
   outV.fill(0);
   let nCap = 0;
   let uTop = st.uPeak;
+  /** Largest face speed / face length this step (the CFL estimate's advective part). */
+  let uDx = 0;
   for (let f = 0; f < N - 1; f++) {
     const i = f;
     const k = f + 1;
@@ -802,7 +804,9 @@ function advance(st: RouterState, t: number, dt: number, flood: boolean): number
           q = q > 0 ? uc * Af : -uc * Af;
           nCap++;
         }
-        if ((q >= 0 ? q : -q) > uTop * Af) uTop = (q >= 0 ? q : -q) / Af;
+        const qa2 = q >= 0 ? q : -q;
+        if (qa2 > uTop * Af) uTop = qa2 / Af;
+        if (qa2 * ILF[f] > uDx * Af) uDx = (qa2 * ILF[f]) / Af;
       }
     }
     Qn[f] = q;
@@ -811,6 +815,7 @@ function advance(st: RouterState, t: number, dt: number, flood: boolean): number
   }
   st.capped += nCap;
   st.uPeak = uTop;
+  st.uFaceMaxDx = uDx;
   // Outlet: normal flow on the last reach's slope.
   {
     const i = N - 1;
