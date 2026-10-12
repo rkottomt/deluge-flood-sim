@@ -469,10 +469,21 @@ export interface FloodSolver {
 
   /**
    * Extension (GpuFloodSolver): read back the per-cell hazard accumulators gathered since the last reset (HazardFields).
-   * A full-grid readback (~16 B/cell), so it is on demand — the impact panel calls it when it recomputes losses, not
-   * every frame. Resolves after the GPU work queued so far has finished.
+   * A full-grid readback (~32 B/cell: the accumulators plus the exported state for max depth), so it is on demand —
+   * the impact panel calls it when it recomputes losses, not every frame. Resolves after the GPU work queued so far has
+   * finished. The accumulators are updated when the solver exports stateTexture (every frame the renderer refreshes
+   * its water, and before every stats readback), not every substep: arrival times are interpolated between exports, and
+   * a cell that wets and dries again between two exports is missed (src/sim/shaders/exportState.ts).
    */
   readHazardFields?(): Promise<HazardFields>;
+
+  /**
+   * Extension (GpuFloodSolver): the same accumulators on the GPU, for the renderer's arrival-time and hazard-class views.
+   * A storage buffer (STORAGE | COPY_SRC) of nx·ny vec4f, row-major: (max speed while wet m/s, max depth × speed m²/s,
+   * first-wet time s or −1, wet seconds) — HazardFields without maxDepth, which is stateTexture.a. Current as of the
+   * latest export, so read stateTexture first in the frame. Created with the solver and never replaced.
+   */
+  readonly hazardBuffer?: GPUBuffer;
 
   destroy(): void;
 }

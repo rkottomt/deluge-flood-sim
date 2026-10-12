@@ -18,7 +18,11 @@ import { MAX_SOURCES, MAX_STORMS } from '../constants';
  */
 export const ACC_PER_CELL = 2;
 
-/** Byte size of the `Sim` uniform (keep in sync with SIM_WGSL and packSimUniform in Solver.ts). */
+/**
+ * Byte size of the `Sim` uniform (keep in sync with SIM_WGSL and writeSimUniform in Solver.ts). hzTime and hzSpan are
+ * read by the export pass alone (its hazard accumulators, shaders/exportState.ts): the simulated time the export
+ * describes and the simulated seconds since the previous export.
+ */
 export const SIM_UNIFORM_BYTES = 112;
 /** Byte size of the `Forcing` uniform. */
 export const FORCING_UNIFORM_BYTES = (2 * MAX_SOURCES + MAX_STORMS) * 16;
@@ -31,7 +35,7 @@ struct Sim {
   robust: i32, openBnd: i32, nSrc: i32, nStorm: i32,
   stageAlpha: f32, invN: f32, minSlope: f32, advection: i32,
   resetMax: i32, velDepth: f32, crGuard: f32, smoothRatio: f32,
-  bFrMax: f32, wallAdv: f32, _pad1: f32, _pad2: f32,
+  bFrMax: f32, wallAdv: f32, hzTime: f32, hzSpan: f32,
 };
 `;
 
