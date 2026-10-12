@@ -184,6 +184,91 @@ export interface HazardChainSpec {
   /** Time of the alert (s after clock zero), for warning lead time; e.g. Nepal 2026's SMS at 09:15 NPT. */
   alertTime?: number;
   observations?: ChainObservation[];
+  /**
+   * File name of the baked chain run in the preset directory (normally 'chain-result.json', a BakedChainResult): what
+   * the chain produced when the preset was baked, so the UI can show fronts, peaks, bands and lead times without
+   * re-running the chain. Absent: no baked run (the UI may run the chain itself).
+   */
+  result?: string;
+}
+
+/**
+ * `public/presets/<id>/chain-result.json` — one baked run of the preset's hazard chain (written by
+ * scripts/bake-chain-result.ts from chain.json + meta.json `scenario.hazardChain`, read by the UI). Additive to the
+ * ChainFile contract: nothing in the engine reads it.
+ *
+ * JSON SHAPE (every time in seconds after ChainFile.clockZero = the trigger, every discharge in m³/s of mixture,
+ * every volume in m³):
+ *
+ *   {
+ *     "version": 1,
+ *     "preset": "nepal",                        // preset id
+ *     "profile": "chain.json",                  // the ChainFile it was routed on
+ *     "clockZero": "2026-08-26T08:37:00+05:45", // copied from the ChainFile when the event is real; absent for what-ifs
+ *     "generated": "2026-10-12",                // bake date (UTC), and the script that wrote the file
+ *     "generator": "scripts/bake-chain-result.ts",
+ *     "provenance": "modelled",                 // every number below is the model's, never an observation
+ *     "label": "…",                             // one-line caption for the UI
+ *     "run": { "routeDx": 100, "memberDx": 250, "members": 9, "ms": 180, "note": "…" },
+ *     "source": { "trigger": "massIntoRiver", "volume": …, "peak": …, "tPeak": …, "cv": 0.4, "notes": ["…"] },
+ *     "stations": [                             // in chainage order, one per ChainFile station
+ *       { "name": "Betrawati", "s": 60300, "kind": "town",
+ *         "tFront": 2580, "tPeak": 2900, "qPeak": 9100, "stageMax": 590.2, "rise": 9.1,
+ *         "leadTime": 300,                      // tFront − alertTime; absent when the spec has no alertTime
+ *         "band": { "tFront": [p10, p50, p90], "qPeak": [p10, p50, p90] },   // ensemble; absent without one
+ *         "observed": [ { "tFront": 2580, "qPeak": 7355, "note": "…", "source": "…" } ]  // absent when none
+ *       }, …
+ *     ],
+ *     "entry": { "s": 53800, "tFront": …, "qPeak": …, "volume": …, "baseflow": …,
+ *                "band": { "tFront": [p10, p50, p90], "qPeak": [p10, p50, p90] } },
+ *     "alertTime": 2280,                        // copied from the spec when known
+ *     "domain": { "offset": 1800, "sourceId": "trishuli-inflow", "inflowVolume": …, "inflowPeak": … }
+ *   }
+ *
+ * `null` stands for "never arrived" (a NaN/∞ front: JSON has neither) in tFront, leadTime and band entries.
+ * `domain.offset` is the chain time that is the 2-D solver's t = 0: the preset's inflow (meta.json scenario.sources,
+ * id `domain.sourceId`) is this run's routed entry hydrograph shifted by it (chain.ts toWaterSource), so
+ * 2-D time t corresponds to chain time t + offset, and a station's chain time minus `offset` is its 2-D time.
+ */
+export interface BakedChainResult {
+  version: 1;
+  preset: string;
+  profile: string;
+  clockZero?: string;
+  generated: string;
+  generator: string;
+  provenance: 'modelled';
+  label: string;
+  /** Grid of the deterministic run (m), of the ensemble members (m), member count, wall time (ms), and a caption. */
+  run: { routeDx: number; memberDx: number; members: number; ms: number; note: string };
+  source: { trigger: HazardTrigger['kind']; volume: number; peak: number; tPeak: number; cv: number; notes: string[] };
+  stations: BakedStationResult[];
+  entry: { s: number; tFront: number | null; qPeak: number; volume: number; baseflow: number; band?: BakedBand };
+  alertTime?: number;
+  domain: { offset: number; sourceId: string; inflowVolume: number; inflowPeak: number };
+}
+
+/** p10 / p50 / p90 of an ensemble; `null` = the flood never got there (in that quantile). */
+export interface BakedBand {
+  tFront: [number | null, number | null, number | null];
+  qPeak: [number, number, number];
+}
+
+/** One station of a BakedChainResult. */
+export interface BakedStationResult {
+  name: string;
+  s: number;
+  kind: ChainStation['kind'];
+  tFront: number | null;
+  tPeak: number;
+  qPeak: number;
+  /** Highest stage (m a.s.l.) and its rise above the stage at t = 0 (m). */
+  stageMax: number;
+  rise: number;
+  leadTime?: number | null;
+  band?: BakedBand;
+  /** The spec's observations at this station, copied so the UI can show model beside observation. */
+  observed?: Array<{ tFront?: number; qPeak?: number; tPeak?: number; note: string; source: string }>;
 }
 
 /** What a chain run produces. */
