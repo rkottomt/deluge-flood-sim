@@ -11,15 +11,18 @@
  * 'scenario' puts back. Swapping the inflow resets the water: the hydrograph's times are 2-D solver times since reset.
  * While the first run computes, the entry inflow is held back (the rivers start dry, so the map waits for the wave).
  *
- * BAKED RESULTS. A calibrated chain result baked into the preset (planned: `BakedChainResult`, src/hazard/types.ts)
- * should drive the default view without a worker run, the worker then running only when the user changes a
- * parameter. The one place that changes is bakedResult() below; everything downstream takes a ChainRunResult.
+ * BAKED RESULTS. A chain preset ships the calibrated run it was baked with (HazardChainSpec.result →
+ * chain-result.json, a BakedChainResult): the ensemble member whose entry peak is the median, and the clock offset its
+ * baked inflow starts at. The live run starts from that member's parameters (`run.member`, layered UNDER the panel's
+ * what-if, which is a delta from the scenario's defaults), so the default view reproduces the baked inflow instead of
+ * the trigger's raw defaults — Chungthang's edge peak was 17,213 m³/s live against 9,578 baked before this. A missing
+ * or unreadable chain-result.json only costs that: the chain then runs from the trigger's own defaults.
  *
  * The solver's rheology (HazardChainSpec.rheology / solver.uMax) is not applied here.
  */
 import type { ScenarioPreset, Store, WaterSource } from '../contracts';
-import type { ChainFile, HazardChainSpec } from '../hazard/types';
-import type { ChainRunResult } from '../hazard/chain';
+import type { BakedChainResult, ChainFile, HazardChainSpec } from '../hazard/types';
+import type { ChainOverrides, ChainRunResult } from '../hazard/chain';
 import { createHazardWorker, type HazardChainBackend } from '../hazard/workerClient';
 import { bridgeFor, postNotice, type ChainInflowMode, type ChainView, type ChainWhatIf } from '../ui/bridge';
 import { presetFileUrl } from '../data';
@@ -88,8 +91,9 @@ export function specFor(spec: HazardChainSpec, whatIf: ChainWhatIf): HazardChain
 }
 
 /**
- * A calibrated result baked into the preset, when there is one. None is baked yet: every chain preset runs the
- * chain in the worker. When `BakedChainResult` lands (src/hazard/types.ts), return it here as a ChainRunResult.
+ * A full ChainRunResult baked into the preset, when there is one. chain-result.json (BakedChainResult) holds summaries
+ * — fronts, peaks, bands — not the time series the timeline and the inflow need, so every chain preset still runs its
+ * baked member in the worker (loadBaked) and this returns null. Returning a result here would skip that run.
  */
 function bakedResult(_scenario: ScenarioPreset, _file: ChainFile): ChainRunResult | null {
   return null;
@@ -105,6 +109,9 @@ export class HazardChainController {
   private busy = false;
   private scenario: ScenarioPreset | null = null;
   private inflow: ChainInflowMode = 'chain';
+  /** The baked run's member parameters (the base every what-if is layered on) and its inflow's clock offset. */
+  private baseOverrides: ChainOverrides = {};
+  private bakedOffset: number | null = null;
 
   constructor(private readonly deps: HazardChainDeps) {}
 
@@ -144,6 +151,8 @@ export class HazardChainController {
     }
     this.scenario = sc;
     this.inflow = 'chain';
+    this.baseOverrides = {};
+    this.bakedOffset = null;
     const presetId = scene.request.id;
     this.bridge.setChain({
       sceneKey: `${presetId}#${token}`,
@@ -176,6 +185,8 @@ export class HazardChainController {
       if (token !== this.sceneToken) return;
       if (!isChainFile(raw)) throw new Error(`${spec.profile} is not a valley profile this version can read`);
       this.publish({ file: raw });
+      await this.loadBaked(token, presetId, spec);
+      if (token !== this.sceneToken) return;
       const baked = bakedResult(sc, raw);
       if (baked) {
         await this.apply(token, this.runToken, baked, { overrides: {} }, 'baked', null);
@@ -191,6 +202,28 @@ export class HazardChainController {
     }
   }
 
+  /** Read the preset's baked chain run, if it names one: its member parameters and inflow clock offset. */
+  private async loadBaked(token: number, presetId: string, spec: HazardChainSpec): Promise<void> {
+    if (!spec.result) return;
+    const url = presetFileUrl(presetId, spec.result);
+    if (!url) return;
+    try {
+      const raw = (await (this.deps.loadFile ?? ((u: string) => fetchJSON(u, { retries: 1 })))(url)) as Partial<BakedChainResult> | null;
+      if (token !== this.sceneToken || !raw || typeof raw !== 'object') return;
+      const m = raw.run?.member;
+      const base: ChainOverrides = {};
+      if (m && Number.isFinite(m.volumeFactor) && m.volumeFactor > 0) base.volumeFactor = m.volumeFactor;
+      if (m && m.erosionRate !== undefined && Number.isFinite(m.erosionRate) && m.erosionRate > 0) base.erosionRate = m.erosionRate;
+      if (m && Number.isFinite(m.cv) && m.cv >= 0 && m.cv < 1) base.cv = m.cv;
+      this.baseOverrides = base;
+      const off = raw.domain?.offset;
+      this.bakedOffset = typeof off === 'number' && Number.isFinite(off) ? off : null;
+    } catch (err) {
+      if (token !== this.sceneToken) return;
+      this.deps.errors.warn('chain', `the baked chain run could not be read (${errorMessage(err)}); running from the trigger's defaults`, { toast: false });
+    }
+  }
+
   /** Run the chain for a what-if: deterministic run → drive the map → ensemble bands. */
   async run(whatIf: ChainWhatIf): Promise<void> {
     const view = this.view;
@@ -199,6 +232,8 @@ export class HazardChainController {
     const token = this.sceneToken;
     const runId = ++this.runToken;
     const spec = specFor(view.spec, whatIf);
+    // The baked member's parameters under the user's changes (see BAKED RESULTS above).
+    const overrides: ChainOverrides = { ...this.baseOverrides, ...whatIf.overrides };
     // A job still in flight would make this run wait behind it: start a fresh worker instead.
     if (this.busy) this.disposeBackend();
     const backend = (this.backend ??= (this.deps.createBackend ?? createHazardWorker)());
@@ -206,12 +241,12 @@ export class HazardChainController {
     this.publish({ status: 'running', progress: null, error: null, whatIf, bands: null, entryBand: null });
     this.busy = true;
     try {
-      const { ms, result } = await backend.run(spec, file, whatIf.overrides);
+      const { ms, result } = await backend.run(spec, file, overrides);
       if (!current()) return;
       await this.apply(token, runId, result, whatIf, 'worker', ms);
       if (!current()) return;
       this.publish({ status: 'ensemble', progress: { done: 0, total: 1 } });
-      const { ensemble } = await backend.ensemble(spec, file, whatIf.overrides, {
+      const { ensemble } = await backend.ensemble(spec, file, overrides, {
         onProgress: (done, total) => {
           if (current()) this.publish({ progress: { done, total } });
         },
@@ -242,10 +277,12 @@ export class HazardChainController {
   }
 
   /**
-   * The preset's own inflow starts at the domain edge at t = 0, where its description puts the front: its chain clock
-   * offset is the routed front's arrival at the entry.
+   * The chain clock at the 2-D t = 0 when the preset's own inflow drives the map. A baked chain preset's inflow IS the
+   * baked routed hydrograph, which starts at its own offset (the entry front less the preroll); a preset without a
+   * baked run starts its inflow where its description puts the front, at the routed front's arrival at the entry.
    */
   private scenarioOffset(result: ChainRunResult): number {
+    if (this.bakedOffset !== null) return this.bakedOffset;
     return Number.isFinite(result.entryFront) ? result.entryFront : 0;
   }
 

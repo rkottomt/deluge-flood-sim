@@ -1465,6 +1465,10 @@ const FLOWS = [
           window.__deluge.actions.resetWater();
         });
         await D(() => window.__deluge.waitFrames(4));
+        // The timeline follows the stats readback (~300 ms), not the reset itself: wait until a readback shows the
+        // reset clock, or 'before' reads the previous run's lit stations.
+        for (let i = 0; i < 50 && (await D(() => window.__deluge.getStats()?.simTime ?? 0)) > 120; i++) await sleep(100);
+        await sleep(200); // and one timeline update (≤ 10 Hz)
         const read = () =>
           D(() => ({
             x: Number(document.querySelector('.dl-cl-frontline')?.getAttribute('x1') ?? NaN),
