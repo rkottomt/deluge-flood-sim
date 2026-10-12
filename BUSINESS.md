@@ -296,6 +296,8 @@ one-page *What Deluge answers for your business* brief, which prints. Or link st
 * `?usecase=glacier` — Nepal 2026 with the hazard chain and the Early warning designer
 * `?usecase=portfolio` — Houston with the fictional demo portfolio loaded into Impact & loss
 
+![The Use cases dialog: three cards, and the business brief behind the button at the bottom](docs/business/use-cases.jpg)
+
 The value is matched exactly against those three words; anything else is ignored with a fixed message. The demo
 portfolio is a plain CSV in [public/demo/](public/demo/); load your own under *Impact & loss → Load sites / portfolio
 CSV*, with the schema in [business-case.md §E.1](docs/research/business-case.md#e1-asset-portfolio-csv-schema-parsed-client-side-nothing-uploaded).
