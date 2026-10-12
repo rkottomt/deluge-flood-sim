@@ -10,8 +10,13 @@ import { summarizeSweep, type SweepRow } from '../loss';
 import { h } from './dom';
 
 /** A plain table (siteReport.ts has the same helper; not imported, because siteReport imports this file). */
-function table(head: string[], rows: string[][]): HTMLTableElement {
-  return h('table', null, h('thead', null, h('tr', null, ...head.map((c) => h('th', null, c)))), h('tbody', null, ...rows.map((r) => h('tr', null, ...r.map((c) => h('td', null, c))))));
+function table(head: string[], rows: string[][], durations: string[] = []): HTMLTableElement {
+  return h(
+    'table',
+    null,
+    h('thead', null, h('tr', null, ...head.map((c) => h('th', null, c)))),
+    h('tbody', null, ...rows.map((r, i) => h('tr', { 'data-sim-s': durations[i] ?? null }, ...r.map((c) => h('td', null, c))))),
+  );
 }
 
 export interface ClimateSweepPair {
@@ -30,7 +35,7 @@ export interface ClimateComparison {
   futureEal: { low: number; high: number } | null;
   /** Relative change of the EAL midpoint, or null when either side has none (or today's is 0). */
   change: number | null;
-  rows: Array<{ id: string; label: string; returnPeriod: number | null; today: number | null; future: number | null }>;
+  rows: Array<{ id: string; label: string; returnPeriod: number | null; today: number | null; future: number | null; todayS: number; futureS: number }>;
 }
 
 /** Today vs future for one site; `rpOf` gives each level's return period as the ladder has it now (user edits count). */
@@ -61,6 +66,8 @@ export function compareClimate(pair: ClimateSweepPair, siteId: string, rpOf: (le
       returnPeriod: r.level.returnPeriod,
       today: r.run.result?.loss ?? null,
       future: futureById.get(r.level.id)?.run.result?.loss ?? null,
+      todayS: r.level.durationS,
+      futureS: futureById.get(r.level.id)?.level.durationS ?? NaN,
     })),
   };
 }
@@ -90,8 +97,21 @@ export function climateCompareBlock(c: ClimateComparison, money: (v: number) => 
       table(
         ['Level', 'Loss today', `Loss ${c.label}`],
         c.rows.map((r) => [r.label + (r.returnPeriod ? ` · ${r.returnPeriod} yr` : ''), fmt(r.today), fmt(r.future)]),
+        c.rows.map((r) => `${Math.round(r.todayS)}|${Math.round(r.futureS)}`),
       ),
     ),
+    lengthWarning(c) ? h('p', { class: 'dl-impact-fine dl-warn', 'data-site': 'climate-length-warning' }, lengthWarning(c)) : null,
     h('p', { class: 'dl-impact-fine' }, CLIMATE_COMPARE_NOTE),
   );
+}
+
+/** Runs longer than asked overshoot by a readback or two; past 5 % apart, part of the difference is run length. */
+export const RUN_LENGTH_TOLERANCE = 0.05;
+
+/** A warning when a level's today and future runs differ in simulated length by more than the tolerance. */
+export function lengthWarning(c: ClimateComparison): string | null {
+  const off = c.rows.filter((r) => Number.isFinite(r.todayS) && Number.isFinite(r.futureS) && Math.abs(r.futureS - r.todayS) > RUN_LENGTH_TOLERANCE * Math.max(r.todayS, r.futureS));
+  if (!off.length) return null;
+  const list = off.map((r) => `${r.label} ${Math.round(r.todayS / 6) / 10} vs ${Math.round(r.futureS / 6) / 10} min`).join('; ');
+  return `The two runs of a level differ in simulated length (${list}): headless runs overshoot the asked time by up to a readback, so part of the change is run length, not climate. Run longer levels to shrink it.`;
 }

@@ -208,6 +208,12 @@ Measured (e2e flow 17, Houston, a lot under ~1.2 m after 10 min of Harvey's 173 
 $166 k–$203 k (+2 %); the 100-yr level's loss $3.6 M → $3.7 M. Small, because the lot is already deep under today's
 storm; a lot at the flood's edge moves much more.
 
+**Run-length noise.** Each headless sweep run overshoots the asked time by up to a readback (measured: 614–696 s for
+600 s asked), and a rain-driven loss keeps growing with time, so at 2050 the overshoot can move a level's loss as much
+as the climate does (repeat runs of the same comparison gave +2 %, +18 % and, once, −30 %). The block shows a warning
+when a level's two runs differ in length by more than 5 %; longer levels shrink the effect. A fix belongs in the
+sweep machinery (stop stepping once the asked time is reached), not here.
+
 ## F. Known gaps
 
 * No downscaling, no change in storm frequency, track or duration; no compound rain + surge in one run.

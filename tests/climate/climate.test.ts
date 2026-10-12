@@ -36,7 +36,7 @@ import { StageLevels } from '../../src/app/stage';
 import { createStore } from '../../src/app/store';
 import { ClimateLayer } from '../../src/app/climate';
 import { climateItems } from '../../src/ui/climatePanel';
-import { climateEalSentence, compareClimate } from '../../src/ui/siteClimate';
+import { climateEalSentence, compareClimate, lengthWarning } from '../../src/ui/siteClimate';
 import type { SweepRow } from '../../src/loss';
 
 const near = (a: number, b: number, eps = 1e-9) => Math.abs(a - b) <= eps;
@@ -288,6 +288,10 @@ test('today vs future: EAL from the same return periods, the future losses highe
   assert.equal(compareClimate(pair, 'other', rp), null);
   const none = compareClimate(pair, 's1', () => null)!;
   assert.match(climateEalSentence(none, String), /not computed/);
+  // Equal run lengths: no warning. A future run 10 % longer: the panel says part of the change is run length.
+  assert.equal(lengthWarning(c), null);
+  const long = { ...pair, future: new Map([['s1', pair.future.get('s1')!.map((r) => ({ ...r, level: { ...r.level, durationS: 660 } }))]]) };
+  assert.match(lengthWarning(compareClimate(long, 's1', rp)!) ?? '', /differ in simulated length .*10 vs 11 min/);
 });
 
 // ─── the chain re-runs with the grown lake ───────────────────────────────────────────────────────
