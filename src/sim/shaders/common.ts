@@ -21,9 +21,11 @@ export const ACC_PER_CELL = 2;
 /**
  * Byte size of the `Sim` uniform (keep in sync with SIM_WGSL and writeSimUniform in Solver.ts). hzTime and hzSpan are
  * read by the export pass alone (its hazard accumulators, shaders/exportState.ts): the simulated time the export
- * describes and the simulated seconds since the previous export.
+ * describes and the simulated seconds since the previous export. The rheo* fields are the scenario's debris-flow
+ * rheology (src/sim/rheology.ts; read by the momentum pass alone, rheoKind 0 = water); rheoPad keeps the struct a
+ * multiple of 16 bytes.
  */
-export const SIM_UNIFORM_BYTES = 112;
+export const SIM_UNIFORM_BYTES = 144;
 /** Byte size of the `Forcing` uniform. */
 export const FORCING_UNIFORM_BYTES = (2 * MAX_SOURCES + MAX_STORMS) * 16;
 
@@ -36,6 +38,8 @@ struct Sim {
   stageAlpha: f32, invN: f32, minSlope: f32, advection: i32,
   resetMax: i32, velDepth: f32, crGuard: f32, smoothRatio: f32,
   bFrMax: f32, wallAdv: f32, hzTime: f32, hzSpan: f32,
+  rheoKind: i32, rheoTau: f32, rheoMu: f32, rheoVisc: f32,
+  rheoN2: f32, rheoGXi: f32, rheoHVisc: f32, rheoPad: f32,
 };
 `;
 
