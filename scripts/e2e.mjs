@@ -482,8 +482,8 @@ const FLOWS = [
       // The Try-it strip offers the demo moments in pitch order: Evacuate before the levee, so building the levee
       // (which replays the rise) visibly re-plans a route that is already on screen.
       if (PRESET === 'pittsburgh') {
-        const order = await D(() => [...document.querySelectorAll('.dl-try-step')].map((b) => b.dataset.step));
-        const labels = await D(() => [...document.querySelectorAll('.dl-try-step')].map((b) => b.textContent.trim()));
+        const order = await D(() => [...document.querySelectorAll('.dl-try-step:not([hidden])')].map((b) => b.dataset.step));
+        const labels = await D(() => [...document.querySelectorAll('.dl-try-step:not([hidden])')].map((b) => b.textContent.trim()));
         check(r, 'Try-it strip order: raise, evacuate, levee, rain', order.join(',') === 'flood,evac,levee,rain', labels.join(' · '));
       }
       await sleep(2600); // camera fly-in
