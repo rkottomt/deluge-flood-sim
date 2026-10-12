@@ -14,6 +14,7 @@
  *   egress.ts     when every road route from a site to a shelter closes (router over the arrival-ordered flood)
  *   site.ts       site check: one planned building across a ladder of events, FFE, mitigation options, verdict, link
  *   ladders.ts    sourced event ladders (NWS categories, FEMA/NOAA frequency levels, historic crests) per preset
+ *   ensemble.ts   flood-probability ensembles: Latin-hypercube perturbations, member forcing, p10/p50/p90, tallies
  *
  * analyze() below strings them together for the UI.
  */
@@ -40,6 +41,7 @@ export * from './fallback';
 export * from './egress';
 export * from './site';
 export * from './ladders';
+export * from './ensemble';
 
 /**
  * Presets whose flood is debris-laden (a glacial-lake outburst): the heuristic dv × 1.5 rule applies by default
