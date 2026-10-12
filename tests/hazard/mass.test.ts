@@ -85,14 +85,60 @@ test('impulse wave: P grows with slide speed and mass; a big freeboard survives,
   const mass: MassMovement = { volume: 14.7e6, iceFraction: 0.1, fallHeight: 300, pathLength: 800 };
   const w = impulseWave(mass, lake);
   assert.ok(w.P > 0 && w.hMax > w.heightAtDam && w.heightAtDam > 0);
-  // South Lhonak 2023 observed a ~20 m wave; these [M] coefficients give the same order (tens of m), not the number.
-  assert.ok(w.heightAtDam > 10 && w.heightAtDam < 100, `wave ${w.heightAtDam} m`);
+  assert.ok(w.heightAtDam > 5 && w.heightAtDam < 100, `wave ${w.heightAtDam} m`);
   assert.ok(impulseWave({ ...mass, volume: 1e6 }, lake).P < w.P, 'smaller slide, smaller P');
   const ot = overtopping(w, lake);
   assert.ok(ot.overtops && ot.volume > 0);
   close(ot.pulse.series.total, ot.volume, 1e-6 * ot.volume, 'pulse volume');
   const safe = overtopping(impulseWave({ ...mass, volume: 1e4, fallHeight: 50 }, lake), { ...lake, freeboard: 30 });
   assert.ok(!safe.overtops && safe.volume === 0, 'the lake survived');
+});
+
+test('impulse wave: the manual’s 2-D coefficients (Evers et al. 2019, eqs. 3.13–3.19), checked against the text', () => {
+  // A slide built so P comes out exactly 1: F = 1, S = 1, M = 1, α = 0 (cos 0 = 1). Then H_M = 5/9·h, a = 4/5·H,
+  // x_M = 5.5·h, and the flume decay at X = 27 is (3/4)·(27^(−1/3))^(4/5)·h = (3/4)·3^(−4/5)·h.
+  const h = 50;
+  const lake: GlacialLake = { id: 'l', name: 'l', lat: 0, lon: 0, elevation: 0, area: 1e8, volume: { median: h * 1e8, lo: 1, hi: 1, method: 'bathymetry' }, damType: 'moraine', freeboard: 1 };
+  // v_s = √(g·h) needs fallHeight − μ·L = h/2 (the energy line); s = h; M = ρ_s·V/(ρ_w·b·h²) = 1 with ice (917 kg/m³).
+  const b = 100;
+  const volume = (1000 * b * h * h) / 917;
+  const mu = mobilityRatio({ volume, iceFraction: 1, fallHeight: 1, pathLength: 1 });
+  const mass: MassMovement = { volume, iceFraction: 1, fallHeight: h / 2 + mu * 1000, pathLength: 1000, thickness: h, width: b, impactAngleDeg: 0 };
+  const w = impulseWave(mass, lake, { depth: h, distance: 27 * h, spreadDeg: 0 });
+  close(w.P, 1, 1e-9, 'P');
+  close(w.hMax, (5 / 9) * h, 1e-9, 'H_M = (5/9)·P^(4/5)·h (3.13)');
+  close(w.aMax, (4 / 9) * h, 1e-9, 'a_M = (4/5)·H_M (3.16)');
+  close(w.xM, 5.5 * h, 1e-9, 'x_M = (11/2)·P^½·h (3.14)');
+  close(w.heightAtDam2D, 0.75 * Math.pow(3, -0.8) * h, 1e-9, 'H(x) (3.19)');
+  close(w.heightAtDam, w.heightAtDam2D, 1e-9, 'a flume (β = 0) does not spread');
+  close(w.amplitudeAtDam, 0.8 * w.heightAtDam2D, 1e-9, 'the dam sees the crest, a = 0.8·H');
+  close(w.period, 9 * Math.pow(27, 5 / 16) * Math.sqrt(h / 9.81), 1e-9, 'T(x) (3.20)');
+  // Open water spreads the front (Ruffini et al. 2019, eq. 4.3) and a dam off the slide's axis sees less (cos²(2γ′/3)).
+  const open = impulseWave(mass, lake, { depth: h, distance: 27 * h });
+  assert.ok(open.heightAtDam < w.heightAtDam, 'open water lowers the wave');
+  const side = impulseWave(mass, lake, { depth: h, distance: 27 * h, angleDeg: 90 });
+  close(side.heightAtDam / open.heightAtDam, Math.cos(deg(60)) ** 2, 1e-9, 'γ′ = 90°: cos²(60°) = 1/4');
+});
+
+test('impulse wave: South Lhonak 2023 — the flume equations gave 46 m, the spreading lake ~15 m, against ~20 m observed', () => {
+  const lake: GlacialLake = {
+    id: 'south-lhonak',
+    name: 'South Lhonak Lake',
+    lat: 27.9125,
+    lon: 88.1964,
+    elevation: 5200,
+    area: 1.674e6,
+    volume: { median: 102.4e6, lo: 76.8e6, hi: 128e6, method: 'empirical' },
+    damType: 'moraine',
+  };
+  const mass: MassMovement = { volume: 14.7e6, iceFraction: 0.2, fallHeight: 150, pathLength: 500 };
+  const w = impulseWave(mass, lake, { distance: 1330, angleDeg: 77 });
+  close(w.P, 2.79, 0.01, 'P');
+  close(w.heightAtDam2D, 46, 1, 'the first version’s flume answer');
+  assert.ok(w.heightAtDam > 10 && w.heightAtDam < 25, `wave ${w.heightAtDam.toFixed(1)} m at the outlet vs ~20 m observed (Sattar et al. 2025)`);
+  assert.ok(w.warnings.some((x) => /^M = /.test(x)), 'M ≈ 14 is outside the tested range, and says so');
+  const ot = overtopping(w, lake);
+  close(ot.excess, w.amplitudeAtDam - 1, 1e-9, 'overtopping by the crest above the 1 m default freeboard');
 });
 
 test('dam height: V = A(H)·L solved for H', () => {

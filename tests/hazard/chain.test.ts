@@ -6,7 +6,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { ChainFile, GlacialLake, HazardChainSpec } from '../../src/hazard/types';
-import { domainClockOffset, quantile, runChain, runEnsemble, toWaterSource } from '../../src/hazard/chain';
+import { domainClockOffset, massTravelTime, quantile, runChain, runEnsemble, toWaterSource } from '../../src/hazard/chain';
 import { meanInflow } from '../../src/sim/forcing';
 import { syntheticValley } from '../helpers/valley';
 
@@ -136,6 +136,23 @@ test('massIntoRiver: direct flow carries its sediment; a transient dam fills, th
   assert.ok(t.sourceInfo.dam && t.sourceInfo.dam.height > 1 && t.sourceInfo.dam.impounded > 0);
   assert.ok(t.source.t[0] >= t.sourceInfo.dam.fillTime - 1e-6, 'nothing leaves before the impoundment is full');
   assert.ok(t.sourceInfo.flood);
+});
+
+test('mass movements: the avalanche’s own travel is on the clock — nothing leaves the impact before pathLength / travelSpeed', () => {
+  const file = valley();
+  const spec = (travelSpeed?: number): HazardChainSpec => ({
+    ...breachSpec(),
+    trigger: { kind: 'massIntoRiver', mass: { volume: 5e6, iceFraction: 0.3, fallHeight: 1500, pathLength: 6000, ...(travelSpeed ? { travelSpeed } : {}) }, mode: 'directFlow', baseflow: 15 },
+  });
+  const slow = runChain(spec(30), file);
+  const dflt = runChain(spec(), file);
+  close(massTravelTime({ volume: 1, iceFraction: 0, fallHeight: 1, pathLength: 6000, travelSpeed: 30 }), 200, 1e-9, '6 km at 30 m/s');
+  close(slow.sourceInfo.travelTime!, 200, 1e-9, 'source info');
+  close(dflt.sourceInfo.travelTime!, 6000 / 50, 1e-9, 'default AVALANCHE_SPEED 50 m/s');
+  assert.ok(slow.source.t[0] >= 200 - 1e-9 && dflt.source.t[0] >= 120 - 1e-9, 'the hydrograph starts when the mass arrives');
+  // Same flood, shifted: the downstream fronts move by the difference in travel time.
+  const st = (r: typeof slow) => r.stations[r.stations.length - 1].tFront;
+  close(st(slow) - st(dflt), 80, 15, 'fronts shift by the extra 80 s');
 });
 
 test('meltAnomaly: no flood wave — the entry carries the raised baseflow; given: the series as published', () => {

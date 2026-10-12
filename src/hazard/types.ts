@@ -88,12 +88,30 @@ export interface MassMovement {
   impactAngleDeg?: number;
   thickness?: number;
   width?: number;
+  /**
+   * Mean speed of the mass from detachment to the end of its path, m/s (default AVALANCHE_SPEED, 50). The chain's
+   * clock starts at the collapse (its seismic signal), so the water cannot leave the impact point before
+   * pathLength / travelSpeed — the avalanche's own travel time.
+   */
+  travelSpeed?: number;
+}
+
+/**
+ * Where a lake's dam lies relative to a slide entering it, for the impulse wave's spreading (src/hazard/mass.ts
+ * impulseWave). All optional: depth = the lake's mean depth, distance = √area, angle 0 (the dam straight ahead of the
+ * slide), spread 90° (open water).
+ */
+export interface ImpulseGeometry {
+  depth?: number;
+  distance?: number;
+  angleDeg?: number;
+  spreadDeg?: number;
 }
 
 /** What starts the chain. */
 export type HazardTrigger =
   | { kind: 'breach'; lake: GlacialLake; breach: BreachParams }
-  | { kind: 'massIntoLake'; lake: GlacialLake; mass: MassMovement; breach: BreachParams }
+  | { kind: 'massIntoLake'; lake: GlacialLake; mass: MassMovement; breach: BreachParams; wave?: ImpulseGeometry }
   | { kind: 'massIntoRiver'; mass: MassMovement; mode: 'transientDam' | 'directFlow'; damLength?: number; baseflow: number }
   | { kind: 'meltAnomaly'; glacierArea: number; meanElevation: number; debrisFraction: number; deltaT: number; days: number }
   | { kind: 'given'; hydrograph: Array<[number, number]>; provenance: Provenance };
@@ -209,7 +227,8 @@ export interface HazardChainSpec {
  *     "generator": "scripts/bake-chain-result.ts",
  *     "provenance": "modelled",                 // every number below is the model's, never an observation
  *     "label": "…",                             // one-line caption for the UI
- *     "run": { "routeDx": 100, "memberDx": 250, "members": 9, "ms": 180, "note": "…" },
+ *     "run": { "routeDx": 100, "memberDx": 100, "members": 9, "ms": 1800, "note": "…",
+ *              "member": { "volumeFactor": 1, "erosionRate": 30, "cv": 0.2 } },  // which member this run is
  *     "source": { "trigger": "massIntoRiver", "volume": …, "peak": …, "tPeak": …, "cv": 0.4, "notes": ["…"] },
  *     "stations": [                             // in chainage order, one per ChainFile station
  *       { "name": "Betrawati", "s": 60300, "kind": "town",
@@ -240,7 +259,15 @@ export interface BakedChainResult {
   provenance: 'modelled';
   label: string;
   /** Grid of the deterministic run (m), of the ensemble members (m), member count, wall time (ms), and a caption. */
-  run: { routeDx: number; memberDx: number; members: number; ms: number; note: string };
+  run: {
+    routeDx: number;
+    memberDx: number;
+    members: number;
+    ms: number;
+    note: string;
+    /** The ensemble member this run is (its chain.ts ChainOverrides): the median of the members' entry peaks. */
+    member?: { volumeFactor: number; erosionRate?: number; cv: number };
+  };
   source: { trigger: HazardTrigger['kind']; volume: number; peak: number; tPeak: number; cv: number; notes: string[] };
   stations: BakedStationResult[];
   entry: { s: number; tFront: number | null; qPeak: number; volume: number; baseflow: number; band?: BakedBand };

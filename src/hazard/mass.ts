@@ -6,7 +6,7 @@
  * Everything here is an empirical relation with a wide scatter. The functions return the intermediate numbers (H/L,
  * the impulse product P, the dam height …) so the UI can show WHY the chain went the way it did, not just the answer.
  */
-import type { GlacialLake, MassMovement } from './types';
+import type { GlacialLake, ImpulseGeometry, MassMovement } from './types';
 import {
   DEBRIS_FLOW_STOP_RATIO,
   DIRECT_FLOW_CV,
@@ -18,6 +18,8 @@ import {
   ICE_RICH_FRACTION,
   IMPACT_ANGLE,
   IMPACT_VELOCITY_MAX,
+  IMPULSE_A_BREAK,
+  IMPULSE_SPREAD_DEG,
   NTD_A,
   NTD_B,
   OVERTOPPING_COEFF,
@@ -115,23 +117,77 @@ export interface ImpulseWave {
   distance: number;
   /** Impact velocity, m/s. */
   vs: number;
-  /** Max near-field amplitude and wave height, m. */
+  /** Max near-field crest amplitude and wave height in a laterally confined (2-D) reservoir, m, and its distance from
+   * the impact, m (eqs. 3.13, 3.14, 3.16). */
   aMax: number;
   hMax: number;
-  /** Wave height arriving at the dam, m. */
+  xM: number;
+  /** Wave height and crest amplitude arriving at the dam, m (the lower of the 2-D decay and the spreading estimate). */
   heightAtDam: number;
+  amplitudeAtDam: number;
+  /** What the dam sees if the lake were a flume (eq. 3.19, a = 0.8 H): the old answer, kept for comparison. */
+  heightAtDam2D: number;
+  /** Wave period at the dam, s (eq. 3.20), and the wave type that picks the spreading pre-factors (Table 4-1). */
+  period: number;
+  waveType: 'Stokes' | 'cnoidal' | 'solitary';
+  /** Spreading geometry used: side angle β and propagation angle γ′ from the slide axis to the dam, rad. */
+  spread: number;
+  angle: number;
+  /** Parameters outside the laboratory ranges the equations were fitted on (manual Table 3-2), and caps applied. */
+  warnings: string[];
 }
 
 /**
- * Heller & Hager 2010 impulse-product parameter and the wave it makes (spec §C.2):
- *   F = v_s/√(gh)   S = s/h   M = m_s/(ρ_w·b·h²)   P = F·S^½·M^¼·{cos[(6/7)α]}^½        [V for P]
- *   a_M/h = (4/9)·P^0.8   H_M/h = (5/9)·P^0.8                                             [M]
- *   H(x)/h = (3/4)·[P·X^(−1/3)]^0.8, X = x/h  (decay with distance), capped at H_M        [M]
- * Depth defaults to the lake's mean depth V/A, distance to √A (one lake length).
+ * Where the dam lies relative to the slide (types.ts ImpulseGeometry): depth in the impact zone (default the lake's
+ * mean depth V/A), distance to the dam (default √A), angle γ′ between the slide's direction of travel and the line to
+ * the dam (default 0°), water-body side angle β (0° a flume, default 90° open water).
  */
-export function impulseWave(mass: MassMovement, lake: GlacialLake, opts: { depth?: number; distance?: number } = {}): ImpulseWave {
-  const h = Math.max(1, opts.depth ?? (lake.area > 0 ? lake.volume.median / lake.area : 10));
-  const x = Math.max(h, opts.distance ?? Math.sqrt(Math.max(lake.area, 0)));
+export type WaveGeometry = ImpulseGeometry;
+
+/**
+ * Wave-type classification and the Ruffini et al. (2019) pre-factors κ for wave height and crest amplitude, from
+ * Evers et al. 2019 manual Table 4-1 [V for κ; the class bounds T < (4/5)F^(−7/5) Stokes, ≤ 11·F^(−5/2) cnoidal, else
+ * solitary, as read from the same table]. T = S^(1/3)·M·cos[(6/7)α] is the wave type product.
+ */
+function waveTypeOf(F: number, S: number, M: number, alpha: number): { type: ImpulseWave['waveType']; kH: number; kA: number } {
+  const T = Math.cbrt(S) * M * Math.cos((6 / 7) * alpha);
+  if (T < 0.8 * Math.pow(F, -1.4)) return { type: 'Stokes', kH: 1.1, kA: 1.01 };
+  if (T <= 11 * Math.pow(F, -2.5)) return { type: 'cnoidal', kH: 1.03, kA: 0.85 };
+  return { type: 'solitary', kH: 1.2, kA: 0.84 };
+}
+
+/**
+ * Impulse wave in a lake from a mass movement (spec §C.2), from the VAW / Swiss Federal Office of Energy impulse-wave
+ * manual: Evers, Heller, Fuchs, Hager & Boes, "Landslide-generated Impulse Waves in Reservoirs — Basics and
+ * Computation", 2nd ed. v2.1 (SFOE, June 2023), which collects Heller & Hager 2010 (J. Waterway Port Coastal Ocean
+ * Eng. 136(3):145–155) and Ruffini et al. 2019. Every coefficient below was checked against that text in Oct 2026 [V]:
+ *
+ *   F = v_s/√(gh)   S = s/h   M = ρ_s·V_s/(ρ_w·b·h²)   P = F·S^½·M^¼·{cos[(6/7)α]}^½          (3.12)
+ *   H_M = (5/9)·P^(4/5)·h        x_M = (11/2)·P^½·h        a = (4/5)·H                       (3.13, 3.14, 3.16)
+ *   H(x) = (3/4)·(P·X^(−1/3))^(4/5)·h  for X = x/h > X_M      T(x) = 9·P^¼·X^(5/16)·√(h/g)    (3.19, 3.20)
+ *
+ * Those are the "extreme case (a)": a wave running down a laterally CONFINED channel (a flume). A lake is not one:
+ * the manual (§4.2.1) reports 3-D waves 2.7–8.4× smaller than 2-D at the same distance, and gives Ruffini et al.'s
+ * energy argument for geometries in between, which this function applies from the end of the generation zone
+ * (r′ = distance − x_M):
+ *
+ *   H(r′, γ′, β) = κ_H · H_M · (b/l_w)^½ · cos²(2γ′/3),   l_w = b + 2·r′·β   (wave front length)   (4.2, 4.3)
+ *   a(r′, γ′, β) = κ_A · a_M · (b/l_w)^½ · cos²(2γ′/3)                                          (4.4)
+ *
+ * with β the water body's side angle (90° = open water) and γ′ the angle from the slide axis to the dam. The answer is
+ * the lower of that and the flume decay (3.19) — spreading can only lower a wave. The dam sees the CREST AMPLITUDE a
+ * (the manual's overtopping criterion is a > f, eq. 3.38), not the height H, which includes the trough: the first
+ * version compared H with the freeboard. Finally a ≤ 0.78·h, the largest crest amplitude of a non-breaking solitary
+ * wave (manual §3.3.3): a taller crest breaks and spends its energy before the dam [V for 0.78; its use as a cap is H].
+ *
+ * Calibration [C]: South Lhonak 2023 (14.7 Mm³ into a 1.67 km², ~61 m mean-depth lake; ~20 m wave observed): the
+ * flume equations give H = 46 m at the outlet; open-water spreading with the lateral-moraine geometry of chain-defs.ts
+ * (γ′ ≈ 77°) gives ≈ 15 m. The equations' laboratory ranges are reported as `warnings` (South Lhonak's M ≈ 14 is
+ * above the tested 10).
+ */
+export function impulseWave(mass: MassMovement, lake: GlacialLake, geo: WaveGeometry = {}): ImpulseWave {
+  const h = Math.max(1, geo.depth ?? (lake.area > 0 ? lake.volume.median / lake.area : 10));
+  const x = Math.max(h, geo.distance ?? Math.sqrt(Math.max(lake.area, 0)));
   const L13 = Math.cbrt(mass.volume);
   const s = mass.thickness ?? SLIDE_THICKNESS_FACTOR * L13;
   const b = mass.width ?? SLIDE_WIDTH_FACTOR * L13;
@@ -141,11 +197,60 @@ export function impulseWave(mass: MassMovement, lake: GlacialLake, opts: { depth
   const S = s / h;
   const M = (slideDensity(mass) * mass.volume) / (RHO_WATER * b * h * h);
   const P = F * Math.sqrt(S) * Math.pow(M, 0.25) * Math.sqrt(Math.max(0, Math.cos((6 / 7) * alpha)));
-  const aMax = h * (4 / 9) * Math.pow(P, 0.8);
-  const hMax = h * (5 / 9) * Math.pow(P, 0.8);
+  const P45 = Math.pow(P, 0.8);
+  const hMax = h * (5 / 9) * P45;
+  const aMax = h * (4 / 9) * P45;
+  const xM = 5.5 * Math.sqrt(P) * h;
   const X = x / h;
-  const heightAtDam = Math.min(hMax, h * 0.75 * Math.pow(P * Math.pow(X, -1 / 3), 0.8));
-  return { F, S, M, alpha, P, depth: h, distance: x, vs, aMax, hMax, heightAtDam };
+  const warnings: string[] = [];
+  // Flume decay (3.19), valid beyond x_M; nearer than that the wave is still the near-field maximum.
+  const h2D = x > xM ? Math.min(hMax, h * 0.75 * Math.pow(P * Math.pow(X, -1 / 3), 0.8)) : hMax;
+  // Spreading (Ruffini et al. 2019 via the manual §4.2.1).
+  const spread = (geo.spreadDeg ?? IMPULSE_SPREAD_DEG) * DEG;
+  const angle = Math.min(90, Math.abs(geo.angleDeg ?? 0)) * DEG;
+  const wt = waveTypeOf(F, S, M, alpha);
+  const rp = Math.max(0, x - xM);
+  const lw = b + 2 * rp * spread;
+  const lateral = Math.pow(Math.cos((2 * angle) / 3), 2);
+  const shrink = Math.sqrt(b / lw) * lateral;
+  let heightAtDam = Math.min(h2D, wt.kH * hMax * shrink);
+  let amplitudeAtDam = Math.min(0.8 * h2D, wt.kA * aMax * shrink);
+  if (amplitudeAtDam > IMPULSE_A_BREAK * h) {
+    warnings.push(`crest amplitude capped at ${IMPULSE_A_BREAK}·h (breaking limit of a solitary wave)`);
+    const f = (IMPULSE_A_BREAK * h) / amplitudeAtDam;
+    amplitudeAtDam *= f;
+    heightAtDam *= f;
+  }
+  const range = (name: string, v: number, lo: number, hi: number) => {
+    if (v < lo || v > hi) warnings.push(`${name} = ${v.toFixed(2)} outside the tested ${lo}–${hi}`);
+  };
+  range('F', F, 0.86, 6.83);
+  range('S', S, 0.09, 1.64);
+  range('M', M, 0.11, 10.02);
+  range('P', P, 0.17, 8.13);
+  if (alpha < 30 * DEG - 1e-9) warnings.push('impact angle below the tested 30°');
+  const period = 9 * Math.pow(P, 0.25) * Math.pow(Math.max(X, xM / h), 5 / 16) * Math.sqrt(h / G);
+  return {
+    F,
+    S,
+    M,
+    alpha,
+    P,
+    depth: h,
+    distance: x,
+    vs,
+    aMax,
+    hMax,
+    xM,
+    heightAtDam,
+    amplitudeAtDam,
+    heightAtDam2D: h2D,
+    period,
+    waveType: wt.type,
+    spread,
+    angle,
+    warnings,
+  };
 }
 
 export interface Overtopping {
@@ -159,13 +264,14 @@ export interface Overtopping {
 }
 
 /**
- * Does the wave clear the dam (spec §C.2)? H < f: no — the lake survived, a valid outcome to show. H ≥ f: an
- * overtopping pulse (V_ot = (H − f)·A·0.3 [H], released over 60 s) and a breach that starts with the crest already
- * scoured by (H − f) and cuts at the triggered rate (chain.ts).
+ * Does the wave clear the dam (spec §C.2)? Crest amplitude a ≤ f: no — the lake survived, a valid outcome to show.
+ * a > f (the manual's criterion, eq. 3.38's a_w = a − f): an overtopping pulse (V_ot = (a − f)·A·0.3 [H], released
+ * over 60 s) and a breach that starts with the crest already scoured by (a − f) and cuts at the triggered rate
+ * (chain.ts).
  */
 export function overtopping(wave: ImpulseWave, lake: GlacialLake): Overtopping {
   const f = lake.freeboard ?? FREEBOARD_DEFAULT;
-  const excess = Math.max(0, wave.heightAtDam - f);
+  const excess = Math.max(0, wave.amplitudeAtDam - f);
   if (!(excess > 0)) {
     return { overtops: false, excess: 0, volume: 0, pulse: { series: new Series([0, 1], [0, 0]), volume: 0, peak: 0, tPeak: 0 } };
   }

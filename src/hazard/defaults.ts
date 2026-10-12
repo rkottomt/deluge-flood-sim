@@ -94,7 +94,23 @@ export const ICE_RICH_FRACTION = 0.2;
 /** GLOF-induced debris flows stop where the mean slope from the source falls to 11° (H/L ≈ 0.19) — Huggel et al.
  * 2003 NHESS 3:647. [V] */
 export const DEBRIS_FLOW_STOP_RATIO = Math.tan((11 * Math.PI) / 180);
-/** Impulse-wave overtopping volume coefficient c_ot in V_ot = (H − f)·A·c_ot. [H — flag on screen] */
+/**
+ * Water-body side angle β of a lake for the impulse wave's spreading, degrees (Ruffini et al. 2019 via Evers et al.
+ * 2019 manual §4.2.1): 0 = a flume, 90 = open water. A lake is open water to a slide narrower than it; the manual
+ * notes that even a corner impact behaves far closer to 3-D than to 2-D (Heller et al. 2012). [V for the method,
+ * H for applying 90° to every lake]
+ */
+export const IMPULSE_SPREAD_DEG = 90;
+/** Largest crest amplitude / depth of a non-breaking solitary wave on a horizontal bed (manual §3.3.3). [V] */
+export const IMPULSE_A_BREAK = 0.78;
+/**
+ * Mean speed of an ice-rock avalanche from detachment to the end of its path, m/s, to time its arrival at the river
+ * or lake (the chain's clock starts at the seismic signal of the collapse). ≈ 50 m/s is the speed the OPRI
+ * reconstruction of the 2026 Lirung event gives for the flow the debris became "within three minutes of the impact"
+ * (OPRI, "The Langtang Collapse", Sep 2026) [S]; large rock-ice avalanches are reported at tens of m/s. [H as a default]
+ */
+export const AVALANCHE_SPEED = 50;
+/** Impulse-wave overtopping volume coefficient c_ot in V_ot = (a − f)·A·c_ot. [H — flag on screen] */
 export const OVERTOPPING_COEFF = 0.3;
 /** Duration over which the overtopping pulse is released, s (Q = V_ot / 60 s). [H] */
 export const OVERTOPPING_PULSE = 60;

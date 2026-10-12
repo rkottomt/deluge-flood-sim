@@ -13,6 +13,7 @@ import type { WaterSource } from '../contracts';
 import type { ChainFile, ChainResult, ChainStation, HazardChainSpec, HazardTrigger, MassMovement } from './types';
 import { breachHydrograph, type Hydrograph } from './breach';
 import {
+  AVALANCHE_SPEED,
   BASEFLOW_DEFAULT,
   CV_ENSEMBLE,
   DAM_LENGTH,
@@ -66,6 +67,19 @@ export interface SourceInfo {
   dam?: { height: number; impounded: number; fillTime: number };
   /** Melt anomaly: extra baseflow, m³/s. */
   meltQ?: number;
+  /** Mass movements: seconds from the collapse (clock zero) to the mass reaching the lake or river. */
+  travelTime?: number;
+}
+
+/**
+ * The avalanche's own travel time, s: path length / mean speed (MassMovement.travelSpeed, default AVALANCHE_SPEED).
+ * The chain's clock starts at the collapse — for a real event, its seismic signal — and no water leaves the impact
+ * point before the mass gets there. Observed arrival times downstream include this; the routing must not be tuned to
+ * absorb it.
+ */
+export function massTravelTime(mass: MassMovement): number {
+  const v = mass.travelSpeed ?? AVALANCHE_SPEED;
+  return v > 0 && mass.pathLength > 0 ? mass.pathLength / v : 0;
 }
 
 /** A station's read-out (ChainResult.stations entry plus what the UI also wants). */
@@ -93,7 +107,7 @@ export interface ChainRunResult extends ChainResult {
   /** Front arrival and peak at the domain entry (also the ensemble's subject). */
   entryFront: number;
   entryPeak: number;
-  routing: { steps: number; ms: number; tEnd: number; capped: number; uPeak: number; massBalance: MassBalance; dx: number };
+  routing: { steps: number; nodeSteps: number; ms: number; tEnd: number; capped: number; uPeak: number; massBalance: MassBalance; dx: number };
 }
 
 // ────────────────────────────────────────────────────────────────────────────────────────────
@@ -141,18 +155,28 @@ function sourceOf(trigger: HazardTrigger, file: ChainFile, ov: ChainOverrides, b
         notes.push(`the mass stops short of the lake (path H/L ${ro.pathRatio.toFixed(2)} < mobility ${ro.mobility.toFixed(2)})`);
         return { series: zeroSeries(), info: info(0, false, { runout: ro }), extraBase: 0 };
       }
-      const wave = impulseWave(mass, lake);
+      const wave = impulseWave(mass, lake, trigger.wave);
       const ot = overtopping(wave, lake);
+      const travel = massTravelTime(mass);
+      notes.push(`the mass reaches the lake ${(travel / 60).toFixed(1)} min after the collapse (${(mass.pathLength / 1000).toFixed(1)} km at ${(mass.travelSpeed ?? AVALANCHE_SPEED).toFixed(0)} m/s)`);
+      notes.push(
+        `impulse wave ${wave.waveType}: H ${wave.heightAtDam.toFixed(1)} m, crest ${wave.amplitudeAtDam.toFixed(1)} m at the dam ${(wave.distance / 1000).toFixed(2)} km away (flume value ${wave.heightAtDam2D.toFixed(1)} m; spreading β ${((wave.spread * 180) / Math.PI).toFixed(0)}°, γ′ ${((wave.angle * 180) / Math.PI).toFixed(0)}°)` +
+          (wave.warnings.length ? `; ${wave.warnings.join('; ')}` : ''),
+      );
       if (!ot.overtops) {
-        notes.push(`wave ${wave.heightAtDam.toFixed(1)} m at the dam does not clear the freeboard — the lake survived`);
+        notes.push(`crest ${wave.amplitudeAtDam.toFixed(1)} m at the dam does not clear the freeboard — the lake survived`);
         return { series: zeroSeries(), info: info(0, false, { runout: ro, wave }), extraBase: 0 };
       }
       // The surge has already scoured the crest by (H − f) and cuts at the triggered rate (spec §C.2).
       const drain = drainableVolume(lake.volume.median, lake.area, breach.finalDepth, breach.hypsometry || LAKE_HYPSOMETRY);
       const k = ov.erosionRate ?? Math.max(breach.erosionRate, EROSION_RATE_TRIGGERED);
       const b = breachHydrograph(Math.max(0, drain - ot.volume), { ...breach, model: breach.model, erosionRate: k }, { startHead: Math.min(breach.finalDepth, ot.excess) });
-      notes.push(`wave ${wave.heightAtDam.toFixed(1)} m at the dam (P = ${wave.P.toFixed(2)}): overtops by ${ot.excess.toFixed(1)} m, ${(ot.volume / 1e6).toFixed(2)} Mm³ pulse, breach at ${k} m/h`);
-      return { series: sumSeries([ot.pulse.series, b.series]), info: info(ov.cv ?? 0, true, { runout: ro, wave, overtopVolume: ot.volume }), extraBase: 0 };
+      notes.push(`P = ${wave.P.toFixed(2)}: overtops by ${ot.excess.toFixed(1)} m, ${(ot.volume / 1e6).toFixed(2)} Mm³ pulse, breach at ${k} m/h`);
+      return {
+        series: sumSeries([ot.pulse.series, b.series]).shifted(travel),
+        info: info(ov.cv ?? 0, true, { runout: ro, wave, overtopVolume: ot.volume, travelTime: travel }),
+        extraBase: 0,
+      };
     }
     case 'massIntoRiver': {
       const mass = scaledMass(trigger.mass, vf);
@@ -161,10 +185,12 @@ function sourceOf(trigger: HazardTrigger, file: ChainFile, ov: ChainOverrides, b
         notes.push(`the mass stops short of the river (path H/L ${ro.pathRatio.toFixed(2)} < mobility ${ro.mobility.toFixed(2)})`);
         return { series: zeroSeries(), info: info(0, false, { runout: ro }), extraBase: 0 };
       }
+      const travel = massTravelTime(mass);
+      notes.push(`the mass reaches the river ${(travel / 60).toFixed(1)} min after the collapse (${(mass.pathLength / 1000).toFixed(1)} km at ${(mass.travelSpeed ?? AVALANCHE_SPEED).toFixed(0)} m/s)`);
       if (trigger.mode === 'directFlow') {
         const df = directFlow(mass, { cv: ov.cv });
         notes.push(`direct flow: ${(df.water / 1e6).toFixed(1)} Mm³ of melt water, ${(df.mixture / 1e6).toFixed(1)} Mm³ at Cv ${df.cv.toFixed(2)}, peak ${df.peak.toFixed(0)} m³/s`);
-        return { series: df.series, info: info(df.cv, df.volume > 0, { runout: ro }), extraBase: 0 };
+        return { series: df.series.shifted(travel), info: info(df.cv, df.volume > 0, { runout: ro, travelTime: travel }), extraBase: 0 };
       }
       // Transient dam: the deposit blocks the valley at the impact, the river fills the impoundment, then it breaches
       // like an ice-rich, uncompacted dam (spec §C.3 branch 1).
@@ -188,8 +214,8 @@ function sourceOf(trigger: HazardTrigger, file: ChainFile, ov: ChainOverrides, b
       // The river's own baseflow keeps flowing in the routing while the lake fills (simplification: the dry river bed
       // below a blockage — itself a warning sign — is not modelled), so the breach ODE takes no inflow.
       return {
-        series: b.series.shifted(fill),
-        info: info(ov.cv ?? 0, b.volume > 0, { runout: ro, dam: { height: H, impounded: imp.volume, fillTime: fill } }),
+        series: b.series.shifted(travel + fill),
+        info: info(ov.cv ?? 0, b.volume > 0, { runout: ro, travelTime: travel, dam: { height: H, impounded: imp.volume, fillTime: fill } }),
         extraBase: 0,
       };
     }
@@ -278,7 +304,7 @@ export function runChain(spec: HazardChainSpec, file: ChainFile, overrides: Chai
     entryCv: Array.from(r.entry.cv),
     entryFront,
     entryPeak,
-    routing: { steps: r.steps, ms: r.ms, tEnd: r.tEnd, capped: r.capped, uPeak: r.uPeak, massBalance: r.massBalance, dx: ov.routeDx ?? ROUTING_DX },
+    routing: { steps: r.steps, nodeSteps: r.nodeSteps, ms: r.ms, tEnd: r.tEnd, capped: r.capped, uPeak: r.uPeak, massBalance: r.massBalance, dx: ov.routeDx ?? ROUTING_DX },
   };
 }
 
@@ -334,24 +360,38 @@ function erosionRates(trigger: HazardTrigger): Array<number | undefined> {
 }
 
 /**
+ * Grid of the ensemble members, m. The baked 100 m: with the quiescent-reach window, the exact per-node CFL step and
+ * the early stop below, a member on the full grid costs what a 250 m member used to — and a coarser member is not
+ * the same model: on Nepal's DEM profile 250 m members ran the front ~15 % faster than the 100 m deterministic run,
+ * so their band did not bracket it.
+ */
+export const MEMBER_DX = ROUTING_DX;
+/**
+ * A member stops once the flood at the furthest station is back under half its peak excess and the valley holds less
+ * than half the most flood water it held (routing.ts stopFraction): every front and peak is behind it by then, and a
+ * member reports nothing else. The deterministic run keeps the full recession — its entry hydrograph is the 2-D inflow.
+ */
+export const MEMBER_STOP_FRACTION = 0.5;
+
+/**
  * The 3 × 3 × 3 ensemble of spec §I.5 — volume lo/median/hi × erosion rate 10/30/100 m/h × source Cv 0/0.2/0.4 —
  * collapsing dimensions a trigger does not have (a given hydrograph has no volume band or erosion rate). Members are
- * routed on a coarser grid (default 250 m: ~6× faster) — their spread is the point, not their last digit — and the
- * deterministic result is routed on the baked grid. Members are equally weighted; p10/p50/p90 interpolate between
- * order statistics, with "never arrived" as +∞.
+ * routed on MEMBER_DX and stop early (MEMBER_STOP_FRACTION); the deterministic result is routed on the baked grid to
+ * the end of the recession. Members are equally weighted; p10/p50/p90 interpolate between order statistics, with
+ * "never arrived" as +∞.
  */
 export function runEnsemble(
   spec: HazardChainSpec,
   file: ChainFile,
   overrides: ChainOverrides = {},
-  opts: { memberDx?: number; onProgress?: (done: number, total: number) => void } = {},
+  opts: { memberDx?: number; stopFraction?: number; onProgress?: (done: number, total: number) => void } = {},
 ): EnsembleResult {
   const t0 = typeof performance !== 'undefined' ? performance.now() : Date.now();
   const result = runChain(spec, file, overrides);
   const vfs = volumeFactors(spec.trigger);
   const ks = erosionRates(spec.trigger);
   const cvs = spec.trigger.kind === 'meltAnomaly' ? [0] : [...CV_ENSEMBLE];
-  const memberDx = opts.memberDx ?? 250;
+  const memberDx = opts.memberDx ?? MEMBER_DX;
   const members: EnsembleMember[] = [];
   const total = vfs.length * ks.length * cvs.length;
   for (const vf of vfs)
@@ -363,6 +403,7 @@ export function runEnsemble(
           erosionRate: k ?? overrides.erosionRate,
           cv,
           routeDx: Math.max(memberDx, overrides.routeDx ?? 0),
+          routing: { stopFraction: opts.stopFraction ?? MEMBER_STOP_FRACTION, ...overrides.routing },
         });
         members.push({
           volumeFactor: vf,
