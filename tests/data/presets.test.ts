@@ -40,7 +40,7 @@ const BAKED_US = ['pittsburgh', 'johnstown', 'ellicott', 'asheville', 'nashville
  * redistribute (public/presets/SOURCES.txt). They go through every structural check below; only the
  * imagery-and-agency assertions differ, and `isGlobal` marks where.
  */
-const BAKED_GLOBAL = ['nepal', 'chungthang'];
+const BAKED_GLOBAL = ['nepal', 'chungthang', 'chamoli'];
 const BAKED = [...BAKED_US, ...BAKED_GLOBAL];
 const isGlobal = (id: string) => BAKED_GLOBAL.includes(id);
 /** Presets with a glacier-hazard valley profile (scripts/bake-chain.ts). */
@@ -69,8 +69,20 @@ const hasChain = (id: string) => fs.existsSync(path.join(ROOT, id, 'chain.json')
  *
  * If it ever has to come down instead of up, the lever is the close-up insets: the failure message below names the
  * per-preset inset sizes and the largest one to drop.
+ *
+ * Raised 120 -> 125 for the eleventh preset (chamoli, 4.44 MB), which took the directory to 120.2 MB. Same three
+ * arguments, re-measured rather than repeated:
+ *   • the visitor's cost is the largest single preset, still asheville at 17.0 MB; a glacier preset is ~4.5 MB because
+ *     it ships no photo — 4.19 MB of Float32 elevation and ~0.25 MB of JSON. There is nothing left in it to squeeze
+ *     except the grid itself: 1024² is what the solver, the renderer and every other preset run at, and dropping
+ *     chamoli to 960² (3.7 MB) to stay under 120 would have bought 0.5 MB of headroom for one preset's worth of
+ *     inconsistency, and the NEXT preset would need this argument anyway.
+ *   • the host limit is unchanged (1 GB); 125 MB is 12.5 % of it.
+ *   • the repo cost is the reason a cap exists, and 5 MB is one glacier preset: this is NOT room for another
+ *     US-style preset with a photo (~10–17 MB). The next one of those needs the insets argument above, or a
+ *     deliberate raise of its own.
  */
-const PRESETS_BUDGET_MB = 120;
+const PRESETS_BUDGET_MB = 125;
 
 interface Loaded {
   meta: PresetMeta;
@@ -278,8 +290,16 @@ function checkScenario(
       const bed = elevation[k];
       const i0 = Math.floor(src.gx);
       const j0 = Math.floor(src.gy);
-      const left = i0 - R >= 0 ? elevation[j0 * nx + (i0 - R)] : Infinity;
-      const right = i0 + R < nx ? elevation[j0 * nx + (i0 + R)] : Infinity;
+      // The banks are ACROSS the channel, i.e. along the edge the inflow sits at: east–west for an inflow on the north or
+      // south edge (Betrawati, Chungthang), north–south for one on the east or west edge (Chamoli's Rishiganga).
+      const alongX = Math.min(src.gy, ny - src.gy) <= Math.min(src.gx, nx - src.gx);
+      const bank = (d: number) => {
+        const i = alongX ? i0 + d : i0;
+        const j = alongX ? j0 : j0 + d;
+        return i >= 0 && j >= 0 && i < nx && j < ny ? elevation[j * nx + i] : Infinity;
+      };
+      const left = bank(-R);
+      const right = bank(R);
       assert.ok(Math.min(left, right) > bed + 1, `${label}: inflow ${src.id} at ${bed.toFixed(1)} m is not in a channel (banks ${left.toFixed(1)}/${right.toFixed(1)} m)`);
       /*
        * On the channel floor, within a metre of the thalweg: findRiverEnds places an inflow at the WIDEST cell that
@@ -456,8 +476,10 @@ for (const id of BAKED) {
      * floor is only here to catch a DEM that came back flat or constant — it is not a claim that every domain is
      * hilly. Fort Myers is a tidal flat and spans 17.3 m, from the burned estuary bed (-4.3 m) to the highest ground
      * in east Fort Myers (13.0 m); a real bake that failed would be near zero, not 17.
+     * The ceiling is the highest ground any domain could hold: 4,500 m in the US (Mt Whitney is 4,421 m), Everest's
+     * 8,849 m elsewhere — the Raini–Tapovan domain climbs to 4,776 m on the ridges above the Rishiganga.
      */
-    assert.ok(lo > -100 && hi < 4500 && hi - lo > 15, `elevation range ${lo}…${hi}`);
+    assert.ok(lo > -100 && hi < (isGlobal(id) ? 8849 : 4500) && hi - lo > 15, `elevation range ${lo}…${hi}`);
     assert.ok(Math.abs(cellSizeFor(meta.bounds, meta.nx) / meta.cellSize - 1) < 2e-3, 'cellSize matches bounds');
     if (isGlobal(id)) {
       /*
@@ -508,8 +530,12 @@ for (const id of BAKED) {
      * over the domain carry 73 drivable ways — the North Sikkim Highway, the road towards Lachung and a few lanes,
      * 34 km in 51 edges — next to ~1,170 unnamed buildings and not one school or clinic (counted from the cached
      * extracts; public/presets/SOURCES.txt). The scenario text says the streets are sparse.
+     *
+     * Chamoli's is the lowest, for the same reason: OSM maps 33 drivable ways over the 144 km² Raini–Tapovan domain —
+     * the Joshimath–Malari road (NH107B), the Khullara–Dhak road and a few lanes at Tapovan, 30 km of road that the
+     * graph reduces to 19 edges between 22 junctions and ends (scripts/bake-presets.ts, the chamoli shelter note).
      */
-    const floor = id === 'chungthang' ? 40 : isGlobal(id) ? 300 : 500;
+    const floor = id === 'chamoli' ? 15 : id === 'chungthang' ? 40 : isGlobal(id) ? 300 : 500;
     assert.ok(roads.edges.length > floor, `real road network (${roads.edges.length} edges)`);
   });
 }
@@ -986,6 +1012,95 @@ test('chungthang: the routed chain hydrograph, the South Lhonak chain, and the c
   assert.ok(dam.storage && dam.storage.length > 2);
 });
 
+test('chamoli: a labelled placeholder debris flow, the Ronti Gad chain, a rheology that moves, and the caveats on screen', { skip: !fs.existsSync(path.join(ROOT, 'chamoli/meta.json')) }, () => {
+  const { meta, elevation } = load('chamoli');
+  const s = meta.scenario;
+  // 12 km at 1024² (11.7 m cells): both plants and the reach below Tapovan in one map (scripts/bake-presets.ts).
+  assert.equal(meta.nx, 1024);
+  assert.ok(Math.abs(meta.cellSize - 12000 / 1024) < 0.01, `cell ${meta.cellSize}`);
+  assert.equal(s.sources.length, 1, 'one forcing: the debris flow down the Rishiganga');
+  const src = s.sources[0];
+  assert.ok(src.type === 'inflow' && src.hydrograph && src.hydrograph.length > 10, 'a hydrograph inflow');
+  if (src.type !== 'inflow' || !src.hydrograph) return;
+  /*
+   * The placeholder carries published numbers and the chain's own arithmetic, nothing else: its peak is the top of
+   * Shugar et al.'s 8,200–14,200 m³/s band, its volume the direct-flow mixture 26.9 Mm³ × 20 % ice × 0.917 / (1 − 0.4)
+   * ≈ 8.2 Mm³ (src/hazard/mass.ts directFlow), on the §B.4 gamma shape — a SHAPE, so the label says so.
+   */
+  const peak = Math.max(...src.hydrograph.map((p) => p.q));
+  assert.equal(peak, 14200);
+  assert.equal(src.discharge, peak);
+  assert.equal(src.hydrograph[0].q, 0);
+  assert.equal(src.hydrograph[src.hydrograph.length - 1].q, 0);
+  const vol = hydrographVolume(src.hydrograph, 0, src.stopAfter ?? Infinity);
+  const mixture = (26.9e6 * 0.2 * 0.917) / (1 - 0.4);
+  assert.ok(Math.abs(vol - mixture) / mixture < 0.01, `the placeholder delivers ${(vol / 1e6).toFixed(2)} million m³, not the ${(mixture / 1e6).toFixed(2)} the chain releases`);
+  // Its mean over the central ten minutes sits inside the published band of MEAN discharge.
+  const tp = src.hydrograph.reduce((b, p) => (p.q > b.q ? p : b)).t;
+  const mean10 = hydrographVolume(src.hydrograph, tp - 300, tp + 300) / 600;
+  assert.ok(mean10 > 8200 && mean10 < 14200, `mean over the central 10 min ${mean10.toFixed(0)} m³/s`);
+  assert.match(src.label!, /placeholder/);
+  assert.match(src.label!, /not a measured hydrograph/);
+  assert.match(s.description, /parametric placeholder, not a measured hydrograph/);
+  assert.match(s.description, /8,200 to 14,200 m³\/s/, 'the published band, not just the number used');
+  assert.match(s.description, /clock starts as the front reaches the east edge/);
+  assert.match(s.description, /surface model with canopy and buildings/);
+  assert.match(s.description, /25 m\/s speed cap/);
+  assert.match(s.description, /neither picks up nor drops sediment/);
+  assert.match(s.description, /do not read street-level depths/);
+  const shown = `${meta.name} ${meta.subtitle} ${s.description} ${s.sources.map((x) => x.label ?? '').join(' ')}`;
+  assert.doesNotMatch(shown, /\b(dead|death|deaths|killed|casualt\w*|missing|bodies)/i, 'no casualty figures on screen');
+  assert.equal(s.stage, null);
+  assert.equal(meta.bake?.prefill, 'none');
+
+  // The evacuation pin is the barrage site, at river level, on the road graph — the warning-time story.
+  assert.ok(s.evacStart, 'an evacuation start');
+  const ez = elevAt(elevation, meta.nx, s.evacStart!.gx, s.evacStart!.gy);
+  assert.ok(ez < 1800, `the barrage-site start stands at ${ez.toFixed(0)} m — it should be down at the river`);
+  // Every shelter stands > 80 m above the barrage site.
+  for (const sh of s.shelters) assert.ok(elevAt(elevation, meta.nx, sh.gx, sh.gy) > ez + 80, `${sh.name}`);
+
+  /*
+   * The gorge floor (RiverDef.carve): along the Rishiganga, the shipped bed never rises downstream by more than a pit's
+   * rim. Measured along the chain's own centreline (minimum within ±3 cells), the largest rise above the running
+   * minimum must stay below the 18–41 m false sills the raw DSM has here — the sills that made even clear water pond.
+   */
+  const c = loadChain('chamoli');
+  let run = Infinity;
+  let worst = 0;
+  for (let i = 0; i < c.s.length; i++) {
+    const g = geoToGrid({ nx: meta.nx, ny: meta.ny, bounds: meta.bounds }, c.lonlat[i][0], c.lonlat[i][1]);
+    if (g.gx < 4 || g.gy < 4 || g.gx > meta.nx - 4 || g.gy > meta.ny - 4 || c.s[i] > 15500) continue;
+    let m = Infinity;
+    for (let dj = -3; dj <= 3; dj++) for (let di = -3; di <= 3; di++) m = Math.min(m, elevAt(elevation, meta.nx, g.gx + di, g.gy + dj));
+    worst = Math.max(worst, m - run);
+    run = Math.min(run, m);
+  }
+  assert.ok(worst < 12, `the Rishiganga bed rises ${worst.toFixed(1)} m downstream somewhere in the gorge`);
+
+  const hc = s.hazardChain!;
+  assert.ok(hc.trigger.kind === 'massIntoRiver' && hc.trigger.mode === 'directFlow');
+  if (hc.trigger.kind !== 'massIntoRiver') return;
+  assert.equal(hc.trigger.mass.volume, 26.9e6);
+  assert.equal(hc.trigger.mass.iceFraction, 0.2);
+  // The debris-flow rheology of spec §I.6 #3, with the FLUID O'Brien–Julien material (the stiff one stalls, see the def).
+  assert.ok(hc.rheology.kind === 'quadratic' && hc.rheology.cv === 0.45 && hc.rheology.material.name === 'Glenwood 1');
+  assert.equal(hc.solver?.uMax, 25);
+  assert.equal(c.clockZero, '2021-02-07T10:21:00+05:30');
+  const at = (name: string) => c.stations.find((st) => st.name === name)!;
+  assert.equal(at('Rishiganga HEP, Raini (position approximate)').capacityMW, 13.2);
+  assert.equal(at('Tapovan-Vishnugad HEP barrage (under construction)').capacityMW, 520);
+  // Shugar et al.: the Rishiganga plant ~15 km from the source, Joshimath 16 km below Raini.
+  const raini = at('Rishiganga HEP, Raini (position approximate)').s;
+  assert.ok(raini > 13_000 && raini < 17_000, `Raini at ${raini} m`);
+  const jm = at('Joshimath (Vishnuprayag confluence)').s - raini;
+  assert.ok(jm > 14_000 && jm < 18_000, `Raini → Joshimath ${jm} m`);
+  assert.ok(c.domainEntry.s < raini, 'the chain enters the map above the Rishiganga plant');
+  assert.equal(hc.observations!.find((o) => o.tFront !== undefined && o.station.startsWith('Tapovan-Vishnugad'))!.tFront, 900);
+  // No barrage crest invented where no height was published.
+  assert.equal(c.structures.length, 0);
+});
+
 test(`public/presets stays inside its ${PRESETS_BUDGET_MB} MB budget`, () => {
   /*
    * Two axes grow this directory independently — new city presets and close-up imagery insets — so when it goes
@@ -1035,7 +1150,7 @@ test('a hazard chain spec and its chain.json come together', () => {
     assert.equal(!!spec, hasChain(id), `${id}: scenario.hazardChain ${spec ? 'without' : 'missing beside'} chain.json`);
   }
   // The two glacier presets the chain was built for.
-  assert.ok(hasChain('nepal') && hasChain('chungthang'));
+  assert.ok(hasChain('nepal') && hasChain('chungthang') && hasChain('chamoli'));
 });
 for (const id of BAKED.filter(hasChain)) {
   test(`baked preset "${id}": chain.json is a consistent valley profile`, () => {

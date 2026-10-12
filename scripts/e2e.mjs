@@ -1422,7 +1422,7 @@ const FLOWS = [
     async run(r) {
       // src/app/hazardChain.ts runs the chain in a worker on load and swaps the preset's inflow for the routed wave;
       // the panel's Hazard chain section and the valley timeline (src/ui/chainPanel.ts, chainTimeline.ts) draw it.
-      for (const id of ['nepal', 'chungthang']) {
+      for (const id of ['nepal', 'chungthang', 'chamoli']) {
         await D((p) => window.__deluge.loadPreset(p), id);
         const t0 = Date.now();
         const ready = await page

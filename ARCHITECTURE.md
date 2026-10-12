@@ -320,6 +320,15 @@ headless with the presets' own terrain and sources (n = 0.035). The spec's own �
 O'Brien–Julien Glenwood 1 at Cv 0.3, carry the surge down the valley at water-like speed (front rows 401 and 436 at
 450 s, against 456 for water).
 
+The Chamoli preset is the debris-FLOW case and specifies O'Brien–Julien Glenwood 1 at Cv 0.45 (τ_y ≈ 29 Pa,
+η ≈ 8.9 Pa·s, K 2,285). Measured headless on its own terrain with the chain-routed inflow
+(`artifacts/chamoli-build/tools/physics.mjs`): the front reaches the Tapovan barrage, 10 km of river into the map,
+1,140 s after the inflow starts, against 960 s for water — 19 % slower, and it keeps going out of the map. Voellmy
+μ 0.05 stalls ~1 km below Raini (μ exceeds the Dhauliganga's 2.3 % bed slope), and the stiff end of the O'Brien–Julien
+table (Aspen Pit 1, τ_y ≈ 1.9 kPa, η ≈ 75 Pa·s at Cv 0.45) is down to 1–2 m/s 3–4 km below Raini after 25 minutes. The same runs found that the
+radar DSM's false sills in the Rishiganga slot gorge pond even clear water 48 m deep; the bake's gorge floor
+(`RiverDef.carve`, public/presets/SOURCES.txt) is what lets any rheology through.
+
 ## 4. Rivers, stages and crests
 
 The Pittsburgh preset's river stage slider is in feet on the Point gauge (NWS PTTP1 / USGS 03085152): normal pool
@@ -430,9 +439,9 @@ Monongahela and Ohio cross the domain edge.
   level is MEASURED from the DEM's own flat estuary surface (-0.28 m NAVD88, essentially MLLW — the lidar was flown
   near low tide) rather than assumed.
 * **Deploy budget.** `public/presets` is served from a public static host, so `tests/data/presets.test.ts` caps the
-  whole directory at **120 MB** and each preset at 25 MB. It currently stands at **97.2 MB across eight presets** —
-  Asheville is the largest single city at 15.9 MB, Fort Myers the smallest at 9.5 MB, and close-up insets account for
-  16.5 MB of the total.
+  whole directory at **125 MB** and each preset at 25 MB. It currently stands at **120.1 MB across eleven presets** —
+  Asheville is the largest single city at 17.0 MB, the three Himalayan glacier presets (no photo) are 4.4–5.0 MB each,
+  and close-up insets account for 16.5 MB of the total.
 
   The two caps guard different things, which is why they moved differently. **The per-preset cap is the one a visitor
   feels**: presets load one at a time, so what anyone downloads is bounded by the largest single preset (15.9 MB), not
@@ -448,6 +457,12 @@ Monongahela and Ohio cross the domain edge.
   Fort Myers qualifies on the texel-density rule at 1.95 m/texel. It is not room for both a second new preset and both
   insets; the bake after next needs this argument made again. If the number ever has to come down instead, the lever
   is the insets: the test's failure message names each preset's inset size and the largest one to drop.
+
+  Raised again 120 → 125 MB for the third glacier preset (`chamoli`, 4.44 MB), which took the directory to 120.1 MB.
+  A glacier preset is 4.19 MB of Float32 elevation plus ~0.25 MB of JSON — nothing left to squeeze but the grid, and
+  shipping one preset at 960² instead of the 1024² every other preset runs at would have bought 0.5 MB of headroom for
+  an inconsistency. 5 MB is one more glacier preset, not a US preset with a photo: the next one of those needs the
+  insets argument above, or a deliberate raise of its own.
 * **Live areas** are cancellable. A download that stalls mid-transfer fails after 20 s without data, and the elevation
   has a 90 s overall deadline (the error then says the service can't be reached). Dead venue wifi often leaves requests
   hanging instead of failing: while no elevation has arrived, the loader checks every 9 s that the data hosts answer at
