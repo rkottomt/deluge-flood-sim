@@ -467,7 +467,41 @@ export interface FloodSolver {
    */
   raiseWaterSurface?(base: Float32Array, offset?: number): void;
 
+  /**
+   * Extension (GpuFloodSolver): read back the per-cell hazard accumulators gathered since the last reset (HazardFields).
+   * A full-grid readback (~16 B/cell), so it is on demand — the impact panel calls it when it recomputes losses, not
+   * every frame. Resolves after the GPU work queued so far has finished.
+   */
+  readHazardFields?(): Promise<HazardFields>;
+
   destroy(): void;
+}
+
+/**
+ * Per-cell hazard accumulators since the last reset (FloodSolver.readHazardFields): what impact and loss models need
+ * beyond the current depth. All arrays are nx·ny, row-major, like TerrainData.elevation.
+ *
+ * "Wet" here means h > ARRIVAL_DEPTH (0.15 m, src/sim/constants.ts) — ankle-deep water that stops cars and starts
+ * damaging ground floors — not the solver's 1 cm WET_DEPTH, so a film of rain on a roof is not an arrival.
+ */
+export interface HazardFields {
+  nx: number;
+  ny: number;
+  /** Simulated seconds since reset when the accumulators were read. */
+  simTime: number;
+  /** Maximum depth reached, m (the same values as stateTexture.a). */
+  maxDepth: Float32Array;
+  /** Maximum flow speed |(u, v)| while wet, m/s. */
+  maxSpeed: Float32Array;
+  /** Maximum depth × speed (unit discharge magnitude), m²/s — the structural-failure and human-stability index. */
+  maxDV: Float32Array;
+  /**
+   * Simulated time at which the cell FIRST became wet, s since reset; 0 for cells already wet at reset (rivers, lakes);
+   * −1 for cells never wet. Warning lead time for an asset = firstWet − the time the alert went out.
+   */
+  firstWet: Float32Array;
+  /** Total simulated seconds the cell has been wet. */
+  wetSeconds: Float32Array;
 }
 
 // ────────────────────────────────────────────────────────────────────────────────────────────

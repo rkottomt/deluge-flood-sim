@@ -133,6 +133,8 @@ export const DEFAULT_SOLVER_OPTIONS: SolverOptions = {
 /** Depth thresholds used by statistics (contract definitions). */
 export const WET_DEPTH = 0.01;
 export const FLOODED_DEPTH = 0.3;
+/** HazardFields "wet": first-wet (arrival) time and wet duration count depth above this, m (contracts.ts HazardFields). */
+export const ARRIVAL_DEPTH = 0.15;
 /** Below this cell depth the exported velocity is zero (avoids q/h blow-up on films). */
 export const VELOCITY_DEPTH = 1e-3;
 
