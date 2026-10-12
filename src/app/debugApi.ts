@@ -94,6 +94,19 @@ export interface DelugeDebugExtras {
     stations: Array<{ name: string; s: number; tFront: number }>;
     error: string | null;
   } | null;
+  /**
+   * The latest flood-probability ensemble (src/ui/ensemble.ts), summarised, and its GPU tally read back as cell counts:
+   * cells some member flooded deeper than 0.15 m, cells every member did, and cells in between. null without one.
+   */
+  getEnsemble(): Promise<{
+    members: number;
+    planned: number;
+    seconds: number;
+    floodedM2: number[];
+    loss: number[];
+    rows: Array<{ inflowFactor: number; rainFactor: number; stageDelta: number; manningN: number; floodedM2: number; loss: number; readMs: number; lossMs: number; runMs: number }>;
+    map: { members: number; any: number; all: number; partial: number } | null;
+  } | null>;
   waitFrames(n: number): Promise<void>;
 }
 
@@ -291,6 +304,32 @@ export function createDebugApi(app: App, ready: Promise<void>): DelugeDebug {
         bands: !!c.bands,
         stations: r ? r.stations.map((s) => ({ name: s.name, s: s.s, tFront: s.tFront })) : [],
         error: c.error,
+      };
+    },
+
+    async getEnsemble() {
+      const e = bridgeFor(store).ensemble;
+      if (!e || !e.summary) return null;
+      const ctl = bridgeFor(store).sim?.ensembleMap?.() ?? null;
+      let map: { members: number; any: number; all: number; partial: number } | null = null;
+      if (ctl && ctl.members > 0) {
+        const a = await ctl.read();
+        let any = 0;
+        let all = 0;
+        for (let c = 0; c < a.length; c += 4) {
+          if (a[c] > 0) any++;
+          if (a[c] >= ctl.members) all++;
+        }
+        map = { members: ctl.members, any, all, partial: any - all };
+      }
+      return {
+        members: e.rows.length,
+        planned: e.planned,
+        seconds: e.seconds,
+        floodedM2: e.summary.floodedM2,
+        loss: e.summary.loss,
+        rows: e.rows.map((r) => ({ inflowFactor: r.params.inflowFactor, rainFactor: r.params.rainFactor, stageDelta: r.params.stageDelta, manningN: r.params.manningN, floodedM2: r.floodedM2, loss: r.loss, readMs: r.readMs, lossMs: r.lossMs, runMs: r.runMs })),
+        map,
       };
     },
 

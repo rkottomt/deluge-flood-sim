@@ -195,6 +195,7 @@ export function createImpactSection(ctx: UIContext): ImpactSection {
   const loadBtn = button('Load sites / portfolio CSV…', () => fileInput.click(), { icon: 'database', className: 'dl-btn-sm', tip: 'asset_id, lat, lon (or wkt) and optional values — read in this tab, never uploaded', side: 'top' });
   const clearPortfolioBtn = button('Remove', () => {
     portfolio = null;
+    bridge.portfolio = null;
     portfolioName = '';
     fileInput.value = '';
     renderPortfolioInfo();
@@ -688,6 +689,8 @@ export function createImpactSection(ctx: UIContext): ImpactSection {
         portfolio = { assets: [], errors: [], warnings: [], fatal: `Could not read the file (${err instanceof Error ? err.name : 'error'}).`, moreIssues: 0, ignoredColumns: [] };
       }
     }
+    // The ensemble (src/ui/ensemble.ts) tallies the same assets member by member.
+    bridge.portfolio = portfolio?.assets.length ? portfolio.assets : null;
     renderPortfolioInfo();
     if (portfolio.assets.length && getTerrain()) void recompute();
   });

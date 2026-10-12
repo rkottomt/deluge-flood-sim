@@ -39,6 +39,8 @@ import { MAX_SOURCES, MAX_STORMS } from './tools';
 import { formatStage, hasGauge, stageSub, weatherBadge } from './stageText';
 import { createImpactSection } from './impact';
 import { createSiteSection } from './siteCheck';
+import { createEnsembleSection } from './ensemble';
+import { bridgeFor } from './bridge';
 import { sitesFor } from './sites';
 import { createChainSection } from './chainPanel';
 
@@ -544,6 +546,7 @@ export function createPanel(ctx: UIContext): Panel {
     velocity: 'Speed',
     arrival: 'Arrival',
     hazard: 'Hazard',
+    probability: 'Probability',
   };
   const viewBadge = h('span', { class: 'dl-sec-badge' });
   const modes = segmented<WaterViewMode>(
@@ -554,13 +557,35 @@ export function createPanel(ctx: UIContext): Panel {
       { value: 'velocity', label: 'Speed', tip: 'How fast the water moves' },
       { value: 'arrival', label: 'Arrival', tip: 'How many minutes after the start the water arrived — the warning time' },
       { value: 'hazard', label: 'Hazard', tip: 'Flood hazard class H1–H6 from depth × speed (AIDR 2017)' },
+      { value: 'probability', label: 'Flood probability', tip: 'Share of an ensemble’s members in which the water got deeper than 15 cm (Uncertainty section)' },
     ],
     (v) => ctx.setRender({ waterMode: v }),
     // Six modes do not fit one row of the panel: three per row.
     { label: 'Water display mode', className: 'dl-seg-full dl-seg-grid3', tipSide: 'top' },
   );
   const legend = h('div', { class: 'dl-legend' });
+  // The probability view exists once an ensemble of this scene does (src/ui/ensemble.ts).
+  const probBtn = modes.buttons.get('probability')!;
+  probBtn.dataset.mode = 'probability';
+  const hasEnsemble = () => {
+    const e = bridgeFor(store).ensemble;
+    const st = store.get();
+    return !!e && e.rows.length > 0 && e.sceneKey === `${st.presetId}|${st.terrainName}`;
+  };
   const renderLegend = (mode: WaterViewMode) => {
+    probBtn.hidden = !hasEnsemble() && mode !== 'probability';
+    if (mode === 'probability' && !hasEnsemble()) {
+      legend.replaceChildren(
+        h(
+          'div',
+          { class: 'dl-legend-note' },
+          icon('layers', 14),
+          h('span', null, 'No ensemble yet. Run one under ', h('b', null, 'Uncertainty'), ' to map how often each street floods.'),
+          button('Open Uncertainty', () => api.reveal('ensemble'), { className: 'dl-btn-sm' }),
+        ),
+      );
+      return;
+    }
     if (mode === 'realistic') {
       legend.replaceChildren(
         h('div', { class: 'dl-legend-note' }, icon('eye', 14), h('span', null, 'Photoreal water. Switch to ', h('b', null, 'Depth'), ', ', h('b', null, 'Speed'), ' or ', h('b', null, 'Arrival'), ' for a hazard map.')),
@@ -573,17 +598,19 @@ export function createPanel(ctx: UIContext): Panel {
       h('div', { class: 'dl-legend-row' }, h('i', { style: { background: b.color } }), h('span', { class: 'dl-legend-label' }, b.label), b.note ? h('span', { class: 'dl-legend-desc' }, b.note) : null);
     // Depth maps colour only land that was dry at reset; the normal river is drawn muted (not part of the gradient).
     const rows = h('div', { class: 'dl-legend-rows' }, showsNormalWater(mode) ? row(NORMAL_WATER_LEGEND) : null, ...bands.map(row));
-    const title = legendTitle(mode);
+    const title = legendTitle(mode, store.get().render.probabilityThreshold ?? 0.15);
     legend.replaceChildren(h('div', { class: 'dl-legend-title' }, title), bar, rows);
   };
   bind(
-    (s) => s.render.waterMode,
-    (m) => {
+    (s) => `${s.render.waterMode}|${s.render.probabilityThreshold ?? 0.15}|${s.presetId}|${s.terrainName}`,
+    (_k, s) => {
+      const m = s.render.waterMode;
       modes.set(m);
       renderLegend(m);
       setText(viewBadge, modeNames[m]);
     },
   );
+  ctx.own(bridgeFor(store).ensembleChanged.on(() => renderLegend(store.get().render.waterMode)));
 
   const exag = slider({
     label: 'Vertical exaggeration',
@@ -771,13 +798,18 @@ export function createPanel(ctx: UIContext): Panel {
     }),
   );
 
+  // ════════════════════════════════ Uncertainty ════════════════════════════════
+  // The flood-probability ensemble (src/ui/ensemble.ts). Collapsed until asked for; nothing runs until Run.
+  const ensemble = createEnsembleSection(ctx);
+  const ensembleSec = section('Uncertainty', 'layers', ensemble.body, { id: 'ensemble', open: false, badge: ensemble.badge });
+
   // ════════════════════════════════ Hazard chain ════════════════════════════════
   // Only on presets whose flood starts upstream of the map (a glacial lake, an avalanche): see chainPanel.ts.
   const chain = createChainSection(ctx);
   const chainSec = section('Hazard chain', 'mountain', chain.body, { id: 'chain', badge: chain.badge });
   chain.onVisible((v) => (chainSec.hidden = !v));
 
-  const scroller = h('div', { class: 'dl-panel-scroll' }, scenarioSec, chainSec, weatherSec, evacSec, impactSec, siteSec, viewSec, advancedSec, attribution);
+  const scroller = h('div', { class: 'dl-panel-scroll' }, scenarioSec, chainSec, weatherSec, evacSec, impactSec, siteSec, ensembleSec, viewSec, advancedSec, attribution);
   const closeBtn = h(
     'button',
     { type: 'button', class: 'dl-icon-btn dl-panel-close', 'aria-label': 'Hide panel', onclick: () => api.setOpen(false) },
