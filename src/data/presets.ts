@@ -35,6 +35,11 @@ export const PRESETS: PresetInfo[] = [
     name: 'Chungthang — Teesta Valley',
     subtitle: '4 October 2023 — South Lhonak lake bursts, 68 km upstream',
   },
+  {
+    id: 'chamoli',
+    name: 'Raini–Tapovan — Dhauliganga Valley',
+    subtitle: '7 February 2021 — Ronti Peak collapses into a debris flow',
+  },
   { id: 'sandbox', name: SANDBOX_NAME, subtitle: 'Offline sandbox — river town, reservoir and dam' },
 ];
 

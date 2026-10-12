@@ -43,9 +43,9 @@ export * from './ladders';
 
 /**
  * Presets whose flood is debris-laden (a glacial-lake outburst): the heuristic dv × 1.5 rule applies by default
- * (hazard.ts). The user can switch it off.
+ * (hazard.ts). The user can switch it off. Chamoli is the debris flow of 7 Feb 2021 (O'Brien–Julien rheology at Cv 0.45).
  */
-export const DEBRIS_FLOW_PRESETS: ReadonlySet<string> = new Set(['nepal']);
+export const DEBRIS_FLOW_PRESETS: ReadonlySet<string> = new Set(['nepal', 'chamoli']);
 
 export type AnalysisTerrain = Pick<TerrainData, 'nx' | 'ny' | 'cellSize' | 'bounds' | 'roads'> & Partial<Pick<TerrainData, 'buildings'>>;
 

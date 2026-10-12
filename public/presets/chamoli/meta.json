@@ -1,0 +1,445 @@
+{
+ "version": 1,
+ "id": "chamoli",
+ "name": "Raini–Tapovan — Dhauliganga Valley",
+ "subtitle": "7 February 2021 — Ronti Peak collapses into a debris flow",
+ "nx": 1024,
+ "ny": 1024,
+ "cellSize": 11.71875,
+ "bounds": {
+  "west": 79.59745177196231,
+  "south": 30.436086160805722,
+  "east": 79.72254822803767,
+  "north": 30.543883984513112
+ },
+ "attribution": "Elevation: Copernicus DEM GLO-30 (© DLR e.V. 2010–2014 / © Airbus Defence and Space GmbH, ESA), bare-earth filtered · Terrain shading: no aerial imagery (hypsometric tint) · Roads © OpenStreetMap contributors (ODbL) · Buildings © OpenStreetMap contributors & Microsoft ML Building Footprints (ODbL)",
+ "scenario": {
+  "description": "Raini stands where the Rishiganga meets the Dhauliganga, and the 13.2 MW Rishiganga hydropower plant stood beside it; 6 km downstream, at Tapovan, the barrage of the 520 MW Tapovan-Vishnugad project was being built. At 10:21 on the morning of 7 February 2021 about 27 million m³ of rock and glacier ice broke from the north face of Ronti Peak, 5,500 m up and some 15 km away. Its ice melted on the way down, and the avalanche became a debris flow that ran down the Ronti Gad and the Rishiganga at about 25 m/s, destroyed the Rishiganga plant, reached the Tapovan barrage about a quarter of an hour after the collapse and destroyed it too. Most of the people it took were workers at the two projects (Shugar et al., Science, 2021). Nothing gauged the flow; the published reconstruction gives a mean discharge of 8,200 to 14,200 m³/s at the Rishiganga plant over 10–20 minutes. This run brings 14,200 m³/s at its peak and 8.2 million m³ in all (the melted ice and the rock it carried) in through the east edge on a smooth rise and fall — a parametric placeholder, not a measured hydrograph — and the clock starts as the front reaches the east edge of the map, not at the collapse. The flow moves as one fluid under a uniform debris-flow friction law (O’Brien–Julien, 45 % solids by volume) with a 25 m/s speed cap; it neither picks up nor drops sediment, so the 8 million m³ the real flow left near the Ronti Gad and the mud it laid down at Tapovan are not here, and the arrival times are the model’s, not the flood’s. The terrain is Copernicus 30 m radar data, a surface model with canopy and buildings in it, acquired in 2011–2015, before the Tapovan barrage was finished. The bare-earth filter only runs on ground flatter than 20°, and 90 % of this domain is steeper: the valley floor is filtered and still a metre or two high, the walls above it are the raw surface model. No photograph is baked in, so the ground is shaded by height instead. OpenStreetMap maps the Joshimath–Malari road and a few village lanes here. The rivers start dry, so every drop you see is the modelled flow. Watch where it goes and in what order, and do not read street-level depths.",
+  "sources": [
+   {
+    "id": "rishiganga-inflow",
+    "type": "inflow",
+    "gx": 1018.5,
+    "gy": 704.5,
+    "radius": 4,
+    "discharge": 14200,
+    "stopAfter": 1613,
+    "hydrograph": [
+     {
+      "t": 0,
+      "q": 0
+     },
+     {
+      "t": 39,
+      "q": 211
+     },
+     {
+      "t": 78,
+      "q": 1252
+     },
+     {
+      "t": 116,
+      "q": 3131
+     },
+     {
+      "t": 155,
+      "q": 5498
+     },
+     {
+      "t": 194,
+      "q": 7955
+     },
+     {
+      "t": 233,
+      "q": 10183
+     },
+     {
+      "t": 272,
+      "q": 11980
+     },
+     {
+      "t": 311,
+      "q": 13248
+     },
+     {
+      "t": 349,
+      "q": 13973
+     },
+     {
+      "t": 388,
+      "q": 14200
+     },
+     {
+      "t": 427,
+      "q": 14002
+     },
+     {
+      "t": 466,
+      "q": 13467
+     },
+     {
+      "t": 505,
+      "q": 12684
+     },
+     {
+      "t": 543,
+      "q": 11736
+     },
+     {
+      "t": 582,
+      "q": 10694
+     },
+     {
+      "t": 621,
+      "q": 9614
+     },
+     {
+      "t": 660,
+      "q": 8543
+     },
+     {
+      "t": 699,
+      "q": 7513
+     },
+     {
+      "t": 737,
+      "q": 6546
+     },
+     {
+      "t": 776,
+      "q": 5656
+     },
+     {
+      "t": 815,
+      "q": 4850
+     },
+     {
+      "t": 854,
+      "q": 4131
+     },
+     {
+      "t": 893,
+      "q": 3497
+     },
+     {
+      "t": 932,
+      "q": 2944
+     },
+     {
+      "t": 970,
+      "q": 2465
+     },
+     {
+      "t": 1009,
+      "q": 2054
+     },
+     {
+      "t": 1048,
+      "q": 1704
+     },
+     {
+      "t": 1087,
+      "q": 1408
+     },
+     {
+      "t": 1126,
+      "q": 1159
+     },
+     {
+      "t": 1164,
+      "q": 950
+     },
+     {
+      "t": 1203,
+      "q": 777
+     },
+     {
+      "t": 1242,
+      "q": 633
+     },
+     {
+      "t": 1281,
+      "q": 514
+     },
+     {
+      "t": 1320,
+      "q": 417
+     },
+     {
+      "t": 1358,
+      "q": 337
+     },
+     {
+      "t": 1397,
+      "q": 271
+     },
+     {
+      "t": 1436,
+      "q": 218
+     },
+     {
+      "t": 1475,
+      "q": 175
+     },
+     {
+      "t": 1514,
+      "q": 140
+     },
+     {
+      "t": 1553,
+      "q": 112
+     },
+     {
+      "t": 1613,
+      "q": 0
+     }
+    ],
+    "label": "Rishiganga — placeholder hydrograph: peak 14,200 m³/s (top of the published 8,200–14,200 m³/s band), 8.2 million m³ on a parametric rise-and-fall (not a measured hydrograph)"
+   }
+  ],
+  "storms": [],
+  "shelters": [
+   {
+    "name": "Dhak",
+    "gx": 117.59,
+    "gy": 428.45
+   },
+   {
+    "name": "SubCentre, Topoban",
+    "gx": 258.52,
+    "gy": 505.12
+   }
+  ],
+  "rainRate": 0,
+  "stage": null,
+  "initialFill": [],
+  "camera": {
+   "target": {
+    "gx": 610.2,
+    "gy": 531,
+    "elevation": 1961.5
+   },
+   "distance": 5500,
+   "yaw": -1.5,
+   "pitch": 1
+  },
+  "evacStart": {
+   "gx": 257.61,
+   "gy": 479.8,
+   "label": "Tapovan barrage site (access road)"
+  },
+  "defaultView": "depth",
+  "hazardChain": {
+   "trigger": {
+    "kind": "massIntoRiver",
+    "mass": {
+     "volume": 26900000,
+     "iceFraction": 0.2,
+     "fallHeight": 1400,
+     "pathLength": 3700
+    },
+    "mode": "directFlow",
+    "baseflow": 20
+   },
+   "profile": "chain.json",
+   "rheology": {
+    "kind": "quadratic",
+    "cv": 0.45,
+    "material": {
+     "name": "Glenwood 1",
+     "a2": 0.0345,
+     "b2": 20.1,
+     "a1": 0.00283,
+     "b1": 23
+    }
+   },
+   "solver": {
+    "uMax": 25
+   },
+   "observations": [
+    {
+     "station": "Ronti Gad (avalanche runout, head of the mapped stream)",
+     "tFront": 0,
+     "note": "04:51 UTC (10:21 IST): ~26.9 Mm³ of rock and ice (~80/20 %) detached from the north face of Ronti Peak at ~5,500 m — a slab up to ~550 m wide and ~80 m thick; ~8 Mm³ was deposited near the Ronti Gad–Rishiganga confluence.",
+     "source": "Shugar et al. 2021, Science 373:300–306, doi:10.1126/science.abh4455"
+    },
+    {
+     "station": "Rishiganga HEP, Raini (position approximate)",
+     "qPeak": 11200,
+     "note": "RECONSTRUCTED mean discharge 8,200–14,200 m³/s at the Rishiganga plant (centre of the band shown), passing in 10–20 min; front ~25 m/s here, ~15 km from the source. The 13.2 MW plant was destroyed.",
+     "source": "Shugar et al. 2021, Science (research spec §G.4)"
+    },
+    {
+     "station": "Tapovan-Vishnugad HEP barrage (under construction)",
+     "tFront": 900,
+     "note": "Seismic records put the debris flow at the Tapovan project ~15 min after the failure (Shugar et al.: ~16 m/s just upstream of Tapovan). Most of those lost that morning were workers at the two hydropower projects, many of them in the Tapovan tunnels (casualty figures are kept off screen, as in every preset).",
+     "source": "Cook et al. 2021, Science 374:87–92 (via The Landslide Blog); Shugar et al. 2021"
+    },
+    {
+     "station": "Tapovan",
+     "qPeak": 3900,
+     "note": "RECONSTRUCTED mean discharge 2,900–4,900 m³/s below Tapovan (centre of the band shown); front ~12 m/s.",
+     "source": "Shugar et al. 2021, Science (research spec §G.4)"
+    },
+    {
+     "station": "Joshimath (Vishnuprayag confluence)",
+     "note": "Mean front speed ~10 m/s over the 16 km from Raini to Joshimath — about 27 min, a derived figure, not a timed arrival.",
+     "source": "Shugar et al. 2021, Science (research spec §G.4)"
+    }
+   ]
+  }
+ },
+ "files": {
+  "elevation": "elevation.f32",
+  "imagery": null,
+  "roads": "roads.json",
+  "buildings": "buildings.json"
+ },
+ "bake": {
+  "bakedAt": "2026-10-12T18:48:40.857Z",
+  "demSource": "copernicus",
+  "demRepairedCells": 0,
+  "demTiles": [
+   "Copernicus_DSM_COG_10_N30_00_E079_00_DEM"
+  ],
+  "bareEarth": {
+   "flaggedPercent": 1.65,
+   "meanDropM": 4.48,
+   "maxDropM": 12
+  },
+  "center": {
+   "lat": 30.49,
+   "lon": 79.66
+  },
+  "sizeMeters": 12000,
+  "burnedCells": 5214,
+  "rivers": [
+   {
+    "name": "Rishiganga",
+    "cells": 4110,
+    "depth": 4,
+    "surfaceMax": 2226.56,
+    "surfaceMin": 1625.8
+   },
+   {
+    "name": "Dhauliganga above Raini",
+    "cells": 1104,
+    "depth": 2,
+    "surfaceMax": 2081.49,
+    "surfaceMin": 1934.44
+   }
+  ],
+  "initialWetCells": 0,
+  "prefill": "none",
+  "roads": {
+   "nodes": 22,
+   "edges": 19,
+   "km": 30.20060387188748,
+   "byClass": {
+    "highway": 0,
+    "major": 0,
+    "minor": 14,
+    "local": 5
+   }
+  },
+  "buildings": {
+   "bakedAt": "2026-10-12T18:49:02.761Z",
+   "source": "OpenStreetMap API 0.6 /map (ODbL 1.0)",
+   "tiles": 42,
+   "microsoftFootprintsAdded": 5116,
+   "heightProfile": "nepal",
+   "parsed": 5776,
+   "kept": 2622,
+   "droppedTiny": 1064,
+   "droppedOutside": 0,
+   "droppedInWater": 0,
+   "duplicates": 2090,
+   "measured": 0,
+   "levels": 0,
+   "estimated": 2622,
+   "remote": 0,
+   "vertices": 11602,
+   "tallest": [
+    {
+     "name": "(unnamed other)",
+     "height": 12.2,
+     "source": "estimated"
+    },
+    {
+     "name": "(unnamed other)",
+     "height": 12.2,
+     "source": "estimated"
+    },
+    {
+     "name": "(unnamed other)",
+     "height": 8.9,
+     "source": "estimated"
+    },
+    {
+     "name": "(unnamed other)",
+     "height": 8.9,
+     "source": "estimated"
+    },
+    {
+     "name": "(unnamed other)",
+     "height": 8.9,
+     "source": "estimated"
+    },
+    {
+     "name": "(unnamed other)",
+     "height": 8.9,
+     "source": "estimated"
+    },
+    {
+     "name": "(unnamed other)",
+     "height": 8.9,
+     "source": "estimated"
+    },
+    {
+     "name": "(unnamed other)",
+     "height": 8.9,
+     "source": "estimated"
+    },
+    {
+     "name": "(unnamed other)",
+     "height": 8.9,
+     "source": "estimated"
+    },
+    {
+     "name": "(unnamed other)",
+     "height": 8.9,
+     "source": "estimated"
+    },
+    {
+     "name": "(unnamed other)",
+     "height": 8.9,
+     "source": "estimated"
+    },
+    {
+     "name": "(unnamed other)",
+     "height": 8.9,
+     "source": "estimated"
+    },
+    {
+     "name": "(unnamed other)",
+     "height": 8.9,
+     "source": "estimated"
+    },
+    {
+     "name": "(unnamed other)",
+     "height": 8.9,
+     "source": "estimated"
+    },
+    {
+     "name": "(unnamed other)",
+     "height": 8.9,
+     "source": "estimated"
+    }
+   ],
+   "medianHeight": 5.3,
+   "maxHeight": 12.2,
+   "bytes": 107072,
+   "cellsBuiltOn": 1607
+  }
+ }
+}
