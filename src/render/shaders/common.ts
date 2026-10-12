@@ -24,7 +24,7 @@ struct Frame {
   mesh: vec2f,        // vertices per row / column
   viewport: vec2f,    // physical pixels
   stride: f32,
-  waterMode: f32,     // 0 realistic, 1 depth, 2 maxDepth, 3 velocity, 4 arrival, 5 hazard class
+  waterMode: f32,     // 0 realistic, 1 depth, 2 maxDepth, 3 velocity, 4 arrival, 5 hazard class, 6 probability
   elev: vec4f,        // minElev, maxElev, skirt base elevation, pixelScale (world size of 1px at distance 1)
   opts: vec4f,        // imagery on, contours on, contour interval (m), overcast 0..1
   camFwd: vec3f,

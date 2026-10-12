@@ -4,7 +4,7 @@
  */
 import type { WaterViewMode } from '../contracts';
 
-export function legendTitle(mode: WaterViewMode): string {
+export function legendTitle(mode: WaterViewMode, probabilityThreshold = 0.15): string {
   switch (mode) {
     case 'velocity':
       return 'Flow speed';
@@ -16,6 +16,8 @@ export function legendTitle(mode: WaterViewMode): string {
       return 'When the water arrived — minutes after the start, deeper than 15 cm';
     case 'hazard':
       return 'Flood hazard since reset — depth × speed (AIDR 2017)';
+    case 'probability':
+      return `Share of ensemble members deeper than ${probabilityThreshold >= 0.5 ? '50' : '15'} cm — sensitivity to the input bands, not a forecast`;
     default:
       return '';
   }

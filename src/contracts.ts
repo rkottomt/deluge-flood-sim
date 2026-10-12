@@ -501,6 +501,13 @@ export interface FloodSolver {
    */
   readonly hazardBuffer?: GPUBuffer;
 
+  /**
+   * Extension (GpuFloodSolver): an ensemble member's DEM error — ground += delta (nx·ny, m), replacing the previous
+   * perturbation, or removing it with null. delta must be 0 under the initial water (src/sim/demNoise.ts masks it) so
+   * the lake at rest stays at rest; call reset() before stepping. Barriers stay on top; reset({ resetTerrain }) drops it.
+   */
+  setBedPerturbation?(delta: Float32Array | null): void;
+
   destroy(): void;
 }
 
@@ -554,7 +561,13 @@ export type WaterViewMode =
    * Flood hazard class H1–H6 (AIDR 2017) from the maxima since reset of depth, speed and depth × speed
    * (HazardFields), on the max-depth surface. Uses FloodSolver.hazardBuffer (classed by max depth alone without it).
    */
-  | 'hazard';
+  | 'hazard'
+  /**
+   * Extension: ensemble flood probability — the share of an ensemble's members (src/loss/ensemble.ts) whose max depth
+   * exceeded RenderSettings.probabilityThreshold (0.15 m by default), drawn on the deepest water any member reached.
+   * Needs an ensemble layer (DelugeRendererAPI.setEnsembleLayer); with none, nothing is coloured.
+   */
+  | 'probability';
 
 export interface CameraPose {
   /** Orbit target in grid coords + elevation in meters. */
@@ -577,6 +590,8 @@ export interface RenderSettings {
   rainRate: number;
   /** Seconds, monotonically increasing, for animation. */
   time: number;
+  /** Extension: the 'probability' view's depth threshold, m (0.15 by default, or 0.5). */
+  probabilityThreshold?: number;
 }
 
 /** Per-edge road status for coloring: 0 = dry, 1 = wet (passable, slow), 2 = flooded (impassable). */
@@ -893,6 +908,8 @@ export interface AppState {
     showImagery: boolean;
     showRoads: boolean;
     showContours: boolean;
+    /** Extension: the 'probability' view's depth threshold, m (0.15 or 0.5; RenderSettings.probabilityThreshold). */
+    probabilityThreshold?: number;
   };
   /**
    * Look controls a presenter drives from the View panel. Kept apart from `render` because that object is spread

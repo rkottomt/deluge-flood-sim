@@ -13,7 +13,7 @@ struct Overlay {
   routeState: f32,     // 0 none, 1 ok, 2 blocked
   roadAlpha: f32,
   hasStatus: f32,
-  waterMode: f32,      // 0 realistic, 1 depth, 2 max depth, 3 speed, 4 arrival, 5 hazard class
+  waterMode: f32,      // 0 realistic, 1 depth, 2 max depth, 3 speed, 4 arrival, 5 hazard class, 6 probability
   evacActive: f32,     // 1 while an evacuation start is set: cut roads matter, draw them more prominently
   pad0: f32,
   pad1: f32,
