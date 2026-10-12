@@ -56,6 +56,17 @@ const CONTINENT_BOXES: ReadonlyArray<{ c: Continent; w: number; s: number; e: nu
 
 const COST: Readonly<Record<string, CostCountry>> = { US: 'US', IN: 'IN', NP: 'NP' };
 
+/** Display names for the JRC continents. */
+export const CONTINENT_LABELS: Readonly<Record<Continent, string>> = {
+  europe: 'European',
+  northAmerica: 'North-American',
+  centralSouthAmerica: 'Central & South American',
+  asia: 'Asian',
+  africa: 'African',
+  oceania: 'Oceanian',
+  global: 'global',
+};
+
 export function regionAt(lon: number, lat: number): Region {
   for (const b of COUNTRY_BOXES) {
     if (lon >= b.w && lon <= b.e && lat >= b.s && lat <= b.n) {
