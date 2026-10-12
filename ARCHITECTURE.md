@@ -104,7 +104,8 @@ Ritter solution (§9).
   run within 6 % of Manning's normal depth (0.98–1.05), and grid-scale circulations along rough shorelines stay damped.
 * **Semi-implicit friction.** An explicit Manning term is stiff on thin films (rate ∝ `h^{−4/3}`) and overshoots.
   Dividing by a factor ≥ 1 can only slow water down, for any `dt`.
-* **Safety caps (robust mode).** `|q| ≤ hf · min(15 m/s, 8·√(g·hf))`. The Froude cap is 8, not ~2: a dam-break tip is
+* **Safety caps (robust mode).** `|q| ≤ hf · min(uMax, 8·√(g·hf))`, `uMax` = 15 m/s unless the scenario sets its own
+  (`setRheology(…, { uMax })`, §3.9; the debris presets use 25 m/s). The Froude cap is 8, not ~2: a dam-break tip is
   legitimately strongly supercritical, and Fr ≤ 2 made the Ritter front 22 % slow.
 * **Local Courant guard.** A face whose own Courant number exceeds the limit is advanced with a proportionally
   smaller effective `dt`, so one stale statistic cannot start a local instability.
@@ -229,6 +230,95 @@ check all freeze on the last physical readback rather than reading NaN depths as
 `protection.ts`, `tests/app/logic.test.ts`).
 
 ---
+
+### 3.9 Debris-flow rheology and the per-scenario speed cap
+
+`FloodSolver.setRheology(rheology, { uMax })` (`src/contracts.ts`, `src/hazard/types.ts` `Rheology`) swaps Manning for a
+debris-flow friction law in the momentum pass, uniform over the map (no sediment tracer yet). The app calls it when a
+preset loads (`applyScenarioRheology` in `src/app/scene.ts`): a preset with a `hazardChain` gets its rheology and speed
+cap, everything else water at 15 m/s. The coefficients come from one function shared by the GPU solver and the CPU
+reference (`src/sim/rheology.ts`); the research behind the laws is `docs/research/glacier-hazard-chain.md` §D.
+
+Every law is a resistance per unit width on the face discharge, split by how it can be integrated stably:
+
+```
+∂q/∂t = … − g·hf·∂η/∂x − [ τ_y/ρ + μ·g·hf·cosθ ]·q/|q| − [ ν/hf² + (g·n_td²/hf^{7/3} + (g/ξ)/hf²)·|q| ]·q
+                          rate-independent                   rate-dependent
+
+Voellmy          μ, g/ξ                                   (S_f = μ·cosθ + u²/(ξ·h))
+O'Brien–Julien   τ_y = 0.1·α₂·e^{β₂·Cv} Pa, η = 0.1·α₁·e^{β₁·Cv} Pa·s, ρ_m = 1000 + 1650·Cv,
+                 ν = K·η/(8·ρ_m) (K = 2285 unless given), n_td = n·(1 + 0.0538·e^{6.09·Cv})/1.0538
+Bingham          τ_y/ρ, ν = 3·μ_B/ρ                        (laminar sheet flow)
+```
+
+Per face, in robust mode (`rheoMomentum` in `shaders/momentum.ts`, `dt` the face's guarded timestep):
+
+```
+q*    = q̃ − dt·A − g·hf·dt·∂η/∂x                          explicit predictor, no resistance
+τ     = dt·( τ_y/ρ + μ·g·hf·cosθ )                         cosθ = 1/√(1 + (Δz/dx)²), the face's bed slope
+q'    = 0                     if √(q*² + q⊥²) ≤ τ           stop …
+      = q*·(1 − τ/√(q*² + q⊥²))   otherwise                 … or reduce along the flow vector (q⊥ as Manning uses)
+q_new = q' / ( 1 + dt·( ν/max(hf, 0.05 m)² + (g·n_td²/hf^{7/3} + (g/ξ)/hf²)·|q| ) )
+```
+
+then the usual cap. The rate-dependent terms sit in the semi-implicit denominator like Manning (≥ 1, stable for any
+`dt`). The yield and Coulomb terms are the plastic projection ("stop-or-reduce"): an explicit `sgn(q)` term chatters
+around zero, while the projection brings a face to exact rest, can never reverse the flow, and lets a deposit stand
+wherever `g·hf·|∂η/∂x| ≤ τ_y/ρ + μ·g·hf·cosθ`. The driving slope is the face's surface slope, as for water, so a deposit
+at rest is still well-balanced. The viscous term's depth is floored at 5 cm: the solver's wetting fronts are films a
+millimetre thick, and a 1/h² law would freeze every one of them. Yield and Coulomb terms apply at every depth.
+Bingham uses τ_y, not the 1.5·τ_y of the flowing sheet-flow approximation, so that material starts and stops at the
+true yield criterion; a flowing layer therefore meets up to 0.5·τ_y less resistance than that approximation gives
+(longer runout, the cautious direction for a hazard map). Naive mode ignores the rheology.
+
+`rheoKind = 0` (water) skips all of it with one uniform branch: the water results are bit-identical to the solver
+before this change (SHA-256 of the full state after 600 substeps of a rough-terrain run with rain and an inflow, open
+and walled, unchanged), and `setRheology({ kind: 'water' })` after a debris law restores them exactly.
+
+`uMax` (default 15 m/s, clamped to 1–100) is the cap of the momentum pass, the open-boundary outflow, the exported
+speed and every speed the CFL estimate anticipates from sources (`forcingSpeedEstimate`, released stages and raises).
+
+**Tests** (`tests/sim/rheology.test.ts`, GTX 1660 Ti / D3D12):
+
+| Check | Result |
+| --- | --- |
+| GPU vs Float64 CPU reference, 5 laws (two Voellmy, two O'Brien–Julien, Bingham), 300 free-running steps of a dam break on rough terrain with rain and an inflow | max \|Δh\| 1.2·10⁻⁵ – 8.8·10⁻⁴ m; per step from the GPU state ~1·10⁻⁶ m |
+| (a) Voellmy μ = 0, ξ = h_n^{1/3}/n², 0° walled channel, normal depth 2.843 m | 2.788 m vs Manning's 2.799 m on the same grid (0.996); 0.981 of the analytic normal depth |
+| (b) Bingham slab, 1 m on a 0.1 slope, ρ·g·h·S = 0.8·τ_y | interior exactly at rest (q = 0), depth unchanged after 60 s |
+| (b) same slab, ρ·g·h·S = 1.25·τ_y, μ_B 200 Pa·s | interior 0.652 m/s vs the sheet law's 0.654 m/s |
+| (c) Bingham dam break (2 m × 40 m, τ_y 200 Pa), creeping (μ_B 200 Pa·s) | at rest (< 1 mm/s) after ~470 s; front 90 m vs the analytic plug's 89.1 m, depth at the wall 1.341 m vs 1.347 m, surface slope / (τ_y/(ρ·g·h)) 1.001 on average (max 1.009) |
+| (c) same, inertial (μ_B 20 Pa·s) | exactly at rest after 54 s, slope ratio 0.43 on average and ≤ 0.89 everywhere: the slump overshoots the static plug, as inertia must |
+| (d) extreme parameters (ξ → 0, μ 10, τ_y and μ_B 10¹², NaN, negative, unknown kind, frictionless at uMax 100) | finite, h ≥ 0, massError < 10⁻⁴ |
+| (e) mass, every law, closed and open (rain, inflow) | closed: \|ΔV\|/V₀ < 10⁻⁴, nothing out; open: massError < 10⁻⁵ |
+| (f) steep (0.25) dam break, n = 0.01 | peak speed 15.00 m/s at the default cap, 25.00 m/s with uMax 25, 21.6 m/s as a Voellmy debris flood with uMax 25 |
+
+The analytic plug (c) is the quasi-static limit: `h·dh/dx = −τ_y/(ρ·g)`, so `h² = 2·τ_y/(ρ·g)·(x_f − x)` against a wall,
+`x_f` from the volume. The tolerances (2 % on slope and wall depth, 3 % on the front) cover one cell of front position
+and the face-depth convention (`hf` = the deeper side on a flat bed).
+
+**Cost** (momentum pass alone, 1024², Dawn on D3D12, GTX 1660 Ti; median of 7 × 2000 dispatches):
+
+| | river valley (mostly dry) | every cell wet |
+| --- | --- | --- |
+| before (water) | 0.129 ms | 0.168 ms |
+| water | 0.129 ms | 0.169 ms |
+| Voellmy | 0.129 ms | 0.172 ms (+2 %) |
+| O'Brien–Julien | 0.129 ms | 0.175 ms (+4 %) |
+| Bingham | 0.129 ms | 0.171 ms (+2 %) |
+
+Water costs the same as before (the whole substep, `tests/sim/bench.ts 1024`: 2,374–2,411 substeps/s before, 2,361–2,367
+after, within run-to-run noise). A debris law adds 2–4 % to the momentum pass on wet cells — under 2 % of a substep —
+and nothing on dry ones; `node --import tsx tests/sim/bench.ts 1024 voellmy` (or `quadratic`, `bingham`) measures it.
+
+**Caveat for the debris presets.** A Coulomb μ stops flow wherever the surface slope is below μ·cosθ. The Nepal and
+Chungthang chains specify Voellmy μ 0.05, ξ 500 (research spec §I.3, "debris flood"): on the Trishuli valley floor,
+which falls ~2 % across the map, that stalls the 11,100 m³/s surge about 2 km below the north edge (front row ~250 of
+1024 after 25 simulated minutes; water reaches the south edge in ~20). Chungthang's slower hydrograph gets through,
+but half as fast: front row 529 of 1024 after 4,700 s, where water reaches the south edge by ~4,400 s. Both measured
+headless with the presets' own terrain and sources (n = 0.035). The spec's own §D.1 notes that for debris floods
+(Cv 0.1–0.35) yield and Coulomb terms are minor and the dispersive roughness dominates; Voellmy μ = 0 with ξ 500, or
+O'Brien–Julien Glenwood 1 at Cv 0.3, carry the surge down the valley at water-like speed (front rows 401 and 436 at
+450 s, against 456 for water).
 
 ## 4. Rivers, stages and crests
 

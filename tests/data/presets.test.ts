@@ -755,12 +755,15 @@ test('nepal: a labelled scenario hydrograph, sourced numbers, and the caveats on
   const steepClaim = Number(/([0-9]+) % of this domain is steeper/.exec(s.description)?.[1]);
   assert.ok(Number.isFinite(steepClaim), 'the text states what share of the domain the filter skipped');
   /*
-   * (b) THE ARRIVAL TIMES ARE THE SOLVER'S SPEED CAP, not the terrain's answer. Measured on this bake the reported
-   * max speed is 15.0 m/s (SOLVER_DEFAULTS.uMax) by 32 simulated seconds and stays pinned there
-   * (artifacts/nepal-verify/nepal-run.json), so "when the water arrives" is a statement about the cap. The research
-   * brief is explicit that this must not be presented as reproducing the real arrival times.
+   * (b) THE ARRIVAL TIMES ARE THE MODEL'S, not the flood's. With water at the default 15 m/s cap the reported max speed
+   * sat on the cap from 32 simulated seconds on (artifacts/nepal-verify/nepal-run.json). The app now runs this preset
+   * with its hazard chain's debris-flood friction and 25 m/s cap (src/app/scene.ts applyScenarioRheology), and the text
+   * must name the cap that applies. The surge still starts from rest at the map edge with one uniform friction law, so
+   * the research brief's rule stands: this must not be presented as reproducing the real arrival times.
    */
-  assert.match(s.description, /15 m\/s/);
+  assert.match(s.description, /25 m\/s speed cap/);
+  assert.equal(meta.scenario?.hazardChain?.solver?.uMax, 25, 'the cap the text names is the one the chain sets');
+  assert.doesNotMatch(s.description, /15 m\/s/);
   assert.match(s.description, /not the real arrival times/);
   /*
    * (c) THE IMAGERY SENTENCE MUST NOT CONTRADICT SOURCES.txt, which says Sentinel-2 L2A is open and COULD be
@@ -929,7 +932,10 @@ test('chungthang: a labelled placeholder hydrograph, the South Lhonak chain, and
   assert.match(s.description, /surface model with canopy and buildings/);
   assert.match(s.description, /flatter than 20°/);
   assert.match(s.description, /do not read street-level depths/);
-  assert.match(s.description, /15 m\/s/);
+  // The app runs this preset with its chain's debris friction and speed cap (src/app/scene.ts applyScenarioRheology).
+  assert.match(s.description, /25 m\/s speed cap/);
+  assert.match(s.description, /carries no sediment/);
+  assert.doesNotMatch(s.description, /this is clear water|15 m\/s/);
   const shown = `${meta.name} ${meta.subtitle} ${s.description} ${s.sources.map((x) => x.label ?? '').join(' ')}`;
   assert.doesNotMatch(shown, /\b(dead|death|deaths|killed|casualt\w*|missing|bodies)/i, 'no casualty figures on screen');
   assert.equal(s.stage, null);

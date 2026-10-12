@@ -5,11 +5,11 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import type { EvacuationRouter, FloodRenderer } from '../../src/contracts';
+import type { EvacuationRouter, FloodRenderer, FloodSolver, ScenarioPreset } from '../../src/contracts';
 import type { App } from '../../src/app/App';
 import { createActions } from '../../src/app/actions';
 import { createInitialState } from '../../src/app/defaults';
-import { SceneManager, SupersededLoadError } from '../../src/app/scene';
+import { applyScenarioRheology, SceneManager, SupersededLoadError } from '../../src/app/scene';
 import { StageLevels } from '../../src/app/stage';
 import { createStore } from '../../src/app/store';
 
@@ -269,4 +269,16 @@ test('scene: label never echoes a link-supplied name or an unknown preset id', (
   assert.equal(SceneManager.label({ kind: 'preset', id: 'pittsburgh' }), 'Pittsburgh — Three Rivers');
   const spoofed = SceneManager.label({ kind: 'preset', id: '<img src=x onerror=alert(1)>' });
   assert.equal(spoofed, 'an unknown preset');
+});
+
+test('scene: a hazard-chain preset runs its rheology and speed cap, any other scenario runs water', () => {
+  const calls: unknown[][] = [];
+  const solver = { setRheology: (...a: unknown[]) => calls.push(a) } as unknown as FloodSolver;
+  const chain = { rheology: { kind: 'voellmy', mu: 0.05, xi: 500 }, solver: { uMax: 25 } };
+  applyScenarioRheology(solver, { hazardChain: chain } as unknown as ScenarioPreset);
+  applyScenarioRheology(solver, { sources: [] } as unknown as ScenarioPreset);
+  applyScenarioRheology(solver, null);
+  assert.deepEqual(calls, [[chain.rheology, chain.solver], [{ kind: 'water' }], [{ kind: 'water' }]]);
+  // A solver without the extension is left alone.
+  assert.doesNotThrow(() => applyScenarioRheology({} as FloodSolver, { hazardChain: chain } as unknown as ScenarioPreset));
 });
