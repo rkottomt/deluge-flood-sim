@@ -1559,6 +1559,174 @@ const FLOWS = [
       }
     },
   },
+  {
+    id: 17,
+    name: 'Future climate: Houston 2050 SSP5-8.5 scales the forcing; Site check EAL today vs future',
+    timeoutMs: 420_000,
+    async run(r) {
+      // src/climate + src/app/climate.ts: a layer on what the solver receives; the store (and the sliders) keep today.
+      await D((p) => window.__deluge.loadPreset(p), 'houston');
+      await D(() => {
+        const d = window.__deluge;
+        d.store.set({ climate: { horizon: 'today', pathway: 'ssp585', scaling: 'cc' } });
+        d.actions.restoreScenario();
+        d.setPaused(false);
+        d.actions.resetWater();
+      });
+      const read = () =>
+        D(() => {
+          const d = window.__deluge;
+          const solver = d.getSolver();
+          const inflow = (solver?.sources ?? []).find((s) => s.type === 'inflow');
+          return {
+            solverRain: solver?.params.rainRate ?? NaN,
+            solverInflow: inflow?.discharge ?? NaN,
+            storeRain: d.getState().sim.rainRate,
+            storeInflow: d.getState().sources.find((s) => s.type === 'inflow')?.discharge ?? NaN,
+            badge: document.querySelector('[data-climate="badge"]')?.textContent ?? '',
+            rainLine: document.querySelector('[data-climate="rain"]')?.textContent ?? '',
+            inflowLine: document.querySelector('[data-climate="inflow"]')?.textContent ?? '',
+            note: document.querySelector('[data-climate="note-line"]')?.textContent ?? '',
+          };
+        });
+      const today = await read();
+      check(r, 'Today: the solver gets the scenario as it ships', today.solverRain === today.storeRain && today.solverInflow === today.storeInflow && /Today/.test(today.badge), `rain ${num(today.solverRain, 1)} mm/hr, inflow ${num(today.solverInflow, 0)} m³/s, badge “${today.badge}”`);
+
+      // The UI: Weather & rivers → Future climate → 2050, SSP5-8.5.
+      await D(() => document.querySelector('.dl-climate')?.scrollIntoView({ block: 'center' }));
+      await page.click('[data-climate-horizon="2050"]');
+      await page.click('[data-climate-pathway="ssp585"]');
+      await sleep(200);
+      const fut = await read();
+      const k = fut.solverRain / today.solverRain;
+      const expected = Math.pow(1.07, 2.4 - 0.85); // AR6 SPM.1 2041–2060 SSP5-8.5, from 1995–2014, at 7 %/°C
+      r.metrics.climate = { today, future: fut, multiplier: k };
+      check(r, 'the badge and the rain line name the climate and the multiplier', /2050 · SSP5-8\.5/.test(fut.badge) && /× 1\.11/.test(fut.rainLine) && /173/.test(fut.rainLine), `“${fut.badge}” · “${fut.rainLine.slice(0, 110)}”`);
+      check(r, 'the solver’s rain and the bayou inflow are scaled by the same multiplier', Math.abs(k - expected) < 1e-3 && Math.abs(fut.solverInflow / today.solverInflow - expected) < 1e-3, `× ${num(k, 4)} (expected ${num(expected, 4)}): ${num(fut.solverRain, 1)} mm/hr, ${num(fut.solverInflow, 0)} m³/s`);
+      check(r, 'the store keeps today’s values (the sliders keep their meaning), and a note says so', fut.storeRain === today.storeRain && fut.storeInflow === today.storeInflow && /the sliders show today/.test(fut.note), `store rain ${num(fut.storeRain, 1)}, inflow ${num(fut.storeInflow, 0)}; “${fut.note.slice(0, 80)}”`);
+      await sleep(300);
+      const climShot = path.join(OUT, '17-climate-panel.png');
+      await page.locator('.dl-climate').screenshot({ path: climShot });
+      console.log(`  [shot] ${path.relative(ROOT, climShot)}`);
+
+      // Site check: a lot that floods in today's storm. Run the scenario 10 sim-min, take a cell that was dry at the
+      // start and is under 1–3 m now (block maximum), drop the site there.
+      await D(() => window.__deluge.actions.resetWater());
+      await runFor(2); // a readback of the reset water
+      await D(() => {
+        window.__e2e17 = { initial: window.__deluge.sampleGrid('depth', 8) };
+      });
+      await runFor(600);
+      const spot = await D(() => {
+        const d = window.__deluge;
+        const a = window.__e2e17.initial;
+        const b = d.sampleGrid('depth', 8);
+        if (!a || !b) return { diag: `no samples (${!!a}, ${!!b})` };
+        let best = null;
+        let wet = 0;
+        let max = 0;
+        for (let k = 0; k < b.data.length; k++) {
+          max = Math.max(max, b.data[k]);
+          if (b.data[k] > 0.3) wet++;
+          if (a.data[k] > 0.02 || !(b.data[k] > 1 && b.data[k] < 3)) continue;
+          const gx = (k % b.w) * b.stride + b.stride / 2;
+          const gy = Math.floor(k / b.w) * b.stride + b.stride / 2;
+          const score = -Math.hypot(gx - (b.w * b.stride) / 2, gy - (b.h * b.stride) / 2);
+          if (!best || score > best.score) best = { gx, gy, depth: b.data[k], score };
+        }
+        if (best) {
+          // The block maximum is somewhere in the block: put the pin on the deepest cell of it.
+          const x0 = best.gx - b.stride / 2;
+          const y0 = best.gy - b.stride / 2;
+          let deep = { gx: best.gx, gy: best.gy, depth: -1 };
+          for (let j = 0; j < b.stride; j++) {
+            for (let i = 0; i < b.stride; i++) {
+              const dd = d.sampleAt(x0 + i + 0.5, y0 + j + 0.5)?.depth ?? 0;
+              if (dd > deep.depth) deep = { gx: x0 + i + 0.5, gy: y0 + j + 0.5, depth: dd };
+            }
+          }
+          best = { ...best, ...deep };
+        }
+        return best ?? { diag: `${wet} blocks > 0.3 m, max ${max.toFixed(2)} m, t ${d.getStats()?.simTime}` };
+      });
+      const found = spot && !spot.diag;
+      check(r, 'found a lot that floods in today’s storm', found, found ? `(${num(spot.gx, 0)}, ${num(spot.gy, 0)}) ${num(spot.depth, 2)} m after 10 min` : spot?.diag ?? 'none');
+      if (!found) return;
+      await D((p) => {
+        const d = window.__deluge;
+        const ground = d.sampleAt(p.gx, p.gy).ground;
+        d.setCamera({ target: { gx: p.gx, gy: p.gy, elevation: ground }, distance: 700, yaw: 0, pitch: Math.PI / 2 - 0.01 });
+      }, spot);
+      await D(() => window.__deluge.waitFrames(4));
+      await D(() => window.__deluge.selectTool('site'));
+      const box = await page.locator('#deluge-canvas').boundingBox();
+      await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+      const placed = await page
+        .waitForFunction(() => document.querySelectorAll('.dl-site-item').length >= 1 && document.querySelector('[data-section="site"]')?.classList.contains('dl-open'), null, { timeout: 5000 })
+        .then(() => true, () => false);
+      check(r, 'a site is dropped on the lot', placed);
+      await D(() => window.__deluge.selectTool('orbit'));
+
+      // Ladder: forcing × 0.5 and × 1 with return periods typed in (10 and 100 years, the user's input), 10 min each.
+      await page.fill('[data-site-field="duration"]', '10');
+      await page.dispatchEvent('[data-site-field="duration"]', 'change');
+      await D(() => {
+        for (const box of document.querySelectorAll('.dl-site-ladder input[type=checkbox]')) {
+          const want = box.dataset.level === 'x0.5' || box.dataset.level === 'x1';
+          if (box.checked !== want) box.click();
+        }
+        for (const [id, T] of [['x0.5', '10'], ['x1', '100']]) {
+          const inp = document.querySelector(`.dl-site-ladder input[data-level="${id}"]`)?.closest('tr')?.querySelector('.dl-site-rp');
+          if (inp) {
+            inp.value = T;
+            inp.dispatchEvent(new Event('change'));
+          }
+        }
+      });
+      const btnState = await D(() => ({ disabled: document.querySelector('[data-site="run-climate-sweep"]')?.disabled ?? null }));
+      check(r, '“Today vs future” is enabled under 2050 SSP5-8.5', btnState.disabled === false, JSON.stringify(btnState));
+      const t0 = Date.now();
+      await page.click('[data-site="run-climate-sweep"]');
+      const done = await page
+        .waitForFunction(() => /^(Done: 2 levels today|Sweep stopped|Cancelled)/.test(document.querySelector('[data-site="sweep-status"]')?.textContent ?? ''), null, { timeout: 360_000 })
+        .then(() => true, () => false);
+      const out = await D(() => ({
+        status: document.querySelector('[data-site="sweep-status"]')?.textContent ?? '',
+        eal: document.querySelector('[data-site="climate-eal"]')?.textContent ?? '',
+        rows: [...document.querySelectorAll('[data-site="climate-compare"] tbody tr')].map((tr) => [...tr.children].map((td) => td.textContent)),
+        climate: window.__deluge.getState().climate,
+        solverRain: window.__deluge.getSolver()?.params.rainRate ?? NaN,
+      }));
+      r.metrics.compare = { ...out, seconds: (Date.now() - t0) / 1000 };
+      check(r, 'today-vs-future sweep completes', done && /^Done: 2 levels today and under 2050 · SSP5-8\.5/.test(out.status), `${out.status.slice(0, 90)} (${num((Date.now() - t0) / 1000, 1)} s wall)`);
+      check(r, 'the site card shows “EAL today $X → 2050 · SSP5-8.5 $Y”', /^EAL today .+ a year → 2050 · SSP5-8\.5 /.test(out.eal), out.eal);
+      const money = (s) => Number(String(s).replace(/[^0-9.kKMB]/g, '').replace(/k$/i, 'e3').replace(/M$/, 'e6').replace(/B$/, 'e9'));
+      const worse = out.rows.length === 2 && out.rows.every((row) => !(money(row[2]) < money(row[1]))) && out.rows.some((row) => money(row[2]) > money(row[1]));
+      check(r, 'per-level loss under 2050 SSP5-8.5 is no lower than today, and higher somewhere', worse, JSON.stringify(out.rows));
+      check(r, 'the user’s climate is put back afterwards', out.climate?.horizon === '2050' && Math.abs(out.solverRain / today.solverRain - expected) < 1e-3, `${JSON.stringify(out.climate)}, solver rain ${num(out.solverRain, 1)}`);
+      await D(() => document.querySelector('[data-site="climate-compare"]')?.scrollIntoView({ block: 'center' }));
+      await sleep(400);
+      const siteShot = path.join(OUT, '17-site-climate.png');
+      await page.locator('.dl-panel').screenshot({ path: siteShot });
+      console.log(`  [shot] ${path.relative(ROOT, siteShot)}`);
+      await shot('17-houston-2050');
+
+      // The report carries the comparison.
+      const [dl] = await Promise.all([page.waitForEvent('download', { timeout: 20_000 }), page.click('[data-site="report-html"]')]);
+      const file = path.join(OUT, '17-site-assessment-climate.html');
+      await dl.saveAs(file);
+      const html = fs.readFileSync(file, 'utf8');
+      check(r, 'the site assessment report has the climate comparison', /Future climate — today vs 2050 · SSP5-8\.5/.test(html) && /EAL today/.test(html), `${(html.length / 1024).toFixed(0)} KB`);
+
+      // Back to Today: the identity again.
+      await D(() => document.querySelector('.dl-climate')?.scrollIntoView({ block: 'center' }));
+      await page.click('[data-climate-horizon="today"]');
+      await sleep(200);
+      const back = await read();
+      check(r, 'Today again restores the scenario’s own forcing', back.solverRain === today.solverRain && back.solverInflow === today.solverInflow, `rain ${num(back.solverRain, 1)}, inflow ${num(back.solverInflow, 0)}`);
+      await D((p) => window.__deluge.loadPreset(p), PRESET);
+    },
+  },
 ];
 
 // ─── report ────────────────────────────────────────────────────────────────────────────────────
