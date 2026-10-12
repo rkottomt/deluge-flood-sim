@@ -1,0 +1,410 @@
+/**
+ * Per-asset flood impact from the solver's hazard accumulators (HazardFields): what reached each building, how bad it
+ * was, what it cost, and how long the place is out of action.
+ *
+ * For each footprint the cells it covers (footprints.ts) are sampled for maximum depth, maximum speed, maximum
+ * depth × speed, first arrival and wet duration — the WORST cell, since a flood that fills one side of a building
+ * fills its ground floor. Cells that were already wet at reset (rivers, lakes: firstWet = 0) are left out, so a
+ * riverside building whose footprint clips the channel is not booked the river's depth.
+ *
+ * The terrain is bare earth: the solver lets water flow THROUGH buildings, so the depth on a footprint is the depth
+ * the street would have there, and the speed is open-ground speed where real flow would split around the walls.
+ * Both are what the loss curves and hazard classes are usually fed in screening studies, and both are stated.
+ */
+import type { BuildingSet, HazardFields } from '../contracts';
+import { BUILDING_KINDS, HEIGHT_SOURCES, type HeightProfile } from '../data/buildings';
+import { ACCESS_CUT, type AccessResult } from './access';
+import type { Curve } from './curves';
+import type { FootprintIndex } from './footprints';
+import {
+  ACCESS_CLEARING_DAYS,
+  aidrClass,
+  downtimeDays,
+  fd2321HR,
+  hrClass,
+  structuralState,
+  type AidrClass,
+  type HrClass,
+} from './hazard';
+import type { Region } from './region';
+import {
+  assetValue,
+  curveForOccupancy,
+  floorsFromHeight,
+  OCCUPANCY_PROFILES,
+  occupancyForKind,
+  storeyDamage,
+  storeyHeightFor,
+  undamageableShare,
+  type Construction,
+  type Occupancy,
+  type StructuralState,
+  type ValueConfidence,
+} from './value';
+
+/** Water depth that counts as reaching an asset, m — the solver's ARRIVAL_DEPTH, the depth HazardFields' firstWet uses. */
+export const REACHED_DEPTH = 0.15;
+/**
+ * Reporting threshold for "damaged": the ground storey lost at least this fraction of its damageable value. A
+ * presentation choice, not physics — every building with water above its floor carries some loss in the totals.
+ */
+export const DAMAGED_MIN_FRACTION = 0.2;
+
+export interface CellSample {
+  /** Cells sampled (cells wet at reset excluded). */
+  sampled: number;
+  maxDepth: number;
+  /** NaN when the fields carry no velocity. */
+  maxSpeed: number;
+  maxDV: number;
+  /** Earliest arrival over the sampled cells, s since reset; −1 if never reached. */
+  firstWet: number;
+  wetSeconds: number;
+}
+
+export function sampleCells(f: HazardFields, cells: ArrayLike<number>, start = 0, end = cells.length): CellSample {
+  const s: CellSample = { sampled: 0, maxDepth: 0, maxSpeed: 0, maxDV: 0, firstWet: -1, wetSeconds: 0 };
+  let speedNaN = false;
+  for (let q = start; q < end; q++) {
+    const c = cells[q];
+    const fw = f.firstWet[c];
+    if (fw === 0) continue;
+    s.sampled++;
+    const d = f.maxDepth[c];
+    if (d > s.maxDepth) s.maxDepth = d;
+    const v = f.maxSpeed[c];
+    if (Number.isNaN(v)) speedNaN = true;
+    else if (v > s.maxSpeed) s.maxSpeed = v;
+    const dv = f.maxDV[c];
+    if (dv > s.maxDV) s.maxDV = dv;
+    if (fw > 0 && (s.firstWet < 0 || fw < s.firstWet)) s.firstWet = fw;
+    const w = f.wetSeconds[c];
+    if (w > s.wetSeconds) s.wetSeconds = w;
+  }
+  if (speedNaN) {
+    s.maxSpeed = NaN;
+    s.maxDV = NaN;
+  }
+  return s;
+}
+
+/** What is being assessed (values may be NaN = unknown). */
+export interface AssetSpec {
+  occ: Occupancy;
+  floors: number;
+  storeyHeight: number;
+  structure: number;
+  contents: number;
+  construction: Construction | null;
+  /** Ground-floor height above the ground, m (0 for footprints: the JRC curves are on water depth). */
+  firstFloorHeight: number;
+  /** Height of critical equipment above grade, m (portfolio). */
+  criticalElev?: number | null;
+  /** Daily gross profit (daily revenue × gross margin), for business interruption (portfolio). */
+  dailyGrossProfit?: number | null;
+  recapture?: number | null;
+  deductible?: number | null;
+  limit?: number | null;
+}
+
+export interface AssessContext {
+  curve: Curve;
+  debrisFlow: boolean;
+  /** Warning time: lead time = arrival − this, s since reset. */
+  alertTime: number;
+}
+
+export interface AssetResult {
+  sampled: number;
+  /** Max water depth at the asset, m. */
+  depth: number;
+  /** Max depth above the ground floor, m. */
+  depthAboveFloor: number;
+  speed: number;
+  dv: number;
+  firstWet: number;
+  /** firstWet − alert time, s; NaN if never reached. */
+  leadTime: number;
+  wetSeconds: number;
+  reached: boolean;
+  aidr: AidrClass;
+  hr: number;
+  hrClass: HrClass;
+  state: StructuralState;
+  /** Whole-asset damage fraction (after the velocity rule). */
+  damage: number;
+  groundDamage: number;
+  lossStructure: number;
+  lossContents: number;
+  loss: number;
+  lossLo: number;
+  lossHi: number;
+  /** Downtime heuristic, days. */
+  downtimeDays: number;
+  /** Business-interruption loss; NaN without a daily gross profit. */
+  biLoss: number;
+  /** clamp(loss + BI − deductible, 0, limit); NaN without a deductible or limit. */
+  insuredLoss: number;
+  /** Critical equipment under water (max depth > critical elevation), null when no elevation was given. */
+  criticalWet: boolean | null;
+  accessCut: boolean;
+}
+
+export function assessAsset(
+  s: CellSample,
+  spec: AssetSpec,
+  ctx: AssessContext,
+  access?: { cut: boolean; roadWetSeconds: number } | null,
+): AssetResult {
+  const depth = s.maxDepth;
+  const above = depth - Math.max(0, spec.firstFloorHeight || 0);
+  const state = structuralState(s.maxSpeed, s.maxDV, { construction: spec.construction, debrisFlow: ctx.debrisFlow });
+  const effState: StructuralState = depth >= REACHED_DEPTH ? state : state === 'unknown' ? 'unknown' : 'none';
+  const dmg = storeyDamage({
+    depth: above,
+    floors: spec.floors,
+    storeyHeight: spec.storeyHeight,
+    curve: ctx.curve,
+    structureValue: spec.structure,
+    contentsValue: spec.contents,
+    undamageable: undamageableShare(spec.construction),
+    state: effState,
+  });
+  const prof = OCCUPANCY_PROFILES[spec.occ];
+  const accessCut = !!access?.cut;
+  const accessDays = accessCut ? ACCESS_CLEARING_DAYS + (access?.roadWetSeconds ?? 0) / 86400 : 0;
+  const downtime = downtimeDays({ depth: Math.max(0, above), damage: dmg.fraction, rebuildDays: prof.rebuildDays, accessDays });
+  const gp = spec.dailyGrossProfit;
+  const recapture = spec.recapture ?? prof.recapture;
+  const biLoss = gp != null && Number.isFinite(gp) ? downtime * gp * (1 - Math.min(1, Math.max(0, recapture))) : NaN;
+  const loss = dmg.structure + dmg.contents;
+  let insured = NaN;
+  if ((spec.deductible != null && Number.isFinite(spec.deductible)) || (spec.limit != null && Number.isFinite(spec.limit))) {
+    const gross = loss + (Number.isFinite(biLoss) ? biLoss : 0);
+    insured = Math.max(0, gross - (spec.deductible ?? 0));
+    if (spec.limit != null && Number.isFinite(spec.limit)) insured = Math.min(insured, spec.limit);
+  }
+  const hr = fd2321HR(depth, s.maxSpeed);
+  return {
+    sampled: s.sampled,
+    depth,
+    depthAboveFloor: above,
+    speed: s.maxSpeed,
+    dv: s.maxDV,
+    firstWet: s.firstWet,
+    leadTime: s.firstWet >= 0 ? s.firstWet - ctx.alertTime : NaN,
+    wetSeconds: s.wetSeconds,
+    reached: depth >= REACHED_DEPTH,
+    aidr: aidrClass(depth, s.maxSpeed, s.maxDV),
+    hr,
+    hrClass: hrClass(hr),
+    state: effState,
+    damage: dmg.fraction,
+    groundDamage: dmg.groundFraction,
+    lossStructure: dmg.structure,
+    lossContents: dmg.contents,
+    loss,
+    lossLo: dmg.lossLo,
+    lossHi: dmg.lossHi,
+    downtimeDays: downtime,
+    biLoss,
+    insuredLoss: insured,
+    criticalWet: spec.criticalElev != null && Number.isFinite(spec.criticalElev) ? depth > spec.criticalElev : null,
+    accessCut,
+  };
+}
+
+// ─── Footprints ──────────────────────────────────────────────────────────────────────────────────────────────────────
+
+export interface ImpactOptions {
+  region: Region;
+  heightProfile?: HeightProfile;
+  /** Debris-laden flow (GLOF / debris flow): the heuristic dv × 1.5 rule (hazard.ts). */
+  debrisFlow?: boolean;
+  /** Warning time, s since reset (default 0: the alert goes out when the scenario starts). */
+  alertTime?: number;
+  /** True when HazardFields carry real speeds (false for the depth-only snapshot fallback). */
+  velocityKnown?: boolean;
+}
+
+export interface BuildingImpact extends AssetResult {
+  /** Index into the BuildingSet. */
+  k: number;
+  name: string;
+  occ: Occupancy;
+  kind: string;
+  floors: number;
+  gfaM2: number;
+  valueStructure: number;
+  valueContents: number;
+  valueConfidence: ValueConfidence;
+  /** The roof height (and so the storey count) is a guess (BuildingSet.heightSource 'estimated'). */
+  heightEstimated: boolean;
+  gx: number;
+  gy: number;
+}
+
+export interface ImpactSummary {
+  simTime: number;
+  buildings: number;
+  /** Buildings with at least one cell not under water at reset. */
+  assessed: number;
+  reached: number;
+  damaged: number;
+  partial: number;
+  destroyed: number;
+  /** Total replacement value (structure + contents) of every assessed building; NaN without a cost table. */
+  exposedValue: number;
+  loss: number;
+  lossLo: number;
+  lossHi: number;
+  lossStructure: number;
+  lossContents: number;
+  /** Reached buildings per AIDR class (index 1–6; 0 unused). */
+  aidr: number[];
+  hr: Record<HrClass, number>;
+  /** Reached buildings whose nearest road was impassable at the peak. */
+  accessCut: number;
+  earliest: { k: number; firstWet: number; leadTime: number } | null;
+  /** Loss by occupancy. */
+  byOccupancy: Partial<Record<Occupancy, { count: number; loss: number }>>;
+  velocityKnown: boolean;
+  debrisFlow: boolean;
+  /** Reached buildings whose storey count came from an estimated height. */
+  heightEstimated: number;
+  /** Reached buildings whose occupancy came from the size heuristic. */
+  occupancyGuessed: number;
+}
+
+export interface ImpactReport {
+  summary: ImpactSummary;
+  /** Every building with any water on it (depth > 1 cm), in BuildingSet order. */
+  impacts: BuildingImpact[];
+}
+
+/** Below this max depth a building is not listed (it still counts as assessed). */
+const LIST_MIN_DEPTH = 0.01;
+
+export function computeBuildingImpacts(
+  fields: HazardFields,
+  set: BuildingSet,
+  fp: FootprintIndex,
+  opts: ImpactOptions,
+  access?: AccessResult | null,
+): ImpactReport {
+  const region = opts.region;
+  const profile = opts.heightProfile ?? 'us';
+  const ctxBase = { debrisFlow: !!opts.debrisFlow, alertTime: opts.alertTime ?? 0 };
+  const curves = new Map<Occupancy, Curve>();
+  const curve = (o: Occupancy) => {
+    let c = curves.get(o);
+    if (!c) curves.set(o, (c = curveForOccupancy(o, region.continent)));
+    return c;
+  };
+  const sum: ImpactSummary = {
+    simTime: fields.simTime,
+    buildings: set.count,
+    assessed: 0,
+    reached: 0,
+    damaged: 0,
+    partial: 0,
+    destroyed: 0,
+    exposedValue: region.costCountry ? 0 : NaN,
+    loss: 0,
+    lossLo: 0,
+    lossHi: 0,
+    lossStructure: 0,
+    lossContents: 0,
+    aidr: [0, 0, 0, 0, 0, 0, 0],
+    hr: { low: 0, moderate: 0, significant: 0, extreme: 0 },
+    accessCut: 0,
+    earliest: null,
+    byOccupancy: {},
+    velocityKnown: opts.velocityKnown !== false,
+    debrisFlow: !!opts.debrisFlow,
+    heightEstimated: 0,
+    occupancyGuessed: 0,
+  };
+  const impacts: BuildingImpact[] = [];
+  const estimatedSrc = HEIGHT_SOURCES.indexOf('estimated');
+  for (let k = 0; k < set.count; k++) {
+    const s = sampleCells(fields, fp.cells, fp.offsets[k], fp.offsets[k + 1]);
+    if (s.sampled === 0) continue;
+    sum.assessed++;
+    const kind = BUILDING_KINDS[set.kind[k]] ?? 'other';
+    const area = fp.areaM2[k];
+    const rawFloors = floorsFromHeight(set.height[k], profile);
+    const { occ, confidence } = occupancyForKind(kind, area, rawFloors);
+    const prof = OCCUPANCY_PROFILES[occ];
+    const floors = prof.maxFloors ? Math.min(prof.maxFloors, rawFloors) : rawFloors;
+    const gfa = area * floors;
+    const value = assetValue({ occ, gfaM2: gfa, country: region.costCountry });
+    if (region.costCountry) sum.exposedValue += (value.structure || 0) + (value.contents || 0);
+    if (!(s.maxDepth > LIST_MIN_DEPTH)) continue;
+    const r = assessAsset(
+      s,
+      {
+        occ,
+        floors,
+        storeyHeight: storeyHeightFor(floors, profile),
+        structure: value.structure,
+        contents: value.contents,
+        construction: null,
+        firstFloorHeight: 0,
+      },
+      { ...ctxBase, curve: curve(occ) },
+      access ? { cut: access.status[k] === ACCESS_CUT, roadWetSeconds: access.roadWetSeconds[k] } : null,
+    );
+    const heightEstimated = set.heightSource[k] === estimatedSrc;
+    const b: BuildingImpact = {
+      ...r,
+      k,
+      name: set.names[k] ?? '',
+      occ,
+      kind,
+      floors,
+      gfaM2: gfa,
+      valueStructure: value.structure,
+      valueContents: value.contents,
+      valueConfidence: confidence,
+      heightEstimated,
+      gx: fp.cx[k],
+      gy: fp.cy[k],
+    };
+    impacts.push(b);
+    if (Number.isFinite(r.loss)) {
+      sum.loss += r.loss;
+      sum.lossLo += r.lossLo;
+      sum.lossHi += r.lossHi;
+      sum.lossStructure += r.lossStructure;
+      sum.lossContents += r.lossContents;
+    }
+    if (!r.reached) continue;
+    sum.reached++;
+    if (r.groundDamage >= DAMAGED_MIN_FRACTION) sum.damaged++;
+    if (r.state === 'partial') sum.partial++;
+    if (r.state === 'collapse') sum.destroyed++;
+    sum.aidr[r.aidr]++;
+    sum.hr[r.hrClass]++;
+    if (r.accessCut) sum.accessCut++;
+    if (heightEstimated) sum.heightEstimated++;
+    if (confidence === 'heuristic') sum.occupancyGuessed++;
+    const bo = (sum.byOccupancy[occ] ??= { count: 0, loss: 0 });
+    bo.count++;
+    if (Number.isFinite(r.loss)) bo.loss += r.loss;
+    if (r.firstWet > 0 && (!sum.earliest || r.firstWet < sum.earliest.firstWet)) {
+      sum.earliest = { k, firstWet: r.firstWet, leadTime: r.leadTime };
+    }
+  }
+  if (!region.costCountry) {
+    sum.loss = sum.lossLo = sum.lossHi = sum.lossStructure = sum.lossContents = NaN;
+  }
+  return { summary: sum, impacts };
+}
+
+/** The n biggest losses (by loss, then depth), stable. */
+export function topByLoss<T extends { loss: number; depth: number }>(items: readonly T[], n = 10): T[] {
+  return [...items]
+    .sort((a, b) => (Number.isFinite(b.loss) ? b.loss : -1) - (Number.isFinite(a.loss) ? a.loss : -1) || b.depth - a.depth)
+    .slice(0, n);
+}
