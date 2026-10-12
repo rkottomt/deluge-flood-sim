@@ -5,6 +5,10 @@
  *   1 raise the rivers to the record crest (or play the flood fast)   2 plan an evacuation   3 build a levee
  *   4 hurricane rain
  *
+ * A glacier hazard-chain preset (ScenarioPreset.hazardChain: a flood that starts far upstream, in the mountains) gets
+ * its own steps instead — release the flood, show the arrival times (the warning each place had), evacuate — and no
+ * levee or hurricane rain, which are not that story.
+ *
  * Evacuate comes before the levee: building the demo levee replays the rise, so a planned route visibly re-plans as
  * streets flood. Each step shows a check once done, and the ones with an obvious inverse (rivers, levee, rain)
  * toggle back. Under the buttons a status line follows the river while it rises and says how much land the
@@ -73,7 +77,7 @@ export function dramaticOffset(ctrl: StageControl): number {
 }
 
 interface Step {
-  id: 'flood' | 'levee' | 'evac' | 'rain' | 'break';
+  id: 'flood' | 'levee' | 'evac' | 'rain' | 'break' | 'arrival';
   icon: IconName;
   key?: string;
   /** Current label (may depend on state, e.g. toggles). */
@@ -83,6 +87,13 @@ interface Step {
   /** Toggle steps show their inverse action once done. */
   active?(s: AppState): boolean;
   run(): void;
+  /** Steps that do not fit the scene are hidden (default: shown). */
+  visible?(s: AppState): boolean;
+}
+
+/** The scene's flood starts upstream of the map (a glacial lake, an avalanche): the hazard-chain story. */
+export function isGlacierScene(s: Pick<AppState, 'scenario'>): boolean {
+  return !!s.scenario?.hazardChain;
 }
 
 /** Nothing in the scenario makes water: no river stage, inflow, storm or rain (e.g. a live area with no river found). */
@@ -143,11 +154,13 @@ export function createWelcome(ctx: UIContext): HTMLElement {
     icon: 'water',
     label: (s) => {
       const ctrl = s.scenario?.stage;
+      if (!ctrl && isGlacierScene(s)) return 'Release the flood';
       if (!ctrl) return hasNoForcing(s) || stormFloodBase !== null ? stormLabel(s.terrainName) : 'Play the flood';
       return isRaised(s, ctrl) ? 'Back to normal' : raiseStepText(ctrl, dramaticStage(ctrl)).label;
     },
     tip: (s) => {
       const ctrl = s.scenario?.stage;
+      if (!ctrl && isGlacierScene(s)) return 'Start the flood wave from upstream over again and fast-forward it — the valley timeline follows it down to the map';
       if (!ctrl) {
         return hasNoForcing(s) || stormFloodBase !== null
           ? `No river crosses the map edge here to raise: drop a ${PLAY_STORM_RATE} mm/hr thunderstorm over the view and fast-forward`
@@ -166,6 +179,13 @@ export function createWelcome(ctx: UIContext): HTMLElement {
     run: () => {
       const s = store.get();
       const ctrl = s.scenario?.stage ?? null;
+      if (!ctrl && isGlacierScene(s)) {
+        played = true;
+        ctx.actions.resetWater();
+        store.set({ paused: false, sim: quickSpeed(s) });
+        releaseTheFlood(ctx);
+        return;
+      }
       if (!ctrl) {
         played = true;
         if (hasNoForcing(s) && s.grid) {
@@ -197,6 +217,7 @@ export function createWelcome(ctx: UIContext): HTMLElement {
     id: 'levee',
     icon: 'wall',
     key: '2',
+    visible: (s) => !isGlacierScene(s),
     label: (s) => (demoLevee(s) && leveeUp ? 'Remove levee' : 'Build a levee'),
     tip: (s) => {
       const levee = demoLevee(s);
@@ -232,8 +253,35 @@ export function createWelcome(ctx: UIContext): HTMLElement {
     },
   };
 
+  const arrivalStep: Step = {
+    id: 'arrival',
+    icon: 'clock',
+    label: (s) => (s.render.waterMode === 'arrival' ? 'Hide arrival times' : 'Show arrival times'),
+    tip: (s) =>
+      s.render.waterMode === 'arrival'
+        ? 'Back to the scenario’s own view'
+        : 'Colour the map by when the water got there — and read each place’s warning time on the valley timeline',
+    done: (s) => s.render.waterMode === 'arrival',
+    active: (s) => s.render.waterMode === 'arrival',
+    visible: isGlacierScene,
+    run: () => {
+      const s = store.get();
+      if (s.render.waterMode === 'arrival') return ctx.setRender({ waterMode: s.scenario?.defaultView ?? 'realistic' });
+      ctx.setRender({ waterMode: 'arrival' });
+      postNotice(store, {
+        kind: 'info',
+        key: 'try-arrival',
+        title: 'When the water arrived',
+        message:
+          'Each place on the map is coloured by the minutes after the start that water first stood there. The timeline at the bottom gives the clock time at each town and power plant upstream, and the warning it had.',
+        durationMs: 10000,
+      });
+    },
+  };
+
   const steps: Step[] = [
     floodStep,
+    arrivalStep,
     {
       id: 'evac',
       icon: 'evac',
@@ -247,6 +295,7 @@ export function createWelcome(ctx: UIContext): HTMLElement {
     {
       id: 'rain',
       icon: 'rain',
+      visible: (s) => !isGlacierScene(s),
       label: (s) => (s.sim.rainRate >= HURRICANE_RAIN ? 'Stop rain' : 'Hurricane rain'),
       tip: (s) =>
         s.sim.rainRate >= HURRICANE_RAIN ? 'Turn the rain off' : `${HURRICANE_RAIN} mm/hr over the whole map (Harvey’s peak rates), fast-forwarded`,
@@ -432,8 +481,10 @@ export function createWelcome(ctx: UIContext): HTMLElement {
     if (!used) toggleClass(el, 'dl-compact', false);
     el.inert = !show;
     if (!show) return;
-    const firstOpen = buttons.find((x) => !x.step.done(s));
+    const shown = (step: Step) => step.visible?.(s) ?? true;
+    const firstOpen = buttons.find((x) => shown(x.step) && !x.step.done(s));
     for (const { step, b, text } of buttons) {
+      b.hidden = !shown(step);
       const done = step.done(s);
       setText(text, step.label(s));
       b.dataset.tip = step.tip(s);
@@ -484,7 +535,7 @@ export function createWelcome(ctx: UIContext): HTMLElement {
   );
   bind(
     (s) =>
-      `${!!s.terrainName}|${!!s.loading}|${s.scenario === null}|${s.stageOffset}|${s.stageOffsetApplied}|${s.sim.rainRate}|${s.sim.timeScale}|${s.paused}|${!!s.evacStart}|${s.storms.length}|${s.sources.length}|${stormFloodBase !== null ? Math.round((s.stats?.floodedArea ?? 0) / 1000) : ''}`,
+      `${!!s.terrainName}|${!!s.loading}|${s.scenario === null}|${isGlacierScene(s)}|${s.render.waterMode}|${s.stageOffset}|${s.stageOffsetApplied}|${s.sim.rainRate}|${s.sim.timeScale}|${s.paused}|${!!s.evacStart}|${s.storms.length}|${s.sources.length}|${stormFloodBase !== null ? Math.round((s.stats?.floodedArea ?? 0) / 1000) : ''}`,
     (_k, s) => sync(s),
   );
   // A new scene starts the checklist over (the dismissal sticks).
@@ -540,6 +591,35 @@ function playTheFlood(ctx: UIContext): void {
         ? 'Storm rain runs off the hills into the creeks and down through town — the first minutes are thin threads along the streams.'
         : 'Peak flows pour in where the rivers enter the map and spill out of the channels.') +
       (s.render.waterMode === 'realistic' ? ' The depth map shows every flooded street by how deep it is.' : ''),
+    action: s.render.waterMode === 'realistic' ? { label: 'Show depth map', run: () => ctx.setRender({ waterMode: 'depth' }) } : undefined,
+    durationMs: 12000,
+  });
+}
+
+/**
+ * "Release the flood" on a glacier hazard-chain scene: the wave was routed down the valley from the lake or the
+ * avalanche (src/hazard) and enters the map at its upstream edge. Zoom in on the scenario's framing and point at the
+ * valley timeline, which follows the front down the valley and says when it passed each place.
+ */
+function releaseTheFlood(ctx: UIContext): void {
+  const { store } = ctx;
+  const s = store.get();
+  const pose = s.scenario?.camera;
+  const camera = bridgeFor(store).scene?.getCamera?.() ?? null;
+  if (pose && camera) {
+    try {
+      camera.flyTo(closeUpPose(pose), 1.6);
+    } catch {
+      /* renderer gone */
+    }
+  }
+  postNotice(store, {
+    kind: 'info',
+    key: 'try-flood',
+    title: 'The flood wave is on its way down the valley',
+    message:
+      'It formed far upstream and enters at the top edge of the map. The valley timeline at the bottom follows the front past the power plants and towns, with the time it reached each.' +
+      (s.render.waterMode === 'realistic' ? ' The depth map shows the water on dry rock better.' : ''),
     action: s.render.waterMode === 'realistic' ? { label: 'Show depth map', run: () => ctx.setRender({ waterMode: 'depth' }) } : undefined,
     durationMs: 12000,
   });
