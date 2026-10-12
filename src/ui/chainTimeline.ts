@@ -39,6 +39,7 @@ import {
   type FrontPoint,
   type StationState,
 } from './chainTime';
+import { clampSensorS, ensureDesign, kindLabel, leadText, newSensor, warningModel, MAX_SENSORS } from './warningModel';
 
 /** Upper bound on timeline updates per second. */
 export const UPDATE_HZ = 10;
@@ -129,6 +130,13 @@ export function createChainTimeline(ctx: UIContext): ChainTimeline {
   let yOf: ((s: number) => number) | null = null;
   let markers: Array<{ g: SVGGElement; row: Row; state: StationState | '' }> = [];
   let chips: Array<{ el: HTMLElement; row: Row; state: StationState | '' }> = [];
+  // Early-warning sensors (warningPanel.ts designs them; here they are drawn, placed and dragged on the profile).
+  let sensorLayer: SVGGElement | null = null;
+  let profileSvg: SVGSVGElement | null = null;
+  /** Chainage under a profile x (px), in the current build. */
+  let sOfX: ((x: number) => number) | null = null;
+  let drag: { id: string; pointer: number; raf: number; s: number } | null = null;
+  const ewSpans = new Map<string, HTMLElement>();
 
   // ── Shell ──
   const title = h('span', { class: 'dl-cl-title' }, 'Valley timeline');
@@ -172,6 +180,9 @@ export function createChainTimeline(ctx: UIContext): ChainTimeline {
     chips = [];
     wetClip = frontLine = frontDot = chartCursor = null;
     chartX = profileX = yOf = null;
+    sensorLayer = profileSvg = null;
+    sOfX = null;
+    ewSpans.clear();
     const v = view;
     const file = v?.file ?? null;
     el.hidden = !v;
@@ -199,6 +210,7 @@ export function createChainTimeline(ctx: UIContext): ChainTimeline {
     buildProfile(v, file);
     buildChart(v, file);
     buildChips();
+    drawSensors();
     lastUpdate = -Infinity;
     update(true);
   }
@@ -262,6 +274,14 @@ export function createChainTimeline(ctx: UIContext): ChainTimeline {
       root.append(grp);
       markers.push({ g: grp, row, state: '' });
     });
+    sOfX = (px: number) => file.s[0] + ((px - box.x0) / Math.max(1, box.x1 - box.x0)) * (sEnd - file.s[0]);
+    sensorLayer = svg('g', { class: 'dl-cl-sensors' });
+    root.append(sensorLayer);
+    profileSvg = root;
+    root.addEventListener('pointerdown', onProfileDown);
+    root.addEventListener('pointermove', onProfileMove);
+    root.addEventListener('pointerup', onProfileUp);
+    root.addEventListener('pointercancel', onProfileUp);
     frontLine = svg('line', { class: 'dl-cl-frontline', x1: 0, x2: 0, y1: 20, y2: H - 14 });
     frontDot = svg('circle', { class: 'dl-cl-frontdot', cx: 0, cy: 0, r: 5 });
     root.append(frontLine, frontDot);
@@ -385,6 +405,9 @@ export function createChainTimeline(ctx: UIContext): ChainTimeline {
         time,
         ...extra,
       );
+      const ew = h('span', { class: 'dl-cl-chip-ew', hidden: true });
+      chip.append(ew);
+      ewSpans.set(row.name, ew);
       chipRow.append(chip);
       chips.push({ el: chip, row, state: '' });
     }
@@ -494,6 +517,98 @@ export function createChainTimeline(ctx: UIContext): ChainTimeline {
     update(true);
   }
 
+  // ── Early-warning sensors on the profile ──
+  /** Profile x (px) of a pointer event. */
+  function localX(e: PointerEvent): number {
+    const r = profileSvg!.getBoundingClientRect();
+    const vb = profileSvg!.viewBox.baseVal;
+    return ((e.clientX - r.left) / Math.max(1, r.width)) * (vb?.width || r.width);
+  }
+
+  function onProfileDown(e: PointerEvent) {
+    const v = view;
+    if (!v || !sOfX || !profileSvg) return;
+    const d = ensureDesign(bridge, v);
+    const m = warningModel(v, d);
+    if (!m) return;
+    const hit = (e.target as Element | null)?.closest?.('[data-sensor]');
+    if (hit) {
+      const id = hit.getAttribute('data-sensor')!;
+      const sn = d.sensors.find((x) => x.id === id);
+      if (!sn) return;
+      drag = { id, pointer: e.pointerId, raf: 0, s: sn.s };
+      profileSvg.setPointerCapture?.(e.pointerId);
+      profileHost.classList.add('dl-cl-dragging');
+      e.preventDefault();
+      return;
+    }
+    if (!d.placing || d.sensors.length >= MAX_SENSORS) return;
+    const s = clampSensorS(m, sOfX(localX(e)));
+    bridge.setWarning({ ...d, sensors: [...d.sensors, newSensor(s, d.presetId)], placing: false });
+    e.preventDefault();
+  }
+
+  function onProfileMove(e: PointerEvent) {
+    if (!drag || e.pointerId !== drag.pointer || !sOfX || !view) return;
+    const m = warningModel(view, bridge.warning);
+    if (!m) return;
+    drag.s = clampSensorS(m, sOfX(localX(e)));
+    if (drag.raf) return;
+    drag.raf = requestAnimationFrame(() => {
+      if (!drag) return;
+      drag.raf = 0;
+      const d = bridge.warning;
+      if (d) bridge.setWarning({ ...d, sensors: d.sensors.map((x) => (x.id === drag!.id ? { ...x, s: drag!.s } : x)) });
+    });
+  }
+
+  function onProfileUp(e: PointerEvent) {
+    if (!drag || e.pointerId !== drag.pointer) return;
+    const { id, s, raf } = drag;
+    cancelAnimationFrame(raf);
+    drag = null;
+    profileHost.classList.remove('dl-cl-dragging');
+    const d = bridge.warning;
+    if (d) bridge.setWarning({ ...d, sensors: d.sensors.map((x) => (x.id === id ? { ...x, s } : x)) });
+  }
+
+  /** Draw the design's sensors on the profile and their lead times on the chips. */
+  function drawSensors() {
+    const v = view;
+    const d = v && v.file && v.result ? ensureDesign(bridge, v) : null;
+    toggleClass(profileHost, 'dl-cl-placing', !!d?.placing);
+    profileHost.title = d?.placing ? 'Click to place the sensor' : '';
+    if (!sensorLayer || !profileX || !yOf || !d) return;
+    const m = warningModel(v, d);
+    sensorLayer.replaceChildren();
+    d.sensors.forEach((sn, i) => {
+      const x = r1(profileX!(sn.s));
+      const y = r1(yOf!(sn.s));
+      const first = m?.combined.sensor === i;
+      sensorLayer!.append(
+        svg(
+          'g',
+          { class: `dl-cl-sensor${first ? ' dl-cl-sensor-first' : ''}`, 'data-sensor': sn.id, 'data-tip': `${kindLabel(sn.kind)} ${i + 1} · km ${(sn.s / 1000).toFixed(1)} · drag to move`, 'data-tip-side': 'top' },
+          svg('line', { class: 'dl-cl-sensor-stem', x1: x, x2: x, y1: y - 14, y2: y }),
+          svg('path', { class: 'dl-cl-sensor-mark', d: `M${x} ${y - 27} L${x + 6.5} ${y - 20.5} L${x} ${y - 14} L${x - 6.5} ${y - 20.5} Z` }),
+          svg('text', { class: 'dl-cl-sensor-num', x, y: y - 17.5, 'text-anchor': 'middle' }, String(i + 1)),
+          svg('circle', { class: 'dl-cl-sensor-hit', cx: x, cy: y - 16, r: 11 }),
+        ),
+      );
+    });
+    for (const [name, span] of ewSpans) {
+      const k = m ? m.targets.findIndex((t) => t.name === name) : -1;
+      const show = !!m && d.sensors.length > 0 && k >= 0;
+      span.hidden = !show;
+      if (show) {
+        // The chip's own "warning" line is the existing alert; this is what the sensors alone would give.
+        const lead = (m!.sensorsOnly ?? m!.combined).leads[k].lead;
+        setText(span, `sensors: ${leadText(lead)}`);
+        span.dataset.sev = lead === Infinity || lead >= 1800 ? 'ok' : lead >= 600 ? 'tight' : 'short';
+      }
+    }
+  }
+
   // ── Wiring ──
   const rebuild = () => build();
   ctx.own(
@@ -507,6 +622,7 @@ export function createChainTimeline(ctx: UIContext): ChainTimeline {
       update(true);
     }),
   );
+  ctx.own(bridge.warningChanged.on(() => drawSensors()));
   ctx.own(() => {
     stopReplay();
     clearTimeout(pendingTimer);
