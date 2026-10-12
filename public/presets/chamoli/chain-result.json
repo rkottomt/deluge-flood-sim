@@ -1,0 +1,247 @@
+{
+ "version": 1,
+ "preset": "chamoli",
+ "profile": "chain.json",
+ "clockZero": "2021-02-07T10:21:00+05:30",
+ "generated": "2026-10-12",
+ "generator": "scripts/bake-chain-result.ts",
+ "provenance": "modelled",
+ "label": "Hazard chain, modelled: the ensemble's median member (volume ×1, source Cv 0.2) routed down Ronti Gad → Rishiganga → Dhauliganga",
+ "run": {
+  "routeDx": 100,
+  "memberDx": 100,
+  "members": 9,
+  "ms": 628,
+  "member": {
+   "volumeFactor": 1,
+   "cv": 0.2
+  },
+  "note": "9 members (569 ms), median member re-run to the end of its recession; the mass reaches the river 1.2 min after the collapse (3.7 km at 50 m/s); direct flow: 4.9 Mm³ of melt water, 6.2 Mm³ at Cv 0.20, peak 13921 m³/s"
+ },
+ "source": {
+  "trigger": "massIntoRiver",
+  "volume": 6166825,
+  "peak": 13921,
+  "tPeak": 372,
+  "cv": 0.2,
+  "notes": [
+   "the mass reaches the river 1.2 min after the collapse (3.7 km at 50 m/s)",
+   "direct flow: 4.9 Mm³ of melt water, 6.2 Mm³ at Cv 0.20, peak 13921 m³/s"
+  ]
+ },
+ "stations": [
+  {
+   "name": "Ronti Gad (avalanche runout, head of the mapped stream)",
+   "s": 0,
+   "kind": "source",
+   "tFront": 99,
+   "tPeak": 374,
+   "qPeak": 13913,
+   "stageMax": 4082.6,
+   "rise": 16.55,
+   "band": {
+    "tFront": [
+     99,
+     99,
+     108
+    ],
+    "qPeak": [
+     8040,
+     13913,
+     24057
+    ]
+   },
+   "observed": [
+    {
+     "tFront": 0,
+     "note": "04:51 UTC (10:21 IST): ~26.9 Mm³ of rock and ice (~80/20 %) detached from the north face of Ronti Peak at ~5,500 m — a slab up to ~550 m wide and ~80 m thick; ~8 Mm³ was deposited near the Ronti Gad–Rishiganga confluence.",
+     "source": "Shugar et al. 2021, Science 373:300–306, doi:10.1126/science.abh4455"
+    }
+   ]
+  },
+  {
+   "name": "Raini–Tapovan 2-D domain (east edge)",
+   "s": 11564,
+   "kind": "domainEdge",
+   "tFront": 676,
+   "tPeak": 749,
+   "qPeak": 12572,
+   "stageMax": 2248.46,
+   "rise": 11.15,
+   "band": {
+    "tFront": [
+     612,
+     682,
+     780
+    ],
+    "qPeak": [
+     6420,
+     12572,
+     23471
+    ]
+   }
+  },
+  {
+   "name": "Reni bridge (NH107B)",
+   "s": 15223,
+   "kind": "bridge",
+   "tFront": 864,
+   "tPeak": 948,
+   "qPeak": 10485,
+   "stageMax": 1971.88,
+   "rise": 9.84,
+   "band": {
+    "tFront": [
+     780,
+     891,
+     994
+    ],
+    "qPeak": [
+     4935,
+     10485,
+     21501
+    ]
+   }
+  },
+  {
+   "name": "Rishiganga HEP, Raini (position approximate)",
+   "s": 15436,
+   "kind": "hydro",
+   "tFront": 874,
+   "tPeak": 955,
+   "qPeak": 10435,
+   "stageMax": 1962.04,
+   "rise": 10.12,
+   "band": {
+    "tFront": [
+     789,
+     902,
+     1006
+    ],
+    "qPeak": [
+     4902,
+     10435,
+     21431
+    ]
+   },
+   "observed": [
+    {
+     "qPeak": 11200,
+     "note": "RECONSTRUCTED mean discharge 8,200–14,200 m³/s at the Rishiganga plant (centre of the band shown), passing in 10–20 min; front ~25 m/s here, ~15 km from the source. The 13.2 MW plant was destroyed.",
+     "source": "Shugar et al. 2021, Science (research spec §G.4)"
+    }
+   ]
+  },
+  {
+   "name": "Tapovan-Vishnugad HEP barrage (under construction)",
+   "s": 21730,
+   "kind": "hydro",
+   "tFront": 1336,
+   "tPeak": 1518,
+   "qPeak": 6025,
+   "stageMax": 1805.2,
+   "rise": 10.23,
+   "band": {
+    "tFront": [
+     1153,
+     1336,
+     1600
+    ],
+    "qPeak": [
+     2722,
+     6025,
+     13477
+    ]
+   },
+   "observed": [
+    {
+     "tFront": 900,
+     "note": "Seismic records put the debris flow at the Tapovan project ~15 min after the failure (Shugar et al.: ~16 m/s just upstream of Tapovan). Most of those lost that morning were workers at the two hydropower projects, many of them in the Tapovan tunnels (casualty figures are kept off screen, as in every preset).",
+     "source": "Cook et al. 2021, Science 374:87–92 (via The Landslide Blog); Shugar et al. 2021"
+    }
+   ]
+  },
+  {
+   "name": "Tapovan",
+   "s": 22039,
+   "kind": "town",
+   "tFront": 1373,
+   "tPeak": 1469,
+   "qPeak": 5365,
+   "stageMax": 1804.97,
+   "rise": 14.08,
+   "band": {
+    "tFront": [
+     1181,
+     1373,
+     1645
+    ],
+    "qPeak": [
+     2390,
+     5365,
+     12165
+    ]
+   },
+   "observed": [
+    {
+     "qPeak": 3900,
+     "note": "RECONSTRUCTED mean discharge 2,900–4,900 m³/s below Tapovan (centre of the band shown); front ~12 m/s.",
+     "source": "Shugar et al. 2021, Science (research spec §G.4)"
+    }
+   ]
+  },
+  {
+   "name": "Joshimath (Vishnuprayag confluence)",
+   "s": 31487,
+   "kind": "town",
+   "tFront": 2324,
+   "tPeak": 2506,
+   "qPeak": 3866,
+   "stageMax": 1452.98,
+   "rise": 7.06,
+   "band": {
+    "tFront": [
+     1928,
+     2324,
+     2862
+    ],
+    "qPeak": [
+     1668,
+     3866,
+     8601
+    ]
+   },
+   "observed": [
+    {
+     "note": "Mean front speed ~10 m/s over the 16 km from Raini to Joshimath — about 27 min, a derived figure, not a timed arrival.",
+     "source": "Shugar et al. 2021, Science (research spec §G.4)"
+    }
+   ]
+  }
+ ],
+ "entry": {
+  "s": 11564,
+  "tFront": 676,
+  "qPeak": 12572,
+  "volume": 5915772,
+  "baseflow": 20,
+  "band": {
+   "tFront": [
+    612,
+    682,
+    780
+   ],
+   "qPeak": [
+    6420,
+    12572,
+    23471
+   ]
+  }
+ },
+ "domain": {
+  "offset": 376,
+  "sourceId": "rishiganga-inflow",
+  "inflowVolume": 5908294,
+  "inflowPeak": 12438
+ }
+}

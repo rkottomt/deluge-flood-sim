@@ -460,7 +460,10 @@ same licences, same caveats, every one of them in the on-screen scenario text. W
                  buildings/km2 here): 660 OSM footprints parsed, 5,116 Microsoft footprints kept for the gaps, 2,622
                  buildings after de-duplication, every height ESTIMATED with the Himalayan low-rise ('nepal') prior.
 
-  meta.json      THE STANDALONE FORCING IS A PLACEHOLDER, and says so in its label and in the text. The event: at
+  meta.json      THE FORCING IS MODELLED: the hazard chain's routed debris flow (chain-result.json below), the
+                 ensemble's median member, peaking at 12,438 m3/s at the east edge and carrying 5.9 Mm3 into the map,
+                 labelled "modelled ... not a measured hydrograph"; the 2-D clock starts five minutes before the
+                 modelled front reaches the edge, on the event's own clock (10:27 IST). The event: at
                  04:51 UTC (10:21 IST) on 7 February 2021 ~26.9 million m3 of rock and glacier ice (~80/20 %) fell from
                  the north face of Ronti Peak at ~5,500 m; the ice melted almost entirely and the mass became a debris
                  flow down the Ronti Gad, Rishiganga and Dhauliganga; ~8 million m3 was deposited near the Ronti Gad
@@ -472,12 +475,11 @@ same licences, same caveats, every one of them in the on-screen scenario text. W
                  Tapovan, ~15 min after the failure: Cook et al. 2021, Science 374:87-92, doi:10.1126/science.abj1227,
                  read via The Landslide Blog [secondary].
                  Discharge at the Rishiganga plant: NO GAUGE. Shugar et al. give a MEAN discharge of 8,200-14,200
-                 m3/s over a 10-20 min passage, and 2,900-4,900 m3/s below Tapovan. The inflow is the spec's §B.4
-                 gamma shape (a = 3) with the band's top as its peak (14,200 m3/s) and the volume the chain's
-                 direct-flow source makes from the published numbers: 26.9 Mm3 x 20 % ice x 0.917 = 4.93 Mm3 of melt
-                 water at Cv 0.4 = 8.2 Mm3 of mixture (delivered: 8.185 Mm3). Its mean over the central 10 minutes
-                 falls inside the published band (the test checks it). It enters through the east edge 3.7 km above
-                 Raini, and the 2-D clock starts there, not at the collapse.
+                 m3/s over a 10-20 min passage, and 2,900-4,900 m3/s below Tapovan. The inflow enters through the east
+                 edge 3.7 km above Raini. Before chain.json exists (a first bake) scripts/bake-presets.ts ships a
+                 placeholder instead: the spec's §B.4 gamma shape (a = 3) with the band's top as its peak (14,200
+                 m3/s) and 26.9 Mm3 x 20 % ice x 0.917 / (1 - 0.4) = 8.2 Mm3 - replaced, with the description, as
+                 soon as the chain is baked, as for the other glacier presets.
                  SHELTERS: TWO. Dhak (OSM node 5519535106, place=village) snapped to a Joshimath-Malari road junction
                  46 m away at 2,068 m, ~270 m above the river; SubCentre, Topoban (OSM node 8229553590,
                  healthcare=centre; "Topoban" is OSM's spelling) snapped to the junction 202 m away at 1,903 m, ~110 m
@@ -491,10 +493,12 @@ same licences, same caveats, every one of them in the on-screen scenario text. W
   chain.json     Ronti Gad → Rishiganga → Dhauliganga, baked by scripts/bake-chain.ts exactly as the others (45 OSM
                  API tiles along the corridor, Copernicus tile N30_00_E079_00 through the bare-earth filter, monotone
                  fit, DEM sections). Profile 31.7 km, 318 nodes, 4,077 m (the head of OSM's Raunthi Gadhera, way
-                 682961414) to 1,437 m at Vishnuprayag; raw sills up to 41 m and pits up to 18 m fitted out. Raini
-                 measures 15.4 km down it (published: ~15 km from the source), Joshimath 16.1 km below Raini
-                 (published: 16 km). The calibration work on the chain bake (smoothed thalweg, minimum gorge floor
-                 width in the 1-D sections) had not landed when this was baked; it uses the tool as it stood.
+                 682961414) to 1,437 m at Vishnuprayag (smoothed bed 4,066 to 1,445 m); raw sills up to 49 m and pits
+                 up to 25 m fitted out, 176 of 318 section floors widened to the bake's 25 m minimum. Raini measures
+                 15.4 km down it (published: ~15 km from the source), Joshimath 16.1 km below Raini (published: 16
+                 km). Baked with the calibrated chain tool (smooth monotone thalweg, minimum section floor). The
+                 Ronti Gad is a glacier torrent: the smoothed bed falls up to 29 m per 100 m above the confluence,
+                 and the test's step limit is 32 m there (25 m for the other presets), with that reason beside it.
                  Stations: the Rishiganga plant at OSM node 7833070518 ("Reni", alt_name Raini - the plant itself is
                  not mapped, position approximate), the Reni bridge (way 905613418), the Tapovan-Vishnugad barrage (way
                  683265980), Tapovan (node 7833070513), Joshimath at the Vishnuprayag confluence (node 2376466294,
@@ -505,9 +509,16 @@ same licences, same caveats, every one of them in the on-screen scenario text. W
                  winter baseflow. Rheology: O'Brien-Julien quadratic, Cv 0.45, material Glenwood 1 (the fluid end of
                  O'Brien & Julien 1988's table), K 2,285; 25 m/s cap. The stiff end (Aspen Pit 1) and Voellmy mu 0.05
                  both STALL on the Dhauliganga's 2.3 % bed (measured on the GPU; mu 0.05 exceeds the slope outright).
-                 Observations: the failure, the reconstructed discharges at Raini and below Tapovan (band centres
-                 shown, bands in the notes), the ~15 min seismic arrival at Tapovan, and the 10 m/s mean to Joshimath
-                 (a derived figure, no time attached).
+                 The avalanche's own travel (3.7 km) uses the chain's default 50 m/s. Observations: the failure, the
+                 reconstructed discharges at Raini and below Tapovan (band centres shown, bands in the notes), the
+                 ~15 min seismic arrival at Tapovan, and the 10 m/s mean to Joshimath (a derived figure, no time).
+
+  chain-result.json  The baked chain run (scripts/bake-chain-result.ts): the 9-member ensemble's median member
+                 (source Cv 0.2: 4.9 Mm3 of melt water, 6.2 Mm3 of flow, peak 13,900 m3/s at the source) routed down
+                 the profile. MODEL against PUBLISHED: peak ~10,400 m3/s at Raini (published mean 8,200-14,200),
+                 ~5,400 m3/s below Tapovan (2,900-4,900 - the model is ~10 % high), front at the Tapovan barrage
+                 ~22 min after the collapse (band 19-27) against ~15 min observed - the model is LATE by a third, and
+                 the scenario text says so. Raini -> Joshimath 24 min (published mean ~10 m/s over 16 km, ~27 min).
 
 Place names used for shelters and camera framing are ordinary geographic names; no third-party place database is
 redistributed here. For the Nepal preset the two shelter names are read out of the OSM extracts listed above, and
