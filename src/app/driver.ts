@@ -68,6 +68,8 @@ export class StepAverager {
 const BLOWUP_SPEED = 100;
 /** How long ready() waits for the first readback after the first rendered frame. */
 const READY_SNAPSHOT_WAIT_MS = 3000;
+/** Render interval while the app holds rendering (App.renderHold), ms. */
+const RENDER_HOLD_MS = 500;
 
 /**
  * Per-frame work: step the solver (feeding the frame-time governor), consume readbacks (stats → HUD,
@@ -92,6 +94,7 @@ export class FrameDriver {
   private sceneReadyAt = 0;
   private blowupNotified = false;
   private wasRunning = false;
+  private lastHeldRender = -Infinity;
   private readonly overlays = new OverlayComposer();
 
   constructor(private readonly app: App) {}
@@ -180,7 +183,12 @@ export class FrameDriver {
     // 3. Overlays + render — at full rate while anything changes, otherwise a low-rate heartbeat.
     state = store.get();
     const camera = renderer.camera;
-    const pace = pacer.decide(now, running || runner.active || !!state.loading, hidden, camera.pose);
+    let pace = pacer.decide(now, running || runner.active || !!state.loading, hidden, camera.pose);
+    // Render hold (a headless sweep): a frame every RENDER_HOLD_MS shows progress; the rest of the GPU goes to the solver.
+    if (pace.render && this.app.renderHold && !state.loading) {
+      if (now - this.lastHeldRender < RENDER_HOLD_MS) pace = { render: false, active: false };
+      else this.lastHeldRender = now;
+    }
     let rendered = false;
     if (pace.render) {
       this.guard('overlays', () => {

@@ -126,6 +126,15 @@ export const TOOLS: ToolDef[] = [
     hints: ['Hover to measure', 'Drag to look around'],
     group: 4,
   },
+  {
+    id: 'site',
+    key: 'S',
+    label: 'Site check',
+    description: 'Mark a parcel you are weighing: click to drop a site pin, or drag around the parcel to outline it. The Site check panel assesses it.',
+    hints: ['Click: site pin', 'Drag around a parcel: outline', 'Click a site to select it'],
+    ringColor: [0.98, 0.85, 0.35],
+    group: 4,
+  },
 ];
 
 export const TOOL_BY_ID: Record<ToolId, ToolDef> = Object.fromEntries(TOOLS.map((t) => [t.id, t])) as Record<

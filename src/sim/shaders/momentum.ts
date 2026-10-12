@@ -55,7 +55,21 @@
  * The water still moves (continuity uses the full dt), mass is still exactly conserved, still water still
  * stays still (S = 0 ⇒ q = 0), and whenever the global CFL estimate is valid the guard is inactive (dt_m = dt).
  *
- * 'naive' mode (the textbook reference scheme) uses explicit friction, no smoothing, no guard and no cap.
+ * RHEOLOGY (robust mode, sim.rheoKind ≠ 0: a debris flood or debris flow, FloodSolver.setRheology; coefficients in
+ * src/sim/rheology.ts). The Manning term is replaced by the scenario's friction law, split by how it can be integrated
+ * stably (research spec docs/research/glacier-hazard-chain.md §D.2):
+ *
+ *   q* = q̃ − dt·A − g·hf·dt·S                                    explicit predictor, no resistance
+ *   τ  = dt·( τ_y/ρ + μ·g·hf·cosθ )                               yield + Coulomb impulse, cosθ from the face's bed slope
+ *   q' = 0 if |q*|_vec ≤ τ, else q*·(1 − τ/|q*|_vec)              stop-or-reduce, |q*|_vec = √(q*² + qPerp²)
+ *   q_new = q' / ( 1 + dt·( ν/max(hf, h_v)² + (g·n_td²/hf^{7/3} + (g/ξ)/hf²)·|q| ) )      semi-implicit, ≥ 1
+ *
+ * The projection is the standard treatment of plastic friction: it brings a face to exact rest (a deposit forms when
+ * g·hf·|S| < τ_y/ρ + μ·g·hf·cosθ) and can never push the flow backwards, whatever dt. rheoKind 0 skips all of it:
+ * water runs the Manning code above unchanged.
+ *
+ * 'naive' mode (the textbook reference scheme) uses explicit friction, no smoothing, no guard and no cap, and ignores
+ * the rheology (it is water only).
  */
 import { HELPERS_WGSL, SIM_WGSL } from './common';
 
@@ -120,9 +134,31 @@ fn smoothIncrement(hf: f32, qc: f32, qUp: f32, hfUp: f32, qDn: f32, hfDn: f32, d
   return minmod(lap, divJump);
 }
 
-// hf: face depth (≥ hMin), slope: (η_R − η_L)/dx, qc: old flux, dq: smoothing increment, qPerp: mean of the
-// 4 surrounding perpendicular faces, adv: convective acceleration.
-fn momentum(hf: f32, slope: f32, qc: f32, dq: f32, qPerp: f32, adv: f32) -> f32 {
+// Debris-flow rheology (sim.rheoKind ≠ 0, robust mode; see RHEOLOGY in the header). qt: smoothed old flux, dz: bed
+// rise z_R − z_L across the face, qmag: |q| of the old state (as Manning uses), dtm: the guarded timestep.
+fn rheoMomentum(hf: f32, hf73: f32, slope: f32, dz: f32, qt: f32, qmag: f32, qPerp: f32, adv: f32, dtm: f32) -> f32 {
+  // 1. Explicit predictor without resistance.
+  let qStar = qt - dtm * adv - sim.g * hf * dtm * slope;
+  // 2. Rate-independent resistance (yield stress, Coulomb), as a discharge per unit width removed this step:
+  //    stop-or-reduce. A face whose driving impulse cannot overcome it stops exactly; otherwise |q| shrinks by it
+  //    along the flow vector (qStar, qPerp). Never reverses the flow, for any dt.
+  let bedS = dz / sim.dx;
+  let cosT = inverseSqrt(1.0 + bedS * bedS);
+  let stopQ = dtm * (sim.rheoTau + sim.rheoMu * sim.g * hf * cosT);
+  let qsMag = sqrt(qStar * qStar + qPerp * qPerp);
+  var q = 0.0;
+  if (qsMag > stopQ) { q = qStar * (1.0 - stopQ / qsMag); }
+  // 3. Rate-dependent resistance (laminar viscosity, turbulent Manning n_td² or Voellmy g/ξ), semi-implicit: the
+  //    denominator is ≥ 1, so it can only slow the flow.
+  let hv = max(hf, sim.rheoHVisc);
+  let lin = sim.rheoVisc / (hv * hv);
+  let quad = (sim.g * sim.rheoN2 / hf73 + sim.rheoGXi / (hf * hf)) * qmag;
+  return q / (1.0 + dtm * (lin + quad));
+}
+
+// hf: face depth (≥ hMin), slope: (η_R − η_L)/dx, dz: bed rise z_R − z_L, qc: old flux, dq: smoothing increment,
+// qPerp: mean of the 4 surrounding perpendicular faces, adv: convective acceleration.
+fn momentum(hf: f32, slope: f32, dz: f32, qc: f32, dq: f32, qPerp: f32, adv: f32) -> f32 {
   let qmag = sqrt(qc * qc + qPerp * qPerp);
   // hf ≥ hMin (1e-4) here, so hf^{7/3} ≥ 4.6e-10: no underflow / division by zero in Float32.
   let hf73 = pow(hf, 7.0 / 3.0);
@@ -133,8 +169,13 @@ fn momentum(hf: f32, slope: f32, qc: f32, dq: f32, qPerp: f32, adv: f32) -> f32 
     let ratio = min(1.0, sim.crGuard / max(cr, 1e-6));
     let dtm = sim.dt * ratio * ratio;
     let qt = qc + 0.5 * (1.0 - sim.theta) * dq;
-    let fric = sim.g * dtm * sim.n2 * qmag / hf73;
-    let q = (qt - dtm * adv - sim.g * hf * dtm * slope) / (1.0 + fric);
+    var q: f32;
+    if (sim.rheoKind != 0) {
+      q = rheoMomentum(hf, hf73, slope, dz, qt, qmag, qPerp, adv, dtm);
+    } else {
+      let fric = sim.g * dtm * sim.n2 * qmag / hf73;
+      q = (qt - dtm * adv - sim.g * hf * dtm * slope) / (1.0 + fric);
+    }
     let cap = hf * min(sim.uMax, sim.frMax * sqrt(sim.g * hf));
     return clamp(q, -cap, cap);
   }
@@ -214,7 +255,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
       if (j == 0) { qNe = -bflux(e.r, i + 1, j, 0, 1); }
       let divE = (e.g - c.g) + (e.b - qNe);
       let dq = smoothIncrement(hf, c.g, w.g, hfW, e.g, hfE, divE - divC);
-      qxNew = momentum(hf, slope, c.g, dq, qPerp, adv);
+      qxNew = momentum(hf, slope, e.a - c.a, c.g, dq, qPerp, adv);
     }
   }
 
@@ -251,7 +292,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
       if (i == 0) { qSw = -bflux(s.r, i, j + 1, 1, 0); }
       let divS = (s.g - qSw) + (s.b - c.b);
       let dq = smoothIncrement(hf, c.b, n.b, hfN, s.b, hfS, divS - divC);
-      qyNew = momentum(hf, slope, c.b, dq, qPerp, adv);
+      qyNew = momentum(hf, slope, s.a - c.a, c.b, dq, qPerp, adv);
     }
   }
 

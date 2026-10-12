@@ -482,8 +482,8 @@ const FLOWS = [
       // The Try-it strip offers the demo moments in pitch order: Evacuate before the levee, so building the levee
       // (which replays the rise) visibly re-plans a route that is already on screen.
       if (PRESET === 'pittsburgh') {
-        const order = await D(() => [...document.querySelectorAll('.dl-try-step')].map((b) => b.dataset.step));
-        const labels = await D(() => [...document.querySelectorAll('.dl-try-step')].map((b) => b.textContent.trim()));
+        const order = await D(() => [...document.querySelectorAll('.dl-try-step:not([hidden])')].map((b) => b.dataset.step));
+        const labels = await D(() => [...document.querySelectorAll('.dl-try-step:not([hidden])')].map((b) => b.textContent.trim()));
         check(r, 'Try-it strip order: raise, evacuate, levee, rain', order.join(',') === 'flood,evac,levee,rain', labels.join(' · '));
       }
       await sleep(2600); // camera fly-in
@@ -1189,6 +1189,106 @@ const FLOWS = [
     },
   },
   {
+    id: 15,
+    name: 'Site check: drop a site in Pittsburgh, sweep two levels, export the assessment',
+    timeoutMs: 300_000,
+    async run(r) {
+      if (PRESET !== 'pittsburgh') {
+        r.notes.push(`${PRESET}: the flow is written for Pittsburgh's ladder: skipped`);
+        check(r, 'preset without the Pittsburgh ladder (nothing to check)', true, PRESET);
+        return;
+      }
+      await calm();
+      // A riverfront lot at the Point: dry at NWS minor flood, under about a metre at FEMA's 1 % level.
+      const site = { lat: 40.4425, lon: -80.0085 };
+      const g = await D((p) => window.__deluge.geoToGrid(p.lon, p.lat), site);
+      const before = await D(() => {
+        const s = window.__deluge.getState();
+        return { stageOffset: s.stageOffset, paused: s.paused, sources: s.sources.length };
+      });
+      await D((p) => {
+        const d = window.__deluge;
+        const ground = d.sampleAt(p.gx, p.gy).ground;
+        d.setCamera({ target: { gx: p.gx, gy: p.gy, elevation: ground }, distance: 900, yaw: 0, pitch: Math.PI / 2 - 0.01 });
+      }, g);
+      await D(() => window.__deluge.waitFrames(4));
+      await D(() => window.__deluge.selectTool('site'));
+      const box = await page.locator('#deluge-canvas').boundingBox();
+      await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+      const placed = await page
+        .waitForFunction(() => document.querySelectorAll('.dl-site-item').length === 1 && document.querySelector('[data-section="site"]')?.classList.contains('dl-open'), null, { timeout: 5000 })
+        .then(() => true, () => false);
+      check(r, 'a click with the Site tool drops a site and opens the Site check section', placed, placed ? '1 site' : 'none');
+      await D(() => window.__deluge.selectTool('orbit'));
+
+      // This run: assess the calm river (the site must be dry, and reach a shelter).
+      await page.click('[data-section="site"] button:has-text("Assess this run")');
+      await page.waitForFunction(() => /Flood at T\+/.test(document.querySelector('[data-section="site"] .dl-impact-status')?.textContent ?? ''), null, { timeout: 20_000 });
+      const card = await D(() => document.querySelector('.dl-site-card')?.textContent ?? '');
+      await D(() => document.querySelector('.dl-site-card')?.scrollIntoView({ block: 'center' }));
+      await sleep(400);
+      const cardShot = path.join(OUT, '15-site-card.png');
+      await page.locator('.dl-panel').screenshot({ path: cardShot });
+      console.log(`  [shot] ${path.relative(ROOT, cardShot)}`);
+      check(r, 'site card renders for the flood on screen (dry, with egress)', /Water at the site/.test(card) && /Egress to a shelter/.test(card), card.slice(0, 160));
+
+      // Sweep: NWS minor flood and FEMA's 1 % (100-yr) level only, 4 simulated minutes each (the river ramps at ~3 m/min).
+      await page.fill('[data-site-field="duration"]', '4');
+      await page.dispatchEvent('[data-site-field="duration"]', 'change');
+      await D(() => {
+        for (const box of document.querySelectorAll('.dl-site-ladder input[type=checkbox]')) {
+          const want = box.dataset.level === 'minor' || box.dataset.level === 'rp100';
+          if (box.checked !== want) box.click();
+        }
+      });
+      const t0 = Date.now();
+      await page.click('[data-site="run-sweep"]');
+      const done = await page
+        .waitForFunction(() => /^(Done|Sweep stopped|Cancelled)/.test(document.querySelector('[data-site="sweep-status"]')?.textContent ?? ''), null, { timeout: 240_000 })
+        .then(() => true, () => false);
+      const sweepS = (Date.now() - t0) / 1000;
+      const out = await D(() => ({
+        status: document.querySelector('[data-site="sweep-status"]')?.textContent ?? '',
+        verdict: [...document.querySelectorAll('[data-site="verdict"] p')].map((p) => p.textContent),
+        rows: document.querySelectorAll('.dl-site-sweep-out table tbody tr').length,
+        chart: !!document.querySelector('.dl-site-sweep-out svg.dl-site-chart'),
+        state: (() => {
+          const s = window.__deluge.getState();
+          return { stageOffset: s.stageOffset, paused: s.paused, sources: s.sources.length };
+        })(),
+      }));
+      check(r, 'two-level sweep completes', done && /^Done: 2 levels/.test(out.status), `${out.status.slice(0, 90)} (${num(sweepS, 1)} s wall)`);
+      check(r, 'sweep table has both levels and a verdict', out.rows >= 2 && out.verdict.length >= 3, `${out.rows} rows; ${out.verdict[0] ?? ''}`);
+      check(r, 'the user’s scenario is put back (stage, play state, sources)', JSON.stringify(out.state) === JSON.stringify(before), `${JSON.stringify(before)} → ${JSON.stringify(out.state)}`);
+      r.metrics.sweepSeconds = sweepS;
+      r.metrics.verdict = out.verdict;
+      await D(() => document.querySelector('[data-site="verdict"]')?.scrollIntoView({ block: 'start' }));
+      await sleep(400);
+      const panelShot = path.join(OUT, '15-site-sweep.png');
+      await page.locator('.dl-panel').screenshot({ path: panelShot });
+      console.log(`  [shot] ${path.relative(ROOT, panelShot)}`);
+      await shot('15-site-map');
+
+      // Export: the standalone report, as a download.
+      const [dl] = await Promise.all([page.waitForEvent('download', { timeout: 20_000 }), page.click('[data-site="report-html"]')]);
+      const file = path.join(OUT, '15-site-assessment.html');
+      await dl.saveAs(file);
+      const html = fs.readFileSync(file, 'utf8');
+      const has = ['site assessment', 'Verdict', 'Sweep', 'Expected annual loss', 'Egress timeline', 'Recommendations (indicative)', 'Limitations', 'NWS minor flood', 'FEMA 1 % (100-yr)', 'ASCE 24-14', 'Freeboard', 'BCR 7 %'];
+      const missing = has.filter((s) => !html.includes(s));
+      check(r, 'site assessment report renders every section', missing.length === 0, missing.length ? `missing: ${missing.join(', ')}` : `${(html.length / 1024).toFixed(0)} KB`);
+      check(r, 'report carries no script', !/<script/i.test(html), 'no <script>');
+      // Render the downloaded report for a screenshot.
+      const rp = await page.context().newPage();
+      await rp.setContent(html);
+      const reportShot = path.join(OUT, '15-site-report.png');
+      await rp.screenshot({ path: reportShot, fullPage: true });
+      await rp.close();
+      console.log(`  [shot] ${path.relative(ROOT, reportShot)}`);
+      await calm();
+    },
+  },
+  {
     id: 13,
     name: 'Screen Wake Lock holds the display awake while the pitch runs',
     timeoutMs: 60_000,
@@ -1313,6 +1413,80 @@ const FLOWS = [
       await D(() => sessionStorage.removeItem('deluge:gpu-lost-reload-at'));
       await page.goto(ctx.appUrl, { waitUntil: 'domcontentloaded' });
       await waitReady(90_000);
+    },
+  },
+  {
+    id: 16,
+    name: 'Glacier hazard chain: the routed wave drives the map, the valley timeline follows it',
+    timeoutMs: 600_000,
+    async run(r) {
+      // src/app/hazardChain.ts runs the chain in a worker on load and swaps the preset's inflow for the routed wave;
+      // the panel's Hazard chain section and the valley timeline (src/ui/chainPanel.ts, chainTimeline.ts) draw it.
+      for (const id of ['nepal', 'chungthang']) {
+        await D((p) => window.__deluge.loadPreset(p), id);
+        const t0 = Date.now();
+        const ready = await page
+          .waitForFunction(() => window.__deluge.getHazardChain()?.status === 'ready', null, { timeout: 120_000 })
+          .then(() => true, () => false);
+        const chain = await D(() => window.__deluge.getHazardChain());
+        r.metrics[id] = { chainSeconds: (Date.now() - t0) / 1000, status: chain?.status, offset: chain?.offset, entryFront: chain?.entryFront, entryPeak: chain?.entryPeak, error: chain?.error };
+        check(r, `${id}: chain ran in the worker (run + 27-member ensemble)`, ready && !!chain?.bands, `${chain?.status} in ${((Date.now() - t0) / 1000).toFixed(1)} s, edge peak ${num(chain?.entryPeak ?? NaN, 0)} m³/s`);
+        const sources = await D(() => window.__deluge.getState().sources.map((s) => ({ id: s.id, n: s.hydrograph?.length ?? 0 })));
+        check(r, `${id}: the map's inflow is the routed hydrograph`, sources.some((s) => s.id === 'chain-inflow' && s.n > 3), JSON.stringify(sources));
+
+        const ui = await D(() => {
+          const vis = (el) => !!el && !el.hidden && el.getClientRects().length > 0 && getComputedStyle(el).display !== 'none';
+          const sec = document.querySelector('[data-section="chain"]');
+          const line = document.querySelector('.dl-chainline');
+          const step = (k) => vis(document.querySelector(`.dl-try-step[data-step="${k}"]`));
+          return {
+            section: vis(sec),
+            results: sec?.querySelectorAll('.dl-chain-kv').length ?? 0,
+            provenance: [...(sec?.querySelectorAll('.dl-prov') ?? [])].map((b) => b.textContent),
+            timeline: vis(line),
+            svgs: line?.querySelectorAll('svg.dl-cl-svg').length ?? 0,
+            markers: line?.querySelectorAll('.dl-cl-st').length ?? 0,
+            chips: line?.querySelectorAll('.dl-cl-chipbox').length ?? 0,
+            eventClock: document.querySelector('.dl-clock-event')?.textContent ?? '',
+            steps: { flood: step('flood'), arrival: step('arrival'), evac: step('evac'), rain: step('rain'), levee: step('levee') },
+            floodLabel: document.querySelector('.dl-try-step[data-step="flood"]')?.textContent ?? '',
+          };
+        });
+        r.metrics[id].ui = ui;
+        check(r, `${id}: Hazard chain section with results and provenance badges`, ui.section && ui.results >= 2 && ui.provenance.includes('modelled') && ui.provenance.includes('observed'), `${ui.results} results, badges ${[...new Set(ui.provenance)].join('/')}`);
+        check(r, `${id}: valley timeline with profile, hydrograph and stations`, ui.timeline && ui.svgs === 2 && ui.markers >= 4 && ui.chips >= 3, `${ui.svgs} svg, ${ui.markers} markers, ${ui.chips} chips`);
+        check(r, `${id}: the real event clock in the top bar`, /\d{4} \d\d:\d\d.(NPT|IST)$/.test(ui.eventClock.replace(/\u00a0/g, ' ')), ui.eventClock);
+        check(r, `${id}: Try-it offers the glacier steps, no hurricane rain or levee`, ui.steps.flood && ui.steps.arrival && ui.steps.evac && !ui.steps.rain && !ui.steps.levee && /Release the flood/.test(ui.floodLabel), JSON.stringify(ui.steps));
+
+        // Advance the flood until every station the front reaches inside the map has been passed.
+        const runS = Math.min(3600, Math.max(300, ...chain.stations.filter((s) => Number.isFinite(s.tFront)).map((s) => s.tFront - chain.offset + 60)));
+        await D(() => {
+          window.__deluge.setPaused(false);
+          window.__deluge.actions.resetWater();
+        });
+        await D(() => window.__deluge.waitFrames(4));
+        const read = () =>
+          D(() => ({
+            x: Number(document.querySelector('.dl-cl-frontline')?.getAttribute('x1') ?? NaN),
+            passed: document.querySelectorAll('.dl-cl-chipbox.dl-cl-passed').length,
+            chips: document.querySelectorAll('.dl-cl-chipbox').length,
+            clock: document.querySelector('.dl-cl-clock')?.textContent ?? '',
+            t: window.__deluge.getStats()?.simTime ?? 0,
+          }));
+        const before = await read();
+        if (id === 'nepal') await shot('16-nepal-start');
+        await runFor(runS);
+        await sleep(400); // the timeline updates at ≤ 10 Hz
+        const after = await read();
+        r.metrics[id].timeline = { runS, before, after };
+        check(r, `${id}: stations light up as the front passes`, after.passed > before.passed, `${before.passed} → ${after.passed} of ${after.chips} lit after ${Math.round(runS)} s`);
+        check(r, `${id}: the front moved down the valley`, after.x > before.x, `x ${num(before.x, 1)} → ${num(after.x, 1)} px; clock ${before.clock} → ${after.clock}`);
+        await shot(`16-${id}-timeline`);
+        await page.locator('.dl-chainline').screenshot({ path: path.join(OUT, `16-${id}-strip.png`) });
+        await D(() => document.querySelector('[data-section="chain"]')?.scrollIntoView());
+        await sleep(300);
+        await page.locator('[data-section="chain"]').screenshot({ path: path.join(OUT, `16-${id}-panel.png`) });
+      }
     },
   },
 ];

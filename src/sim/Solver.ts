@@ -68,6 +68,8 @@ import { footprintRadius, inflowVariesUntil, packForcing, peakInflow, sourceFoot
 /** How far ahead (simulated s) the CFL estimate looks along an inflow hydrograph for the flow it is about to reach. */
 const HYDROGRAPH_LOOKAHEAD_S = 120;
 import { HAZARD_PER_CELL, unpackHazardFields } from './hazard';
+import { RHEO_VISC_DEPTH, rheologyCoefficients } from './rheology';
+import type { Rheology } from '../hazard/types';
 import { brushWGSL, BRUSH_UNIFORM_BYTES } from './shaders/brush';
 import { ACC_PER_CELL, FORCING_UNIFORM_BYTES, SIM_UNIFORM_BYTES } from './shaders/common';
 import { continuityWGSL } from './shaders/continuity';
@@ -273,6 +275,9 @@ export class GpuFloodSolver implements FloodSolver {
    */
   private uBoost = 0;
   private uBoostTime = -Infinity;
+  /** The scenario's rheology (setRheology; water by default) and the speed cap in force, m/s (options.uMax by default). */
+  private rheologyNow: Rheology = { kind: 'water' };
+  private uMaxNow: number;
   /** Simulated time of the latest processed readback, and the simulated time between the last two (s). */
   private readSimTime = 0;
   private readSpan = 0;
@@ -310,6 +315,7 @@ export class GpuFloodSolver implements FloodSolver {
     this.cellSize = cellSize;
     this.params = params;
     this.options = options;
+    this.uMaxNow = options.uMax;
     this.N = nx * ny;
     this.cellArea = cellSize * cellSize;
     this.gx = Math.ceil(nx / WG);
@@ -628,6 +634,32 @@ export class GpuFloodSolver implements FloodSolver {
     this.sourcesChanged = true;
   }
 
+  /**
+   * The flow's rheology and speed cap (FloodSolver.setRheology). Water with no uMax is the Manning code path bit for bit;
+   * any other law replaces Manning in the momentum pass of robust mode (shaders/momentum.ts RHEOLOGY; naive mode stays
+   * water). uMax (m/s, clamped to 1–100; absent or not finite = options.uMax) is the velocity cap of the momentum pass,
+   * the boundary outflow and the exported speed, and bounds the CFL estimate's anticipated speeds. Takes effect from the
+   * next step; reset() keeps it.
+   */
+  setRheology(rheology: Rheology, opts?: { uMax?: number }): void {
+    this.rheologyNow = rheology && typeof rheology === 'object' ? { ...rheology } : { kind: 'water' };
+    const u = opts?.uMax;
+    this.uMaxNow = typeof u === 'number' && Number.isFinite(u) ? Math.min(100, Math.max(1, u)) : this.options.uMax;
+    // A different cap changes what the sources are about to produce (forcingSpeedEstimate): re-estimate on the next dt.
+    this.forcingDirty = true;
+    this.sourcesChanged = true;
+  }
+
+  /** The rheology set by setRheology (water by default). */
+  get rheology(): Rheology {
+    return { ...this.rheologyNow };
+  }
+
+  /** The velocity cap in force, m/s (options.uMax unless setRheology gave one). */
+  get speedCap(): number {
+    return this.uMaxNow;
+  }
+
   setStorms(storms: StormCell[]): void {
     this.storms = storms.map((s) => ({ ...s }));
     this.forcingDirty = true;
@@ -753,7 +785,7 @@ export class GpuFloodSolver implements FloodSolver {
     this.hBoost = Math.max(this.hBoost, hMax);
     this.hBoostSeq = this.editSeq;
     if (dhMax > 0) {
-      this.uBoost = Math.max(this.uBoost, Math.min(this.options.uMax, 2 * Math.sqrt(GRAVITY * dhMax)));
+      this.uBoost = Math.max(this.uBoost, Math.min(this.uMaxNow, 2 * Math.sqrt(GRAVITY * dhMax)));
       this.uBoostTime = this.simTime;
     }
     // No readback here: one taken before any step would pair the raised water with the previous window's (larger)
@@ -1325,7 +1357,7 @@ export class GpuFloodSolver implements FloodSolver {
     fv[5] = n * n;
     fv[6] = robust ? o.theta : 1;
     fv[7] = o.hMin;
-    fv[8] = o.uMax;
+    fv[8] = this.uMaxNow;
     fv[9] = o.froudeMax;
     fv[10] = Math.max(0, Number.isFinite(p.rainRate) ? p.rainRate : 0) * MMHR_TO_MS;
     fv[11] = Math.max(0, Number.isFinite(p.infiltrationRate) ? p.infiltrationRate : 0) * MMHR_TO_MS;
@@ -1347,6 +1379,16 @@ export class GpuFloodSolver implements FloodSolver {
     fv[26] = exportTime;
     fv[27] = Math.max(0, exportTime - this.hazardTime);
     this.hazardTimePending = exportTime;
+    // Rheology (src/sim/rheology.ts): the quadratic law's dispersive n_td follows the current Manning n.
+    const rc = rheologyCoefficients(this.rheologyNow, n);
+    iv[28] = rc.kind;
+    fv[29] = rc.tauRho;
+    fv[30] = rc.mu;
+    fv[31] = rc.visc;
+    fv[32] = rc.n2;
+    fv[33] = rc.gXi;
+    fv[34] = RHEO_VISC_DEPTH;
+    fv[35] = 0;
     this.device.queue.writeBuffer(this.simBuf, 0, this.simBytes);
   }
 
@@ -1397,7 +1439,7 @@ export class GpuFloodSolver implements FloodSolver {
       }
       if (dh > 0) u = Math.max(u, 2 * Math.sqrt(GRAVITY * dh));
     }
-    return Math.min(u, this.options.uMax);
+    return Math.min(u, this.uMaxNow);
   }
 
   /**
@@ -1431,7 +1473,7 @@ export class GpuFloodSolver implements FloodSolver {
     for (const s of this.sources.slice(0, MAX_SOURCES)) {
       if (s.type === 'inflow' && s.hydrograph) u = Math.max(u, this.inflowSpeed(s, footprintRadius(s.radius), this.simTime));
     }
-    u = Math.min(u, this.options.uMax);
+    u = Math.min(u, this.uMaxNow);
     if (u > this.uRead && u > this.uBoost) {
       this.uBoost = u;
       this.uBoostTime = this.simTime;

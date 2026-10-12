@@ -1,6 +1,6 @@
 /**
  * Global keyboard shortcuts. Installed by mountUI because several need AppActions.
- *   1…0 tools · Space play/pause · R reset water · F frame all · T top-down · V next water view · H or ? help
+ *   1…0 and S tools · Space play/pause · R reset water · F frame all · T top-down · V next water view · H or ? help
  *   Esc closes the top-most modal (the tool controller separately cancels an in-progress wall)
  *   [ and ] shrink / grow the brush
  */
@@ -94,6 +94,12 @@ export function installKeyboard(ctx: UIContext): () => void {
         // Realistic → Depth → Max depth → Speed (Shift+V goes back).
         e.preventDefault();
         ctx.setRender({ waterMode: nextViewMode(s.render.waterMode, e.shiftKey) });
+        return;
+      case 's':
+      case 'S':
+        if (e.ctrlKey || e.metaKey || e.altKey) return;
+        e.preventDefault();
+        selectTool(store, 'site');
         return;
       case '[':
         e.preventDefault();

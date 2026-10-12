@@ -858,7 +858,8 @@ export type ToolId =
   | 'dig' // hold to lower ground (shift = raise)
   | 'evac' // click to set the evacuation start point
   | 'shelter' // click to add a shelter; click existing to remove
-  | 'probe'; // hover readout of elevation / depth / speed
+  | 'probe' // hover readout of elevation / depth / speed
+  | 'site'; // click to drop a site pin, drag around a parcel to outline it (Site check panel); click a site to select it
 
 export interface AppState {
   presetId: string | null;

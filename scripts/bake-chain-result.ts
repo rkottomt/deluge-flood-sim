@@ -182,8 +182,8 @@ const DESCRIPTIONS: Record<string, (r: BakedChainResult) => string> = {
       `edge. The model puts the front at Betrawati at ${clockAt(cz, bet.tFront ?? 0)} (its runs span ` +
       `${clockAt(cz, b.tFront[0] ?? 0)}–${b.tFront[2] === null ? 'later' : clockAt(cz, b.tFront[2])}) — later than ` +
       'reported, and that gap is the model’s error, not the river’s: its valley comes from a 30 m elevation model ' +
-      'and its channel roughness is a textbook value. Inside the map the solver also caps flood speeds (15 m/s unless ' +
-      'the debris-flood setting raises the cap to 25), so the water here moves slower than the real flood did. ' +
+      'and its channel roughness is a textbook value. Inside the map the run carries no sediment: it moves the water ' +
+      'under one uniform debris-flood friction law with a 25 m/s speed cap. ' +
       'The terrain is Copernicus 30 m radar data, a surface model with canopy and buildings in it. The bare-earth ' +
       'filter only runs on ground flatter than 20°, and 77 % of this domain is steeper: the valley floor is filtered ' +
       'and still a metre or two high, the walls above it are the raw surface model. No photograph is baked in — open ' +
@@ -216,8 +216,8 @@ const DESCRIPTIONS: Record<string, (r: BakedChainResult) => string> = {
       `${clockAt(cz, ch.tFront ?? 0)} (its runs span ${clockAt(cz, b.tFront[0] ?? 0)}–` +
       `${b.tFront[2] === null ? 'later' : clockAt(cz, b.tFront[2])}) against about 00:30 observed — earlier than the ` +
       'real flood, and that gap is the model’s error. The real flood was a debris flood that moved hundreds of ' +
-      'millions of cubic metres of sediment, and inside the map the solver caps its speed (15 m/s unless the ' +
-      'debris-flood setting raises the cap to 25). The terrain is Copernicus 30 m radar data, a surface model with ' +
+      'millions of cubic metres of sediment; inside the map this run carries no sediment — it moves the water under ' +
+      'one uniform debris-flood friction law with a 25 m/s speed cap. The terrain is Copernicus 30 m radar data, a surface model with ' +
       'canopy and buildings in it, acquired in 2011–2015 while the dam was being built, so neither the dam nor its ' +
       'reservoir is in it. The bare-earth filter only runs on ground flatter than 20°, and 94 % of this domain is ' +
       'steeper: the valley floor is filtered and still a metre or two high, the walls above it are the raw surface ' +

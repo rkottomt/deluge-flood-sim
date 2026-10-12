@@ -70,6 +70,16 @@ function baseUrl(): string {
   return `${env?.BASE_URL ?? '/'}presets/`;
 }
 
+/**
+ * URL of a file baked next to a preset's meta.json (e.g. the hazard chain's `chain.json`), or null when the id is not
+ * a preset or the file name is not a plain baked file name — both come from data (a link, meta.json), and neither may
+ * steer the request anywhere else.
+ */
+export function presetFileUrl(id: string, file: string): string | null {
+  if (!isPresetId(id) || !/^[a-z0-9][a-z0-9._-]{0,63}\.json$/i.test(file) || file.includes('..')) return null;
+  return `${baseUrl()}${id}/${file}`;
+}
+
 export function listPresets(): PresetInfo[] {
   return PRESETS.map((p) => ({ ...p }));
 }

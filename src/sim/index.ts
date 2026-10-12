@@ -16,6 +16,8 @@
  *   solver.readHazardFields()   per-cell max speed, max depth × speed, arrival time, wet duration (contract extension;
  *                               accumulated by the export pass, see hazard.ts and shaders/exportState.ts)
  *   solver.hazardBuffer         the same accumulators on the GPU (the renderer's arrival and hazard-class views)
+ *   solver.setRheology(r, {uMax}) debris-flow friction law and speed cap for the scenario (contract extension;
+ *                               coefficients in rheology.ts, ARCHITECTURE.md §3.9); solver.rheology, solver.speedCap
  *   solver.options              numerical tunables (see SolverOptions / DEFAULT_SOLVER_OPTIONS)
  */
 import type { SimParams, SolverTerrainInput } from '../contracts';

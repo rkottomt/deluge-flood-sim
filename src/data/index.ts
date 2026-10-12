@@ -39,7 +39,7 @@ export function gridToGeo(terrain: Pick<TerrainData, 'nx' | 'ny' | 'bounds'>, gx
 }
 
 // Extra helpers other modules may find useful (not part of the contract).
-export { isPresetId, setPresetBaseUrl, validatePresetMeta, type PresetMeta } from './presets';
+export { isPresetId, presetFileUrl, setPresetBaseUrl, validatePresetMeta, type PresetMeta } from './presets';
 export { cleanPlaceLabel, coordinateName, isCoordinateName, linkPlaceLabel, withCoordinates } from './placeName';
 export { generateSandbox } from './sandbox';
 export { cellSizeFor, squareDomain, isLikelyUS } from './geo';

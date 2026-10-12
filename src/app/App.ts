@@ -9,6 +9,7 @@ import { APP_CONFIG, createInitialState } from './defaults';
 import { FrameDriver } from './driver';
 import { errorMessage, ErrorReporter } from './errors';
 import { EvacController, snapshotIsPhysical } from './evac';
+import { HazardChainController } from './hazardChain';
 import { WorkBudget, type BudgetMode } from './governor';
 import { FrameCeiling } from './frameCeiling';
 import { GpuLatencyProbe } from './latency';
@@ -70,6 +71,8 @@ export class App {
   readonly evac: EvacController;
   /** Land the walls keep dry (≤ 1 Hz, only while walls exist) → UI bridge + renderer glow. */
   readonly protection: ProtectionController;
+  /** The glacier hazard chain behind a chain preset's inflow (worker run, routed hydrograph, bands; see hazardChain.ts). */
+  readonly chain: HazardChainController;
   readonly sim: SimSync;
   /** Stage raises lift the water in the river channels at once (see crest.ts). */
   readonly crest: CrestFill;
@@ -84,6 +87,8 @@ export class App {
   scenes: SceneManager | null = null;
   tools: ToolController | null = null;
   probe: ProbeSampler | null = null;
+  /** A long automated run (the Site check sweep) holds rendering to a slow heartbeat (FrameDriver). */
+  renderHold = false;
 
 
   /** Resolves when the first scene is on screen; rejects if startup fails (main.ts hands it to the debug API). */
@@ -153,6 +158,7 @@ export class App {
         this.requestRender();
       },
     });
+    this.chain = new HazardChainController({ store: this.store, errors: this.errors, resetWater: () => this.actions.resetWater() });
     this.driver = new FrameDriver(this);
     this.loop = new FrameLoop(
       (dt, now, frameMs) => this.frame(dt, now, frameMs),
@@ -196,6 +202,14 @@ export class App {
       this.errors.report('ui', `mountUI failed: ${errorMessage(err)}`, err);
     }
     document.getElementById('boot')?.remove();
+    bridgeFor(store).sim = {
+      runFor: (s) => this.runFor(s),
+      simClock: () => this.driver.simClock,
+      setRenderHold: (on) => {
+        this.renderHold = on;
+        this.requestRender();
+      },
+    };
 
     const format = navigator.gpu.getPreferredCanvasFormat();
     const renderer = await createRenderer(gpu.device, this.canvas, format);
@@ -212,6 +226,7 @@ export class App {
         this.setStageNow(0);
         this.evac.reset();
         this.protection.reset();
+        this.chain.onSceneCleared();
       },
       onSceneReady: (scene) => this.onSceneReady(scene),
     });
@@ -692,6 +707,7 @@ export class App {
     this.probe?.reset();
     this.budget.restart();
     this.driver.onSceneChanged(performance.now());
+    this.chain.onSceneReady(scene);
     console.info(
       `[deluge] loaded “${scene.terrain.name}” ${scene.terrain.nx}×${scene.terrain.ny} @ ${scene.terrain.cellSize.toFixed(2)} m`,
     );

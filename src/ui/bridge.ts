@@ -7,10 +7,14 @@
  *  • notices: neutral / warning / success toasts that are NOT errors (limits, guidance, overtopped walls),
  *  • scene access: terrain, solver and camera getters (for one-click suggestions such as an evacuation start),
  *  • walls: a wall was drawn by the user, the latest check of the drawn walls against the water, and the land they
- *    keep dry (published by the app, see src/app/protection.ts).
+ *    keep dry (published by the app, see src/app/protection.ts),
+ *  • the glacier hazard chain: the routed run behind a chain preset's inflow and the control to re-run it (published by
+ *    src/app/hazardChain.ts, drawn by chainPanel.ts, chainTimeline.ts and the top bar's event clock).
  */
 import type { CameraController, FloodSolver, Store, TerrainData } from '../contracts';
 import type { WallStatus } from './wallCheck';
+import type { ChainFile, HazardChainSpec } from '../hazard/types';
+import type { ChainOverrides, ChainRunResult, EnsembleResult } from '../hazard/chain';
 
 /** Terrain under the cursor while a tool that cares about it is active. */
 export interface HoverInfo {
@@ -72,6 +76,65 @@ export interface WallSegment {
   height: number;
 }
 
+/**
+ * Automation the app lends the UI for long headless runs (the Site check sweep): the same runFor the debug API uses,
+ * and a render hold that drops the 3D view to a slow heartbeat so the GPU time goes to the solver.
+ */
+export interface SimControl {
+  /** Advance the simulation by `simSeconds` as fast as the GPU allows (even while paused); resolves once a readback includes it. */
+  runFor(simSeconds: number): Promise<void>;
+  /** Simulated seconds since the last water reset. */
+  simClock(): number;
+  /** While on, the view renders at most a couple of times a second. */
+  setRenderHold(on: boolean): void;
+}
+
+/** Where the inflow on the map comes from on a chain preset. */
+export type ChainInflowMode = 'chain' | 'scenario';
+
+/** What the user may change about the chain from the panel (ChainOverrides plus the trigger's mode). */
+export interface ChainWhatIf {
+  overrides: ChainOverrides;
+  /** massIntoRiver only: replaces the trigger's mode. */
+  mode?: 'transientDam' | 'directFlow';
+}
+
+/** The hazard chain of the scene on screen (null on scenes without one). */
+export interface ChainView {
+  /** Changes with every scene, so a late answer for an old scene is recognisable. */
+  sceneKey: string;
+  spec: HazardChainSpec;
+  /** Null until chain.json has arrived. */
+  file: ChainFile | null;
+  /** loading = fetching the profile; running = the deterministic run; ensemble = the bands; ready; error. */
+  status: 'loading' | 'running' | 'ensemble' | 'ready' | 'error';
+  progress: { done: number; total: number } | null;
+  error: string | null;
+  /** The run on screen (the deterministic member of the what-if last applied). */
+  result: ChainRunResult | null;
+  /** p10 / p50 / p90 per station and at the domain entry, once the ensemble has run for this what-if. */
+  bands: EnsembleResult['stationBands'] | null;
+  entryBand: ChainRunResult['ensemble'] | null;
+  /** Chain time (s after clock zero) at the 2-D solver's t = 0. */
+  offset: number;
+  /** The what-if the result is for. */
+  whatIf: ChainWhatIf;
+  /** What drives the map: the routed chain hydrograph, or the preset's own inflow. */
+  inflow: ChainInflowMode;
+  /** The result came from the bake (calibrated) or from a run in this tab. */
+  origin: 'baked' | 'worker';
+  /** Worker time of the last run, ms. */
+  ms: number | null;
+}
+
+/** What the chain section may ask of the app. */
+export interface ChainControl {
+  /** Re-run the chain for this what-if (worker; progress in ChainView) and drive the map with it. */
+  run(whatIf: ChainWhatIf): void;
+  /** Drive the map with the routed chain or with the preset's own inflow (resets the water). */
+  setInflow(mode: ChainInflowMode): void;
+}
+
 type Listener<T> = (v: T) => void;
 
 class Channel<T> {
@@ -97,6 +160,8 @@ class Channel<T> {
 export class UIBridge {
   hover: HoverInfo | null = null;
   scene: SceneAccess | null = null;
+  /** Set by the app once it runs (null in tests and before startup). */
+  sim: SimControl | null = null;
   readonly hoverChanged = new Channel<HoverInfo | null>();
   readonly wallDrawn = new Channel<void>();
   /** Latest scan of the walls on the map (null = no walls). Same data as the overtopping notices. */
@@ -105,6 +170,10 @@ export class UIBridge {
   /** Land the walls keep dry (null = no walls). */
   protection: ProtectionSummary | null = null;
   readonly protectionChanged = new Channel<ProtectionSummary | null>();
+  /** The hazard chain of the scene on screen, and the app's handle on it (both null without a chain). */
+  chain: ChainView | null = null;
+  chainControl: ChainControl | null = null;
+  readonly chainChanged = new Channel<ChainView | null>();
   private readonly notices = new Channel<Notice>();
   /** Notices posted before the UI mounted are delivered when it subscribes. */
   private pending: Notice[] = [];
@@ -133,6 +202,12 @@ export class UIBridge {
     if (a === p || (a && p && a.wallCells === p.wallCells && a.areaM2 === p.areaM2 && a.roadMeters === p.roadMeters && a.level === p.level)) return;
     this.protection = p;
     this.protectionChanged.emit(p);
+  }
+
+  setChain(c: ChainView | null): void {
+    if (c === this.chain) return;
+    this.chain = c;
+    this.chainChanged.emit(c);
   }
 
   notify(n: Notice): void {

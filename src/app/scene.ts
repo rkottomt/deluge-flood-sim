@@ -5,6 +5,7 @@ import type {
   FloodSolver,
   PresetInfo,
   ProgressFn,
+  ScenarioPreset,
   SimParams,
   SolverTerrainInput,
   Store,
@@ -43,6 +44,18 @@ export interface SceneManagerDeps {
   onSceneCleared(): void;
   /** New scene is bound to renderer/router and its scenario applied to the store. */
   onSceneReady(scene: Scene): void;
+}
+
+/**
+ * The scenario's flow rheology and speed cap → the solver (FloodSolver.setRheology, feature-detected). A preset with a
+ * glacier hazard chain runs its debris law and cap (Nepal and Chungthang: Voellmy debris flood, 25 m/s); every other
+ * scenario — and a live area, which has none — runs water at the default cap.
+ */
+export function applyScenarioRheology(solver: FloodSolver, scenario: ScenarioPreset | null | undefined): void {
+  if (typeof solver.setRheology !== 'function') return;
+  const chain = scenario?.hazardChain;
+  if (chain?.rheology) solver.setRheology(chain.rheology, chain.solver);
+  else solver.setRheology({ kind: 'water' });
 }
 
 /** Share of the loading bar used by data fetching; the rest covers solver creation and binding. */
@@ -184,6 +197,7 @@ export class SceneManager {
       store.set({ loading: { message: 'Filling rivers…', progress: 0.93 } });
       const initialWater = computeInitialWater(terrain, terrain.scenario);
       solver.setInitialWater(initialWater);
+      applyScenarioRheology(solver, terrain.scenario);
 
       // 4. Bind renderer + router.
       renderer.setScene(terrain, solver);

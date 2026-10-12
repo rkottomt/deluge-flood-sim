@@ -151,8 +151,9 @@ const IAN_PEAK_FT = 12.92; // 2.293 m NAVD88 — the station record
  *
  * WHAT THE SIMULATION CANNOT DO. The channel falls 163 m in the 6.5 km of this domain (2.5 %), where the flow is
  * supercritical and the local-inertial scheme is outside the regime it was validated in — and the real event was a
- * sediment-laden debris flood that ran hundreds of metres up the valley walls. The solver's flood speeds cap at 15 m/s
- * against the ~20 m/s ICIMOD measured between Rasuwagadhi and Betrawati. This is a clear-water flood of comparable
+ * sediment-laden debris flood that ran hundreds of metres up the valley walls. The solver's flood speeds capped at 15 m/s
+ * against the ~20 m/s ICIMOD measured between Rasuwagadhi and Betrawati (the app now runs this preset with its hazard
+ * chain's debris friction and a 25 m/s cap, ARCHITECTURE.md §3.9). This is a clear-water flood of comparable
  * volume on the real terrain: which ground goes under, in what order, and what that does to the roads.
  */
 const BHOTE_KOSHI_EXCESS_M3 = 2.0e7;
@@ -213,8 +214,9 @@ const CHUNGTHANG_DESCRIPTION =
   `gauged peak downstream, ${CHUNGTHANG_PEAK_M3S.toLocaleString('en-US')} m³/s, on a smooth rise and fall that carries ` +
   `the ${(SOUTH_LHONAK_RELEASE_M3 / 1e6).toFixed(0)} million m³ released at the lake — a parametric placeholder, not a ` +
   'measured hydrograph — and the clock starts as the front reaches the north edge of the map, not at the collapse. ' +
-  'The real flood was a debris flood that moved hundreds of millions of cubic metres of sediment; this is clear water, ' +
-  'and the solver caps its speed at 15 m/s, so the arrival times here are the model’s, not the flood’s. The terrain ' +
+  'The real flood was a debris flood that moved hundreds of millions of cubic metres of sediment; this run carries no ' +
+  'sediment — it moves the water under one uniform debris-flood friction law with a 25 m/s speed cap — so the ' +
+  'arrival times here are the model’s, not the flood’s. The terrain ' +
   'is Copernicus 30 m radar data, a surface model with canopy and buildings in it, acquired in 2011–2015 while the ' +
   'dam was being built, so neither the dam nor its reservoir is in it. The bare-earth filter only runs on ground ' +
   `flatter than 20°, and ${CHUNGTHANG_STEEP_PCT} % of this domain is steeper: the valley floor is filtered and still a ` +
@@ -1212,8 +1214,9 @@ const PRESET_DEFS: PresetDef[] = [
       'licensed against redistribution — so the ground is shaded by height instead. ' +
       'The rivers start dry, because no surviving gauge gives their flow that morning and this model cannot hold a ' +
       'river that falls 167 m across the domain at a level — so every drop you see is the modelled surge. The clock ' +
-      'is the model’s, not the flood’s: the front sits on the solver’s 15 m/s speed cap from the first half-minute ' +
-      'on, so these are not the real arrival times. Watch which roads go under and in what order, and where the ' +
+      'is the model’s, not the flood’s: the surge starts from rest at the edge of the map and moves under one ' +
+      'uniform debris-flood friction law with a 25 m/s speed cap (measured debris-flood fronts ran 20–25 m/s), so ' +
+      'these are not the real arrival times. Watch which roads go under and in what order, and where the ' +
       'routes turn uphill, and do not read street-level depths.',
   },
   {

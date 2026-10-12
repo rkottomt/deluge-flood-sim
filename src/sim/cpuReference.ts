@@ -13,6 +13,7 @@
  */
 import { GRAVITY, INFLOW_EDGE_MASK_CELLS, MAX_SOURCES } from './constants';
 import { footprintWeight, stormWeight, type PackedForcing } from './forcing';
+import { RHEO_VISC_DEPTH, type RheologyCoefficients } from './rheology';
 
 export interface SchemeStepParams {
   dt: number;
@@ -42,6 +43,8 @@ export interface SchemeStepParams {
   /** Stage relaxation factor for this step, 0..1. */
   stageAlpha: number;
   forcing?: PackedForcing | null;
+  /** Debris-flow rheology (src/sim/rheology.ts rheologyCoefficients); absent or kind 0 = water (Manning). Robust mode only. */
+  rheology?: RheologyCoefficients;
 }
 
 const g = GRAVITY;
@@ -163,12 +166,41 @@ export function smoothingIncrement(
 }
 
 /**
+ * Rheology momentum update of one face (shaders/momentum.ts rheoMomentum and RHEOLOGY): explicit predictor, stop-or-reduce
+ * for the yield / Coulomb impulse, semi-implicit viscous + turbulent denominator. dz: bed rise z_R − z_L across the face.
+ */
+export function rheoMomentum(
+  hf: number,
+  hf73: number,
+  S: number,
+  dz: number,
+  qt: number,
+  qmag: number,
+  qPerp: number,
+  adv: number,
+  dtm: number,
+  p: SchemeStepParams,
+  r: RheologyCoefficients,
+): number {
+  const qStar = qt - dtm * adv - g * hf * dtm * S;
+  const bedS = dz / p.dx;
+  const cosT = 1 / Math.sqrt(1 + bedS * bedS);
+  const stopQ = dtm * (r.tauRho + r.mu * g * hf * cosT);
+  const qsMag = Math.sqrt(qStar * qStar + qPerp * qPerp);
+  const q = qsMag > stopQ ? qStar * (1 - stopQ / qsMag) : 0;
+  const hv = Math.max(hf, RHEO_VISC_DEPTH);
+  const lin = r.visc / (hv * hv);
+  const quad = ((g * r.n2) / hf73 + r.gXi / (hf * hf)) * qmag;
+  return q / (1 + dtm * (lin + quad));
+}
+
+/**
  * Momentum update for one face (see shaders/momentum.ts for the full explanation).
- *   hf: face depth; S: water-surface slope (ηR − ηL)/dx; qc: old flux; dq: smoothing increment
+ *   hf: face depth; S: water-surface slope (ηR − ηL)/dx; dz: bed rise z_R − z_L; qc: old flux; dq: smoothing increment
  *   (smoothingIncrement); qPerp: mean of the 4 surrounding perpendicular faces; adv: convective acceleration
  *   ∂(q·u)/∂x + ∂(q·v)/∂y at this face.
  */
-export function momentum(hf: number, S: number, qc: number, dq: number, qPerp: number, adv: number, p: SchemeStepParams): number {
+export function momentum(hf: number, S: number, dz: number, qc: number, dq: number, qPerp: number, adv: number, p: SchemeStepParams): number {
   if (!(hf >= p.hMin)) return 0;
   const n2 = p.manningN * p.manningN;
   const qmag = Math.sqrt(qc * qc + qPerp * qPerp);
@@ -180,7 +212,11 @@ export function momentum(hf: number, S: number, qc: number, dq: number, qPerp: n
     const ratio = Math.min(1, p.courantGuard / Math.max(cr, 1e-6));
     const dtm = p.dt * ratio * ratio;
     const qt = qc + 0.5 * (1 - p.theta) * dq;
-    const q = (qt - dtm * adv - g * hf * dtm * S) / (1 + (g * dtm * n2 * qmag) / hf73);
+    const r = p.rheology;
+    const q =
+      r && r.kind !== 0
+        ? rheoMomentum(hf, hf73, S, dz, qt, qmag, qPerp, adv, dtm, p, r)
+        : (qt - dtm * adv - g * hf * dtm * S) / (1 + (g * dtm * n2 * qmag) / hf73);
     const cap = hf * Math.min(p.uMax, p.froudeMax * Math.sqrt(g * hf));
     return Math.min(cap, Math.max(-cap, q));
   }
@@ -298,7 +334,7 @@ export class CpuReferenceSolver {
             adv = (advWeight(hf, hfW, hfE, hfS, hfN) * (mR - mL + (gS - gN))) / p.dx;
           }
           const dq = wet(hf) ? smoothingIncrement(hf, qx[c], qW, hfW, qE, hfE, div[e] - div[c], p) : 0;
-          fx[c] = momentum(hf, S, qx[c], dq, qPerp, adv, p);
+          fx[c] = momentum(hf, S, z[e] - z[c], qx[c], dq, qPerp, adv, p);
         }
         if (j < ny - 1) {
           const s = c + nx;
@@ -329,7 +365,7 @@ export class CpuReferenceSolver {
             adv = (advWeight(hf, hfN, hfS, hfE, hfW) * (mD - mU + (gE - gW))) / p.dx;
           }
           const dq = wet(hf) ? smoothingIncrement(hf, qy[c], qN, hfN, qS, hfS, div[s] - div[c], p) : 0;
-          fy[c] = momentum(hf, S, qy[c], dq, qPerp, adv, p);
+          fy[c] = momentum(hf, S, z[s] - z[c], qy[c], dq, qPerp, adv, p);
         }
       }
     }

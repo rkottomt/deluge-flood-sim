@@ -3,6 +3,7 @@
  *
  *   node --import tsx tests/sim/bench.ts            # 512², 1024², 2048² synthetic + Pittsburgh preset if baked
  *   node --import tsx tests/sim/bench.ts 1024       # one size
+ *   node --import tsx tests/sim/bench.ts 1024 voellmy   # one size, a debris rheology (voellmy / quadratic / bingham)
  *
  * Reports substeps/second of the full per-substep pipeline (momentum + continuity passes), the cost of the
  * per-frame export pass, the readback (map + CPU stats) cost, and what that means against the performance target on an
@@ -15,6 +16,8 @@ import path from 'node:path';
 import { getGpu } from '../helpers/gpu';
 import { createSolver, type GpuFloodSolver } from '../../src/sim';
 import type { SimParams } from '../../src/contracts';
+import type { Rheology } from '../../src/hazard/types';
+import { MATERIAL_GLENWOOD_1 } from '../../src/hazard/defaults';
 
 const now = () => performance.now();
 
@@ -105,6 +108,13 @@ async function main() {
   const { device, description } = await getGpu();
   console.log(`GPU: ${description}`);
   const arg = process.argv[2];
+  // Optional 2nd argument: a debris rheology for the synthetic valleys (voellmy | quadratic | bingham; default water).
+  const rheo: Record<string, Rheology> = {
+    voellmy: { kind: 'voellmy', mu: 0.05, xi: 500 },
+    quadratic: { kind: 'quadratic', cv: 0.45, material: MATERIAL_GLENWOOD_1 },
+    bingham: { kind: 'bingham', tauY: 500, muB: 20, rho: 2000 },
+  };
+  const rheology = rheo[process.argv[3] ?? ''];
   const sizes = arg ? [Number(arg)] : [512, 1024, 2048];
   const params: Partial<SimParams> = { rainRate: 50, manningN: 0.035, boundary: 'open' };
 
@@ -113,7 +123,8 @@ async function main() {
     const solver = await createSolver(device, v, params);
     solver.setInitialWater(v.depth);
     solver.setSources([{ id: 'in', type: 'inflow', gx: n / 2, gy: 4, radius: 6, discharge: 400 }]);
-    await measure(`valley ${n}²`, solver, device);
+    if (rheology) solver.setRheology(rheology, { uMax: 25 });
+    await measure(`valley ${n}²${rheology ? ` ${rheology.kind}` : ''}`, solver, device);
     solver.destroy();
   }
 
