@@ -18,6 +18,7 @@
  */
 import type { AppState, FloodSolver, TerrainData } from '../contracts';
 import { computeInitialWater } from '../data/initialWater';
+import { cleanPlaceLabel } from '../data/placeName';
 import {
   analyze,
   CSV_LIMITS,
@@ -69,6 +70,11 @@ export interface ImpactSection {
   overlay: HTMLElement;
   /** The section was opened: start the fallback tracking if it is needed. */
   activate(): void;
+  /**
+   * Load a portfolio from CSV text the app itself supplies (the bundled demo, src/ui/useCases.ts), exactly as if the
+   * user had picked the file; `auto` also turns on the periodic recompute so the table fills as the flood runs.
+   */
+  loadPortfolioText(name: string, text: string, opts?: { auto?: boolean }): void;
 }
 
 function forcingSignature(s: AppState): string {
@@ -775,6 +781,17 @@ export function createImpactSection(ctx: UIContext): ImpactSection {
     activate() {
       ensureScene(getTerrain());
       startTracking();
+    },
+    loadPortfolioText(name, text, opts) {
+      portfolioName = cleanPlaceLabel(name, 60);
+      fileInput.value = '';
+      portfolio = text.length > CSV_LIMITS.maxChars ? { assets: [], errors: [], warnings: [], fatal: 'File too large.', moreIssues: 0, ignoredColumns: [] } : parsePortfolio(text);
+      renderPortfolioInfo();
+      if (opts?.auto && !auto) {
+        auto = true;
+        autoSwitch.set(true);
+      }
+      if (portfolio.assets.length && getTerrain()) void recompute();
     },
   };
 }

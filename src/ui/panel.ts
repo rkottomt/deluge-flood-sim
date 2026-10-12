@@ -52,6 +52,8 @@ export interface Panel {
   reveal(sectionId: string): void;
   /** Layers the panel's sections draw over the canvas (the Impact section's map pins); mounted by mountUI. */
   overlays: HTMLElement[];
+  /** Hand Impact & loss a portfolio CSV the app supplies (the use cases' demo portfolio; impact.ts loadPortfolioText). */
+  loadPortfolio(name: string, text: string, opts?: { auto?: boolean }): void;
 }
 
 function section(
@@ -791,6 +793,7 @@ export function createPanel(ctx: UIContext): Panel {
   const api: Panel = {
     el,
     overlays: [impact.overlay, site.overlay],
+    loadPortfolio: (name, text, opts) => impact.loadPortfolioText(name, text, opts),
     isOpen: () => open,
     setOpen(v: boolean) {
       open = v;

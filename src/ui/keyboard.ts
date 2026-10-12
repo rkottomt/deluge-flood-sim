@@ -23,6 +23,7 @@ export function installKeyboard(ctx: UIContext): () => void {
   const topModal = (s: AppState): keyof AppState['panels'] | null => {
     if (s.panels.locationPicker) return 'locationPicker';
     if (s.panels.howItWorks) return 'howItWorks';
+    if (s.panels.useCases) return 'useCases';
     if (s.panels.help) return 'help';
     return null;
   };

@@ -72,7 +72,9 @@ export const ICON_PATHS = {
   arrowRight: '<path d="M4.5 12h15M13.5 6l6 6-6 6"/>',
   location: '<circle cx="12" cy="12" r="3.2"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3"/><circle cx="12" cy="12" r="7.2"/>',
   site: '<path d="M5 19.5V10.8L12 5l7 5.8v8.7"/><path d="M10 19.5v-4.7h4v4.7"/><path d="M2.5 22h2.4M7.3 22h2.4M12.1 22h2.4M16.9 22h2.4" opacity=".7"/>',
-  mountain: '<path d="M2.5 19.5 9 8l4 6.5 2.5-3.5 6 8.5z"/><path d="m7.2 11.2 1.8 1.3 1.6-1.2"/>',
+  briefcase:
+    '<rect x="3" y="7.5" width="18" height="12.5" rx="2"/><path d="M8.8 7.5V5.6A1.6 1.6 0 0 1 10.4 4h3.2a1.6 1.6 0 0 1 1.6 1.6v1.9"/><path d="M3 12.6h18"/><path d="M10.6 12.6v1.6h2.8v-1.6"/>',
+  mountain:'<path d="M2.5 19.5 9 8l4 6.5 2.5-3.5 6 8.5z"/><path d="m7.2 11.2 1.8 1.3 1.6-1.2"/>',
 } as const;
 
 export type IconName = keyof typeof ICON_PATHS;

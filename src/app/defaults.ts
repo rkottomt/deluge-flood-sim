@@ -88,7 +88,7 @@ export function createInitialState(): AppState {
     fps: 0,
     route: null,
     probe: null,
-    panels: { howItWorks: false, locationPicker: false, help: false },
+    panels: { howItWorks: false, locationPicker: false, help: false, useCases: false },
     gpuInfo: '',
   };
 }

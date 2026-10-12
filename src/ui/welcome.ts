@@ -436,6 +436,19 @@ export function createWelcome(ctx: UIContext): HTMLElement {
       { class: 'dl-welcome-head' },
       h('span', { class: 'dl-welcome-spark' }, icon('spark', 15)),
       h('span', { class: 'dl-welcome-title' }, h('b', null, 'Try it'), ' — click a button, watch the flood'),
+      // The business way in (src/ui/useCases.ts): quiet, and gone with the heading once the strip is used.
+      h(
+        'button',
+        {
+          type: 'button',
+          class: 'dl-welcome-uc',
+          'data-tip': 'Site due diligence, portfolio exposure and glacier risk, set up with demo data',
+          'data-tip-side': 'bottom',
+          onclick: () => ctx.setPanel('useCases', true),
+        },
+        icon('briefcase', 13),
+        'For business',
+      ),
     ),
     h('div', { class: 'dl-try-body' }, row, close),
     status,

@@ -150,6 +150,18 @@ export function createTopBar(ctx: UIContext, opts: { onTogglePanel(): void; isPa
     icon('book', 16),
     h('span', null, 'How it works'),
   );
+  const useCasesBtn = h(
+    'button',
+    {
+      type: 'button',
+      class: 'dl-btn dl-btn-subtle dl-uc-btn',
+      'data-tip': 'Business use cases: site due diligence, portfolios, glacier risk',
+      'data-tip-side': 'bottom',
+      onclick: () => ctx.setPanel('useCases', true),
+    },
+    icon('briefcase', 16),
+    h('span', null, 'Use cases'),
+  );
   const helpBtn = h(
     'button',
     {
@@ -186,7 +198,7 @@ export function createTopBar(ctx: UIContext, opts: { onTogglePanel(): void; isPa
   };
   queueMicrotask(syncPanelBtn);
 
-  const right = h('div', { class: 'dl-island dl-actions' }, perf, howBtn, helpBtn, panelBtn);
+  const right = h('div', { class: 'dl-island dl-actions' }, perf, useCasesBtn, howBtn, helpBtn, panelBtn);
 
   // Achieved speed (sim seconds per real second), measured as simulated time advanced over wall-clock time across
   // a few seconds of readbacks. (One frame's simulated seconds × the average frame rate over-reads whenever that
