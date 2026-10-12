@@ -1,4 +1,5 @@
 import { DEFAULT_SIM_PARAMS, type AppState } from '../contracts';
+import { CLIMATE_TODAY } from '../climate/scenarios';
 
 /** Tuning constants for the application loop. */
 export const APP_CONFIG = {
@@ -64,6 +65,7 @@ export function createInitialState(): AppState {
     sim: { ...DEFAULT_SIM_PARAMS },
     stageOffset: 0,
     stageOffsetApplied: 0,
+    climate: { ...CLIMATE_TODAY },
     render: {
       waterMode: 'realistic',
       verticalExaggeration: 1.5,

@@ -23,6 +23,7 @@
  */
 
 import type { HazardChainSpec, Rheology } from './hazard/types';
+import type { ClimateSelection } from './climate/scenarios';
 
 // ────────────────────────────────────────────────────────────────────────────────────────────
 // Geography / terrain data
@@ -887,6 +888,12 @@ export interface AppState {
    * every bank. Equal to stageOffset once the river has arrived.
    */
   stageOffsetApplied: number;
+  /**
+   * Extension: the future-climate selection (src/climate). A LAYER on the forcing the solver receives — rain, storm cells
+   * and rain-fed inflows scaled, sea-level rise added to a sea boundary, a glacial lake grown — while every field above
+   * keeps today's values, so the rain and stage sliders keep their meaning. Absent or horizon 'today' = the identity.
+   */
+  climate?: ClimateSelection;
   render: {
     waterMode: WaterViewMode;
     verticalExaggeration: number;
