@@ -404,6 +404,12 @@ a simulation. `Deluge.app` serves the same build with `frame-ancestors 'none'` a
   its real speed.
 * **Scheme.** Local-inertial with first-order upwind advection: excellent for floodplain inundation, less so for
   strongly supercritical flow (hydraulic jumps, violent dam breaks).
+* **Debris flows are one uniform material.** A hazard-chain preset swaps Manning for its debris-flow friction law
+  (Voellmy, O'Brien–Julien or Bingham; ARCHITECTURE.md §3.9) and raises the speed cap from 15 to 25 m/s, but the
+  material is the same everywhere and for the whole run: no sediment is carried, picked up or dropped, clear tributary
+  water does not dilute it, and the bed never changes. Yield stress and Coulomb friction stop flow on gentle ground —
+  that is how deposits form, and also why a Coulomb coefficient set for steep gorges (Voellmy μ 0.05 stops flow below
+  ~3°) holds a surge back on a flatter valley floor.
 * **Boundaries.** River stages are imposed where rivers cross the domain edge, with a small head that keeps the
   rivers flowing downstream; discharges at the 1936 crest are lower than the historic record.
 * **Coverage.** Live areas are US-only at full quality (USGS 3DEP); elsewhere the coarse Terrarium fallback is used.
