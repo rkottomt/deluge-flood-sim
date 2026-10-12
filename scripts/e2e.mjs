@@ -482,8 +482,8 @@ const FLOWS = [
       // The Try-it strip offers the demo moments in pitch order: Evacuate before the levee, so building the levee
       // (which replays the rise) visibly re-plans a route that is already on screen.
       if (PRESET === 'pittsburgh') {
-        const order = await D(() => [...document.querySelectorAll('.dl-try-step')].map((b) => b.dataset.step));
-        const labels = await D(() => [...document.querySelectorAll('.dl-try-step')].map((b) => b.textContent.trim()));
+        const order = await D(() => [...document.querySelectorAll('.dl-try-step:not([hidden])')].map((b) => b.dataset.step));
+        const labels = await D(() => [...document.querySelectorAll('.dl-try-step:not([hidden])')].map((b) => b.textContent.trim()));
         check(r, 'Try-it strip order: raise, evacuate, levee, rain', order.join(',') === 'flood,evac,levee,rain', labels.join(' · '));
       }
       await sleep(2600); // camera fly-in
@@ -1413,6 +1413,80 @@ const FLOWS = [
       await D(() => sessionStorage.removeItem('deluge:gpu-lost-reload-at'));
       await page.goto(ctx.appUrl, { waitUntil: 'domcontentloaded' });
       await waitReady(90_000);
+    },
+  },
+  {
+    id: 16,
+    name: 'Glacier hazard chain: the routed wave drives the map, the valley timeline follows it',
+    timeoutMs: 600_000,
+    async run(r) {
+      // src/app/hazardChain.ts runs the chain in a worker on load and swaps the preset's inflow for the routed wave;
+      // the panel's Hazard chain section and the valley timeline (src/ui/chainPanel.ts, chainTimeline.ts) draw it.
+      for (const id of ['nepal', 'chungthang']) {
+        await D((p) => window.__deluge.loadPreset(p), id);
+        const t0 = Date.now();
+        const ready = await page
+          .waitForFunction(() => window.__deluge.getHazardChain()?.status === 'ready', null, { timeout: 120_000 })
+          .then(() => true, () => false);
+        const chain = await D(() => window.__deluge.getHazardChain());
+        r.metrics[id] = { chainSeconds: (Date.now() - t0) / 1000, status: chain?.status, offset: chain?.offset, entryFront: chain?.entryFront, entryPeak: chain?.entryPeak, error: chain?.error };
+        check(r, `${id}: chain ran in the worker (run + 27-member ensemble)`, ready && !!chain?.bands, `${chain?.status} in ${((Date.now() - t0) / 1000).toFixed(1)} s, edge peak ${num(chain?.entryPeak ?? NaN, 0)} m³/s`);
+        const sources = await D(() => window.__deluge.getState().sources.map((s) => ({ id: s.id, n: s.hydrograph?.length ?? 0 })));
+        check(r, `${id}: the map's inflow is the routed hydrograph`, sources.some((s) => s.id === 'chain-inflow' && s.n > 3), JSON.stringify(sources));
+
+        const ui = await D(() => {
+          const vis = (el) => !!el && !el.hidden && el.getClientRects().length > 0 && getComputedStyle(el).display !== 'none';
+          const sec = document.querySelector('[data-section="chain"]');
+          const line = document.querySelector('.dl-chainline');
+          const step = (k) => vis(document.querySelector(`.dl-try-step[data-step="${k}"]`));
+          return {
+            section: vis(sec),
+            results: sec?.querySelectorAll('.dl-chain-kv').length ?? 0,
+            provenance: [...(sec?.querySelectorAll('.dl-prov') ?? [])].map((b) => b.textContent),
+            timeline: vis(line),
+            svgs: line?.querySelectorAll('svg.dl-cl-svg').length ?? 0,
+            markers: line?.querySelectorAll('.dl-cl-st').length ?? 0,
+            chips: line?.querySelectorAll('.dl-cl-chipbox').length ?? 0,
+            eventClock: document.querySelector('.dl-clock-event')?.textContent ?? '',
+            steps: { flood: step('flood'), arrival: step('arrival'), evac: step('evac'), rain: step('rain'), levee: step('levee') },
+            floodLabel: document.querySelector('.dl-try-step[data-step="flood"]')?.textContent ?? '',
+          };
+        });
+        r.metrics[id].ui = ui;
+        check(r, `${id}: Hazard chain section with results and provenance badges`, ui.section && ui.results >= 2 && ui.provenance.includes('modelled') && ui.provenance.includes('observed'), `${ui.results} results, badges ${[...new Set(ui.provenance)].join('/')}`);
+        check(r, `${id}: valley timeline with profile, hydrograph and stations`, ui.timeline && ui.svgs === 2 && ui.markers >= 4 && ui.chips >= 3, `${ui.svgs} svg, ${ui.markers} markers, ${ui.chips} chips`);
+        check(r, `${id}: the real event clock in the top bar`, /\d{4} \d\d:\d\d.(NPT|IST)$/.test(ui.eventClock.replace(/\u00a0/g, ' ')), ui.eventClock);
+        check(r, `${id}: Try-it offers the glacier steps, no hurricane rain or levee`, ui.steps.flood && ui.steps.arrival && ui.steps.evac && !ui.steps.rain && !ui.steps.levee && /Release the flood/.test(ui.floodLabel), JSON.stringify(ui.steps));
+
+        // Advance the flood until every station the front reaches inside the map has been passed.
+        const runS = Math.min(3600, Math.max(300, ...chain.stations.filter((s) => Number.isFinite(s.tFront)).map((s) => s.tFront - chain.offset + 60)));
+        await D(() => {
+          window.__deluge.setPaused(false);
+          window.__deluge.actions.resetWater();
+        });
+        await D(() => window.__deluge.waitFrames(4));
+        const read = () =>
+          D(() => ({
+            x: Number(document.querySelector('.dl-cl-frontline')?.getAttribute('x1') ?? NaN),
+            passed: document.querySelectorAll('.dl-cl-chipbox.dl-cl-passed').length,
+            chips: document.querySelectorAll('.dl-cl-chipbox').length,
+            clock: document.querySelector('.dl-cl-clock')?.textContent ?? '',
+            t: window.__deluge.getStats()?.simTime ?? 0,
+          }));
+        const before = await read();
+        if (id === 'nepal') await shot('16-nepal-start');
+        await runFor(runS);
+        await sleep(400); // the timeline updates at ≤ 10 Hz
+        const after = await read();
+        r.metrics[id].timeline = { runS, before, after };
+        check(r, `${id}: stations light up as the front passes`, after.passed > before.passed, `${before.passed} → ${after.passed} of ${after.chips} lit after ${Math.round(runS)} s`);
+        check(r, `${id}: the front moved down the valley`, after.x > before.x, `x ${num(before.x, 1)} → ${num(after.x, 1)} px; clock ${before.clock} → ${after.clock}`);
+        await shot(`16-${id}-timeline`);
+        await page.locator('.dl-chainline').screenshot({ path: path.join(OUT, `16-${id}-strip.png`) });
+        await D(() => document.querySelector('[data-section="chain"]')?.scrollIntoView());
+        await sleep(300);
+        await page.locator('[data-section="chain"]').screenshot({ path: path.join(OUT, `16-${id}-panel.png`) });
+      }
     },
   },
 ];

@@ -8,6 +8,8 @@ import { icon, iconMarkup, logoMark } from './icons';
 import { segmented } from './controls';
 import { formatClock, fmtNum, formatSpeedup, formatSubsteps } from './format';
 import { SpeedEstimator, speedShortfall } from './stats';
+import { bridgeFor } from './bridge';
+import { formatEventTime, parseEventClock } from './chainTime';
 
 export const SPEEDS: Array<{ value: number; label: string; tip: string }> = [
   { value: 1, label: '1×', tip: 'Real time — one second of flood per second' },
@@ -70,10 +72,27 @@ export function createTopBar(ctx: UIContext, opts: { onTogglePanel(): void; isPa
 
   const clockValue = h('span', { class: 'dl-clock-value' }, 'T+00:00:00');
   const clockState = h('span', { class: 'dl-clock-label' }, 'TIME');
-  const clock = h('div', { class: 'dl-clock', 'data-tip': 'How long the flood has been running', 'data-tip-side': 'bottom' }, clockState, clockValue);
+  // A real event (a hazard chain with a clock zero) also shows its own wall clock: "26 Aug 2026 09:14 NPT".
+  const eventClock = h('span', { class: 'dl-clock-event', hidden: true });
+  const clock = h('div', { class: 'dl-clock', 'data-tip': 'How long the flood has been running', 'data-tip-side': 'bottom' }, clockState, clockValue, eventClock);
   bind(
     (s) => formatClock(s.stats?.simTime ?? 0),
     (v) => setText(clockValue, v),
+  );
+  const bridge = bridgeFor(store);
+  const syncEventClock = () => {
+    const c = bridge.chain;
+    const zero = parseEventClock(c?.file?.clockZero);
+    const show = !!zero && !!c?.result;
+    eventClock.hidden = !show;
+    toggleClass(clock, 'dl-clock-has-event', show);
+    clock.dataset.tip = show ? 'Time since the map’s flood started (T+) and the event’s local time it stands for' : 'How long the flood has been running';
+    if (show) setText(eventClock, formatEventTime(zero!, c!.offset + (store.get().stats?.simTime ?? 0), { date: true }));
+  };
+  ctx.own(bridge.chainChanged.on(syncEventClock));
+  bind(
+    (s) => Math.floor(s.stats?.simTime ?? 0),
+    () => syncEventClock(),
   );
   bind(
     (s) => (s.loading ? 'LOADING' : s.paused ? 'PAUSED' : 'TIME'),

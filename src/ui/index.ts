@@ -21,6 +21,7 @@ import { createLocationPicker } from './locationPicker';
 import { installKeyboard } from './keyboard';
 import { createWelcome } from './welcome';
 import { createRouteChip } from './routeChip';
+import { createChainTimeline } from './chainTimeline';
 import { createTutorial } from './tutorial';
 import { selectTool } from './toolDefs';
 
@@ -73,7 +74,9 @@ export function mountUI(root: HTMLElement, store: Store, actions: AppActions): v
   const hud = createHud(ctx, topbar.achievedSpeed);
   const probe = createProbeTooltip(ctx);
   const routeChip = createRouteChip(ctx, { reveal: () => panel.reveal('evac') });
-  const notices = createNotices(ctx, { top: [createWelcome(ctx)], bottom: [routeChip] });
+  // The valley timeline sits at the bottom of the map strip, under the route chip (the column stacks upwards).
+  const chainline = createChainTimeline(ctx);
+  const notices = createNotices(ctx, { top: [createWelcome(ctx)], bottom: [chainline.el, routeChip] });
   const loading = createLoadingOverlay(ctx);
   const tutorial = createTutorial(ctx);
   ctx.startTutorial = () => tutorial.start();
