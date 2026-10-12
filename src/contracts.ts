@@ -22,6 +22,8 @@
  *  • Elevations are meters above the vertical datum (NAVD88 for USGS data).
  */
 
+import type { HazardChainSpec } from './hazard/types';
+
 // ────────────────────────────────────────────────────────────────────────────────────────────
 // Geography / terrain data
 // ────────────────────────────────────────────────────────────────────────────────────────────
@@ -203,6 +205,12 @@ export interface ScenarioPreset {
    * segment reaches `crest`, so it holds the scenario's most dramatic flood (see src/ui/levee.ts).
    */
   levee?: DemoLevee;
+  /**
+   * Extension: the glacier hazard chain that produces this scenario's flood upstream of the domain (src/hazard/types.ts):
+   * source → outflow hydrograph → 1-D routing down the valley → the inflow at the domain edge, with its warning lead
+   * times and the rheology the 2-D solver should use.
+   */
+  hazardChain?: HazardChainSpec;
 }
 
 /** A demo levee (ScenarioPreset.levee). */
