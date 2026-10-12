@@ -1,11 +1,23 @@
 /**
  * Forcing packing: cached footprints (the solver re-packs on every stage step) match the direct evaluation, and a
- * timed inflow (WaterSource.stopAfter) delivers exactly Q·stopAfter however the run is chunked.
+ * timed inflow (WaterSource.stopAfter) delivers exactly Q·stopAfter, and a hydrograph exactly ∫Q dt, however the run is
+ * chunked.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { WaterSource } from '../../src/contracts';
-import { footprintRadius, footprintWeight, inflowFactor, packForcing, sourceFootprint } from '../../src/sim/forcing';
+import {
+  footprintRadius,
+  footprintWeight,
+  hydrographAt,
+  hydrographVolume,
+  inflowFactor,
+  inflowVariesUntil,
+  meanInflow,
+  packForcing,
+  peakInflow,
+  sourceFootprint,
+} from '../../src/sim/forcing';
 
 test('source footprints: exactly the cells with weight > 0, in row-major order, clipped to the grid', () => {
   const nx = 80;
@@ -123,4 +135,72 @@ test('an untimed inflow never stops, and a stopAfter on one source leaves the ot
   const at = (from: number, to: number) => packForcing(sources, [], nx, ny, 4, 0, (c) => bed[c], undefined, { from, to }).inflowTotal;
   assert.equal(at(0, 10), 107);
   assert.equal(at(100, 110), 7, 'the untimed source still delivers after the timed one has stopped');
+});
+
+test('hydrograph: linear between points, flat beyond them, and its volume is the exact area under the curve', () => {
+  // A GLOF-like wave: nothing, a fast rise to 2,000 m³/s, a slower fall, and a 50 m³/s tail that never ends.
+  const h = [
+    { t: 0, q: 0 },
+    { t: 600, q: 2000 },
+    { t: 2400, q: 200 },
+    { t: 3000, q: 50 },
+  ];
+  assert.equal(hydrographAt(h, -10), 0);
+  assert.equal(hydrographAt(h, 300), 1000);
+  assert.equal(hydrographAt(h, 600), 2000);
+  assert.equal(hydrographAt(h, 1500), 1100);
+  assert.equal(hydrographAt(h, 1e6), 50);
+  // Trapezoids: 0.5·2000·600 + 0.5·(2000+200)·1800 + 0.5·(200+50)·600 = 600k + 1.98M + 75k.
+  assert.equal(hydrographVolume(h, 0, 3000), 2_655_000);
+  // Additive over any split, including splits that fall between breakpoints, and the flat tail is a rectangle.
+  assert.ok(Math.abs(hydrographVolume(h, 0, 1234.5) + hydrographVolume(h, 1234.5, 3000) - 2_655_000) < 1e-6);
+  assert.equal(hydrographVolume(h, 3000, 3100), 5000);
+  assert.equal(hydrographVolume(h, 50, 50), 0);
+});
+
+test('meanInflow: a hydrograph delivers exactly ∫Q dt whatever the frame size; a stopAfter still cuts it off', () => {
+  const hydrograph = [
+    { t: 0, q: 0 },
+    { t: 600, q: 2000 },
+    { t: 2400, q: 200 },
+    { t: 3000, q: 0 },
+  ];
+  const want = 0.5 * 2000 * 600 + 0.5 * 2200 * 1800 + 0.5 * 200 * 600;
+  for (const span of [0.05, 1, 7, 60, 173, 900, 2400]) {
+    let delivered = 0;
+    for (let t = 0; t < 6000; t += span) delivered += meanInflow({ discharge: 2000, hydrograph }, t, t + span) * span;
+    assert.ok(Math.abs(delivered - want) < 1e-9 * want, `frames of ${span} s delivered ${delivered} m³, want ${want}`);
+  }
+  // Cut off at 600 s: only the rising limb.
+  let cut = 0;
+  for (let t = 0; t < 6000; t += 7) cut += meanInflow({ discharge: 2000, hydrograph, stopAfter: 600 }, t, t + 7) * 7;
+  assert.ok(Math.abs(cut - 600_000) < 1e-6, `stopped at 600 s: ${cut}`);
+  // Paused: the instant decides.
+  assert.equal(meanInflow({ discharge: 2000, hydrograph }, 300, 300), 1000);
+  assert.equal(meanInflow({ discharge: 2000, hydrograph, stopAfter: 100 }, 300, 300), 0);
+  // No hydrograph: exactly the old constant behaviour, bit for bit.
+  for (const [from, to] of [[0, 60], [1790, 1810], [1800, 1860], [5, 5]])
+    assert.equal(meanInflow({ discharge: 11100, stopAfter: 1800 }, from, to), 11100 * inflowFactor(1800, from, to));
+  // Junk points are dropped, negative flow clamped, unsorted input sorted; nothing usable → the constant discharge.
+  assert.equal(meanInflow({ discharge: 5, hydrograph: [{ t: 10, q: -4 }, { t: NaN, q: 9 }, { t: 0, q: 8 }] }, 0, 0), 8);
+  assert.equal(meanInflow({ discharge: 5, hydrograph: [{ t: 10, q: -4 }, { t: 0, q: 8 }] }, 10, 10), 0);
+  assert.equal(meanInflow({ discharge: 5, hydrograph: [{ t: NaN, q: 1 }] }, 0, 10), 5);
+});
+
+test('inflowVariesUntil and peakInflow: when re-packing can stop, and the flow a rising limb is about to reach', () => {
+  const hydrograph = [
+    { t: 0, q: 10 },
+    { t: 600, q: 2000 },
+    { t: 3000, q: 50 },
+  ];
+  assert.equal(inflowVariesUntil({ discharge: 7 }), 0, 'a constant inflow never needs re-packing');
+  assert.equal(inflowVariesUntil({ discharge: 7, stopAfter: 1800 }), 1800);
+  assert.equal(inflowVariesUntil({ discharge: 2000, hydrograph }), 3000);
+  assert.equal(inflowVariesUntil({ discharge: 2000, hydrograph, stopAfter: 1200 }), 1200);
+  // The peak between two breakpoints' neighbours is the breakpoint itself.
+  assert.equal(peakInflow({ discharge: 2000, hydrograph }, 0, 120), 10 + (1990 * 120) / 600);
+  assert.equal(peakInflow({ discharge: 2000, hydrograph }, 500, 700), 2000);
+  assert.equal(peakInflow({ discharge: 2000, hydrograph }, 5000, 5100), 50);
+  assert.equal(peakInflow({ discharge: 2000, hydrograph, stopAfter: 400 }, 500, 700), 0, 'stopped: nothing ahead');
+  assert.equal(peakInflow({ discharge: 300 }, 0, 120), 300);
 });

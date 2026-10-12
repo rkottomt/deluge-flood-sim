@@ -61,7 +61,10 @@ import {
   WET_DEPTH,
   type SolverOptions,
 } from './constants';
-import { footprintRadius, inflowFactor, packForcing, sourceFootprint, type ForcingWindow, type Footprint, type PackedForcing } from './forcing';
+import { footprintRadius, inflowVariesUntil, packForcing, peakInflow, sourceFootprint, type ForcingWindow, type Footprint, type PackedForcing } from './forcing';
+
+/** How far ahead (simulated s) the CFL estimate looks along an inflow hydrograph for the flow it is about to reach. */
+const HYDROGRAPH_LOOKAHEAD_S = 120;
 import { brushWGSL, BRUSH_UNIFORM_BYTES } from './shaders/brush';
 import { ACC_PER_CELL, FORCING_UNIFORM_BYTES, SIM_UNIFORM_BYTES } from './shaders/common';
 import { continuityWGSL } from './shaders/continuity';
@@ -188,8 +191,9 @@ export class GpuFloodSolver implements FloodSolver {
   private sourcesChanged = false;
   private warnedDropped = false;
   /**
-   * Latest WaterSource.stopAfter among the inflow sources, simulated seconds (0 = none of them is timed). While the
-   * stop is still ahead of the frame last packed, the forcing is re-packed every frame — see gateTimedInflow.
+   * Latest simulated time at which an inflow's discharge still changes — its stopAfter, or the end of its hydrograph
+   * (0 = every inflow is constant). While that is still ahead of the frame last packed, the forcing is re-packed every
+   * frame — see gateTimedInflow.
    */
   private inflowStopAt = 0;
   /** Simulated-time window the packed forcing was built for (null = t = 0, i.e. nothing has stopped yet). */
@@ -584,9 +588,7 @@ export class GpuFloodSolver implements FloodSolver {
   setSources(sources: WaterSource[]): void {
     this.sources = sources.map((s) => ({ ...s }));
     let stopAt = 0;
-    for (const s of this.sources) {
-      if (s.type === 'inflow' && s.stopAfter !== undefined && Number.isFinite(s.stopAfter) && s.stopAfter > stopAt) stopAt = s.stopAfter;
-    }
+    for (const s of this.sources) if (s.type === 'inflow') stopAt = Math.max(stopAt, inflowVariesUntil(s));
     this.inflowStopAt = stopAt;
     // A zero-length window at the current time: a source added mid-run is gated by where the clock already is, and
     // the next frame replaces this with its own window.
@@ -1261,16 +1263,13 @@ export class GpuFloodSolver implements FloodSolver {
    *    Δh from the latest snapshot's depth (the initial water right after a reset).
    */
   private forcingSpeedEstimate(): number {
-    const { cellSize, ground, barrier } = this;
+    const { ground, barrier } = this;
     const depth = this.snapshot?.depth ?? this.initialDepth;
     let u = 0;
     for (const s of this.sources.slice(0, MAX_SOURCES)) {
       const R = footprintRadius(s.radius);
       if (s.type === 'inflow') {
-        // A timed inflow that has already stopped is not about to produce anything (inflowFactor at the clock's
-        // current instant is 0), so it must not hold the timestep down for the rest of the run.
-        const Q = (Number.isFinite(s.discharge) ? Math.max(0, s.discharge) : 0) * inflowFactor(s.stopAfter, this.simTime, this.simTime);
-        if (Q > 0) u = Math.max(u, 2 * Math.cbrt((GRAVITY * Q) / (2 * Math.PI * (R + 0.5) * cellSize)));
+        u = Math.max(u, this.inflowSpeed(s, R, this.simTime));
         continue;
       }
       if (!Number.isFinite(s.level)) continue;
@@ -1286,8 +1285,19 @@ export class GpuFloodSolver implements FloodSolver {
   }
 
   /**
+   * Spill speed of one inflow (see forcingSpeedEstimate) at the largest discharge it reaches from `from` to
+   * HYDROGRAPH_LOOKAHEAD_S later. A timed inflow that has already stopped is not about to produce anything, so it
+   * must not hold the timestep down for the rest of the run; a rising hydrograph is judged by the flow it is about
+   * to reach, not the trickle it starts from.
+   */
+  private inflowSpeed(s: WaterSource & { type: 'inflow' }, R: number, from: number): number {
+    const Q = peakInflow(s, from, from + HYDROGRAPH_LOOKAHEAD_S);
+    return Q > 0 ? 2 * Math.cbrt((GRAVITY * Q) / (2 * Math.PI * (R + 0.5) * this.cellSize)) : 0;
+  }
+
+  /**
    * Point the packed forcing at the window this frame is about to cover, so a timed inflow (WaterSource.stopAfter)
-   * delivers exactly Q·stopAfter and then nothing.
+   * delivers exactly Q·stopAfter and then nothing, and a hydrograph delivers exactly ∫Q dt.
    *
    * Called from encodeFrame only — the writeSimUniform(0) that keeps stateTexture current after a brush or a reset
    * steps no time and must not move the window. Re-packing stops once the window already packed starts after the
@@ -1299,6 +1309,17 @@ export class GpuFloodSolver implements FloodSolver {
     if (packed && packed.from >= this.inflowStopAt) return;
     this.forcingWindow = { from: this.simTime, to: this.simTime + Math.max(0, span) };
     this.forcingDirty = true;
+    // A rising hydrograph releases faster flow than any readback has seen yet: boost the CFL estimate ahead of it,
+    // as a source change does. Constant and merely stopping inflows never raise this above what they started with.
+    let u = 0;
+    for (const s of this.sources.slice(0, MAX_SOURCES)) {
+      if (s.type === 'inflow' && s.hydrograph) u = Math.max(u, this.inflowSpeed(s, footprintRadius(s.radius), this.simTime));
+    }
+    u = Math.min(u, this.options.uMax);
+    if (u > this.uRead && u > this.uBoost) {
+      this.uBoost = u;
+      this.uBoostTime = this.simTime;
+    }
   }
 
   private packForcingNow(): PackedForcing {

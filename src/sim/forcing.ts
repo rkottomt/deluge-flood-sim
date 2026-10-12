@@ -8,7 +8,7 @@
  *                                       stage : target water-surface elevation relative to the datum z0
  *   storm[k]  = (gx, gy, R, rate m/s)
  */
-import type { StormCell, WaterSource } from '../contracts';
+import type { HydrographPoint, StormCell, WaterSource } from '../contracts';
 import { MAX_SOURCES, MAX_STORMS, MIN_FOOTPRINT_RADIUS, MMHR_TO_MS } from './constants';
 
 export const FORCING_FLOATS = (2 * MAX_SOURCES + MAX_STORMS) * 4;
@@ -55,6 +55,109 @@ export function inflowFactor(stopAfter: number | undefined, from: number, to: nu
   const stop = Math.max(0, stopAfter);
   if (!(to > from)) return from < stop ? 1 : 0;
   return Math.min(1, Math.max(0, (stop - from) / (to - from)));
+}
+
+/** A timed or hydrograph inflow, as far as its delivery over time goes (a subset of the inflow WaterSource). */
+export interface InflowTiming {
+  discharge: number;
+  stopAfter?: number;
+  hydrograph?: readonly HydrographPoint[];
+}
+
+/**
+ * The usable points of a hydrograph, sorted by time: non-finite points are dropped and negative discharges clamped
+ * to 0. Null when fewer than one point survives (the source then falls back to its constant `discharge`).
+ */
+export function cleanHydrograph(points: readonly HydrographPoint[] | undefined): HydrographPoint[] | null {
+  if (!points || points.length === 0) return null;
+  const out: HydrographPoint[] = [];
+  for (const p of points) {
+    if (!p || !Number.isFinite(p.t) || !Number.isFinite(p.q)) continue;
+    out.push({ t: p.t, q: Math.max(0, p.q) });
+  }
+  if (out.length === 0) return null;
+  out.sort((a, b) => a.t - b.t);
+  return out;
+}
+
+/** Discharge of a cleaned hydrograph at time t: linear between points, held flat before the first and after the last. */
+export function hydrographAt(h: readonly HydrographPoint[], t: number): number {
+  const n = h.length;
+  if (t <= h[0].t) return h[0].q;
+  if (t >= h[n - 1].t) return h[n - 1].q;
+  let lo = 0;
+  let hi = n - 1;
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    if (h[mid].t <= t) lo = mid;
+    else hi = mid;
+  }
+  const a = h[lo];
+  const b = h[hi];
+  const span = b.t - a.t;
+  return span > 0 ? a.q + ((b.q - a.q) * (t - a.t)) / span : b.q;
+}
+
+/**
+ * ∫ Q dt over [a, b] (a ≤ b) of a cleaned hydrograph, m³ — exact for the piecewise-linear curve: each piece is a
+ * trapezoid, the flat tails are rectangles.
+ */
+export function hydrographVolume(h: readonly HydrographPoint[], a: number, b: number): number {
+  if (!(b > a)) return 0;
+  // Breakpoints inside (a, b), with the window's own ends: Q is linear between consecutive ones.
+  let v = 0;
+  let t0 = a;
+  let q0 = hydrographAt(h, a);
+  for (const p of h) {
+    if (p.t <= a) continue;
+    if (p.t >= b) break;
+    v += 0.5 * (q0 + p.q) * (p.t - t0);
+    t0 = p.t;
+    q0 = p.q;
+  }
+  v += 0.5 * (q0 + hydrographAt(h, b)) * (b - t0);
+  return v;
+}
+
+/**
+ * Mean discharge an inflow delivers over the window [from, to], m³/s, so the volume booked into the grid is exactly
+ * ∫ Q dt however the run is chunked into frames. A constant source (no hydrograph) is `discharge · inflowFactor`, the
+ * pre-hydrograph behaviour bit for bit. With a hydrograph Q(t) is piecewise linear in simulated time, and a
+ * `stopAfter` still cuts it off. A zero-length window (paused) reads Q at the instant itself.
+ */
+export function meanInflow(s: InflowTiming, from: number, to: number): number {
+  const h = cleanHydrograph(s.hydrograph);
+  if (!h) {
+    const q = Number.isFinite(s.discharge) ? s.discharge : 0;
+    return q * inflowFactor(s.stopAfter, from, to);
+  }
+  const stop = s.stopAfter !== undefined && Number.isFinite(s.stopAfter) ? Math.max(0, s.stopAfter) : Infinity;
+  if (!(to > from)) return from < stop ? hydrographAt(h, from) : 0;
+  return hydrographVolume(h, from, Math.min(to, stop)) / (to - from);
+}
+
+/**
+ * The simulated time after which an inflow's discharge no longer changes (0 = constant from the start): its stop, or
+ * the last point of its hydrograph, whichever comes first. The solver re-packs the forcing every frame until then.
+ */
+export function inflowVariesUntil(s: InflowTiming): number {
+  const stop = s.stopAfter !== undefined && Number.isFinite(s.stopAfter) ? Math.max(0, s.stopAfter) : Infinity;
+  const h = cleanHydrograph(s.hydrograph);
+  const last = h ? h[h.length - 1].t : 0;
+  const until = h ? Math.min(stop, last) : stop;
+  return Number.isFinite(until) ? Math.max(0, until) : 0;
+}
+
+/** The largest discharge an inflow reaches anywhere in [from, to], m³/s (for the CFL estimate). */
+export function peakInflow(s: InflowTiming, from: number, to: number): number {
+  const h = cleanHydrograph(s.hydrograph);
+  const stop = s.stopAfter !== undefined && Number.isFinite(s.stopAfter) ? Math.max(0, s.stopAfter) : Infinity;
+  if (from >= stop) return 0;
+  const end = Math.min(to, stop);
+  if (!h) return Math.max(0, Number.isFinite(s.discharge) ? s.discharge : 0);
+  let q = Math.max(hydrographAt(h, from), hydrographAt(h, Math.max(from, end)));
+  for (const p of h) if (p.t > from && p.t < end) q = Math.max(q, p.q);
+  return q;
 }
 
 /** The cells (row-major indices) where a source footprint has weight > 0, in row-major order, with their weights. */
@@ -147,8 +250,7 @@ export function packForcing(
     data[o + 1] = s.gy;
     data[o + 2] = R;
     if (s.type === 'inflow') {
-      const gate = inflowFactor(s.stopAfter, window?.from ?? 0, window?.to ?? 0);
-      const q = (Number.isFinite(s.discharge) ? s.discharge : 0) * gate;
+      const q = meanInflow(s, window?.from ?? 0, window?.to ?? 0);
       data[o + 3] = 0;
       data[o + 4] = q / (wSum * cellArea);
       inflowTotal += q;

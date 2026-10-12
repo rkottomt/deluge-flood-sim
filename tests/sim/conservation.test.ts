@@ -109,6 +109,49 @@ test('a timed inflow delivers exactly Q·stopAfter and then nothing (WaterSource
   solver.destroy();
 });
 
+test('a hydrograph inflow delivers exactly the area under its curve, chunked across its breakpoints (WaterSource.hydrograph)', async () => {
+  /*
+   * A glacial-lake outburst is a wave — a fast rise, a slower fall — and its peak, volume and timing all matter
+   * downstream. Scaled to a 64² walled grid: 0 → 40 m³/s over 60 s, down to 4 m³/s at 240 s, then nothing. The chunks
+   * are uneven and every one of them straddles a breakpoint, the case a per-frame "Q at the frame start" gets wrong.
+   */
+  const nx = 64;
+  const ny = 64;
+  const elevation = roughTerrain(nx, ny, 11, 6, 80);
+  const solver = await makeSolver({ nx, ny, cellSize: 5, elevation, params: { boundary: 'wall' } });
+  const hydrograph = [
+    { t: 0, q: 0 },
+    { t: 60, q: 40 },
+    { t: 240, q: 4 },
+    { t: 300, q: 0 },
+  ];
+  solver.setSources([{ id: 'glof', type: 'inflow', gx: 32.5, gy: 8.5, radius: 4, discharge: 40, hydrograph }]);
+  const volumeAt = (t: number) => {
+    let v = 0;
+    for (let k = 1; k < hydrograph.length; k++) {
+      const a = hydrograph[k - 1];
+      const b = hydrograph[k];
+      if (t <= a.t) break;
+      const e = Math.min(t, b.t);
+      const qe = a.q + ((b.q - a.q) * (e - a.t)) / (b.t - a.t);
+      v += 0.5 * (a.q + qe) * (e - a.t);
+    }
+    return v;
+  };
+  const total = volumeAt(300);
+  let snap = await stepAndSnapshot(solver, 175, { dt: 0.2 }); // 35 s: rising limb
+  assert.ok(Math.abs(snap.stats.volumeIn - volumeAt(snap.simTime)) < 0.005 * volumeAt(snap.simTime), `at ${snap.simTime} s: ${snap.stats.volumeIn} m³ vs ${volumeAt(snap.simTime)}`);
+  snap = await stepAndSnapshot(solver, 600, { dt: 0.2 }); // → 155 s: across the peak
+  assert.ok(Math.abs(snap.stats.volumeIn - volumeAt(snap.simTime)) < 0.005 * total, `at ${snap.simTime} s: ${snap.stats.volumeIn} m³ vs ${volumeAt(snap.simTime)}`);
+  snap = await stepAndSnapshot(solver, 2000, { dt: 0.2 }); // → 555 s: across the last two breakpoints and long after
+  console.log(`  hydrograph: ∫Q dt = ${total.toFixed(1)} m³, accounted ${snap.stats.volumeIn.toFixed(1)} m³, stored ${snap.stats.volume.toFixed(1)} m³`);
+  assert.ok(Math.abs(snap.stats.volumeIn - total) < 0.005 * total, `delivered ${snap.stats.volumeIn} m³, want ${total}`);
+  assert.equal(snap.stats.volumeOut, 0);
+  assert.ok(Math.abs(snap.stats.volume - total) < 0.01 * total, `stored ${snap.stats.volume} m³ vs delivered ${total}`);
+  assert.deepEqual(gpuErrors(), []);
+  solver.destroy();
+});
+
 test('SimStats.massError < 1e-3 in an open domain with rain, storm, inflow, stage and infiltration', async () => {
   const nx = 128;
   const ny = 128;

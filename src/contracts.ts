@@ -259,6 +259,15 @@ export type WaterSource =
        * depend on the frame size (src/sim/forcing.ts inflowFactor).
        */
       stopAfter?: number;
+      /**
+       * Extension: a discharge hydrograph Q(t) in simulated seconds since reset — piecewise linear between points, held
+       * flat before the first and after the last. When present it replaces `discharge` as what is delivered (keep
+       * `discharge` at the peak: labels and the CFL estimate's fallback read it); `stopAfter` still cuts it off.
+       * A glacial-lake outburst or a breach is a rising-then-falling wave, not a constant flow: its volume, peak and
+       * timing all matter downstream. Delivery is exact: each frame gets ∫Q dt over its own window (src/sim/forcing.ts
+       * meanInflow), so the total is the area under the curve however the run is chunked.
+       */
+      hydrograph?: HydrographPoint[];
       label?: string;
     }
   | {
@@ -279,6 +288,12 @@ export type WaterSource =
       offsetScale?: number;
       label?: string;
     };
+
+/** A point of an inflow hydrograph (WaterSource.hydrograph): discharge `q` (m³/s) at simulated time `t` (s). */
+export interface HydrographPoint {
+  t: number;
+  q: number;
+}
 
 /** Localized storm: rain rate falls off smoothly (e.g. gaussian/smoothstep) to 0 at `radius`. */
 export interface StormCell {
