@@ -23,6 +23,8 @@ import { listPresets, loadPreset } from '../../src/data/index';
 import { decodeElevation, type PresetMeta, setPresetBaseUrl, validatePresetMeta } from '../../src/data/presets';
 import { type CompactRoads, decodeRoads } from '../../src/data/roads';
 import { generateSandbox } from '../../src/data/sandbox';
+import type { ChainFile } from '../../src/hazard/types';
+import { hydrographVolume } from '../../src/sim/forcing';
 
 const ROOT = path.resolve(import.meta.dirname, '../../public/presets');
 const FT = 0.3048;
@@ -36,9 +38,11 @@ const BAKED_US = ['pittsburgh', 'johnstown', 'ellicott', 'asheville', 'nashville
  * redistribute (public/presets/SOURCES.txt). They go through every structural check below; only the
  * imagery-and-agency assertions differ, and `isGlobal` marks where.
  */
-const BAKED_GLOBAL = ['nepal'];
+const BAKED_GLOBAL = ['nepal', 'chungthang'];
 const BAKED = [...BAKED_US, ...BAKED_GLOBAL];
 const isGlobal = (id: string) => BAKED_GLOBAL.includes(id);
+/** Presets with a glacier-hazard valley profile (scripts/bake-chain.ts). */
+const hasChain = (id: string) => fs.existsSync(path.join(ROOT, id, 'chain.json'));
 /*
  * public/presets is served from a public static host, so the whole directory has a size budget (MB).
  *
@@ -280,16 +284,43 @@ function checkScenario(
        * fits its footprint rather than the deepest, so the centre can sit a few decimetres above the lowest burned
        * cell beside it (here 722.1 m against 721.3 m, in a channel burned 4 m deep). A metre of slack accepts that
        * and still fails a footprint that has climbed onto a shelf or a bank.
+       *
+       * "Beside it" means ACROSS the channel — cells at the inflow's own distance from the edge (±1 cell), out to its
+       * radius either side. It used to be every cell in the footprint's square, which on a steep channel compares the
+       * centre with the bed half a footprint DOWNSTREAM: the Lachen Chu enters Chungthang at ~5 % and its 4.8-cell
+       * footprint spans ~3 m of fall along the river, so a centre exactly on the thalweg failed by the gradient alone.
+       * Across the channel the comparison is the one the comment above describes, for any slope.
        */
-      const floor = lowestNear(elevation, nx, ny, src.gx, src.gy, Math.ceil(src.radius));
+      const inward = edgeDist === src.gy ? [0, 1] : edgeDist === ny - src.gy ? [0, -1] : edgeDist === src.gx ? [1, 0] : [-1, 0];
+      let floor = Infinity;
+      const rr = Math.ceil(src.radius);
+      for (let a = -1; a <= 1; a++) {
+        for (let c = -rr; c <= rr; c++) {
+          const i = Math.floor(src.gx) + inward[0] * a + inward[1] * c;
+          const j = Math.floor(src.gy) + inward[1] * a + inward[0] * c;
+          if (i >= 0 && j >= 0 && i < nx && j < ny) floor = Math.min(floor, elevation[j * nx + i]);
+        }
+      }
       assert.ok(bed <= floor + 1, `${label}: inflow ${src.id} bed ${bed.toFixed(1)} m is ${(bed - floor).toFixed(1)} m above the channel floor beside it`);
       /*
        * And the channel must fall AWAY from it into the domain. This is the check that matters for a dry start: with
        * no water to show the way, an inflow on a reverse slope would pond at the boundary instead of running down the
        * valley, and nothing else here would notice.
        */
-      const inward = edgeDist === src.gy ? [0, 1] : edgeDist === ny - src.gy ? [0, -1] : edgeDist === src.gx ? [1, 0] : [-1, 0];
-      const downstream = lowestNear(elevation, nx, ny, src.gx + inward[0] * 64, src.gy + inward[1] * 64, 16);
+      /*
+       * "64 cells in" is a band, 48–80 cells from the edge and up to 64 cells either side of the inflow, not a 16-cell
+       * box straight ahead: a river can cross the edge at an angle (the Lachen Chu enters Chungthang heading
+       * south-east, and the box straight south of it is the valley wall), and what matters is that the channel falls
+       * away from the inflow somewhere a river could actually go.
+       */
+      let downstream = Infinity;
+      for (let a = 48; a <= 80; a++) {
+        for (let c = -64; c <= 64; c++) {
+          const i = Math.floor(src.gx) + inward[0] * a + inward[1] * c;
+          const j = Math.floor(src.gy) + inward[1] * a + inward[0] * c;
+          if (i >= 0 && j >= 0 && i < nx && j < ny) downstream = Math.min(downstream, elevation[j * nx + i]);
+        }
+      }
       assert.ok(downstream < bed - 1, `${label}: inflow ${src.id} at ${bed.toFixed(1)} m does not drain inward (bed ${downstream.toFixed(1)} m, 64 cells in)`);
       continue;
     }
@@ -470,7 +501,14 @@ for (const id of BAKED) {
      * edges — the Pasang Lhamu Highway and village lanes, drawn as long polylines — against >500 edges in any of the
      * US city domains, so the rural floor is lower on purpose.
      */
-    assert.ok(roads.edges.length > (isGlobal(id) ? 300 : 500), `real road network (${roads.edges.length} edges)`);
+    /*
+     * Chungthang's floor is lower again, and that is OpenStreetMap's coverage, not a parse failure: the nine OSM tiles
+     * over the domain carry 73 drivable ways — the North Sikkim Highway, the road towards Lachung and a few lanes,
+     * 34 km in 51 edges — next to ~1,170 unnamed buildings and not one school or clinic (counted from the cached
+     * extracts; public/presets/SOURCES.txt). The scenario text says the streets are sparse.
+     */
+    const floor = id === 'chungthang' ? 40 : isGlobal(id) ? 300 : 500;
+    assert.ok(roads.edges.length > floor, `real road network (${roads.edges.length} edges)`);
   });
 }
 
@@ -794,14 +832,14 @@ test('nepal: a labelled scenario hydrograph, sourced numbers, and the caveats on
   assert.doesNotMatch(names, /Kalika/);
 });
 
-test('nepal: the share of the domain the bare-earth filter skipped is the share the text claims', { skip: !fs.existsSync(path.join(ROOT, 'nepal/meta.json')) }, () => {
+for (const id of BAKED_GLOBAL) test(`${id}: the share of the domain the bare-earth filter skipped is the share the text claims`, { skip: !fs.existsSync(path.join(ROOT, id, 'meta.json')) }, () => {
   /*
    * The on-screen sentence says "77 % of this domain is steeper" than the filter's 20° gate. That number was measured
    * during the sweep (artifacts/nepal-build/out-bareearth-nepal.txt: 53 % at 20–35° plus 24 % over 35°), and an
    * artifact is not a guard — so recompute the gate's own test on the shipped elevation, the same ±2-cell slope
    * bareEarthFromSurface uses, and hold the claim to it.
    */
-  const { meta, elevation } = load('nepal');
+  const { meta, elevation } = load(id);
   const { nx, ny, cellSize } = meta;
   const g = 2;
   let steep = 0;
@@ -818,9 +856,109 @@ test('nepal: the share of the domain the bare-earth filter skipped is the share 
   }
   const pct = (100 * steep) / (nx * ny);
   const claim = Number(/([0-9]+) % of this domain is steeper/.exec(meta.scenario.description)?.[1]);
-  console.log(`  nepal: ${pct.toFixed(1)} % of cells steeper than the ${BARE_EARTH_DEFAULTS.slopeGate} m/m gate; the text claims ${claim} %`);
+  console.log(`  ${id}: ${pct.toFixed(1)} % of cells steeper than the ${BARE_EARTH_DEFAULTS.slopeGate} m/m gate; the text claims ${claim} %`);
   assert.ok(pct > 50, `only ${pct.toFixed(1)} % steep — the gate is not what leaves this domain unfiltered`);
   assert.ok(Math.abs(pct - claim) <= 2, `the text claims ${claim} %, the shipped DEM measures ${pct.toFixed(1)} %`);
+});
+
+const loadChain = (id: string) => JSON.parse(fs.readFileSync(path.join(ROOT, id, 'chain.json'), 'utf8')) as ChainFile;
+
+test('nepal: the hazard chain is the 2026 mechanism, timed against the NDRRMA series, beside an untouched scenario', { skip: !hasChain('nepal') }, () => {
+  /*
+   * The chain is ADDED to the Betrawati preset; the scenario a visitor runs today (one 11,100 m³/s inflow for 30
+   * minutes, asserted above) is not changed by it. What the chain must carry: the avalanche-dam mechanism (spec §C.3),
+   * the debris-flood rheology and 25 m/s cap (§I.3), the 09:15 SMS as the alert, and the published arrival times —
+   * every one of them tied to a station on the profile or marked as lying beyond it.
+   */
+  const { meta } = load('nepal');
+  const hc = meta.scenario.hazardChain!;
+  assert.equal(hc.trigger.kind, 'massIntoRiver');
+  assert.ok(hc.trigger.kind === 'massIntoRiver' && hc.trigger.mode === 'transientDam');
+  assert.deepEqual(hc.rheology, { kind: 'voellmy', mu: 0.05, xi: 500 });
+  assert.equal(hc.solver?.uMax, 25);
+  assert.equal(hc.alertTime, (9 * 60 + 15 - (8 * 60 + 37)) * 60, 'the 09:15 SMS, 38 minutes after 08:37');
+  const c = loadChain('nepal');
+  assert.equal(c.clockZero, '2026-08-26T08:37:00+05:45');
+  const obs = (st: string) => hc.observations!.find((o) => o.station === st && o.tFront !== undefined)!;
+  assert.equal(obs('Rasuwagadhi').tFront, 3 * 60);
+  assert.equal(obs('Betrawati').tFront, 43 * 60);
+  assert.equal(hc.observations!.find((o) => o.station === 'Devghat')!.qPeak, 5850);
+  // The hydropower plants of spec §G.1, with the capacities their sources give.
+  const mw = Object.fromEntries(c.stations.filter((st) => st.kind === 'hydro').map((st) => [st.name, st.capacityMW]));
+  assert.deepEqual(mw, {
+    'Rasuwagadhi HEP headworks': 111,
+    'Chilime HEP powerhouse': 22.1,
+    'Upper Trishuli-1 HEP (under construction)': 216,
+    'Upper Trishuli-3A HEP powerhouse': 60,
+    'Upper Trishuli-3B HEP powerhouse': 37,
+  });
+  // Order down the valley: source → Rasuwagadhi → Syafrubesi → domain edge → Betrawati (inside the 2-D domain).
+  const at = (name: string) => c.stations.find((st) => st.name === name)!.s;
+  assert.ok(at('Rasuwagadhi') < at('Syafrubesi') && at('Syafrubesi') < c.domainEntry.s && c.domainEntry.s < at('Betrawati'));
+  assert.equal(c.stations[0].kind, 'source');
+  // No weir crest is invented where no weir height was published.
+  assert.equal(c.structures.length, 0);
+  assert.equal(c.domainEntry.gx, 536.5);
+  assert.equal(c.domainEntry.gy, 8.5);
+});
+
+test('chungthang: a labelled placeholder hydrograph, the South Lhonak chain, and the caveats on screen', { skip: !fs.existsSync(path.join(ROOT, 'chungthang/meta.json')) }, () => {
+  const { meta } = load('chungthang');
+  const s = meta.scenario;
+  assert.equal(s.sources.length, 1, 'one forcing: the flood from upstream');
+  const src = s.sources[0];
+  assert.ok(src.type === 'inflow' && src.hydrograph && src.hydrograph.length > 10, 'a hydrograph inflow');
+  if (src.type !== 'inflow' || !src.hydrograph) return;
+  /*
+   * The placeholder carries the published numbers and nothing else: the HEC-RAS peak calibrated against the gauged
+   * Gazoldoba peak (7,355 m³/s) and the ~50 million m³ released at the lake (Sattar et al. 2025), on the spec's §B.4
+   * gamma shape — which is a SHAPE, so the label says the curve is parametric, not measured.
+   */
+  const peak = Math.max(...src.hydrograph.map((p) => p.q));
+  assert.equal(peak, 7355);
+  assert.equal(src.discharge, peak, 'discharge is the peak (labels and the CFL fallback read it)');
+  assert.equal(src.hydrograph[0].q, 0, 'the front arrives at t = 0, from nothing');
+  assert.equal(src.hydrograph[src.hydrograph.length - 1].q, 0, 'and the table closes at zero, so it is not held for ever');
+  const vol = hydrographVolume(src.hydrograph, 0, src.stopAfter ?? Infinity);
+  assert.ok(Math.abs(vol - 50e6) / 50e6 < 0.01, `the placeholder delivers ${(vol / 1e6).toFixed(2)} million m³, not the reported 50`);
+  assert.match(src.label!, /placeholder/);
+  assert.match(src.label!, /not a measured hydrograph/);
+  assert.match(s.description, /parametric placeholder, not a measured hydrograph/);
+  assert.match(s.description, /7,355 to 14,673 m³\/s/, 'the published range, not just the number used');
+  assert.match(s.description, /clock starts as the front reaches the north edge/);
+  assert.match(s.description, /surface model with canopy and buildings/);
+  assert.match(s.description, /flatter than 20°/);
+  assert.match(s.description, /do not read street-level depths/);
+  assert.match(s.description, /15 m\/s/);
+  const shown = `${meta.name} ${meta.subtitle} ${s.description} ${s.sources.map((x) => x.label ?? '').join(' ')}`;
+  assert.doesNotMatch(shown, /\b(dead|death|deaths|killed|casualt\w*|missing|bodies)/i, 'no casualty figures on screen');
+  assert.equal(s.stage, null);
+  assert.equal(meta.bake?.prefill, 'none');
+  assert.equal((meta.bake as { demSource?: string }).demSource, 'copernicus');
+
+  const hc = s.hazardChain!;
+  assert.ok(hc.trigger.kind === 'massIntoLake');
+  if (hc.trigger.kind !== 'massIntoLake') return;
+  assert.equal(hc.trigger.mass.volume, 14.7e6);
+  assert.equal(hc.trigger.lake.area, 1.674e6);
+  assert.equal(hc.trigger.breach.erosionRate, 100, 'trigger-driven breach, spec §B.3');
+  assert.equal(hc.solver?.uMax, 25);
+  const c = loadChain('chungthang');
+  assert.equal(c.clockZero, '2023-10-03T22:13:20+05:30');
+  assert.equal(hc.observations!.find((o) => o.station === 'Chungthang' && o.tFront !== undefined)!.tFront, 8200);
+  const at = (name: string) => c.stations.find((st) => st.name === name)!;
+  assert.equal(at('South Lhonak Lake').s, 0);
+  assert.equal(at('South Lhonak Lake').kind, 'lake');
+  assert.equal(at('Teesta-III dam').capacityMW, 1200);
+  // Published "~68 km" from the lake to Chungthang (Sattar et al. 2025); the OSM river measures it here.
+  assert.ok(at('Chungthang').s > 60_000 && at('Chungthang').s < 75_000, `Chungthang at ${at('Chungthang').s} m`);
+  assert.ok(at('Lachen').s < c.domainEntry.s && c.domainEntry.s < at('Chungthang').s);
+  // The lake outlet on the DEM is where the published lake level is.
+  assert.ok(Math.abs(c.zBed[0] - 5200) < 50, `profile starts at ${c.zBed[0]} m`);
+  const dam = c.structures.find((x) => x.name === 'Teesta-III dam')!;
+  const i = c.s.findIndex((v) => v >= dam.s);
+  assert.ok(Math.abs(dam.crest - (c.zBed[i] + 60)) < 0.6, 'crest = bed + the published 60 m');
+  assert.ok(dam.storage && dam.storage.length > 2);
 });
 
 test(`public/presets stays inside its ${PRESETS_BUDGET_MB} MB budget`, () => {
@@ -856,6 +994,114 @@ test(`public/presets stays inside its ${PRESETS_BUDGET_MB} MB budget`, () => {
       `close-up insets account for ${mb(insets)} MB of it, and dropping the largest would save ${mb(rows.reduce((n, r) => Math.max(n, r.inset), 0))} MB`,
   );
 });
+
+/*
+ * GLACIER HAZARD CHAIN — public/presets/<id>/chain.json (src/hazard/types.ts ChainFile, written by
+ * scripts/bake-chain.ts) and the HazardChainSpec in meta.json. The engine that routes a flood down this profile is
+ * written against the contract alone, so every structural promise the contract makes is asserted here: chainage
+ * ascending, one value per node in every per-node array, stage tables ascending from the bed, a bed that never rises
+ * downstream (the bake's isotonic fit is exact), stations and structures on the profile, and a domain entry that is
+ * the preset's own inflow, inside its grid, on the river.
+ */
+test('a hazard chain spec and its chain.json come together', () => {
+  for (const id of BAKED) {
+    if (!fs.existsSync(path.join(ROOT, id, 'meta.json'))) continue;
+    const spec = load(id).meta.scenario.hazardChain;
+    assert.equal(!!spec, hasChain(id), `${id}: scenario.hazardChain ${spec ? 'without' : 'missing beside'} chain.json`);
+  }
+  // The two glacier presets the chain was built for.
+  assert.ok(hasChain('nepal') && hasChain('chungthang'));
+});
+for (const id of BAKED.filter(hasChain)) {
+  test(`baked preset "${id}": chain.json is a consistent valley profile`, () => {
+    const { meta } = load(id);
+    const file = path.join(ROOT, id, 'chain.json');
+    const bytes = fs.statSync(file).size;
+    assert.ok(bytes < 1e6, `chain.json is ${(bytes / 1e6).toFixed(2)} MB — keep it under 1 MB`);
+    const c = JSON.parse(fs.readFileSync(file, 'utf8')) as ChainFile;
+    assert.equal(c.version, 1);
+    assert.ok(c.name.length > 3);
+    if (c.clockZero !== undefined) assert.ok(Number.isFinite(Date.parse(c.clockZero)), `clockZero ${c.clockZero}`);
+    assert.match(c.attribution, /Copernicus DEM GLO-30/);
+    assert.match(c.attribution, /OpenStreetMap contributors/);
+
+    const n = c.s.length;
+    assert.ok(n >= 50, `${n} nodes`);
+    for (const [k, arr] of [['zBed', c.zBed], ['n', c.n], ['sections', c.sections], ['lonlat', c.lonlat]] as const) {
+      assert.equal(arr.length, n, `${k} has ${arr.length} entries for ${n} nodes`);
+    }
+    assert.equal(c.s[0], 0, 'chainage starts at the source');
+    for (let i = 1; i < n; i++) {
+      assert.ok(c.s[i] > c.s[i - 1], `s not ascending at node ${i}`);
+      assert.ok(c.s[i] - c.s[i - 1] <= 250, `a ${c.s[i] - c.s[i - 1]} m gap at node ${i}`);
+      // Monotone bed: exact, tolerance 0 (scripts/bake-chain.ts fits it isotonically and rounds to 1 cm).
+      assert.ok(c.zBed[i] <= c.zBed[i - 1], `bed rises ${(c.zBed[i] - c.zBed[i - 1]).toFixed(2)} m at node ${i} (s ${c.s[i]})`);
+    }
+    assert.ok(c.zBed[0] - c.zBed[n - 1] > 100, 'a mountain valley falls more than 100 m over the profile');
+    for (let i = 0; i < n; i++) {
+      assert.ok(c.n[i] > 0.01 && c.n[i] < 0.2, `Manning n ${c.n[i]}`);
+      const [lon, lat] = c.lonlat[i];
+      assert.ok(Math.abs(lon) <= 180 && Math.abs(lat) <= 90, `lonlat ${lon},${lat}`);
+      const sec = c.sections[i];
+      const m = sec.stage.length;
+      assert.ok(m >= 5, 'a stage table needs levels');
+      for (const k of ['area', 'width', 'perimeter'] as const) assert.equal(sec[k].length, m, `section ${i} ${k} length`);
+      assert.ok(Math.abs(sec.stage[0] - c.zBed[i]) < 0.011, `section ${i} starts at ${sec.stage[0]}, bed ${c.zBed[i]}`);
+      assert.equal(sec.area[0], 0);
+      for (let k = 1; k < m; k++) {
+        assert.ok(sec.stage[k] > sec.stage[k - 1], `section ${i} stage not ascending`);
+        assert.ok(sec.area[k] >= sec.area[k - 1] && sec.width[k] >= sec.width[k - 1] && sec.perimeter[k] >= sec.perimeter[k - 1], `section ${i} shrinks at level ${k}`);
+      }
+      assert.ok(sec.area[m - 1] > 0 && sec.width[m - 1] > 0, `section ${i} never wets`);
+    }
+
+    const end = c.s[n - 1];
+    const names = new Set<string>();
+    for (let k = 0; k < c.stations.length; k++) {
+      const st = c.stations[k];
+      assert.ok(st.s >= 0 && st.s <= end, `station ${st.name} at ${st.s} is off the profile (0–${end})`);
+      if (k) assert.ok(st.s >= c.stations[k - 1].s, 'stations sorted by chainage');
+      assert.ok(!names.has(st.name), `duplicate station ${st.name}`);
+      names.add(st.name);
+      if (st.kind === 'hydro') assert.ok(st.capacityMW! > 0, `hydropower station ${st.name} without its capacity`);
+      assert.ok(Math.abs(st.lat) <= 90 && Math.abs(st.lon) <= 180);
+    }
+    for (const sc of c.structures) {
+      assert.ok(sc.s >= 0 && sc.s <= end, `structure ${sc.name} off the profile`);
+      const i = c.s.findIndex((v) => v >= sc.s);
+      assert.ok(sc.crest > c.zBed[i], `structure ${sc.name} crest ${sc.crest} below the bed ${c.zBed[i]}`);
+      assert.ok(sc.width > 0);
+      if (sc.storage) for (let k = 1; k < sc.storage.length; k++) assert.ok(sc.storage[k][0] > sc.storage[k - 1][0] && sc.storage[k][1] >= sc.storage[k - 1][1]);
+    }
+
+    // Domain entry: on the profile, inside the 2-D grid, and the preset's own inflow (same disc, to the hundredth).
+    const e = c.domainEntry;
+    assert.ok(e.s > 0 && e.s <= end, `domainEntry.s ${e.s}`);
+    assert.ok(e.gx >= 0 && e.gy >= 0 && e.gx <= meta.nx && e.gy <= meta.ny, `domainEntry (${e.gx}, ${e.gy}) outside the ${meta.nx}×${meta.ny} grid`);
+    assert.ok(e.radius > 0);
+    const inflow = meta.scenario.sources.find((x) => x.type === 'inflow' && Math.abs(x.gx - e.gx) < 0.01 && Math.abs(x.gy - e.gy) < 0.01);
+    assert.ok(inflow, 'domainEntry is not at any inflow source of the preset');
+    const edge = c.stations.filter((st) => st.kind === 'domainEdge');
+    assert.equal(edge.length, 1, 'one domainEdge station');
+    assert.equal(edge[0].s, e.s);
+    const i = c.s.findIndex((v) => v >= e.s);
+    const p = geoToGrid({ nx: meta.nx, ny: meta.ny, bounds: meta.bounds }, c.lonlat[i][0], c.lonlat[i][1]);
+    const off = Math.hypot(p.gx - e.gx, p.gy - e.gy) * meta.cellSize;
+    assert.ok(off < 300, `the profile passes ${off.toFixed(0)} m from the domain entry`);
+
+    // The spec in meta.json points at this file, and its observations name stations of the profile — or say why not.
+    const hc = meta.scenario.hazardChain;
+    assert.ok(hc, 'a preset with chain.json carries scenario.hazardChain');
+    assert.equal(hc.profile, 'chain.json');
+    if (hc.alertTime !== undefined) assert.ok(hc.alertTime >= 0);
+    if (hc.solver?.uMax !== undefined) assert.ok(hc.solver.uMax >= 15 && hc.solver.uMax <= 30);
+    for (const o of hc.observations ?? []) {
+      assert.ok(o.source.length > 5, `observation at ${o.station} has no source`);
+      assert.ok(names.has(o.station) || /beyond the profile/.test(o.note), `observation station "${o.station}" is not on the profile and the note does not say so`);
+      if (o.tFront !== undefined) assert.ok(o.tFront >= 0);
+    }
+  });
+}
 
 test('sandbox: valid scenario, connected roads, reachable high shelters', () => {
   const t = generateSandbox();
