@@ -53,7 +53,77 @@
    "yaw": 0.12,
    "pitch": 0.72
   },
-  "defaultView": "depth"
+  "defaultView": "depth",
+  "hazardChain": {
+   "trigger": {
+    "kind": "massIntoRiver",
+    "mass": {
+     "volume": 113000000,
+     "iceFraction": 0.2,
+     "fallHeight": 2300,
+     "pathLength": 13000
+    },
+    "mode": "transientDam",
+    "damLength": 1500,
+    "baseflow": 100
+   },
+   "profile": "chain.json",
+   "rheology": {
+    "kind": "voellmy",
+    "mu": 0.05,
+    "xi": 500
+   },
+   "solver": {
+    "uMax": 25
+   },
+   "alertTime": 2280,
+   "observations": [
+    {
+     "station": "Rasuwagadhi",
+     "tFront": 180,
+     "note": "Flood at Rasuwagadhi ~08:40, about three minutes after the 08:37 seismic signal.",
+     "source": "NDRRMA Situation Report #01 (1 Sep 2026); YAE/KU rapid report (31 Aug 2026)"
+    },
+    {
+     "station": "Syafrubesi gauge (DHM, position approximate)",
+     "tFront": 780,
+     "note": "The hydrometric station stopped transmitting at 08:50 (last reading 1.62 m) and was washed away — an upper bound on the arrival time, not a measurement of it.",
+     "source": "DHM Flood Forecasting Division technical report (27 Aug 2026), via Onlinekhabar and Kathmandu Post; NDRRMA SitRep #01"
+    },
+    {
+     "station": "Betrawati",
+     "tFront": 2580,
+     "note": "Flood at Betrawati ~09:20; DHM station 447 (warning 4.1 m, danger 5.0 m) last read 3.55 m before it was destroyed.",
+     "source": "NDRRMA SitRep #01 (1 Sep 2026); DHM station 447 page (dhm.gov.np/hydrology/hms-Single/52)"
+    },
+    {
+     "station": "Galchhi",
+     "tFront": 6660,
+     "note": "Arrival 10:28, stage +9 m in ~30 min — beyond the profile (validation if it is extended downstream).",
+     "source": "NDRRMA SitRep #01; YAE/KU rapid report"
+    },
+    {
+     "station": "Malekhu",
+     "tFront": 11580,
+     "note": "Arrival 11:50, stage +7 m — beyond the profile.",
+     "source": "NDRRMA SitRep #01; YAE/KU rapid report"
+    },
+    {
+     "station": "Mugling",
+     "tFront": 15780,
+     "note": "Arrival 13:00 — beyond the profile.",
+     "source": "NDRRMA SitRep #01"
+    },
+    {
+     "station": "Devghat",
+     "tFront": 24180,
+     "qPeak": 5850,
+     "tPeak": 26580,
+     "note": "Arrival 15:20, peak 5,850 m³/s at 16:00 (stage 6.57 m); 57.40 Mm³ passed, 19.96 Mm³ of it excess — the only measured discharge, 168 km below Betrawati and beyond the profile.",
+     "source": "NDRRMA SitRep #01 (DHM figures)"
+    }
+   ]
+  }
  },
  "files": {
   "elevation": "elevation.f32",

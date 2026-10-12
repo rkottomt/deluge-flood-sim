@@ -1,0 +1,445 @@
+{
+ "version": 1,
+ "id": "chungthang",
+ "name": "Chungthang — Teesta Valley",
+ "subtitle": "4 October 2023 — South Lhonak lake bursts, 68 km upstream",
+ "nx": 1024,
+ "ny": 1024,
+ "cellSize": 7.8125,
+ "bounds": {
+  "west": 88.59745210079934,
+  "south": 27.567361499050364,
+  "east": 88.67854789920068,
+  "north": 27.639226718356955
+ },
+ "attribution": "Elevation: Copernicus DEM GLO-30 (© DLR e.V. 2010–2014 / © Airbus Defence and Space GmbH, ESA), bare-earth filtered · Terrain shading: no aerial imagery (hypsometric tint) · Roads © OpenStreetMap contributors (ODbL) · Buildings © OpenStreetMap contributors (ODbL)",
+ "scenario": {
+  "description": "Chungthang stands where the Lachen Chu and the Lachung Chu meet to form the Teesta, and the 60 m dam of the 1,200 MW Teesta-III hydropower project stood just below it. Late on 3 October 2023 about 14.7 million m³ of frozen moraine collapsed into South Lhonak Lake, 5,200 m up and some 68 km upstream; the wave it raised, about 20 m high, breached the moraine dam, and about 50 million m³ of water — half the lake — came down the valley. It reached Chungthang around 00:30, about two and a quarter hours later, and destroyed the dam (Sattar et al., Science, 2025). No gauge survived here, and the published peaks at Chungthang are reconstructions that disagree by a factor of two (7,355 to 14,673 m³/s). This run uses the one calibrated against the gauged peak downstream, 7,355 m³/s, on a smooth rise and fall that carries the 50 million m³ released at the lake — a parametric placeholder, not a measured hydrograph — and the clock starts as the front reaches the north edge of the map, not at the collapse. The real flood was a debris flood that moved hundreds of millions of cubic metres of sediment; this is clear water, and the solver caps its speed at 15 m/s, so the arrival times here are the model’s, not the flood’s. The terrain is Copernicus 30 m radar data, a surface model with canopy and buildings in it, acquired in 2011–2015 while the dam was being built, so neither the dam nor its reservoir is in it. The bare-earth filter only runs on ground flatter than 20°, and 94 % of this domain is steeper: the valley floor is filtered and still a metre or two high, the walls above it are the raw surface model. No photograph is baked in — open satellite imagery of this valley could be redistributed, but composing a cloud-free mosaic of it was beyond this bake — so the ground is shaded by height instead. OpenStreetMap maps only the highway and a few lanes here, and one named place on the road network stands clear of the river. The rivers start dry, so every drop you see is the modelled flood. Watch which ground goes under and in what order, and do not read street-level depths.",
+  "sources": [
+   {
+    "id": "lachen-chu-inflow",
+    "type": "inflow",
+    "gx": 197.5,
+    "gy": 6.5,
+    "radius": 4.8,
+    "discharge": 7355,
+    "stopAfter": 18337,
+    "hydrograph": [
+     {
+      "t": 0,
+      "q": 0
+     },
+     {
+      "t": 457,
+      "q": 109
+     },
+     {
+      "t": 914,
+      "q": 649
+     },
+     {
+      "t": 1371,
+      "q": 1622
+     },
+     {
+      "t": 1828,
+      "q": 2848
+     },
+     {
+      "t": 2285,
+      "q": 4120
+     },
+     {
+      "t": 2742,
+      "q": 5275
+     },
+     {
+      "t": 3198,
+      "q": 6205
+     },
+     {
+      "t": 3655,
+      "q": 6862
+     },
+     {
+      "t": 4112,
+      "q": 7238
+     },
+     {
+      "t": 4569,
+      "q": 7355
+     },
+     {
+      "t": 5026,
+      "q": 7252
+     },
+     {
+      "t": 5483,
+      "q": 6975
+     },
+     {
+      "t": 5940,
+      "q": 6570
+     },
+     {
+      "t": 6397,
+      "q": 6079
+     },
+     {
+      "t": 6854,
+      "q": 5539
+     },
+     {
+      "t": 7311,
+      "q": 4980
+     },
+     {
+      "t": 7768,
+      "q": 4425
+     },
+     {
+      "t": 8225,
+      "q": 3891
+     },
+     {
+      "t": 8681,
+      "q": 3390
+     },
+     {
+      "t": 9138,
+      "q": 2929
+     },
+     {
+      "t": 9595,
+      "q": 2512
+     },
+     {
+      "t": 10052,
+      "q": 2140
+     },
+     {
+      "t": 10509,
+      "q": 1811
+     },
+     {
+      "t": 10966,
+      "q": 1525
+     },
+     {
+      "t": 11423,
+      "q": 1277
+     },
+     {
+      "t": 11880,
+      "q": 1064
+     },
+     {
+      "t": 12337,
+      "q": 883
+     },
+     {
+      "t": 12794,
+      "q": 729
+     },
+     {
+      "t": 13251,
+      "q": 600
+     },
+     {
+      "t": 13708,
+      "q": 492
+     },
+     {
+      "t": 14164,
+      "q": 402
+     },
+     {
+      "t": 14621,
+      "q": 328
+     },
+     {
+      "t": 15078,
+      "q": 266
+     },
+     {
+      "t": 15535,
+      "q": 216
+     },
+     {
+      "t": 15992,
+      "q": 174
+     },
+     {
+      "t": 16449,
+      "q": 141
+     },
+     {
+      "t": 16906,
+      "q": 113
+     },
+     {
+      "t": 17363,
+      "q": 91
+     },
+     {
+      "t": 17820,
+      "q": 73
+     },
+     {
+      "t": 18277,
+      "q": 58
+     },
+     {
+      "t": 18337,
+      "q": 0
+     }
+    ],
+    "label": "Lachen Chu — placeholder hydrograph: published modelled peak 7,355 m³/s, 50 million m³ on a parametric rise-and-fall (not a measured hydrograph)"
+   }
+  ],
+  "storms": [],
+  "shelters": [
+   {
+    "name": "Gurudwara, Chungthang",
+    "gx": 606.06,
+    "gy": 492.66
+   }
+  ],
+  "rainRate": 0,
+  "stage": null,
+  "initialFill": [],
+  "camera": {
+   "target": {
+    "gx": 436.2,
+    "gy": 302.5,
+    "elevation": 2052.3
+   },
+   "distance": 5500,
+   "yaw": 0.12,
+   "pitch": 0.72
+  },
+  "defaultView": "depth",
+  "hazardChain": {
+   "trigger": {
+    "kind": "massIntoLake",
+    "lake": {
+     "id": "south-lhonak",
+     "name": "South Lhonak Lake",
+     "lat": 27.9125,
+     "lon": 88.1964,
+     "elevation": 5200,
+     "area": 1674000,
+     "volume": {
+      "median": 102400000,
+      "lo": 76800000,
+      "hi": 128000000,
+      "method": "empirical"
+     },
+     "damType": "moraine"
+    },
+    "mass": {
+     "volume": 14700000,
+     "iceFraction": 0.2,
+     "fallHeight": 150,
+     "pathLength": 500
+    },
+    "breach": {
+     "model": "weirErosion",
+     "erosionRate": 100,
+     "finalDepth": 40,
+     "widthRatio": 2,
+     "sideSlope": 1,
+     "hypsometry": 1.5
+    }
+   },
+   "profile": "chain.json",
+   "rheology": {
+    "kind": "voellmy",
+    "mu": 0.05,
+    "xi": 500
+   },
+   "solver": {
+    "uMax": 25
+   },
+   "observations": [
+    {
+     "station": "South Lhonak Lake",
+     "tFront": 0,
+     "note": "14.7 Mm³ of frozen moraine failed into the lake at 22:13:20 IST; displacement wave ~20 m; ~50 Mm³ (about half the lake) released; peak flow height ~11 m about 1 km downstream.",
+     "source": "Sattar et al. 2025, Science, doi:10.1126/science.ads2659 (via Eos / The Landslide Blog)"
+    },
+    {
+     "station": "Chungthang",
+     "tFront": 8200,
+     "note": "The flood reached Chungthang and the Teesta-III dam about 00:30 on 4 Oct (≈ 2 h 15 min after the failure) and destroyed the 60 m dam.",
+     "source": "Sattar et al. 2025, Science (via Eos / The Landslide Blog)"
+    },
+    {
+     "station": "Chungthang",
+     "qPeak": 7355,
+     "note": "MODELLED peak (HEC-HMS/HEC-RAS reconstruction calibrated to the gauged peak at Gazoldoba); other studies give 10,282–14,673 m³/s here. No gauge measured it.",
+     "source": "Natural Hazards 121 (2025), doi:10.1007/s11069-025-07350-9; research spec §G.3"
+    },
+    {
+     "station": "Gazoldoba",
+     "qPeak": 8252,
+     "note": "Gauged peak at the Gazoldoba barrage on the Teesta in West Bengal — far beyond the profile; the reconstruction above reproduces it with 8,282 m³/s.",
+     "source": "Natural Hazards 121 (2025), doi:10.1007/s11069-025-07350-9"
+    }
+   ]
+  }
+ },
+ "files": {
+  "elevation": "elevation.f32",
+  "imagery": null,
+  "roads": "roads.json",
+  "buildings": "buildings.json"
+ },
+ "bake": {
+  "bakedAt": "2026-10-12T17:15:25.552Z",
+  "demSource": "copernicus",
+  "demRepairedCells": 0,
+  "demTiles": [
+   "Copernicus_DSM_COG_10_N27_00_E088_00_DEM"
+  ],
+  "bareEarth": {
+   "flaggedPercent": 0.93,
+   "meanDropM": 3.57,
+   "maxDropM": 12
+  },
+  "center": {
+   "lat": 27.6033,
+   "lon": 88.638
+  },
+  "sizeMeters": 8000,
+  "burnedCells": 9081,
+  "rivers": [
+   {
+    "name": "Lachen Chu",
+    "cells": 6473,
+    "depth": 4,
+    "surfaceMax": 1879.41,
+    "surfaceMin": 1424.92
+   },
+   {
+    "name": "Lachung Chu",
+    "cells": 2608,
+    "depth": 2,
+    "surfaceMax": 1793.84,
+    "surfaceMin": 1546.33
+   }
+  ],
+  "initialWetCells": 0,
+  "prefill": "none",
+  "roads": {
+   "nodes": 51,
+   "edges": 51,
+   "km": 34.352288659589284,
+   "byClass": {
+    "highway": 0,
+    "major": 0,
+    "minor": 38,
+    "local": 13
+   }
+  },
+  "buildings": {
+   "bakedAt": "2026-10-12T17:16:16.786Z",
+   "source": "OpenStreetMap API 0.6 /map (ODbL 1.0)",
+   "tiles": 20,
+   "microsoftFootprintsAdded": 0,
+   "heightProfile": "nepal",
+   "parsed": 1031,
+   "kept": 940,
+   "droppedTiny": 78,
+   "droppedOutside": 0,
+   "droppedInWater": 0,
+   "duplicates": 13,
+   "measured": 0,
+   "levels": 0,
+   "estimated": 940,
+   "remote": 0,
+   "vertices": 3850,
+   "tallest": [
+    {
+     "name": "(unnamed other)",
+     "height": 12.2,
+     "source": "estimated"
+    },
+    {
+     "name": "(unnamed other)",
+     "height": 12.2,
+     "source": "estimated"
+    },
+    {
+     "name": "(unnamed other)",
+     "height": 12.2,
+     "source": "estimated"
+    },
+    {
+     "name": "(unnamed other)",
+     "height": 8.9,
+     "source": "estimated"
+    },
+    {
+     "name": "(unnamed other)",
+     "height": 8.9,
+     "source": "estimated"
+    },
+    {
+     "name": "(unnamed other)",
+     "height": 8.9,
+     "source": "estimated"
+    },
+    {
+     "name": "(unnamed other)",
+     "height": 8.9,
+     "source": "estimated"
+    },
+    {
+     "name": "(unnamed other)",
+     "height": 8.9,
+     "source": "estimated"
+    },
+    {
+     "name": "(unnamed other)",
+     "height": 8.9,
+     "source": "estimated"
+    },
+    {
+     "name": "(unnamed other)",
+     "height": 8.9,
+     "source": "estimated"
+    },
+    {
+     "name": "(unnamed other)",
+     "height": 8.9,
+     "source": "estimated"
+    },
+    {
+     "name": "(unnamed other)",
+     "height": 8.9,
+     "source": "estimated"
+    },
+    {
+     "name": "(unnamed other)",
+     "height": 8.9,
+     "source": "estimated"
+    },
+    {
+     "name": "(unnamed other)",
+     "height": 8.9,
+     "source": "estimated"
+    },
+    {
+     "name": "(unnamed other)",
+     "height": 8.9,
+     "source": "estimated"
+    }
+   ],
+   "medianHeight": 5.3,
+   "maxHeight": 12.2,
+   "bytes": 38831,
+   "cellsBuiltOn": 2061
+  }
+ }
+}

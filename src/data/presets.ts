@@ -30,6 +30,11 @@ export const PRESETS: PresetInfo[] = [
     name: 'Betrawati — Trishuli Valley',
     subtitle: '26 August 2026 — the bridge that was Rasuwa’s only road',
   },
+  {
+    id: 'chungthang',
+    name: 'Chungthang — Teesta Valley',
+    subtitle: '4 October 2023 — South Lhonak lake bursts, 68 km upstream',
+  },
   { id: 'sandbox', name: SANDBOX_NAME, subtitle: 'Offline sandbox — river town, reservoir and dam' },
 ];
 

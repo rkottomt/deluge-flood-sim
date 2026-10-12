@@ -26,7 +26,10 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import type { CameraPose, GridRect, ScenarioPreset, Shelter, StageControl, StormCell, WaterSource, WaterViewMode } from '../src/contracts';
+import type { CameraPose, GridRect, HydrographPoint, ScenarioPreset, Shelter, StageControl, StormCell, WaterSource, WaterViewMode } from '../src/contracts';
+import { hazardChainFor } from './chain-defs';
+import { tileBoundsOf } from './osm-fetch';
+import { hydrographVolume } from '../src/sim/forcing';
 import { type DEMSource, demAttribution, fetchDEM } from '../src/data/dem';
 import { bareEarthFromSurface, BARE_EARTH_ALGO_VERSION, BARE_EARTH_DEFAULTS, type BareEarthOptions, fetchCopernicusDEM } from '../src/data/demGlobal';
 import { geoToGrid, squareDomain } from '../src/data/geo';
@@ -158,6 +161,67 @@ const TRISHULI_SURGE_INFLOW = Math.round(BHOTE_KOSHI_EXCESS_M3 / BHOTE_KOSHI_REL
 const BETRAWATI_WARNING_M = 4.1;
 const BETRAWATI_DANGER_M = 5.0;
 const BETRAWATI_LAST_READING_M = 3.55;
+/**
+ * Chungthang, North Sikkim — the South Lhonak GLOF of 3–4 October 2023.
+ *
+ * At 22:13:20 IST on 3 October about 14.7 million m³ of frozen lateral moraine collapsed into South Lhonak Lake
+ * (~5,200 m), raised a ~20 m wave that breached the moraine dam, and ~50 million m³ — about half the lake — drained
+ * into the Goma Chu / Lhonak Chu / Lachen Chu. The flood reached Chungthang and the 60 m dam of the 1,200 MW Teesta-III
+ * project about 00:30 on 4 October and destroyed the dam (Sattar et al. 2025, Science, doi:10.1126/science.ads2659,
+ * via Eos / The Landslide Blog and Newcastle University).
+ *
+ * NO GAUGE SURVIVED AT CHUNGTHANG, and the published peaks there are MODEL OUTPUT that disagree by a factor of two:
+ * 7,355 m³/s (HEC-HMS/HEC-RAS reconstruction, Natural Hazards 121 (2025), doi:10.1007/s11069-025-07350-9, which
+ * reproduces the GAUGED ~8,252 m³/s at Gazoldoba downstream with its own 8,282) against 10,282–14,673 m³/s in other
+ * studies (research spec §G.3). The calibrated one is used. Its time series is not published in anything this bake
+ * read, so the placeholder inflow is a PARAMETRIC hydrograph — the spec's §B.4 gamma shape (a = 3) with that peak and
+ * the ~50 million m³ released at the lake — and is labelled as such. It is a stand-in for the routed hydrograph the
+ * hazard-chain engine will put at this edge (public/presets/chungthang/chain.json), not a reconstruction.
+ */
+const SOUTH_LHONAK_RELEASE_M3 = 50e6;
+const CHUNGTHANG_PEAK_M3S = 7355;
+/**
+ * Gamma-shaped hydrograph Q(t) = Qp·(t/tp)^a·e^(a(1 − t/tp)), whose volume is Qp·tp·e^a·Γ(a+1)/a^(a+1)
+ * (research spec §B.4; a = 3 ⇒ V = 1.488·Qp·tp). Sampled at `points` times over [0, span·tp] (99.8 % of the volume
+ * for a = 3, span = 4) and closed with a zero, so the piecewise-linear table delivers the volume to within a
+ * fraction of a percent; the bake logs the exact figure.
+ */
+function gammaHydrograph(qPeak: number, volume: number, a = 3, points = 41, span = 4): HydrographPoint[] {
+  let fact = 1;
+  for (let k = 2; k <= a; k++) fact *= k;
+  const tp = volume / (qPeak * (Math.exp(a) * fact) / a ** (a + 1));
+  const out: HydrographPoint[] = [];
+  for (let k = 0; k < points; k++) {
+    const t = (span * tp * k) / (points - 1);
+    out.push({ t: Math.round(t), q: Math.round(qPeak * (t / tp) ** a * Math.exp(a * (1 - t / tp))) });
+  }
+  out.push({ t: out[out.length - 1].t + 60, q: 0 });
+  return out;
+}
+const CHUNGTHANG_HYDROGRAPH = gammaHydrograph(CHUNGTHANG_PEAK_M3S, SOUTH_LHONAK_RELEASE_M3);
+/** Share of the Chungthang domain steeper than the bare-earth filter's 20° gate, measured on the shipped DEM. */
+const CHUNGTHANG_STEEP_PCT = 94;
+const CHUNGTHANG_DESCRIPTION =
+  'Chungthang stands where the Lachen Chu and the Lachung Chu meet to form the Teesta, and the 60 m dam of the ' +
+  '1,200 MW Teesta-III hydropower project stood just below it. Late on 3 October 2023 about 14.7 million m³ of frozen ' +
+  'moraine collapsed into South Lhonak Lake, 5,200 m up and some 68 km upstream; the wave it raised, about 20 m high, ' +
+  'breached the moraine dam, and about 50 million m³ of water — half the lake — came down the valley. It reached ' +
+  'Chungthang around 00:30, about two and a quarter hours later, and destroyed the dam (Sattar et al., Science, 2025). ' +
+  'No gauge survived here, and the published peaks at Chungthang are reconstructions that disagree by a factor of ' +
+  `two (${CHUNGTHANG_PEAK_M3S.toLocaleString('en-US')} to 14,673 m³/s). This run uses the one calibrated against the ` +
+  `gauged peak downstream, ${CHUNGTHANG_PEAK_M3S.toLocaleString('en-US')} m³/s, on a smooth rise and fall that carries ` +
+  `the ${(SOUTH_LHONAK_RELEASE_M3 / 1e6).toFixed(0)} million m³ released at the lake — a parametric placeholder, not a ` +
+  'measured hydrograph — and the clock starts as the front reaches the north edge of the map, not at the collapse. ' +
+  'The real flood was a debris flood that moved hundreds of millions of cubic metres of sediment; this is clear water, ' +
+  'and the solver caps its speed at 15 m/s, so the arrival times here are the model’s, not the flood’s. The terrain ' +
+  'is Copernicus 30 m radar data, a surface model with canopy and buildings in it, acquired in 2011–2015 while the ' +
+  'dam was being built, so neither the dam nor its reservoir is in it. The bare-earth filter only runs on ground ' +
+  `flatter than 20°, and ${CHUNGTHANG_STEEP_PCT} % of this domain is steeper: the valley floor is filtered and still a ` +
+  'metre or two high, the walls above it are the raw surface model. No photograph is baked in — open satellite ' +
+  'imagery of this valley could be redistributed, but composing a cloud-free mosaic of it was beyond this bake — so ' +
+  'the ground is shaded by height instead. OpenStreetMap maps only the highway and a few lanes here, and one named ' +
+  'place on the road network stands clear of the river. The rivers start dry, so every drop you see is the modelled ' +
+  'flood. Watch which ground goes under and in what order, and do not read street-level depths.';
 
 type LonLat = [number, number];
 
@@ -170,11 +234,26 @@ interface RiverDef {
   snapRadius?: number;
   maxHalfWidth?: number;
   /**
+   * Slide the upstream inflow ACROSS the channel onto its lowest cell (within half the footprint radius). The edge
+   * placement picks the channel's widest cell, which on a narrow, steep gorge (Chungthang's Lachen Chu, ~5 %) can sit
+   * a metre or more up the side of the thalweg; on the gentler Trishuli it does not matter and is left alone.
+   */
+  inflowOnThalweg?: boolean;
+  /**
    * Source created where the UPSTREAM end meets the domain edge. An inflow may carry `stopAfter` (simulated
    * seconds): a scenario forced by a published VOLUME rather than by a gauge record has to stop, or the run keeps
    * delivering the peak for ever and the total on screen leaves the total that was reported behind.
    */
-  upstream?: { type: 'inflow'; discharge: number; stopAfter?: number; label: string } | { type: 'stage'; label: string };
+  upstream?:
+    | {
+        type: 'inflow';
+        discharge: number;
+        stopAfter?: number;
+        /** A published or parametric hydrograph Q(t) (WaterSource.hydrograph); `discharge` is then its peak. */
+        hydrograph?: HydrographPoint[];
+        label: string;
+      }
+    | { type: 'stage'; label: string };
   /** Source created where the DOWNSTREAM end meets the domain edge. */
   downstream?: { type: 'stage'; label: string };
 }
@@ -272,7 +351,10 @@ interface PresetDef {
    * why this carries its own provenance rather than reusing the US strings.
    */
   global?: {
-    /** OSM API 0.6 `map` XML extracts covering the domain, repo-relative (see artifacts/nepal-build/fetch-osm.mjs). */
+    /**
+     * OSM XML extracts covering the domain, repo-relative: files (API 0.6 `map` quadrants, see
+     * artifacts/nepal-build/fetch-osm.mjs) or directories, every *.xml in which is read (scripts/osm-fetch.ts tiles).
+     */
     osmXml: string[];
     /** Overrides for the bare-earth filter; anything omitted uses the validated defaults in src/data/demGlobal.ts. */
     bareEarth?: Partial<Omit<BareEarthOptions, 'cellSize'>>;
@@ -1133,6 +1215,128 @@ const PRESET_DEFS: PresetDef[] = [
       'on, so these are not the real arrival times. Watch which roads go under and in what order, and where the ' +
       'routes turn uphill, and do not read street-level depths.',
   },
+  {
+    /*
+     * Chungthang — 8 km square centred 27.6033 N, 88.6380 E (7.81 m cells, the Betrawati grid), built exactly as
+     * `nepal` is: Copernicus GLO-30 through the bare-earth filter, OSM roads, no photo, dry channels, one inflow.
+     * The centre is ~850 m west of Chungthang village (OSM node 13148720740, 27.60424 N, 88.64652 E), and the north
+     * edge (27.6392 N) is placed where the Lachen Chu — the river the flood came down — crosses it on a reach the raw
+     * DEM shows falling steadily. Two earlier centres put the edge on DSM noise instead (measured along the routed
+     * river, artifacts/chungthang-build): at 27.648 N and 27.656 N the radar surface over the channel RISES 4–10 m
+     * downstream for a few hundred metres, which left the inflow on a false low with the bed climbing away from it.
+     * The Lachen–Lachung confluence, the village, the Teesta-III dam site (OSM way 733894880) and the Teesta's exit
+     * through the south edge are all inside.
+     */
+    id: 'chungthang',
+    center: { lat: 27.6033, lon: 88.638 },
+    sizeMeters: 8000,
+    n: 1024,
+    global: {
+      // Aligned 0.03° OSM API tiles shared with the chain bake (scripts/osm-fetch.ts `tiles`, scripts/bake-chain.ts).
+      osmXml: ['artifacts/chungthang-build/chain-osm'],
+      imagery: 'none',
+    },
+    rivers: [
+      {
+        /*
+         * OSM ways 126757767 + 126757760 ("Lachen Chu") + 1214968882 + 1214968883 + 126757765 ("Teesta"), clipped to
+         * the domain and simplified to 25 m (the same extraction as the Betrawati rivers). The Lachen Chu meets the
+         * Lachung Chu at 27.6011 N, 88.6489 E and is called the Teesta below it.
+         */
+        name: 'Lachen Chu',
+        path: [
+          [88.61007, 27.64199], [88.61103, 27.64071], [88.61144, 27.6403],
+          [88.61256, 27.63966], [88.61293, 27.63902], [88.61302, 27.63816], [88.61369, 27.63703], [88.61438, 27.63657],
+          [88.61544, 27.63651], [88.61612, 27.63544], [88.61674, 27.63436], [88.61713, 27.63273], [88.61816, 27.63072],
+          [88.61875, 27.63009], [88.61912, 27.62901], [88.61885, 27.62794], [88.61938, 27.62654], [88.61933, 27.62598],
+          [88.61925, 27.62528], [88.61911, 27.62407], [88.61937, 27.62294], [88.61903, 27.62176], [88.61934, 27.62062],
+          [88.61979, 27.61963], [88.62025, 27.61948], [88.62156, 27.61965], [88.62245, 27.61924], [88.62273, 27.61869],
+          [88.62307, 27.61843], [88.62417, 27.6179], [88.62506, 27.61758], [88.62519, 27.61715], [88.62546, 27.61693],
+          [88.62565, 27.61658], [88.62643, 27.61624], [88.62652, 27.61595], [88.62655, 27.61564], [88.62711, 27.61487],
+          [88.62813, 27.61431], [88.62871, 27.614], [88.62879, 27.61376], [88.62855, 27.61323], [88.62859, 27.61262],
+          [88.62907, 27.61184], [88.62925, 27.61128], [88.6297, 27.61085], [88.63173, 27.61053], [88.63262, 27.61067],
+          [88.63316, 27.61075], [88.63439, 27.61078], [88.6361, 27.61043], [88.63714, 27.60998], [88.63834, 27.60959],
+          [88.6391, 27.60885], [88.64, 27.60846], [88.64084, 27.60752], [88.64163, 27.60626], [88.64174, 27.60535],
+          [88.6421, 27.6043], [88.64273, 27.60364], [88.64343, 27.60322], [88.64422, 27.60301], [88.64511, 27.60284],
+          [88.64652, 27.60158], [88.64736, 27.60128], [88.64841, 27.60114], [88.64893, 27.6011], [88.64966, 27.60012],
+          [88.64957, 27.59937], [88.6495, 27.59862], [88.64982, 27.59794], [88.65025, 27.59771], [88.65197, 27.59601],
+          [88.65257, 27.59567], [88.65333, 27.59525], [88.65368, 27.59472], [88.65451, 27.59414], [88.65509, 27.59387],
+          [88.65575, 27.59344], [88.65617, 27.59313], [88.65642, 27.59272], [88.65679, 27.59208], [88.65687, 27.5916],
+          [88.65659, 27.59086], [88.65594, 27.58968], [88.65611, 27.58881], [88.65584, 27.58814], [88.6551, 27.58794],
+          [88.65485, 27.58722], [88.65481, 27.58675], [88.65474, 27.58592], [88.65507, 27.58533], [88.65545, 27.58494],
+          [88.65556, 27.5841], [88.65601, 27.58346], [88.65636, 27.58286], [88.65684, 27.58207], [88.65684, 27.58147],
+          [88.65575, 27.57986], [88.6556, 27.57911], [88.65553, 27.57866], [88.65442, 27.57723], [88.65343, 27.57583],
+          [88.65289, 27.575], [88.65289, 27.57409], [88.65294, 27.57364], [88.65321, 27.57339], [88.65337, 27.57212],
+          [88.65352, 27.57168], [88.65424, 27.57097], [88.65464, 27.57027], [88.65496, 27.56918], [88.6545, 27.56794],
+          [88.65381, 27.56555],
+        ],
+        depth: 4,
+        bankCells: 3,
+        snapRadius: 10,
+        maxHalfWidth: 10,
+        inflowOnThalweg: true,
+        upstream: {
+          type: 'inflow',
+          discharge: CHUNGTHANG_PEAK_M3S,
+          hydrograph: CHUNGTHANG_HYDROGRAPH,
+          stopAfter: CHUNGTHANG_HYDROGRAPH[CHUNGTHANG_HYDROGRAPH.length - 1].t,
+          label:
+            `Lachen Chu — placeholder hydrograph: published modelled peak ${CHUNGTHANG_PEAK_M3S.toLocaleString('en-US')} m³/s, ` +
+            `${(SOUTH_LHONAK_RELEASE_M3 / 1e6).toFixed(0)} million m³ on a parametric rise-and-fall (not a measured hydrograph)`,
+        },
+      },
+      {
+        /*
+         * OSM way 170015107 ("Lachung Chu"). It STARTS INSIDE the domain, ~200 m in from the east edge, for the same
+         * reason as the Betrawati tributaries: no discharge for it that night is published, and a wet channel touching
+         * an open boundary without an inflow just drains out of it.
+         */
+        name: 'Lachung Chu',
+        path: [
+          [88.67649, 27.6245], [88.67461, 27.62357], [88.67223, 27.62364], [88.67044, 27.62335], [88.66957, 27.62291],
+          [88.66825, 27.62226], [88.66699, 27.62162], [88.66503, 27.61983], [88.66344, 27.6178], [88.66334, 27.6172],
+          [88.6632, 27.61646], [88.66308, 27.61599], [88.66253, 27.61564], [88.66219, 27.615], [88.66188, 27.61477],
+          [88.6614, 27.61454], [88.66089, 27.61418], [88.6607, 27.61364], [88.66026, 27.61337], [88.65973, 27.6132],
+          [88.65908, 27.61267], [88.65841, 27.61191], [88.65791, 27.61155], [88.65741, 27.6111], [88.6568, 27.61077],
+          [88.6562, 27.61044], [88.6557, 27.61005], [88.65498, 27.60983], [88.65411, 27.60961], [88.65317, 27.60904],
+          [88.65255, 27.6084], [88.65197, 27.60745], [88.65164, 27.60691], [88.65118, 27.60664], [88.65045, 27.6056],
+          [88.6499, 27.60521], [88.64855, 27.60383], [88.64848, 27.60332], [88.64859, 27.60306], [88.64846, 27.60231],
+          [88.64851, 27.60171], [88.64893, 27.6011],
+        ],
+        depth: 2,
+        bankCells: 2,
+        snapRadius: 8,
+        maxHalfWidth: 20,
+      },
+    ],
+    /*
+     * ONE SHELTER, because OpenStreetMap here has one candidate that is both a named place and on the road network:
+     * the nine OSM tiles covering the domain hold ~1,170 buildings (all unnamed), 4 places of worship, 2 toilets, a
+     * viewpoint and a waterfall — no school, clinic or office — and 73 drivable ways, 35 km of road inside it.
+     *   • Gurudwara (node 10852707609, 27.603885 N, 88.646096 E), snapped by the bake to the highest-scoring road node
+     *     within 200 m: 107 m away, at 1,614 m on this DEM — 45 m above the channel surface beside it (the bake's
+     *     30 m margin + 15 m). That is a margin, not a guarantee: the 2021 pre-event study cited in
+     *     public/presets/SOURCES.txt modelled 25–30 m flow depths at Chungthang for a large outburst.
+     * NOT shipped, with the reason measured rather than assumed:
+     *   • Rinchen gompa (node 10852708207, 1,673 m) and the Tibetan monastery at Pegong (node 10852710206, 1,726 m)
+     *     stand well clear of the river, but neither has a drivable road node within 200 m that is itself high ground
+     *     (the nearest are 159 m and 387 m away at 1,602 m and 1,518 m) — their access is by footpath, which this
+     *     road graph does not carry — so the router could not reach them (tests require a shelter within 40 m of a
+     *     road node). Widening the search until they pass is the edit not to make (see the Betrawati note).
+     */
+    shelters: [{ name: 'Gurudwara, Chungthang', at: [88.646096, 27.603885], search: 200 }],
+    shelterMargin: 30,
+    prefill: 'none',
+    storms: [],
+    rainRate: 0,
+    /*
+     * Looking north up the Lachen Chu from above the village: the reach the flood comes down fills the frame, the
+     * confluence and the dam site sit in the lower third. Same pitch reasoning as Betrawati (look DOWN into the gorge).
+     */
+    camera: { at: [88.632, 27.618], distance: 5500, yaw: 0.12, pitch: 0.72 },
+    view: 'depth',
+    description: () => CHUNGTHANG_DESCRIPTION,
+  },
 ];
 
 // ────────────────────────────────────────────────────────────────────────────────────────────────
@@ -1377,6 +1581,21 @@ async function bake(def: PresetDef) {
       const id = `${base}-${r.upstream && r.downstream ? `${which}-` : ''}${cfg.type}`;
       if (cfg.type === 'inflow') {
         const p = inflowPlacement(burn, ri, which, end, N);
+        if (r.inflowOnThalweg) {
+          const along = end.edge === 'north' || end.edge === 'south' ? [1, 0] : [0, 1];
+          const reach = Math.ceil(p.radius / 2);
+          let best = { gx: p.gx, gy: p.gy, z: elevation[Math.floor(p.gy) * N + Math.floor(p.gx)] };
+          for (let c = -reach; c <= reach; c++) {
+            const gx = p.gx + along[0] * c;
+            const gy = p.gy + along[1] * c;
+            if (Math.min(gx, gy, N - gx, N - gy) < p.radius + 1) continue;
+            const z = elevation[Math.floor(gy) * N + Math.floor(gx)];
+            if (z < best.z) best = { gx, gy, z };
+          }
+          if (best.gx !== p.gx || best.gy !== p.gy) log(def.id, `  inflow moved across the channel from (${p.gx}, ${p.gy}) to the thalweg (${best.gx}, ${best.gy})`);
+          p.gx = best.gx;
+          p.gy = best.gy;
+        }
         sources.push({
           id,
           type: 'inflow',
@@ -1385,14 +1604,18 @@ async function bake(def: PresetDef) {
           radius: r1(p.radius),
           discharge: cfg.discharge,
           ...(cfg.stopAfter !== undefined ? { stopAfter: cfg.stopAfter } : {}),
+          ...(cfg.hydrograph ? { hydrograph: cfg.hydrograph } : {}),
           label: cfg.label,
         });
         log(
           def.id,
           `  source ${id} at (${p.gx.toFixed(1)}, ${p.gy.toFixed(1)}) r=${p.radius} edge=${end.edge}` +
-            (cfg.stopAfter !== undefined
-              ? `, stops after ${cfg.stopAfter} s = ${((cfg.discharge * cfg.stopAfter) / 1e6).toFixed(2)} million m³ delivered`
-              : ''),
+            (cfg.hydrograph
+              ? `, hydrograph peak ${Math.max(...cfg.hydrograph.map((p) => p.q))} m³/s, ` +
+                `${(hydrographVolume(cfg.hydrograph, 0, cfg.stopAfter ?? cfg.hydrograph[cfg.hydrograph.length - 1].t) / 1e6).toFixed(3)} million m³ delivered`
+              : cfg.stopAfter !== undefined
+                ? `, stops after ${cfg.stopAfter} s = ${((cfg.discharge * cfg.stopAfter) / 1e6).toFixed(2)} million m³ delivered`
+                : ''),
         );
       } else {
         const along = end.edge === 'north' || end.edge === 'south' ? end.gx : end.gy;
@@ -1451,9 +1674,17 @@ async function bake(def: PresetDef) {
    */
   const rawRoads = def.global
     ? def.global.osmXml.flatMap((rel) => {
-        const file = path.resolve(HERE, '..', rel);
-        const parsed = parseOSMXml(fs.readFileSync(file, 'utf8'));
-        log(def.id, `  OSM ${rel}: ${parsed.length} drivable ways`);
+        const at = path.resolve(HERE, '..', rel);
+        // A directory is a tile cache (scripts/osm-fetch.ts): read the tiles whose bbox touches the domain.
+        const touches = (f: string) => {
+          const tb = tileBoundsOf(f);
+          return !tb || (tb.west < bounds.east && tb.east > bounds.west && tb.south < bounds.north && tb.north > bounds.south);
+        };
+        const files = fs.statSync(at).isDirectory()
+          ? fs.readdirSync(at).filter((f) => f.endsWith('.xml') && touches(f)).sort().map((f) => path.join(at, f))
+          : [at];
+        const parsed = files.flatMap((file) => parseOSMXml(fs.readFileSync(file, 'utf8')));
+        log(def.id, `  OSM ${rel}: ${parsed.length} drivable ways from ${files.length} file(s)`);
         return parsed;
       })
     : (JSON.parse(
@@ -1612,6 +1843,8 @@ async function bake(def: PresetDef) {
     ...(evacStart ? { evacStart } : {}),
     ...(evacCutOff ? { evacCutOff } : {}),
     ...(def.view ? { defaultView: def.view } : {}),
+    // The glacier hazard chain upstream of the domain (scripts/chain-defs.ts; chain.json is baked by bake-chain.ts).
+    ...(hazardChainFor(def.id) ? { hazardChain: hazardChainFor(def.id) } : {}),
   };
 
   // ── Imagery

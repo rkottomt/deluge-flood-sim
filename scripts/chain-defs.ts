@@ -1,0 +1,304 @@
+/**
+ * Glacier-hazard chain definitions: what scripts/bake-chain.ts routes and where its stations are, and the
+ * HazardChainSpec each preset's meta.json carries (scripts/bake-presets.ts writes it into the scenario, and
+ * scripts/bake-chain.ts writes it into an already-baked meta.json, so a re-bake of either keeps it).
+ *
+ * Every coordinate below is either an OpenStreetMap element (named by id; © OpenStreetMap contributors, ODbL) or a
+ * published number (cited). Numbers that are this bake's ASSUMPTIONS rather than anyone's measurement say so, here
+ * and in public/presets/SOURCES.txt.
+ */
+import type { HazardChainSpec } from '../src/hazard/types';
+
+export type LonLat = [number, number];
+
+export interface ChainStationDef {
+  name: string;
+  kind: 'source' | 'lake' | 'gauge' | 'town' | 'hydro' | 'bridge';
+  at: LonLat;
+  /** Use the profile's first node instead of `at` (the source is where the profile starts). */
+  atSource?: boolean;
+  capacityMW?: number;
+  /** Largest allowed distance from the routed river, m (default 600): a town's place node sits beside the river. */
+  maxOffset?: number;
+}
+
+export interface ChainStructureDef {
+  name: string;
+  kind: 'weir' | 'dam';
+  at: LonLat;
+  /** Published structural height, m: crest = profile bed at the structure + height. */
+  height: number;
+  /** Integrate a stage–storage curve from the upstream sections. */
+  storage?: boolean;
+}
+
+export interface ChainDef {
+  /** Preset id (public/presets/<id>/). */
+  id: string;
+  name: string;
+  clockZero?: string;
+  /** Coarse corridor upstream → downstream; only chooses which OSM tiles are downloaded. */
+  route: LonLat[];
+  /** Corridor half-width, degrees. */
+  corridorDeg: number;
+  /** Where the profile starts: the waterway node nearest `at` (on a way whose name matches `wayName`, if given). */
+  source: { at: LonLat; wayName?: RegExp; bedBelow?: number };
+  /** Where the profile ends (inside or past the 2-D domain). */
+  end: LonLat;
+  waterways?: string[];
+  stations: ChainStationDef[];
+  structures: ChainStructureDef[];
+  /** The preset's inflow source the routed hydrograph will replace, and the name of the domainEdge station. */
+  domainEntry: { sourceId: string; name: string };
+  /** Leading sentence(s) of ChainFile.attribution: the sources of the stations, structures and numbers. */
+  attribution: string;
+  hazardChain: HazardChainSpec;
+}
+
+export const CHAIN_DEFS: ChainDef[] = [
+  {
+    id: 'nepal',
+    name: 'Lhende Khola → Bhote Koshi → Trishuli',
+    clockZero: '2026-08-26T08:37:00+05:45',
+    route: [
+      [85.455, 28.5], [85.43, 28.4], [85.385, 28.29], [85.38, 28.27], [85.343, 28.159], [85.3, 28.1], [85.25, 28.06],
+      [85.189, 28.026], [85.1626, 27.952],
+    ],
+    corridorDeg: 0.04,
+    /*
+     * s = 0 is where the Lhende Khola's bed on this DEM first falls below 2,900 m — the elevation at which YAE/KU's
+     * rapid report has the avalanche reaching the river (Chand, Kayastha et al., 31 Aug 2026). The impact point itself
+     * was never located in anything this bake read, so the source is defined by that one published number. It lands
+     * 15.5 km of river above the Rasuwagadhi headworks; NDRRMA puts the source "~20 km upstream". The routed river
+     * is OSM's: Donglin Zangbo / Lende Khola (relation 21285794) → Bhote Koshi → Trishuli (relation 4839538).
+     */
+    source: { at: [85.455, 28.5], wayName: /Lhende|Lende|东林/, bedBelow: 2900 },
+    // The Trishuli's exit through the south edge of the Betrawati domain (the end of bake-presets.ts' traced path).
+    end: [85.1626, 27.952],
+    stations: [
+      { name: 'Lhende Khola at 2,900 m (avalanche runout)', kind: 'source', at: [0, 0], atSource: true },
+      // OSM way 1552793903 "Rasuwagadhi Hydropower Dam" — the headworks, ~400 m below the Kerung–Lende confluence
+      // (rghpcl.com.np). 111 MW: IPPAN via Spotlight Nepal (26 Aug / 1 Sep 2026), Ekantipur 26 Aug 2026.
+      { name: 'Rasuwagadhi HEP headworks', kind: 'hydro', at: [85.3771, 28.27377], capacityMW: 111 },
+      // OSM node 992955542 (place=hamlet "रसुवागढी"), the border post the reports time the flood at.
+      { name: 'Rasuwagadhi', kind: 'town', at: [85.37778, 28.27777] },
+      // OSM node 2553894641 (place=suburb "Timure").
+      { name: 'Timure', kind: 'town', at: [85.36667, 28.25285] },
+      // OSM node 267564991 ("Syafrubesi"/"Shyaphru").
+      { name: 'Syafrubesi', kind: 'town', at: [85.33725, 28.16367] },
+      /*
+       * The Bhote Koshi hydrometric station at Syafrubesi (DHM). Its exact site is not in OSM or in any report this
+       * bake read, so it is placed at the Syafrubesi place node — a station position good to a few hundred metres,
+       * which is what the chain needs for an arrival time, and no better.
+       */
+      { name: 'Syafrubesi gauge (DHM, position approximate)', kind: 'gauge', at: [85.33725, 28.16367] },
+      // OSM node 982602383 "Chilime Hydropower Powerhouse", generator:output:electricity=22.1 MW (Spotlight Nepal: 22 MW).
+      { name: 'Chilime HEP powerhouse', kind: 'hydro', at: [85.33192, 28.15735], capacityMW: 22.1 },
+      // OSM way 1552864314 "Upper Trishuli-1 Hydroelectric Project" (which component is not tagged). 216 MW, under
+      // construction: IPPAN via Spotlight Nepal.
+      { name: 'Upper Trishuli-1 HEP (under construction)', kind: 'hydro', at: [85.20952, 28.07287], capacityMW: 216 },
+      // OSM way 1554017038 "Upper Trishuli 3A" (power=plant). 60 MW: Ekantipur 26 Aug 2026 (three headworks washed away).
+      { name: 'Upper Trishuli-3A HEP powerhouse', kind: 'hydro', at: [85.18635, 28.02532], capacityMW: 60, maxOffset: 300 },
+      // OSM way 1553105361 "Upper Trishuli-3B Powerhouse" (power=plant), inside the 2-D domain. 37 MW: ShareSansar
+      // 1 Sep 2026 ("structures completely destroyed").
+      { name: 'Upper Trishuli-3B HEP powerhouse', kind: 'hydro', at: [85.18306, 27.9949], capacityMW: 37 },
+      /*
+       * Betrawati: OSM way 341461646, the Falaakhu River Bridge at the Phalakhu–Trishuli confluence — the crossing
+       * the scenario is about and where the reports time the flood (~09:20). DHM station 447 (Trishuli at Betrawati)
+       * is here too; its exact site is not published, so no separate gauge station is invented for it.
+       */
+      { name: 'Betrawati', kind: 'town', at: [85.18577, 27.97419] },
+    ],
+    /*
+     * NO STRUCTURES. Every plant on this reach is run-of-river behind a low diversion weir, and no weir height for any of
+     * them was found (Rasuwagadhi's own site gives "overflow diversion weir", gross head 167.9 m, design flow 80 m³/s,
+     * but not the weir's height). A crest invented to the nearest metre would be read as a number someone measured.
+     */
+    structures: [],
+    domainEntry: { sourceId: 'trishuli-inflow', name: 'Betrawati 2-D domain (north edge)' },
+    attribution:
+      'Event times: NDRRMA Rasuwa Flood Situation Report #01 (1 Sep 2026), DHM Flood Forecasting Division technical report (27 Aug 2026, via Kathmandu Post and Onlinekhabar), Chand, Kayastha et al., YAE/HiCCDRC/KU rapid situation report (31 Aug 2026). ' +
+      'Hydropower capacities: IPPAN via Spotlight Nepal (26 Aug and 1 Sep 2026), Ekantipur (26 Aug 2026), ShareSansar (1 Sep 2026), OSM node 982602383. ' +
+      'Station positions: OpenStreetMap elements listed in scripts/chain-defs.ts.',
+    hazardChain: {
+      /*
+       * THE 2026 MECHANISM, per research spec §C.3 / §G.1: an ice-rock avalanche into the river that dammed it for a
+       * short time ("minutes", YAE/KU; an 18–19 h impoundment hypothesis exists and is not the default) and then let go.
+       *   volume      113 Mm³ — YAE/KU's rough collapse estimate (assumed depths, "field verification required"; they
+       *               add 29.4 Mm³ eroded for > 142 Mm³). NDRRMA describes "~1 km² of rock-glacier material".
+       *   fallHeight  2,300 m — failure zone ~5,200 m (YAE/KU) down to the river at 2,900 m (profile s = 0).
+       *   pathLength  13,000 m — ASSUMPTION: map distance from Langtang Lirung's north face to the profile's start.
+       *               H/L ≈ 0.18, in the range of ice-rich rock avalanches (Chamoli 2021: 0.16, Shugar et al. 2021).
+       *   iceFraction 0.2 — ASSUMPTION (the Chamoli rock:ice split, 80:20); no published split for this event.
+       *   damLength   1,500 m — spec default (1–2 km); baseflow 100 m³/s — ASSUMPTION, the low end of the spec's
+       *               monsoon 100–300 m³/s, because the dam sat on the Lhende, not on the larger Kyirong Tsangpo.
+       */
+      trigger: {
+        kind: 'massIntoRiver',
+        mass: { volume: 113e6, iceFraction: 0.2, fallHeight: 2300, pathLength: 13000 },
+        mode: 'transientDam',
+        damLength: 1500,
+        baseflow: 100,
+      },
+      profile: 'chain.json',
+      // Research spec §I.3 "debris flood" preset; uMax 25 m/s — ICIMOD timed ~20 m/s Rasuwagadhi → Betrawati.
+      rheology: { kind: 'voellmy', mu: 0.05, xi: 500 },
+      solver: { uMax: 25 },
+      // The first DHM SMS alerts went out at about 09:15 NPT (DHM issued warnings 09:00–09:16; 632,295–679,295 SMS).
+      alertTime: 38 * 60,
+      observations: [
+        {
+          station: 'Rasuwagadhi',
+          tFront: 3 * 60,
+          note: 'Flood at Rasuwagadhi ~08:40, about three minutes after the 08:37 seismic signal.',
+          source: 'NDRRMA Situation Report #01 (1 Sep 2026); YAE/KU rapid report (31 Aug 2026)',
+        },
+        {
+          station: 'Syafrubesi gauge (DHM, position approximate)',
+          tFront: 13 * 60,
+          note: 'The hydrometric station stopped transmitting at 08:50 (last reading 1.62 m) and was washed away — an upper bound on the arrival time, not a measurement of it.',
+          source: 'DHM Flood Forecasting Division technical report (27 Aug 2026), via Onlinekhabar and Kathmandu Post; NDRRMA SitRep #01',
+        },
+        {
+          station: 'Betrawati',
+          tFront: 43 * 60,
+          note: 'Flood at Betrawati ~09:20; DHM station 447 (warning 4.1 m, danger 5.0 m) last read 3.55 m before it was destroyed.',
+          source: 'NDRRMA SitRep #01 (1 Sep 2026); DHM station 447 page (dhm.gov.np/hydrology/hms-Single/52)',
+        },
+        {
+          station: 'Galchhi',
+          tFront: (10 * 60 + 28 - 517) * 60,
+          note: 'Arrival 10:28, stage +9 m in ~30 min — beyond the profile (validation if it is extended downstream).',
+          source: 'NDRRMA SitRep #01; YAE/KU rapid report',
+        },
+        {
+          station: 'Malekhu',
+          tFront: (11 * 60 + 50 - 517) * 60,
+          note: 'Arrival 11:50, stage +7 m — beyond the profile.',
+          source: 'NDRRMA SitRep #01; YAE/KU rapid report',
+        },
+        { station: 'Mugling', tFront: (13 * 60 - 517) * 60, note: 'Arrival 13:00 — beyond the profile.', source: 'NDRRMA SitRep #01' },
+        {
+          station: 'Devghat',
+          tFront: (15 * 60 + 20 - 517) * 60,
+          qPeak: 5850,
+          tPeak: (16 * 60 - 517) * 60,
+          note: 'Arrival 15:20, peak 5,850 m³/s at 16:00 (stage 6.57 m); 57.40 Mm³ passed, 19.96 Mm³ of it excess — the only measured discharge, 168 km below Betrawati and beyond the profile.',
+          source: 'NDRRMA SitRep #01 (DHM figures)',
+        },
+      ],
+    },
+  },
+  {
+    id: 'chungthang',
+    name: 'South Lhonak → Lhonak Chu → Lachen Chu → Teesta',
+    clockZero: '2023-10-03T22:13:20+05:30',
+    // The rivers as OSM draws them (ways 134410502/293178138/193281483 Goma Chu → 193282162/193282428 Lhonak Chu →
+    // 134410518/481835020 Zemu Chu → 293185705/126757767/126757760 Lachen Chu → 1214968882/… Teesta).
+    route: [
+      [88.1964, 27.9125], [88.2092, 27.9162], [88.3046, 27.878], [88.4162, 27.8709], [88.4508, 27.8535], [88.493, 27.7799],
+      [88.544, 27.7543], [88.6086, 27.6426], [88.6489, 27.6011], [88.6547, 27.5524],
+    ],
+    corridorDeg: 0.05,
+    /*
+     * s = 0 is the head of OSM's Goma Chu (way 134410502, node 4709038501, 27.9162 N, 88.2092 E): the lake's outlet,
+     * 1.4 km east of the lake centroid Eos gives (27.9125 N, 88.1964 E) for a lake ~2.9 km long before the flood
+     * (EGU24-18788).
+     */
+    source: { at: [88.2092, 27.9162], wayName: /Goma/ },
+    // Just inside the south edge of the Chungthang domain, on the Teesta (OSM way 126757765).
+    end: [88.65442, 27.57723],
+    stations: [
+      // The lake: s = 0 (its outlet), position the published centroid (Sattar et al. 2025 via Eos).
+      { name: 'South Lhonak Lake', kind: 'lake', at: [88.1964, 27.9125], atSource: true },
+      // OSM node 342098800 (place=town "Lachen"). The town stands on the valley side above the Lachen Chu.
+      { name: 'Lachen', kind: 'town', at: [88.5495, 27.73061], maxOffset: 1200 },
+      // OSM way 117990901, North Sikkim Highway bridge (NH310A) over the Lachen Chu just above the confluence.
+      { name: 'Chungthang bridge (North Sikkim Highway)', kind: 'bridge', at: [88.646454, 27.601762] },
+      // OSM node 13148720740 (place=village "Chungthang").
+      { name: 'Chungthang', kind: 'town', at: [88.64652, 27.60424] },
+      // OSM way 733894880 "Teesta Stage III Dam" (power=plant, waterway=dam), centroid. 1,200 MW: research spec §G.3
+      // and Sattar et al. 2025 via Eos.
+      { name: 'Teesta-III dam', kind: 'hydro', at: [88.65018, 27.597332], capacityMW: 1200 },
+    ],
+    structures: [
+      /*
+       * Teesta-III: "the 60 m high dam was destroyed" (Sattar et al. 2025 via Eos). Crest = the profile bed at the dam
+       * + 60 m. The bed is the 2011–2015 radar surface, i.e. the river while the dam was under construction, which is
+       * the valley the reservoir would fill; the storage curve is integrated from those sections, so it is the DEM's
+       * valley volume below the crest, not the project's design figure.
+       */
+      { name: 'Teesta-III dam', kind: 'dam', at: [88.65018, 27.597332], height: 60, storage: true },
+    ],
+    domainEntry: { sourceId: 'lachen-chu-inflow', name: 'Chungthang 2-D domain (north edge)' },
+    attribution:
+      'Event: Sattar et al. 2025, Science, doi:10.1126/science.ads2659 (via Eos / The Landslide Blog and Newcastle University). ' +
+      'Lake area: NRSC/ISRO pre/post-outburst map (167.4 ha on 28 Sep 2023); lake volume: EGU24-18788 (102.4 Mm³, 2015–2023 mean). ' +
+      'Peak reconstruction: Natural Hazards 121 (2025), doi:10.1007/s11069-025-07350-9. ' +
+      'Station positions: OpenStreetMap elements listed in scripts/chain-defs.ts.',
+    hazardChain: {
+      /*
+       * Research spec §C.2 / §G.3: a mass movement into the lake → displacement wave → overtopping → breach.
+       *   lake        27.9125 N, 88.1964 E (Eos); ~5,200 m (EGU24-18788); 1.674 km² (NRSC, 28 Sep 2023, 167.4 ha);
+       *               volume 102.4 Mm³ (EGU24-18788, 2015–2023 mean; consistent with "~50 Mm³ ≈ half the lake").
+       *               The ±25 % band (77–128 Mm³) is this bake's ASSUMPTION, not a published interval.
+       *   mass        14.7 Mm³ of frozen lateral moraine (Sattar et al. 2025). A later study puts the debris input at
+       *               ~38 Mm³ (Mohanty et al. 2026, Science Advances) — the published disagreement is real.
+       *               iceFraction 0.2, fallHeight 150 m, pathLength 500 m are ASSUMPTIONS (order of magnitude for a
+       *               lateral-moraine slope into the lake); none was published in the sources read.
+       *   breach      weir + linear erosion (§B.3) with the spec's trigger-driven k = 100 m/h; finalDepth 40 m is the
+       *               spec's ASSUMED value for this lake (§B.3 table), with r = 2, side slope 1, p = 1.5 defaults.
+       */
+      trigger: {
+        kind: 'massIntoLake',
+        lake: {
+          id: 'south-lhonak',
+          name: 'South Lhonak Lake',
+          lat: 27.9125,
+          lon: 88.1964,
+          elevation: 5200,
+          area: 1.674e6,
+          volume: { median: 102.4e6, lo: 76.8e6, hi: 128e6, method: 'empirical' },
+          damType: 'moraine',
+        },
+        mass: { volume: 14.7e6, iceFraction: 0.2, fallHeight: 150, pathLength: 500 },
+        breach: { model: 'weirErosion', erosionRate: 100, finalDepth: 40, widthRatio: 2, sideSlope: 1, hypsometry: 1.5 },
+      },
+      profile: 'chain.json',
+      // §I.3 "debris flood": ~270 Mm³ of sediment was mobilised (Sattar et al. 2025).
+      rheology: { kind: 'voellmy', mu: 0.05, xi: 500 },
+      solver: { uMax: 25 },
+      observations: [
+        {
+          station: 'South Lhonak Lake',
+          tFront: 0,
+          note: '14.7 Mm³ of frozen moraine failed into the lake at 22:13:20 IST; displacement wave ~20 m; ~50 Mm³ (about half the lake) released; peak flow height ~11 m about 1 km downstream.',
+          source: 'Sattar et al. 2025, Science, doi:10.1126/science.ads2659 (via Eos / The Landslide Blog)',
+        },
+        {
+          station: 'Chungthang',
+          tFront: 8200,
+          note: 'The flood reached Chungthang and the Teesta-III dam about 00:30 on 4 Oct (≈ 2 h 15 min after the failure) and destroyed the 60 m dam.',
+          source: 'Sattar et al. 2025, Science (via Eos / The Landslide Blog)',
+        },
+        {
+          station: 'Chungthang',
+          qPeak: 7355,
+          note: 'MODELLED peak (HEC-HMS/HEC-RAS reconstruction calibrated to the gauged peak at Gazoldoba); other studies give 10,282–14,673 m³/s here. No gauge measured it.',
+          source: 'Natural Hazards 121 (2025), doi:10.1007/s11069-025-07350-9; research spec §G.3',
+        },
+        {
+          station: 'Gazoldoba',
+          qPeak: 8252,
+          note: 'Gauged peak at the Gazoldoba barrage on the Teesta in West Bengal — far beyond the profile; the reconstruction above reproduces it with 8,282 m³/s.',
+          source: 'Natural Hazards 121 (2025), doi:10.1007/s11069-025-07350-9',
+        },
+      ],
+    },
+  },
+];
+
+/** HazardChainSpec for a preset id, for scripts/bake-presets.ts. */
+export function hazardChainFor(id: string): HazardChainSpec | undefined {
+  return CHAIN_DEFS.find((d) => d.id === id)?.hazardChain;
+}
