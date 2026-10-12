@@ -72,9 +72,12 @@ const FIT = process.argv.includes('--fit');
 const FILL = process.argv.includes('--fill') ? true : process.argv.includes('--no-fill') ? false : null;
 /**
  * Regional calibration of the estimated-height prior (src/data/buildings.ts). Defaults per preset, because the prior
- * was fitted to US building stock: everything in the United States takes it as fitted, Betrawati does not.
+ * was fitted to US building stock: everything in the United States takes it as fitted, Betrawati does not. Chungthang
+ * (North Sikkim) takes the same Himalayan low-rise prior as Betrawati: it is a closer match to a mountain bazaar of
+ * one- to three-storey masonry and timber than US stock is, and like Betrawati none of its OSM buildings is tagged
+ * with a height or a level count to fit a profile of its own to.
  */
-const HEIGHT_PROFILE_BY_PRESET: Record<string, HeightProfile> = { nepal: 'nepal' };
+const HEIGHT_PROFILE_BY_PRESET: Record<string, HeightProfile> = { nepal: 'nepal', chungthang: 'nepal' };
 const PROFILE_ARG = argValue('profile') as HeightProfile | undefined;
 if (PROFILE_ARG && PROFILE_ARG !== 'us' && PROFILE_ARG !== 'nepal') {
   throw new Error(`--profile must be 'us' or 'nepal', got '${PROFILE_ARG}'`);
