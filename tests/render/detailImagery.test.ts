@@ -16,9 +16,11 @@ after(finishGpuTests);
 
 const MB = 1 / 1e6;
 /** Frame uniform slots (floats) the renderer writes the inset into — see writeFrameUniforms in src/render/index.ts. */
-const RECT0 = 116;
-const STRENGTH = 120;
-const FEATHER = 121;
+// The inset was appended after the shading block (f[116..127]), so it starts at f[128]: Frame.detailRect, then
+// Frame.detail.x (strength) and .y (feather).
+const RECT0 = 128;
+const STRENGTH = 132;
+const FEATHER = 133;
 
 test('imagery texture cost: 4096² is affordable next to the solver, 8192² is not', () => {
   assert.equal(mipCount(4096, 4096), 13);
