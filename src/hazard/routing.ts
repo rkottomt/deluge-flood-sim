@@ -522,6 +522,8 @@ class RouterState {
   /** Manning multiplier for each node's sediment load (dispersiveManningFactor), and its Cv before this step's transport. */
   readonly nFac: Float64Array;
   readonly cvNow: Float64Array;
+  /** Point-source rate into each node this step (baseflow, tributaries, the outburst), m³/s. */
+  readonly srcRate: Float64Array;
   /** 1 / the shorter of each node's two face lengths. */
   readonly invLmin: Float64Array;
   /** Constant clear-water sources per node (baseflow, tributaries), and the baseflow each node passes on, m³/s. */
@@ -564,6 +566,7 @@ class RouterState {
     this.Wnode = new Float64Array(N);
     this.nFac = new Float64Array(N).fill(1);
     this.cvNow = new Float64Array(N);
+    this.srcRate = new Float64Array(N);
     const lf = net.lf;
     this.invLmin = Float64Array.from({ length: N }, (_, i) => 1 / Math.min(i > 0 ? lf[i - 1] : Infinity, i < N - 1 ? lf[i] : Infinity));
     this.qConst = new Float64Array(N);
@@ -673,7 +676,7 @@ function nodePass(st: RouterState): number {
  * (off during the spin-up). Four passes: sources; face fluxes; per-node limiter; transport; then nodePass.
  */
 function advance(st: RouterState, t: number, dt: number, flood: boolean): number {
-  const { net, N, W, S, h, Q, Qn, outV, lim, cvNow, AfLast, MF, Anode, nFac, qConst, constNodes, qBaseNode } = st;
+  const { net, N, W, S, h, Q, Qn, outV, lim, cvNow, srcRate, AfLast, MF, Anode, nFac, qConst, constNodes, qBaseNode } = st;
   const ZB = net.zb;
   const ILF = net.invLf;
   const IDX = net.invDx;
@@ -690,13 +693,15 @@ function advance(st: RouterState, t: number, dt: number, flood: boolean): number
   const FR2 = ROUTING_FROUDE_MAX * ROUTING_FROUDE_MAX;
   const entryFace = st.entryFace;
 
-  // 1. Sources: water with its sediment, booked into the balance.
+  // 1. Sources: water with its sediment, booked into the balance; srcRate keeps each node's source rate this step.
+  srcRate.fill(0);
   let wIn = 0;
   let sIn = 0;
   for (let c = 0; c < constNodes.length; c++) {
     const i = constNodes[c];
     const v = qConst[i] * dt;
     W[i] += v;
+    srcRate[i] = qConst[i];
     wIn += v;
   }
   if (flood) {
@@ -706,6 +711,7 @@ function advance(st: RouterState, t: number, dt: number, flood: boolean): number
       if (!(v > 0)) continue;
       const vs = v * f.cv;
       W[f.node] += v - vs;
+      srcRate[f.node] += v / dt;
       S[f.node] += vs;
       wIn += v - vs;
       sIn += vs;
@@ -770,8 +776,10 @@ function advance(st: RouterState, t: number, dt: number, flood: boolean): number
           Wf = 0.5 * (widthAt(net, i, hf) + widthAt(net, k, hf));
         }
         const qPrev = Q[f];
-        const qL = f > 0 && WEIR[f - 1] < 0 ? Q[f - 1] : qPrev;
-        const qR = f < N - 2 && WEIR[f + 1] < 0 ? Q[f + 1] : qPrev;
+        // Neighbours corrected for the point sources between them and this face (a tributary, the outburst inflow), so
+        // the smoothing does not bleed a junction's jump in Q into the face above it.
+        const qL = f > 0 && WEIR[f - 1] < 0 ? Q[f - 1] + srcRate[i] : qPrev;
+        const qR = f < N - 2 && WEIR[f + 1] < 0 ? Q[f + 1] - srcRate[k] : qPrev;
         const qs = theta * qPrev + 0.5 * (1 - theta) * (qL + qR);
         const nEff = 0.5 * (MAN[i] + MAN[k]) * nFac[qs >= 0 ? i : k];
         // Semi-implicit Manning: g·n²·|Q|/(A·R^{4/3}) in the denominator can only slow the flow.
@@ -1113,7 +1121,8 @@ export interface StationReadout {
 
 /**
  * Front, peak and stage at a probe. Front = first time Q > baseflow + max(10 m³/s, 5 % of the peak's excess over
- * baseflow) OR the stage has risen 0.5 m (defaults.ts FRONT_*), linearly interpolated between steps.
+ * baseflow) OR the stage has risen 0.5 m while Q exceeds baseflow by 10 m³/s (defaults.ts FRONT_*), interpolated between
+ * steps (the stage clause to the step it is met at).
  */
 export function readProbe(t: Float64Array, p: ProbeSeries): StationReadout {
   let k = 0;
@@ -1134,7 +1143,9 @@ export function readProbe(t: Float64Array, p: ProbeSeries): StationReadout {
     let fq = Infinity;
     let fs = Infinity;
     if (bq > thrQ) fq = aq > thrQ ? 0 : (thrQ - aq) / (bq - aq);
-    if (bs > thrStage) fs = as > thrStage ? 0 : (thrStage - as) / (bs - as);
+    // The stage clause counts only while more water is actually passing (Q above baseflow by 10 m³/s): a backwater rise
+    // from a tributary junction or a reservoir settling after the spin-up is not a flood front.
+    if (bs > thrStage && bq > p.qBase + FRONT_Q_MIN) fs = as > thrStage && aq > p.qBase + FRONT_Q_MIN ? 0 : 1;
     const fr = Math.min(fq, fs);
     if (Number.isFinite(fr)) {
       tFront = t[i - 1] + fr * (t[i] - t[i - 1]);

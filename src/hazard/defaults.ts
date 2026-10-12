@@ -168,9 +168,10 @@ export const ROUTING_T_MAX = 24 * 3600;
 
 /**
  * Front arrival at a station: the first time Q exceeds the station's baseflow by max(FRONT_Q_MIN, FRONT_Q_FRAC × the
- * station's peak excess) OR the stage has risen FRONT_STAGE_RISE above its value at t = 0. The absolute 10 m³/s keeps
- * numerical noise from counting; 5 % of the excess scales the threshold for big rivers (Devghat carries ~2,500 m³/s
- * before the wave); the stage clause is what a gauge reader or a riverside villager notices. [H]
+ * station's peak excess) OR the stage has risen FRONT_STAGE_RISE above its value at t = 0 while Q exceeds baseflow by
+ * FRONT_Q_MIN. The absolute 10 m³/s keeps numerical noise from counting; 5 % of the excess scales the threshold for big
+ * rivers (Devghat carries ~2,000 m³/s before the wave); the stage clause is what a gauge reader or a riverside villager
+ * notices, and its flow condition keeps a backwater rise (a tributary junction settling, a reservoir) from counting. [H]
  */
 export const FRONT_Q_MIN = 10;
 export const FRONT_Q_FRAC = 0.05;
