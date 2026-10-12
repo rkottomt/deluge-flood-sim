@@ -16,6 +16,8 @@ import type { WallStatus } from './wallCheck';
 import type { ChainFile, HazardChainSpec } from '../hazard/types';
 import type { ChainOverrides, ChainRunResult, EnsembleMember, EnsembleResult } from '../hazard/chain';
 import type { Sensor, WarningObjective } from '../hazard/warning';
+import type { AssetTally, EnsembleRanges, EnsembleSummary, MemberResult } from '../loss/ensemble';
+import type { PortfolioAsset } from '../loss/portfolio';
 
 /** Terrain under the cursor while a tool that cares about it is active. */
 export interface HoverInfo {
@@ -88,6 +90,41 @@ export interface SimControl {
   simClock(): number;
   /** While on, the view renders at most a couple of times a second. */
   setRenderHold(on: boolean): void;
+  /** The GPU flood-probability accumulator on the scene's grid (src/sim/ensemble.ts), or null without a GPU scene. */
+  ensembleMap?(): EnsembleMapControl | null;
+}
+
+/** What the ensemble runner may do with the GPU accumulator (the app owns it and hands it to the renderer). */
+export interface EnsembleMapControl {
+  /** Start over: every count back to 0, and the probability view shows nothing until the next accumulate. */
+  clear(): void;
+  /** Fold the solver's current max depth in as one more member; the probability view shows the tally so far. */
+  accumulate(): void;
+  readonly members: number;
+  /** The accumulator read back (nx·ny × 4 floats; tests and exports). */
+  read(): Promise<Float32Array>;
+}
+
+/** The latest flood-probability ensemble of the scene on screen (src/ui/ensemble.ts), for the map, Site check and the panel. */
+export interface EnsembleView {
+  /** presetId|terrainName of the scene it was run on. */
+  sceneKey: string;
+  ranges: EnsembleRanges;
+  seed: number;
+  /** Members planned and completed (completed < planned after a cancel). */
+  planned: number;
+  rows: MemberResult[];
+  summary: EnsembleSummary | null;
+  /** Simulated seconds per member. */
+  durationS: number;
+  /** Per Site check site (by site id) and per portfolio asset (in CSV order). */
+  sites: Map<string, AssetTally>;
+  assets: AssetTally[];
+  /** Site specs as they were when the ensemble ran (JSON keys), to flag later edits. */
+  siteKeys: Map<string, string>;
+  cancelled: boolean;
+  /** Wall seconds the whole run took. */
+  seconds: number;
 }
 
 /** Where the inflow on the map comes from on a chain preset. */
@@ -199,6 +236,11 @@ export class UIBridge {
   /** The early-warning design (null until the chain section creates one for the scene). */
   warning: WarningDesign | null = null;
   readonly warningChanged = new Channel<WarningDesign | null>();
+  /** The latest flood-probability ensemble (null: none for this scene). */
+  ensemble: EnsembleView | null = null;
+  readonly ensembleChanged = new Channel<EnsembleView | null>();
+  /** The portfolio the Impact section has loaded (its parsed assets), for the ensemble's per-asset probabilities. */
+  portfolio: PortfolioAsset[] | null = null;
   private readonly notices = new Channel<Notice>();
   /** Notices posted before the UI mounted are delivered when it subscribes. */
   private pending: Notice[] = [];
@@ -233,6 +275,12 @@ export class UIBridge {
     if (c === this.chain) return;
     this.chain = c;
     this.chainChanged.emit(c);
+  }
+
+  setEnsemble(e: EnsembleView | null): void {
+    if (e === this.ensemble) return;
+    this.ensemble = e;
+    this.ensembleChanged.emit(e);
   }
 
   setWarning(w: WarningDesign | null): void {
