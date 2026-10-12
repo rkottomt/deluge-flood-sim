@@ -84,6 +84,26 @@ adapts solver substeps and render resolution to measured frame time and GPU late
 battery, but 60 fps needs mains power. On an Apple M4 the 1936 crest flood with extreme rain runs at 60 fps (p95 frame 19 ms) and
 ~70× real time at 1600×1000 (numbers and the MacBook Air expectation: [ARCHITECTURE.md §8.1](ARCHITECTURE.md#81-performance-budget-measured)).
 
+## Impact & loss
+
+The side panel's **Impact & loss** section (collapsed; nothing in it runs until asked) turns the flood on screen into
+what it does to the buildings under it: buildings reached, damaged and destroyed, an estimated dollar loss with its
+range, AIDR H1–H6 hazard classes, the first arrival at a building, and buildings whose access road went under. It
+reads the solver's per-cell maxima (`FloodSolver.readHazardFields`); a solver without them gets a depth-only fallback
+that says so. Damage comes from the JRC global depth–damage curves (Huizinga et al. 2017) applied storey by storey,
+values from footprint area × storeys × a per-country unit cost (US, India, Nepal; 2026 USD), and fast water from the
+Clausen & Clark depth × velocity thresholds. **Set as baseline**, build a wall, replay and recompute for avoided loss,
+buildings the wall makes wetter, wall cost and a single-event benefit–cost ratio at 7 % and 3.1 %. A sites / portfolio
+CSV (`asset_id, lat, lon` or a WKT polygon, plus optional values, floors, revenue …) is parsed in the tab — never
+uploaded — and exported results come as a CSV or a print-ready report with the methods and sources. Everything
+behind it is pure TypeScript in [`src/loss`](src/loss), every assumption a named constant with its source, tested in
+`tests/loss`.
+
+On the 1936 crest (30 simulated minutes, depth-only fallback) the panel books about 1,330 of Pittsburgh's 45,000
+buildings reached and **$5.5 B** (±1σ curve range $3.8–7.0 B); the one-click levee avoids about $1.0 B of it. These
+are screening numbers for one simulated event on bare-earth terrain: not a flood study, not an insurance valuation,
+not a catastrophe model, and the real uncertainty is wider than the band (values, terrain, missing drains).
+
 ## Seven cities, offline
 
 Every scene below is baked into the repo and needs no network: real USGS elevation, real NAIP photography, real Census
@@ -198,6 +218,7 @@ every ~300 ms, never blocking: stats reduction pass ─▶ mapAsync ─▶ HUD +
 | [`src/render`](src/render) | terrain LOD, water, hazard maps, walls, roads/route ribbons, camera, picking |
 | [`src/data`](src/data) | USGS 3DEP / imagery / roads loaders, hydro-conditioning, presets, live areas |
 | [`src/routing`](src/routing) | road graph, flood status per edge, travel-time Dijkstra |
+| [`src/loss`](src/loss) | impact & loss: damage curves, values, hazard classes, access loss, sites/portfolio CSV, EAL/BCR (pure, no DOM) |
 | [`src/ui`](src/ui) | panels, tools, HUD, How it works, location picker |
 | [`src/app`](src/app) | scene loading, store → solver sync, stage ramp, protected-land analysis, frame pacing, screen wake lock, debug API (`window.__deluge`, dev and flagged builds only) |
 
