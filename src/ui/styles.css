@@ -5081,6 +5081,10 @@ html[data-deluge-presentation='on'] .dl-tutorial {
   line-height: 1;
 }
 .dl-site-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
 /* ── Glacier hazard chain: event clock, valley timeline, panel section ─────────────────────── */
 .dl-clock-event {
   font-size: 10.5px;
@@ -5646,6 +5650,7 @@ select.dl-num-input {
 }
 .dl-site-options table {
   font-size: 11px;
+}
 .dl-chain-kv {
   display: grid;
   grid-template-columns: 1fr auto;
