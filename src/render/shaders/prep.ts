@@ -45,10 +45,13 @@ fn bed(p: vec2i) -> f32 {
 /**
  * Numerically blown-up cell: non-finite values, or values no flood can reach
  * (robust mode caps speeds at 15 m/s and never produces negative depth). NaN fails every comparison, so the tests
- * are written as "not within range".
+ * are written as "not within range" — but a compiler that assumes no NaNs may rewrite !(x < a) as x >= a, and Windows'
+ * legacy FXC (Dawn/Chrome on D3D12) does: a NaN velocity went unflagged there. So non-finite values are also caught
+ * from their IEEE-754 bit pattern (all-ones exponent), which no compiler can fold away (as in sim/shaders/stats.ts).
  */
 fn blownState(s: vec4f) -> bool {
-  return !(s.r > -0.25 && s.r < 1000.0) || !(abs(s.g) < 150.0) || !(abs(s.b) < 150.0) || !(s.a < 1e4);
+  let nonFinite = any((bitcast<vec4u>(s) & vec4u(0x7f800000u)) == vec4u(0x7f800000u));
+  return nonFinite || !(s.r > -0.25 && s.r < 1000.0) || !(abs(s.g) < 150.0) || !(abs(s.b) < 150.0) || !(s.a < 1e4);
 }
 /** Sentinel written to the foam channel of blown-up cells (real foam is ≤ 1.5); the water shader paints it. */
 const BLOWN_FOAM: f32 = 8.0;

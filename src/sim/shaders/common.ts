@@ -129,10 +129,13 @@ fn bflux(h: f32, i: i32, j: i32, di: i32, dj: i32) -> f32 {
  * The grid is kept ≥ 2^-126 (a normal float): Apple GPUs flush subnormals to zero, and d / 0 then made NaN for
  * d ≈ 1e-35. The powers of two are built from bits (exact) and applied by multiplication. Non-finite values stay
  * non-finite (the naive reference mode must still visibly blow up).
+ * ulpExp reads the exponent field of m's bits directly, with no abs(): `>> 23u & 0xffu` already drops the sign bit, so
+ * the result is identical for every input (NaN, ±0, subnormals included). The abs() made Windows' legacy FXC compiler
+ * (Dawn/Chrome on D3D12) fail sim.stats with a bare E_FAIL: asuint(abs(x)) of a max() over storage-buffer loads.
  */
 export const SNAP_WGSL = /* wgsl */ `
 fn ulpExp(m: f32) -> i32 {
-  return max(i32((bitcast<u32>(abs(m)) >> 23u) & 0xffu), 24);
+  return max(i32((bitcast<u32>(m) >> 23u) & 0xffu), 24);
 }
 fn snapE(d: f32, e: i32) -> f32 {
   return round(d * bitcast<f32>(u32(277 - e) << 23u)) * bitcast<f32>(u32(e - 23) << 23u);
