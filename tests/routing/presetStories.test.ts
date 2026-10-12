@@ -86,7 +86,9 @@ test('every stage preset names an evacuation start whose route re-plans, then lo
   let checked = 0;
   for (const id of ids) {
     const world = loadPresetWorld(id);
-    const hint = world.meta.scenario.evacStart;
+    // The "loses its last road" story belongs to evacCutOff where a preset has one: evacStart is then picked to KEEP a
+    // route at the crest (ScenarioPreset.evacStart), and Pittsburgh moved its cut-off story to Market Square.
+    const hint = world.meta.scenario.evacCutOff ?? world.meta.scenario.evacStart;
     if (!world.stage || !hint) continue;
     checked++;
     const { peak, steps } = followTheRise(world, hint, 20);
@@ -122,7 +124,7 @@ test('every stage preset names an evacuation start whose route re-plans, then lo
 
 test('Pittsburgh: the named start still re-plans Mount Washington → Hill District and is then cut off', () => {
   const world = loadPresetWorld('pittsburgh');
-  const hint = world.meta.scenario.evacStart!;
+  const hint = world.meta.scenario.evacCutOff ?? world.meta.scenario.evacStart!;
   const { steps } = followTheRise(world, hint, 20);
   const shelters = steps.map((s) => s.route.shelter?.name ?? '');
   const first = shelters.find(Boolean);
