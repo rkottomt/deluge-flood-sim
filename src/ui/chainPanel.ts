@@ -4,7 +4,7 @@
  * reconstructed, modelled or scenario — a few what-ifs that re-run the chain in the worker (the trigger volume within
  * its band, the breach's erosion rate, the avalanche's mechanism), and the ensemble's p10 / p50 / p90 of the peak
  * discharge and the arrival at the map's edge. Which inflow drives the map — the routed chain or the preset's own —
- * is a switch here too.
+ * is a switch here too. Under the results, the Early warning block (warningPanel.ts): sensors, lead times, best site.
  *
  * The app does the work (src/app/hazardChain.ts) and publishes a ChainView on the UI bridge; this file only draws it
  * and calls ChainControl. All text goes through textContent.
@@ -17,6 +17,7 @@ import { button, segmented, slider, type Slider } from './controls';
 import { fmtNum, formatDischarge } from './format';
 import { formatSpan, formatWhen, parseEventClock, triggerSummary, volumeFactorFor, type EventClock, type TriggerSummary } from './chainTime';
 import { logToT, tToLog } from './scales';
+import { createWarningBlock } from './warningPanel';
 
 const PROVENANCE_TIP: Record<Provenance, string> = {
   observed: 'Observed — measured or reported at the time',
@@ -72,6 +73,8 @@ export function createChainSection(ctx: UIContext): ChainSection {
     { label: 'Inflow on the map', className: 'dl-seg-full', tipSide: 'top' },
   );
   const obsList = h('ul', { class: 'dl-chain-obs' });
+  // The early-warning designer (warningPanel.ts): built once, kept across rebuilds; it follows the chain view itself.
+  const warning = createWarningBlock(ctx);
 
   function whatIf(): ChainWhatIf {
     const overrides: ChainWhatIf['overrides'] = {};
@@ -208,6 +211,7 @@ export function createChainSection(ctx: UIContext): ChainSection {
       h('div', { class: 'dl-row dl-chain-actions' }, runBtn, resetBtn, h('span', { class: 'dl-flex' })),
       h('div', { class: 'dl-chain-statusrow' }, progress, statusText),
       results,
+      warning.el,
       h('div', { class: 'dl-label-row' }, h('span', { class: 'dl-label' }, 'Inflow on the map')),
       inflowSeg.el,
       obsList.childElementCount ? h('div', { class: 'dl-label-row' }, h('span', { class: 'dl-label' }, 'Observed'), provenanceBadge('observed')) : null,

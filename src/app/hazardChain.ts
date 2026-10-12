@@ -164,6 +164,7 @@ export class HazardChainController {
       result: null,
       bands: null,
       entryBand: null,
+      members: null,
       offset: 0,
       whatIf: { overrides: {} },
       inflow: this.inflow,
@@ -238,7 +239,7 @@ export class HazardChainController {
     if (this.busy) this.disposeBackend();
     const backend = (this.backend ??= (this.deps.createBackend ?? createHazardWorker)());
     const current = () => token === this.sceneToken && runId === this.runToken;
-    this.publish({ status: 'running', progress: null, error: null, whatIf, bands: null, entryBand: null });
+    this.publish({ status: 'running', progress: null, error: null, whatIf, bands: null, entryBand: null, members: null });
     this.busy = true;
     try {
       const { ms, result } = await backend.run(spec, file, overrides);
@@ -252,7 +253,7 @@ export class HazardChainController {
         },
       });
       if (!current()) return;
-      this.publish({ status: 'ready', progress: null, bands: ensemble.stationBands, entryBand: ensemble.result.ensemble ?? null });
+      this.publish({ status: 'ready', progress: null, bands: ensemble.stationBands, entryBand: ensemble.result.ensemble ?? null, members: ensemble.members });
     } catch (err) {
       if (!current()) return;
       // The map already runs on the routed hydrograph when only the ensemble failed: keep it, say so.

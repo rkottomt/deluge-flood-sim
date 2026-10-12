@@ -14,7 +14,8 @@
 import type { CameraController, FloodSolver, Store, TerrainData } from '../contracts';
 import type { WallStatus } from './wallCheck';
 import type { ChainFile, HazardChainSpec } from '../hazard/types';
-import type { ChainOverrides, ChainRunResult, EnsembleResult } from '../hazard/chain';
+import type { ChainOverrides, ChainRunResult, EnsembleMember, EnsembleResult } from '../hazard/chain';
+import type { Sensor, WarningObjective } from '../hazard/warning';
 
 /** Terrain under the cursor while a tool that cares about it is active. */
 export interface HoverInfo {
@@ -115,6 +116,8 @@ export interface ChainView {
   /** p10 / p50 / p90 per station and at the domain entry, once the ensemble has run for this what-if. */
   bands: EnsembleResult['stationBands'] | null;
   entryBand: ChainRunResult['ensemble'] | null;
+  /** The ensemble's members (station fronts), for the early-warning lead-time bands; null/absent until it has run. */
+  members?: EnsembleMember[] | null;
   /** Chain time (s after clock zero) at the 2-D solver's t = 0. */
   offset: number;
   /** The what-if the result is for. */
@@ -125,6 +128,25 @@ export interface ChainView {
   origin: 'baked' | 'worker';
   /** Worker time of the last run, ms. */
   ms: number | null;
+}
+
+/**
+ * The early-warning design on a chain preset (src/ui/warningPanel.ts edits it, chainTimeline.ts draws and drags its
+ * sensors): sensors placed on the valley profile and the optimiser's settings. UI state only — nothing in the app or
+ * the simulation reads it. Tied to the chain's sceneKey: a new scene starts a fresh design.
+ */
+export interface WarningDesign {
+  sceneKey: string;
+  sensors: Sensor[];
+  objective: WarningObjective;
+  /** Highest bed elevation a sensor may sit at, m a.s.l. (access), or null for anywhere on the profile. */
+  maxElevation: number | null;
+  /** Latency preset new sensors get (src/hazard/warning.ts LATENCY_PRESETS id). */
+  presetId: string;
+  /** The station the lead-time-vs-position chart is about (null: the furthest town). */
+  target: string | null;
+  /** The next click on the valley profile places a sensor. */
+  placing: boolean;
 }
 
 /** What the chain section may ask of the app. */
@@ -174,6 +196,9 @@ export class UIBridge {
   chain: ChainView | null = null;
   chainControl: ChainControl | null = null;
   readonly chainChanged = new Channel<ChainView | null>();
+  /** The early-warning design (null until the chain section creates one for the scene). */
+  warning: WarningDesign | null = null;
+  readonly warningChanged = new Channel<WarningDesign | null>();
   private readonly notices = new Channel<Notice>();
   /** Notices posted before the UI mounted are delivered when it subscribes. */
   private pending: Notice[] = [];
@@ -208,6 +233,12 @@ export class UIBridge {
     if (c === this.chain) return;
     this.chain = c;
     this.chainChanged.emit(c);
+  }
+
+  setWarning(w: WarningDesign | null): void {
+    if (w === this.warning) return;
+    this.warning = w;
+    this.warningChanged.emit(w);
   }
 
   notify(n: Notice): void {

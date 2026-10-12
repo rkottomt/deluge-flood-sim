@@ -44,6 +44,7 @@ import { fmtNum, formatAcres, formatClock, formatDuration, formatMoney } from '.
 import { bcrView, compareRuns, type Comparison, type RunSignature, type RunSnapshot } from './impactCompare';
 import { METHOD_NOTES } from './impactMethods';
 import { buildingLabel, buildReport, printReport, reportHtmlDocument } from './impactReport';
+import { buildWarningSection } from './warningReport';
 
 /** Auto-update period while the flood runs, ms of wall time. */
 export const AUTO_MS = 5000;
@@ -729,6 +730,7 @@ export function createImpactSection(ctx: UIContext): ImpactSection {
       comparison: c,
       bcr: view,
       mitigation: c ? { label: MITIGATION_LABELS[mitigation], lengthM: wallLength ?? 0, heightM: wallHeight ?? 0, returnPeriod } : null,
+      earlyWarning: buildWarningSection(bridge.chain, bridge.warning),
     });
   }
 

@@ -29,6 +29,7 @@ import { meltFromTrigger } from './melt';
 import { nodeAt, readProbe, resampleProfile, route, sectionArea, valleyStorage, type MassBalance, type RoutingOptions } from './routing';
 import { Series, sumSeries, zeroSeries } from './series';
 import { drainableVolume } from './volume';
+import type { FrontProfile } from './frontProfile';
 
 /** What a caller may change about one run without editing the scenario. */
 export interface ChainOverrides {
@@ -108,6 +109,8 @@ export interface ChainRunResult extends ChainResult {
   entryFront: number;
   entryPeak: number;
   routing: { steps: number; nodeSteps: number; ms: number; tEnd: number; capped: number; uPeak: number; massBalance: MassBalance; dx: number };
+  /** Front arrival along the profile (src/hazard/frontProfile.ts runChainWithProfile; absent from a plain runChain). */
+  frontProfile?: FrontProfile;
 }
 
 // ────────────────────────────────────────────────────────────────────────────────────────────

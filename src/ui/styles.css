@@ -5081,6 +5081,10 @@ html[data-deluge-presentation='on'] .dl-tutorial {
   line-height: 1;
 }
 .dl-site-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
 /* ── Glacier hazard chain: event clock, valley timeline, panel section ─────────────────────── */
 .dl-clock-event {
   font-size: 10.5px;
@@ -5646,6 +5650,7 @@ select.dl-num-input {
 }
 .dl-site-options table {
   font-size: 11px;
+}
 .dl-chain-kv {
   display: grid;
   grid-template-columns: 1fr auto;
@@ -5685,4 +5690,258 @@ select.dl-num-input {
   .dl-cl-chips {
     display: none;
   }
+}
+
+/* Early-warning designer (warningPanel.ts; sensors on the valley timeline in chainTimeline.ts) */
+.dl-ew {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 8px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+  box-shadow: inset 0 0 0 1px var(--dl-line-2);
+  --dl-ew-sensor: #c58bff;
+}
+.dl-ew-intro,
+.dl-ew-note,
+.dl-ew-hint,
+.dl-ew-suggestion,
+.dl-ew-observed {
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--dl-text-2);
+}
+.dl-ew-note,
+.dl-ew-hint {
+  color: var(--dl-text-3);
+}
+.dl-ew-hint:empty,
+.dl-ew-suggestion:empty,
+.dl-ew-observed:empty {
+  display: none;
+}
+.dl-ew-suggestion {
+  color: var(--dl-text);
+}
+.dl-ew-baseline {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0 8px;
+  font-size: 12px;
+}
+.dl-ew-k {
+  color: var(--dl-text-2);
+}
+.dl-ew-v {
+  font-weight: 700;
+  text-align: right;
+  white-space: nowrap;
+}
+.dl-ew-band {
+  grid-column: 1 / -1;
+  font-size: 11px;
+  color: var(--dl-text-3);
+}
+.dl-ew-actions {
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.dl-ew-add.dl-on {
+  box-shadow: inset 0 0 0 1px var(--dl-ew-sensor);
+  color: var(--dl-ew-sensor);
+}
+.dl-ew-sensors {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.dl-ew-sensors:empty {
+  display: none;
+}
+.dl-ew-sensor {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 5px 6px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+}
+.dl-ew-sensor.dl-ew-first {
+  box-shadow: inset 0 0 0 1px rgba(197, 139, 255, 0.55);
+}
+.dl-ew-sensor-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  min-width: 0;
+}
+.dl-ew-dot {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  background: var(--dl-ew-sensor);
+  color: #1a1024;
+  font-size: 10px;
+  font-weight: 800;
+}
+.dl-ew-where {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dl-text-3);
+  font-size: 11px;
+}
+.dl-ew-tag {
+  flex: none;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--dl-ew-sensor);
+}
+.dl-ew-remove {
+  flex: none;
+  padding: 0 4px;
+}
+.dl-ew-sensor-lat {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+.dl-ew-lat .dl-num-wrap {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.dl-ew-chips {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));
+  gap: 5px;
+}
+.dl-ew-chip {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 4px 7px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  box-shadow: inset 0 0 0 1px var(--dl-line-2);
+  font-size: 11px;
+  color: var(--dl-text-3);
+  font-variant-numeric: tabular-nums;
+}
+.dl-ew-chip-name {
+  font-weight: 700;
+  color: var(--dl-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dl-ew-chip-lead {
+  font-size: 12.5px;
+  font-weight: 750;
+  color: var(--dl-ok-text);
+}
+.dl-ew-tight .dl-ew-chip-lead {
+  color: var(--dl-warn-text);
+}
+.dl-ew-short .dl-ew-chip-lead,
+.dl-ew-none .dl-ew-chip-lead {
+  color: var(--dl-danger-text);
+}
+.dl-ew-none {
+  box-shadow: inset 0 0 0 1px rgba(255, 92, 92, 0.45);
+}
+.dl-ew-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-width: 340px;
+}
+.dl-ew-svg text,
+.dl-ew-axis {
+  font-size: 9.5px;
+  fill: var(--dl-text-3);
+}
+.dl-ew-axis-line {
+  stroke: var(--dl-line-2);
+}
+.dl-ew-curve {
+  fill: none;
+  stroke: var(--dl-ew-sensor);
+  stroke-width: 2;
+}
+.dl-ew-base-line {
+  stroke: var(--dl-warn-text);
+  stroke-dasharray: 3 3;
+}
+.dl-ew-base-label {
+  fill: var(--dl-warn-text);
+}
+.dl-ew-pt {
+  fill: #fff;
+  stroke: var(--dl-ew-sensor);
+  stroke-width: 2;
+}
+.dl-ew-caveats {
+  margin: 0;
+  padding: 0 0 0 14px;
+  font-size: 11px;
+  color: var(--dl-text-3);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.dl-ew-observed .dl-prov {
+  margin: 0 4px 0 0;
+}
+.dl-cl-sensor {
+  cursor: grab;
+}
+.dl-cl-dragging .dl-cl-sensor {
+  cursor: grabbing;
+}
+.dl-cl-sensor-stem {
+  stroke: #c58bff;
+  stroke-width: 1.5;
+}
+.dl-cl-sensor-mark {
+  fill: #c58bff;
+  stroke: #1a1024;
+  stroke-width: 1;
+}
+.dl-cl-sensor-first .dl-cl-sensor-mark {
+  fill: #e2c2ff;
+}
+.dl-cl-sensor-num {
+  font-size: 8.5px !important;
+  font-weight: 800;
+  fill: #1a1024 !important;
+  pointer-events: none;
+}
+.dl-cl-sensor-hit {
+  fill: transparent;
+}
+.dl-cl-placing .dl-cl-svg {
+  cursor: crosshair;
+  outline: 1px dashed rgba(197, 139, 255, 0.6);
+  outline-offset: -1px;
+  border-radius: 6px;
+}
+.dl-cl-chip-ew {
+  grid-column: 1 / -1;
+  white-space: nowrap;
+  color: #d9b8ff;
+  font-weight: 650;
+}
+.dl-cl-chip-ew[data-sev='short'] {
+  color: var(--dl-danger-text);
+}
+.dl-ew-chip-own {
+  color: #d9b8ff;
 }

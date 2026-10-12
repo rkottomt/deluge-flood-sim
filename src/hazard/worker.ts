@@ -3,7 +3,7 @@
  * stalls the page. Driven by src/hazard/workerClient.ts.
  *
  * Protocol (every request is answered once; progress messages may precede the answer):
- *   → { type: 'run', id, spec, file, overrides? }                one deterministic run
+ *   → { type: 'run', id, spec, file, overrides? }                one deterministic run (+ its front profile)
  *   → { type: 'ensemble', id, spec, file, overrides?, memberDx? } the §I.5 ensemble
  *   ← { type: 'progress', id, done, total }                       ensemble only
  *   ← { type: 'result', id, ms, result }  |  { type: 'ensemble', id, ms, ensemble }
@@ -14,7 +14,8 @@
  * across slider changes.
  */
 import type { ChainFile, HazardChainSpec } from './types';
-import { runChain, runEnsemble, type ChainOverrides, type ChainRunResult, type EnsembleResult } from './chain';
+import { runEnsemble, type ChainOverrides, type ChainRunResult, type EnsembleResult } from './chain';
+import { runChainWithProfile } from './frontProfile';
 
 export type HazardWorkerRequest =
   | { type: 'run'; id: number; spec: HazardChainSpec; file: ChainFile; overrides?: ChainOverrides }
@@ -46,7 +47,8 @@ scope.onmessage = (e) => {
   try {
     const file = sameFile(m.file);
     if (m.type === 'run') {
-      const result = runChain(m.spec, file, m.overrides);
+      // With the front-arrival profile for the early-warning designer (src/hazard/frontProfile.ts; same stations).
+      const result = runChainWithProfile(m.spec, file, m.overrides);
       scope.postMessage({ type: 'result', id: m.id, ms: performance.now() - t0, result });
     } else {
       const ensemble = runEnsemble(m.spec, file, m.overrides, {
