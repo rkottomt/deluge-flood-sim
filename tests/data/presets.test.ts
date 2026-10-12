@@ -1012,7 +1012,7 @@ test('chungthang: the routed chain hydrograph, the South Lhonak chain, and the c
   assert.ok(dam.storage && dam.storage.length > 2);
 });
 
-test('chamoli: a labelled placeholder debris flow, the Ronti Gad chain, a rheology that moves, and the caveats on screen', { skip: !fs.existsSync(path.join(ROOT, 'chamoli/meta.json')) }, () => {
+test('chamoli: the routed debris flow, the Ronti Gad chain, a rheology that moves, and the caveats on screen', { skip: !fs.existsSync(path.join(ROOT, 'chamoli/meta.json')) }, () => {
   const { meta, elevation } = load('chamoli');
   const s = meta.scenario;
   // 12 km at 1024² (11.7 m cells): both plants and the reach below Tapovan in one map (scripts/bake-presets.ts).
@@ -1020,30 +1020,34 @@ test('chamoli: a labelled placeholder debris flow, the Ronti Gad chain, a rheolo
   assert.ok(Math.abs(meta.cellSize - 12000 / 1024) < 0.01, `cell ${meta.cellSize}`);
   assert.equal(s.sources.length, 1, 'one forcing: the debris flow down the Rishiganga');
   const src = s.sources[0];
-  assert.ok(src.type === 'inflow' && src.hydrograph && src.hydrograph.length > 10, 'a hydrograph inflow');
+  assert.ok(src.type === 'inflow' && src.hydrograph && src.hydrograph.length > 50, 'a routed hydrograph inflow');
   if (src.type !== 'inflow' || !src.hydrograph) return;
   /*
-   * The placeholder carries published numbers and the chain's own arithmetic, nothing else: its peak is the top of
-   * Shugar et al.'s 8,200–14,200 m³/s band, its volume the direct-flow mixture 26.9 Mm³ × 20 % ice × 0.917 / (1 − 0.4)
-   * ≈ 8.2 Mm³ (src/hazard/mass.ts directFlow), on the §B.4 gamma shape — a SHAPE, so the label says so.
+   * The inflow is the hazard chain's routed debris flow (scripts/bake-chain-result.ts, the ensemble's median member),
+   * like the other glacier presets'. Against the published reconstruction (Shugar et al. 2021, a MEAN discharge of
+   * 8,200–14,200 m³/s at the Rishiganga plant and 2,900–4,900 below Tapovan) the model's peaks must land in the right
+   * neighbourhood — at Raini inside the band, below Tapovan within half again of it — or the chain is not this event.
    */
   const peak = Math.max(...src.hydrograph.map((p) => p.q));
-  assert.equal(peak, 14200);
-  assert.equal(src.discharge, peak);
-  assert.equal(src.hydrograph[0].q, 0);
-  assert.equal(src.hydrograph[src.hydrograph.length - 1].q, 0);
-  const vol = hydrographVolume(src.hydrograph, 0, src.stopAfter ?? Infinity);
-  const mixture = (26.9e6 * 0.2 * 0.917) / (1 - 0.4);
-  assert.ok(Math.abs(vol - mixture) / mixture < 0.01, `the placeholder delivers ${(vol / 1e6).toFixed(2)} million m³, not the ${(mixture / 1e6).toFixed(2)} the chain releases`);
-  // Its mean over the central ten minutes sits inside the published band of MEAN discharge.
-  const tp = src.hydrograph.reduce((b, p) => (p.q > b.q ? p : b)).t;
-  const mean10 = hydrographVolume(src.hydrograph, tp - 300, tp + 300) / 600;
-  assert.ok(mean10 > 8200 && mean10 < 14200, `mean over the central 10 min ${mean10.toFixed(0)} m³/s`);
-  assert.match(src.label!, /placeholder/);
+  assert.equal(src.discharge, Math.round(peak), 'discharge is the peak (labels and the CFL fallback read it)');
+  assert.match(src.label!, /modelled/);
   assert.match(src.label!, /not a measured hydrograph/);
-  assert.match(s.description, /parametric placeholder, not a measured hydrograph/);
+  assert.equal(s.hazardChain?.result, 'chain-result.json');
+  const cr = loadChainResult('chamoli');
+  const st = (name: string) => cr.stations.find((x) => x.name === name)!;
+  const raini = st('Rishiganga HEP, Raini (position approximate)');
+  assert.ok(raini.qPeak >= 8200 && raini.qPeak <= 14200, `model peak at Raini ${raini.qPeak} m³/s`);
+  const below = st('Tapovan');
+  assert.ok(below.qPeak >= 2900 && below.qPeak <= 4900 * 1.5, `model peak below Tapovan ${below.qPeak} m³/s`);
+  const tap = st('Tapovan-Vishnugad HEP barrage (under construction)');
+  assert.ok(Number.isFinite(tap.tFront) && tap.tFront! > 0, 'the modelled front reaches the barrage');
   assert.match(s.description, /8,200 to 14,200 m³\/s/, 'the published band, not just the number used');
-  assert.match(s.description, /clock starts as the front reaches the east edge/);
+  assert.ok(s.description.includes(`the run starts at ${clockAt(cr.clockZero!, cr.domain.offset)}`), 'the 2-D clock is stated');
+  assert.ok(s.description.includes(`the Tapovan barrage at ${clockAt(cr.clockZero!, tap.tFront!)}`), 'the model front, from chain-result.json');
+  assert.ok(s.description.includes(`${Math.round(peak).toLocaleString('en-US')} m³/s`), 'the inflow peak, as shipped');
+  assert.match(s.description, /about 10:36 observed/);
+  assert.match(s.description, /the model’s error/);
+  assert.match(s.description, /floor has been cut along the river/, 'the terrain edit is on screen, not only in SOURCES.txt');
   assert.match(s.description, /surface model with canopy and buildings/);
   assert.match(s.description, /25 m\/s speed cap/);
   assert.match(s.description, /neither picks up nor drops sediment/);
@@ -1091,11 +1095,11 @@ test('chamoli: a labelled placeholder debris flow, the Ronti Gad chain, a rheolo
   assert.equal(at('Rishiganga HEP, Raini (position approximate)').capacityMW, 13.2);
   assert.equal(at('Tapovan-Vishnugad HEP barrage (under construction)').capacityMW, 520);
   // Shugar et al.: the Rishiganga plant ~15 km from the source, Joshimath 16 km below Raini.
-  const raini = at('Rishiganga HEP, Raini (position approximate)').s;
-  assert.ok(raini > 13_000 && raini < 17_000, `Raini at ${raini} m`);
-  const jm = at('Joshimath (Vishnuprayag confluence)').s - raini;
+  const rainiS = at('Rishiganga HEP, Raini (position approximate)').s;
+  assert.ok(rainiS > 13_000 && rainiS < 17_000, `Raini at ${rainiS} m`);
+  const jm = at('Joshimath (Vishnuprayag confluence)').s - rainiS;
   assert.ok(jm > 14_000 && jm < 18_000, `Raini → Joshimath ${jm} m`);
-  assert.ok(c.domainEntry.s < raini, 'the chain enters the map above the Rishiganga plant');
+  assert.ok(c.domainEntry.s < rainiS, 'the chain enters the map above the Rishiganga plant');
   assert.equal(hc.observations!.find((o) => o.tFront !== undefined && o.station.startsWith('Tapovan-Vishnugad'))!.tFront, 900);
   // No barrage crest invented where no height was published.
   assert.equal(c.structures.length, 0);
@@ -1186,7 +1190,14 @@ for (const id of BAKED.filter(hasChain)) {
     assert.equal(flatFaces(c.zBed), 0, 'flat faces in the bed: the staircase is back');
     let steepest = 0;
     for (let i = 1; i < n; i++) steepest = Math.max(steepest, (c.zBed[i - 1] - c.zBed[i]) / ((c.s[i] - c.s[i - 1]) / 100));
-    assert.ok(steepest < 25, `a ${steepest.toFixed(1)} m drop per 100 m: a step, not a smoothed bed`);
+    /*
+     * Chamoli's profile starts in the Ronti Gad, a glacier torrent, not a valley river: over the 700 m above its
+     * Rishiganga confluence (9.4–10.1 km) the smoothed bed falls 27–29 m per 100 m node after node, a sustained ~16°
+     * gradient rather than one step (the profile drops 4,066 → 2,247 m over its first 11.5 km, 16 % on average). The
+     * step test there is 32 m; everywhere else it stays at 25.
+     */
+    const stepLimit = id === 'chamoli' ? 32 : 25;
+    assert.ok(steepest < stepLimit, `a ${steepest.toFixed(1)} m drop per 100 m: a step, not a smoothed bed`);
     /*
      * A FLOOR, not a slot: every section is at least MIN_FLOOR_WIDTH (one DEM cell, 25 m) wide one metre above its bed
      * (scripts/chain-profile.ts withFloor) — the first bake had gorge sections 3 m wide at 5 m of stage.

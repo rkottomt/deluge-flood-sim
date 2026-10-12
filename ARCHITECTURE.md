@@ -323,10 +323,10 @@ O'Brien–Julien Glenwood 1 at Cv 0.3, carry the surge down the valley at water-
 The Chamoli preset is the debris-FLOW case and specifies O'Brien–Julien Glenwood 1 at Cv 0.45 (τ_y ≈ 29 Pa,
 η ≈ 8.9 Pa·s, K 2,285). Measured headless on its own terrain with the chain-routed inflow
 (`artifacts/chamoli-build/tools/physics.mjs`): the front reaches the Tapovan barrage, 10 km of river into the map,
-1,140 s after the inflow starts, against 960 s for water — 19 % slower, and it keeps going out of the map. Voellmy
-μ 0.05 stalls ~1 km below Raini (μ exceeds the Dhauliganga's 2.3 % bed slope), and the stiff end of the O'Brien–Julien
-table (Aspen Pit 1, τ_y ≈ 1.9 kPa, η ≈ 75 Pa·s at Cv 0.45) is down to 1–2 m/s 3–4 km below Raini after 25 minutes. The same runs found that the
-radar DSM's false sills in the Rishiganga slot gorge pond even clear water 48 m deep; the bake's gorge floor
+1,080 s after the solver starts, against 900 s for water and 960 s for Glenwood 1 at Cv 0.3 — 20 % slower than water,
+and it runs on out of the map. Voellmy μ 0.05 stops ~1.3 km below Raini (μ exceeds the Dhauliganga's 2.3 % bed slope),
+and the stiff end of the O'Brien–Julien table (Aspen Pit 1, τ_y ≈ 1.9 kPa, η ≈ 75 Pa·s at Cv 0.45) never reaches the
+barrage: after 25 minutes its fastest cell moves at 2.6 m/s, 600 m short of it. The same runs found that the radar DSM's false sills in the Rishiganga slot gorge pond even clear water 48 m deep; the bake's gorge floor
 (`RiverDef.carve`, public/presets/SOURCES.txt) is what lets any rheology through.
 
 ## 4. Rivers, stages and crests
