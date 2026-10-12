@@ -13,7 +13,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 
 /** Every .ts file under src/, excluding the WGSL shader sources (plain strings, no DOM). */
 function sourceFiles(dir: string, out: string[] = []): string[] {
@@ -28,7 +28,8 @@ function sourceFiles(dir: string, out: string[] = []): string[] {
 
 const SRC = fileURLToPath(new URL('../../src/', import.meta.url));
 const REPO = fileURLToPath(new URL('../../', import.meta.url));
-const rel = (f: string) => f.slice(REPO.length);
+/** Repo-relative path with forward slashes, so ALLOWED's keys match on Windows too (join() yields backslashes there). */
+const rel = (f: string) => f.slice(REPO.length).split(sep).join('/');
 
 /** Strip comments so a sink named in prose does not count as a sink. */
 const code = (f: string) =>
