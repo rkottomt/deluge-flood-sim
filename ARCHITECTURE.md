@@ -24,7 +24,8 @@ Contents: [1 Frame pipeline](#1-frame-pipeline) · [2 Module map](#2-module-map)
    │        Pass B  continuity   state + fluxes ──▶ state   (limiter, ∂h/∂t, rain, sources, stages, boundaries,
    │                                                        mass ledger)
    │     Export     state ──▶ stateTexture (h, u, v, max depth), lazily: when the renderer reads it (the frames
-   │                that refresh its water textures) or a stats readback needs it
+   │                that refresh its water textures) or a stats readback needs it; also folds into the per-cell
+   │                hazard accumulators (max speed, max depth × speed, arrival time, wet seconds; §3.7)
    │
    ├─ every ~300 ms (never blocking): stats reduction pass + depth copy → mapAsync → Float64 statistics
    │        └─▶ HUD (flooded area, volume, max speed, mass-balance error, Courant) and road flood status
@@ -194,6 +195,21 @@ and apply the same math to CPU mirrors of ground and walls, which picking and ro
 water in place for river crests (§4). The stats pass reduces the exported state per 16×16 block on the GPU, so a
 readback costs a few milliseconds of main-thread time at 1024².
 
+**Hazard accumulators.** What loss and impact models need beyond the current depth — per cell, the maximum speed while
+wet, the maximum depth × speed, the time the water first stood deeper than 0.15 m (`ARRIVAL_DEPTH`) and the total time
+it stayed that deep (`HazardFields` in `src/contracts.ts`) — is gathered by the export pass into one `vec4f` per cell
+of a storage buffer, updated in place (`shaders/exportState.ts`; Float64 mirror in `src/sim/hazard.ts`). Not per
+substep: that would add a 16-byte read, and on wet cells a write, to each of up to 256 substeps a frame (~20 % of a
+substep at 1024², by the accounting buffer's measured cost). The export already loads the previous export's depth, so
+the time a cell crosses 0.15 m is interpolated linearly between the two exports instead of stamped at the later one:
+arrival times land within one export interval of the per-substep answer and ~¼ of one on average (a dam-break front,
+`tests/sim/hazard.test.ts`, where every export is also replayed on the CPU and the front checked against Ritter). A
+cell that wets and dries again between two exports is missed, and the maxima are sampled at exports, as max depth
+always was. Cells dry now and at the last export with no flow skip the buffer entirely, so the export went from 0.21 to
+0.23 ms at 1024² on a river valley (0.30 ms with every cell wet; Dawn on D3D12), and nothing changes per substep.
+`readHazardFields()` copies the buffer and the exported state to its own staging buffers on demand (~32 B/cell),
+independently of the stats readbacks; `hazardBuffer` hands it to the renderer (§6).
+
 ### 3.8 The naive reference mode, and surviving it
 
 `SimParams.stabilityMode = 'naive'` is the textbook scheme with the four ingredients above taken out: explicit
@@ -362,8 +378,12 @@ rebuilt only when `terrainVersion` changes); the main pass
 renders to MSAA 4× HDR (`rgba16float`, reversed-Z `depth32float`): sky, LOD terrain with imagery, water surface (depth
 absorption, Fresnel reflection, flow-advected ripples, muddy opaque floodwater on land that was dry at reset, a wet
 edge at the flood front), drawn walls with a screen-space minimum width, road and route ribbons coloured by flood
-status, markers and rain. Bloom and ACES tonemapping follow. Hazard maps (depth, max depth, speed) colour only land
-that was dry at reset; their colours are solved through the tone mapper so the screen matches the legend. An
+status, markers and rain. Bloom and ACES tonemapping follow. Hazard maps (depth, max depth, speed, arrival time,
+AIDR 2017 hazard class) colour only land that was dry at reset (speed excepted); their colours are solved through the
+tone mapper so the screen matches the legend. Arrival and hazard class are read from the solver's hazard accumulators
+(§3.7) by the prep pass, drawn on the max-depth surface: minutes since reset (premultiplied by "the water got here",
+so filtering toward land it never reached keeps the right time and fades the colour out), and H1–H6 from the maxima of
+depth, speed and depth × speed, classified with WGSL generated from the legend's own threshold table. An
 adaptive resolution controller keeps frame time on target; the app also tells it how hard the solver is pushing for GPU
 time (§8), so it does not spend on pixels what the flood needs in substeps. Terrain and water are CDLOD meshes of
 32×32-quad patches sized to ~4 px per quad by default: vertex work was half of the renderer's GPU time.
