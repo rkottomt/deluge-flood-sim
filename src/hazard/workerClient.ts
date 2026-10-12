@@ -30,9 +30,9 @@ function inlineBackend(): HazardChainBackend {
   return {
     offThread: false,
     async run(spec, file, overrides) {
-      const { runChain } = await import('./chain');
+      const { runChainWithProfile } = await import('./frontProfile');
       const t0 = performance.now();
-      const result = runChain(spec, file, overrides);
+      const result = runChainWithProfile(spec, file, overrides);
       return { id: nextId++, ms: performance.now() - t0, result };
     },
     async ensemble(spec, file, overrides, opts) {
