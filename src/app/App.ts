@@ -84,6 +84,8 @@ export class App {
   scenes: SceneManager | null = null;
   tools: ToolController | null = null;
   probe: ProbeSampler | null = null;
+  /** A long automated run (the Site check sweep) holds rendering to a slow heartbeat (FrameDriver). */
+  renderHold = false;
 
 
   /** Resolves when the first scene is on screen; rejects if startup fails (main.ts hands it to the debug API). */
@@ -196,6 +198,14 @@ export class App {
       this.errors.report('ui', `mountUI failed: ${errorMessage(err)}`, err);
     }
     document.getElementById('boot')?.remove();
+    bridgeFor(store).sim = {
+      runFor: (s) => this.runFor(s),
+      simClock: () => this.driver.simClock,
+      setRenderHold: (on) => {
+        this.renderHold = on;
+        this.requestRender();
+      },
+    };
 
     const format = navigator.gpu.getPreferredCanvasFormat();
     const renderer = await createRenderer(gpu.device, this.canvas, format);

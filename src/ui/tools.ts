@@ -22,12 +22,14 @@ import type {
   ToolId,
   WaterSource,
 } from '../contracts';
-import { gridToGeo } from '../data/geo';
+import { geoToGrid, gridToGeo } from '../data/geo';
 import { TOOL_BY_ID } from './toolDefs';
 import { bridgeFor, type HoverInfo, type WallSegment } from './bridge';
 import { checkWall, scanWalls, stageSurface, suggestedWallHeight, wallShare, WALL_ALARM_CELLS, WALL_MAX, WALL_MIN } from './wallCheck';
 import { formatStageFt } from './format';
 import { stageFt } from './scales';
+import { sitesFor } from './sites';
+import { SITE_LIMITS } from '../loss/site';
 
 /** Max inflow + stage sources and storm cells the solver supports (MAX_SOURCES / MAX_STORMS in src/sim/constants.ts). */
 export const MAX_SOURCES = 16;
@@ -70,7 +72,30 @@ type Gesture =
   | { kind: 'wall'; pointerId: number; pts: number[] }
   | { kind: 'erase'; pointerId: number; last: { gx: number; gy: number } | null }
   | { kind: 'hold'; pointerId: number }
-  | { kind: 'click'; pointerId: number; x: number; y: number; moved: boolean };
+  | { kind: 'click'; pointerId: number; x: number; y: number; moved: boolean }
+  | { kind: 'site'; pointerId: number; x: number; y: number; moved: boolean; pts: number[] };
+
+/** Smallest outline the site tool accepts, m² (a smaller drag is taken as a click: a pin). */
+export const SITE_MIN_OUTLINE_M2 = 150;
+
+/**
+ * A lasso drawn with the site tool → an outline of at most `maxCorners` corners (grid coords), or null when it is too
+ * small or degenerate to be a parcel.
+ */
+export function siteOutline(pts: number[], cellSize: number, maxCorners: number): number[] | null {
+  if (pts.length < 6) return null;
+  let eps = 0.5;
+  let out = simplifyPolyline(pts, eps);
+  while (out.length / 2 > maxCorners && eps < 1e4) out = simplifyPolyline(pts, (eps *= 2));
+  // A closed lasso ends near its start: drop the duplicate closing corner.
+  const n = out.length;
+  if (n >= 8 && Math.hypot(out[0] - out[n - 2], out[1] - out[n - 1]) < 1) out = out.slice(0, n - 2);
+  if (out.length < 6) return null;
+  let a = 0;
+  const m = out.length / 2;
+  for (let i = 0, j = m - 1; i < m; j = i++) a += (out[2 * j] + out[2 * i]) * (out[2 * j + 1] - out[2 * i + 1]);
+  return (Math.abs(a) / 2) * cellSize * cellSize >= SITE_MIN_OUTLINE_M2 ? out : null;
+}
 
 /** Ramer–Douglas–Peucker simplification of an interleaved [x0,y0,x1,y1,…] polyline. */
 export function simplifyPolyline(pts: number[], eps: number): number[] {
@@ -161,6 +186,7 @@ export function createToolController(canvas: HTMLCanvasElement, deps: ToolContro
   let transientDirty = true;
   const activePointers = new Set<number>();
   const bridge = bridgeFor(store);
+  const sites = sitesFor(store);
   const scene = {
     getTerrain: () => deps.getTerrain(),
     getSolver: () => deps.getSolver(),
@@ -270,6 +296,7 @@ export function createToolController(canvas: HTMLCanvasElement, deps: ToolContro
 
   function cancelGesture() {
     if (gesture.kind !== 'none' && 'pointerId' in gesture) release(gesture.pointerId);
+    if (gesture.kind === 'site') sites.setDraft(null);
     gesture = { kind: 'none' };
     transientDirty = true;
   }
@@ -622,6 +649,10 @@ export function createToolController(canvas: HTMLCanvasElement, deps: ToolContro
         gesture = { kind: 'click', pointerId: e.pointerId, x: pointer.x, y: pointer.y, moved: false };
         capture(e.pointerId);
         break;
+      case 'site':
+        gesture = { kind: 'site', pointerId: e.pointerId, x: pointer.x, y: pointer.y, moved: false, pts: hit ? [hit.gx, hit.gy] : [] };
+        capture(e.pointerId);
+        break;
     }
     e.preventDefault?.();
   }
@@ -672,7 +703,81 @@ export function createToolController(canvas: HTMLCanvasElement, deps: ToolContro
       case 'click':
         if (Math.hypot(pointer.x - gesture.x, pointer.y - gesture.y) > CLICK_SLOP_PX) gesture.moved = true;
         break;
+      case 'site': {
+        if (e.pointerId !== gesture.pointerId) break;
+        if (Math.hypot(pointer.x - gesture.x, pointer.y - gesture.y) > CLICK_SLOP_PX) gesture.moved = true;
+        if (!gesture.moved) break;
+        const evs = e.getCoalescedEvents?.() ?? [];
+        for (const ce of evs.length ? evs : [e]) {
+          const hit = pickAt(ce.clientX - rect.left, ce.clientY - rect.top);
+          if (!hit) continue;
+          const p = gesture.pts;
+          const n = p.length;
+          if (n < 2 || Math.hypot(hit.gx - p[n - 2], hit.gy - p[n - 1]) >= 0.75) p.push(hit.gx, hit.gy);
+        }
+        // Cap a runaway lasso (a very long drag): thin it; the commit simplifies anyway.
+        if (gesture.pts.length > 4000) gesture.pts = simplifyPolyline(gesture.pts, 0.5);
+        sites.setDraft(gesture.pts.slice());
+        break;
+      }
     }
+  }
+
+  /** Site tool: a click drops a pin (or selects a site under it); a drag around a parcel outlines it. */
+  function commitSite(g: Extract<Gesture, { kind: 'site' }>) {
+    sites.setDraft(null);
+    const terrain = deps.getTerrain();
+    const grid = gridInfo();
+    if (!terrain || !grid) return;
+    const toGeo = (gx: number, gy: number) => gridToGeo(terrain, gx, gy);
+    if (!g.moved) {
+      const hit = pickAt(pointer.x, pointer.y);
+      if (!hit) return;
+      const maxD = removeDistance(grid);
+      const at = sites.sites.map((s) => {
+        const p = geoToGridPoint(s.lon, s.lat);
+        return { gx: p[0], gy: p[1] };
+      });
+      const near = nearestWithin(at, hit.gx, hit.gy, maxD);
+      if (near >= 0) {
+        sites.select(sites.sites[near].id);
+        return;
+      }
+      if (sites.full) {
+        bridge.notify({ kind: 'info', key: 'limit-sites', title: `Site limit reached (${SITE_LIMITS.maxSites})`, message: 'Remove a site in the Site check panel to add another.' });
+        return;
+      }
+      const ll = toGeo(hit.gx, hit.gy);
+      sites.add(ll.lon, ll.lat);
+      return;
+    }
+    const outline = siteOutline(g.pts, grid.cellSize, SITE_LIMITS.maxRing);
+    if (!outline) {
+      bridge.notify({ kind: 'info', key: 'site-outline', title: 'Outline too small', message: `Drag all the way around the parcel (at least ${SITE_MIN_OUTLINE_M2} m²), or click once for a pin.` });
+      return;
+    }
+    if (sites.full) {
+      bridge.notify({ kind: 'info', key: 'limit-sites', title: `Site limit reached (${SITE_LIMITS.maxSites})`, message: 'Remove a site in the Site check panel to add another.' });
+      return;
+    }
+    let cx = 0;
+    let cy = 0;
+    const ring: number[] = [];
+    for (let i = 0; i < outline.length; i += 2) {
+      cx += outline[i];
+      cy += outline[i + 1];
+      const ll = toGeo(outline[i], outline[i + 1]);
+      ring.push(ll.lon, ll.lat);
+    }
+    const c = toGeo(cx / (outline.length / 2), cy / (outline.length / 2));
+    sites.add(c.lon, c.lat, ring);
+  }
+
+  function geoToGridPoint(lon: number, lat: number): [number, number] {
+    const t = deps.getTerrain();
+    if (!t) return [NaN, NaN];
+    const p = geoToGrid(t, lon, lat);
+    return [p.gx, p.gy];
   }
 
   function onPointerUp(e: PointerEvent) {
@@ -685,6 +790,8 @@ export function createToolController(canvas: HTMLCanvasElement, deps: ToolContro
     } else if (g.kind === 'click' && !g.moved) {
       const hit = pickAt(pointer.x, pointer.y);
       if (hit) clickAt(state().tool, hit);
+    } else if (g.kind === 'site') {
+      commitSite(g);
     }
     release(e.pointerId);
     gesture = { kind: 'none' };
