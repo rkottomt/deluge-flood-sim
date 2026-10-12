@@ -222,15 +222,15 @@ sources accessed 19-20 September 2026. The full research trail is artifacts/nepa
                  analysis, and neither claim appears in this app.
                  Numbers used on screen, each as published:
                    * about 20 million m3 of excess water down the Bhote Koshi / Trishuli / Narayani system - DHM Flood
-                     Forecasting Division technical report, 27 August 2026. The inflow this scenario uses, 11,100 m3/s,
-                     is that volume divided by 30 minutes. IT IS ARITHMETIC ON A REPORTED VOLUME, NOT A MEASURED PEAK,
-                     and the app's own label and scenario text say so.
-                     AND THE INFLOW STOPS AFTER THOSE 30 MINUTES (WaterSource.stopAfter, honoured by the solver), so
-                     the run delivers 11,100 x 1,800 s = 19.98 million m3 - the reported total, to within the rounding
-                     of the discharge to a hundred m3/s - and then nothing. It did not, until the September 2026 audit:
-                     the source had no duration, so the same peak kept arriving and the run had put 2.07e7 m3 into the
-                     valley by 31 simulated minutes and 5.15e7 m3 by 78, while the label still said 20 million.
-                     tests/data/presets.test.ts asserts the product and tests/sim asserts the solver delivers it.
+                     Forecasting Division technical report, 27 August 2026. THE INFLOW IS THE HAZARD CHAIN'S (since
+                     October 2026): scripts/bake-chain-result.ts turns the avalanche's melted ice (20.7 million m3 of
+                     water - matching that 20 million) into a debris flood, routes it down chain.json and writes the
+                     ensemble median member's hydrograph at the north edge as the inflow, labelled "modelled ... not a
+                     measured hydrograph"; chain-result.json carries that run's fronts, peaks, bands and lead times.
+                     It replaced 11,100 m3/s held for 30 minutes (the volume divided by half an hour - arithmetic, not
+                     a peak; WaterSource.stopAfter, still asserted in tests/sim). The 2-D clock is now the event's (t =
+                     0 five minutes before the modelled front reaches the edge); the model's front at Betrawati is ~75 %
+                     LATER than the reported 09:20, and the text says so - research spec §G.9 has the diagnosis.
                    * Trishuli at Betrawati, DHM station 447 (dhm.gov.np/hydrology/hms-Single/52): warning level 4.1 m,
                      danger level 5.0 m, last reading 3.55 m at 09:20 before the station was destroyed. There is no
                      measured peak level or discharge here, and none is shown.
@@ -376,7 +376,7 @@ licences, same caveats, and every one of them is in the on-screen scenario text.
                  Himalayan low-rise ('nepal') prior - none is tagged with a height or level count. The Microsoft ML
                  footprint fill found no footprints in this domain.
 
-  meta.json      THE FORCING IS A PLACEHOLDER, and says so in its label and in the text. The event: at 22:13:20 IST
+  meta.json      THE FORCING IS MODELLED (the hazard chain), and says so in its label and in the text. The event: at 22:13:20 IST
                  on 3 October 2023 about 14.7 million m3 of frozen lateral moraine collapsed into South Lhonak Lake
                  (~5,200 m), raising a ~20 m displacement wave that breached the moraine dam; ~50 million m3 - about
                  half the lake - was released, ~270 million m3 of sediment mobilised, and the flood reached Chungthang
@@ -385,15 +385,15 @@ licences, same caveats, and every one of them is in the on-screen scenario text.
                  not from the paper itself). A later study puts the debris input at ~38 million m3 (Mohanty et al.
                  2026, Science Advances); the disagreement is real and is recorded, not resolved.
                  Peak at Chungthang: NO GAUGE. Published values are model reconstructions spanning 7,355 to 14,673
-                 m3/s (research spec §G.3). Used: 7,355 m3/s, the HEC-HMS/HEC-RAS reconstruction in Natural Hazards
-                 121 (2025), doi:10.1007/s11069-025-07350-9, chosen because it is the one calibrated against a GAUGE
-                 (Gazoldoba, observed ~8,252 m3/s, modelled 8,282). Its time series was not available, so the inflow
-                 is the spec's §B.4 gamma shape (a = 3) through that peak with the 50 million m3 released at the lake:
-                 rising from zero to the peak in 76 minutes and falling over about four hours more, delivering 49.89
-                 million m3 (0.2 % short of 50, the tail cut at 4 x the time to peak). IT IS A STAND-IN FOR THE
-                 ROUTED HYDROGRAPH the hazard-chain engine will put at this edge, not a reconstruction; it ignores the
-                 attenuation and bulking between lake and Chungthang, and the 2-D clock starts when the front reaches
-                 the north edge (about 00:30), not at the collapse. The solver is clear water capped at 15 m/s.
+                 m3/s (research spec §G.3); the text quotes that whole range. THE FORCING IS THE HAZARD CHAIN'S
+                 (since October 2026): scripts/bake-chain-result.ts runs the chain (impulse wave -> overtopping ->
+                 breach -> 1-D routing down chain.json), takes the ensemble's median member and writes its routed
+                 hydrograph at the north edge as the inflow, labelled "modelled ... not a measured hydrograph"; that
+                 run's station fronts, peaks and ensemble bands are in chain-result.json. It replaced a parametric
+                 gamma placeholder through the 7,355 m3/s HEC-RAS peak (Natural Hazards 121 (2025),
+                 doi:10.1007/s11069-025-07350-9) with the 50 million m3 released. The 2-D clock is now the event's:
+                 t = 0 is the chain time five minutes before the modelled front reaches the north edge (chain-result
+                 domain.offset). Model vs observed: research spec §G.9. The 2-D solver's speed cap still applies.
                  SHELTER: ONE, the Gurudwara (OSM node 10852707609), snapped to a road node 107 m away at 1,614 m on
                  this DEM, 45 m above the channel surface beside it. Rinchen gompa (node 10852708207) and the Tibetan
                  monastery at Pegong (node 10852710206) stand higher but have no drivable road node on high ground within

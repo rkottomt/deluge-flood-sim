@@ -27,6 +27,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { CameraPose, GridRect, HydrographPoint, ScenarioPreset, Shelter, StageControl, StormCell, WaterSource, WaterViewMode } from '../src/contracts';
+import { applyChainResult } from './bake-chain-result';
 import { hazardChainFor } from './chain-defs';
 import { tileBoundsOf } from './osm-fetch';
 import { hydrographVolume } from '../src/sim/forcing';
@@ -1846,6 +1847,15 @@ async function bake(def: PresetDef) {
     // The glacier hazard chain upstream of the domain (scripts/chain-defs.ts; chain.json is baked by bake-chain.ts).
     ...(hazardChainFor(def.id) ? { hazardChain: hazardChainFor(def.id) } : {}),
   };
+  /*
+   * A preset with a baked valley profile floods from its hazard chain: the inflow above (and the description) are the
+   * pre-chain placeholders, replaced here by the chain's routed hydrograph — the ensemble's median member — with its
+   * chain-result.json written beside it (scripts/bake-chain-result.ts). Without chain.json (a first bake, before
+   * scripts/bake-chain.ts has run) the placeholder stays.
+   */
+  if (scenario.hazardChain && fs.existsSync(path.join(OUT, def.id, scenario.hazardChain.profile))) {
+    applyChainResult(def.id, scenario, (m) => log(def.id, m), OUT);
+  }
 
   // ── Imagery
   // 4096²: ≈ 2 m per texel over Pittsburgh's 8 km, sharp at the 0.5–2 km camera distances where walls get drawn and

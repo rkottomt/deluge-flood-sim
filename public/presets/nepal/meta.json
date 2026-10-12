@@ -14,7 +14,7 @@
  },
  "attribution": "Elevation: Copernicus DEM GLO-30 (© DLR e.V. 2010–2014 / © Airbus Defence and Space GmbH, ESA), bare-earth filtered · Terrain shading: no aerial imagery (hypsometric tint) · Roads © OpenStreetMap contributors (ODbL) · Buildings © OpenStreetMap contributors & Microsoft ML Building Footprints (ODbL)",
  "scenario": {
-  "description": "Betrawati stands where the Phalakhu Khola meets the Trishuli on the Nuwakot–Rasuwa district line, and its bridge carried the Pasang Lhamu Highway — the only road into Rasuwa district. On the morning of 26 August 2026 rock and glacier ice broke from the north face of Langtang Lirung and fell about 1,200 m into the Lhende Khola, sending a debris flood down the Bhote Koshi and the Trishuli; it reached Betrawati around 9:20 am, minutes after the first SMS alerts went out, and took the bridge with it. Nepal’s Flood Forecasting Division reported about 20 million m³ of excess water down the river system, and this run releases that volume over 30 minutes — about 11,100 m³/s, an average rather than a measured peak, because the gauge here (warning level 4.1 m, danger level 5 m) last read 3.55 m and was swept away before the crest arrived; the inflow then stops, so the run delivers that volume and no more. The terrain is Copernicus 30 m radar data, a surface model with canopy and buildings in it. The bare-earth filter only runs on ground flatter than 20°, and 77 % of this domain is steeper: the valley floor is filtered and still a metre or two high, the walls above it are the raw surface model. No photograph is baked in — open satellite imagery of this valley could be redistributed, but composing a cloud-free monsoon mosaic of it was beyond this bake and the ready-made cloud-free mosaics are licensed against redistribution — so the ground is shaded by height instead. The rivers start dry, because no surviving gauge gives their flow that morning and this model cannot hold a river that falls 167 m across the domain at a level — so every drop you see is the modelled surge. The clock is the model’s, not the flood’s: the front sits on the solver’s 15 m/s speed cap from the first half-minute on, so these are not the real arrival times. Watch which roads go under and in what order, and where the routes turn uphill, and do not read street-level depths.",
+  "description": "Betrawati stands where the Phalakhu Khola meets the Trishuli on the Nuwakot–Rasuwa district line, and its bridge carried the Pasang Lhamu Highway — the only road into Rasuwa district. At 8:37 am on 26 August 2026 rock and glacier ice broke from the north face of Langtang Lirung and fell about 1,200 m into the Lhende Khola, sending a debris flood down the Bhote Koshi and the Trishuli; it reached Betrawati around 9:20 am by the official account (about 9:00 in another reconstruction), minutes after the first SMS alerts went out, and took the bridge with it. The flood entering this map is modelled, not measured: a 1-D hazard-chain model turns the avalanche's melted ice into a debris flood — about 26 million m³ of debris-laden flow leaving the Lhende, 21 million m³ of it water (Nepal’s Flood Forecasting Division measured about 20 million m³ of excess water far downstream) — and routes it 54 km down the valley; this is the median of its 9 runs, peaking at about 11,444 m³/s at the north edge. No gauge measured the peak: the one here (warning level 4.1 m, danger level 5 m) last read 3.55 m and was swept away before the crest arrived. The clock is the event's: the run starts at 09:36, five minutes before the modelled front reaches the north edge. The model puts the front at Betrawati at 09:52 (its runs span 09:39–10:07) — later than reported, and that gap is the model’s error, not the river’s: its valley comes from a 30 m elevation model and its channel roughness is a textbook value. Inside the map the solver also caps flood speeds (15 m/s unless the debris-flood setting raises the cap to 25), so the water here moves slower than the real flood did. The terrain is Copernicus 30 m radar data, a surface model with canopy and buildings in it. The bare-earth filter only runs on ground flatter than 20°, and 77 % of this domain is steeper: the valley floor is filtered and still a metre or two high, the walls above it are the raw surface model. No photograph is baked in — open satellite imagery of this valley could be redistributed, but composing a cloud-free monsoon mosaic of it was beyond this bake and the ready-made cloud-free mosaics are licensed against redistribution — so the ground is shaded by height instead. The rivers start dry and get five minutes of the modelled baseflow before the front, so almost every drop you see is the modelled flood. Watch which roads go under and in what order, and where the routes turn uphill, and do not read street-level depths.",
   "sources": [
    {
     "id": "trishuli-inflow",
@@ -22,9 +22,918 @@
     "gx": 536.5,
     "gy": 8.5,
     "radius": 4,
-    "discharge": 11100,
-    "stopAfter": 1800,
-    "label": "Trishuli — scenario surge: 20 million m³ over 30 minutes (DHM reported volume, not a measured peak)"
+    "discharge": 11444,
+    "hydrograph": [
+     {
+      "t": 0,
+      "q": 88.63
+     },
+     {
+      "t": 20.3,
+      "q": 88.67
+     },
+     {
+      "t": 50.3,
+      "q": 89.5
+     },
+     {
+      "t": 80.3,
+      "q": 89.98
+     },
+     {
+      "t": 110.3,
+      "q": 89.57
+     },
+     {
+      "t": 140.3,
+      "q": 94.22
+     },
+     {
+      "t": 170.3,
+      "q": 93.62
+     },
+     {
+      "t": 200.3,
+      "q": 94.05
+     },
+     {
+      "t": 230.3,
+      "q": 94.69
+     },
+     {
+      "t": 260.3,
+      "q": 97.22
+     },
+     {
+      "t": 290.3,
+      "q": 409.89
+     },
+     {
+      "t": 320.3,
+      "q": 3070.07
+     },
+     {
+      "t": 350.3,
+      "q": 6304.67
+     },
+     {
+      "t": 380.3,
+      "q": 8073.65
+     },
+     {
+      "t": 410.3,
+      "q": 9150.67
+     },
+     {
+      "t": 440.3,
+      "q": 9951.97
+     },
+     {
+      "t": 470.3,
+      "q": 10455.25
+     },
+     {
+      "t": 500.3,
+      "q": 10839.15
+     },
+     {
+      "t": 530.3,
+      "q": 11138.93
+     },
+     {
+      "t": 560.3,
+      "q": 11325.87
+     },
+     {
+      "t": 590.3,
+      "q": 11419.88
+     },
+     {
+      "t": 620.3,
+      "q": 11443.69
+     },
+     {
+      "t": 650.3,
+      "q": 11412.53
+     },
+     {
+      "t": 680.3,
+      "q": 11338.78
+     },
+     {
+      "t": 710.3,
+      "q": 11230.35
+     },
+     {
+      "t": 740.3,
+      "q": 11097.64
+     },
+     {
+      "t": 770.3,
+      "q": 10949.23
+     },
+     {
+      "t": 800.3,
+      "q": 10788.56
+     },
+     {
+      "t": 830.3,
+      "q": 10618.15
+     },
+     {
+      "t": 860.3,
+      "q": 10445.47
+     },
+     {
+      "t": 890.3,
+      "q": 10269.03
+     },
+     {
+      "t": 920.3,
+      "q": 10091.36
+     },
+     {
+      "t": 950.3,
+      "q": 9909.84
+     },
+     {
+      "t": 980.3,
+      "q": 9725.61
+     },
+     {
+      "t": 1010.3,
+      "q": 9542.63
+     },
+     {
+      "t": 1040.3,
+      "q": 9362.02
+     },
+     {
+      "t": 1070.3,
+      "q": 9184.16
+     },
+     {
+      "t": 1100.3,
+      "q": 9009.26
+     },
+     {
+      "t": 1130.3,
+      "q": 8836.61
+     },
+     {
+      "t": 1160.3,
+      "q": 8667.78
+     },
+     {
+      "t": 1190.3,
+      "q": 8500.2
+     },
+     {
+      "t": 1220.3,
+      "q": 8333.56
+     },
+     {
+      "t": 1250.3,
+      "q": 8166.99
+     },
+     {
+      "t": 1280.3,
+      "q": 8001.77
+     },
+     {
+      "t": 1310.3,
+      "q": 7838.04
+     },
+     {
+      "t": 1340.3,
+      "q": 7675.36
+     },
+     {
+      "t": 1370.3,
+      "q": 7511.96
+     },
+     {
+      "t": 1400.3,
+      "q": 7348.7
+     },
+     {
+      "t": 1430.3,
+      "q": 7185.31
+     },
+     {
+      "t": 1460.3,
+      "q": 7022.48
+     },
+     {
+      "t": 1490.3,
+      "q": 6862.86
+     },
+     {
+      "t": 1520.3,
+      "q": 6706
+     },
+     {
+      "t": 1550.3,
+      "q": 6552.61
+     },
+     {
+      "t": 1580.3,
+      "q": 6405.3
+     },
+     {
+      "t": 1610.3,
+      "q": 6264.8
+     },
+     {
+      "t": 1640.3,
+      "q": 6128.18
+     },
+     {
+      "t": 1670.3,
+      "q": 5993.63
+     },
+     {
+      "t": 1700.3,
+      "q": 5868.5
+     },
+     {
+      "t": 1730.3,
+      "q": 5761.18
+     },
+     {
+      "t": 1760.3,
+      "q": 5657.19
+     },
+     {
+      "t": 1790.3,
+      "q": 5553.11
+     },
+     {
+      "t": 1820.3,
+      "q": 5447.59
+     },
+     {
+      "t": 1850.3,
+      "q": 5342.26
+     },
+     {
+      "t": 1880.3,
+      "q": 5237.54
+     },
+     {
+      "t": 1910.3,
+      "q": 5133.24
+     },
+     {
+      "t": 1940.3,
+      "q": 5031.81
+     },
+     {
+      "t": 1970.3,
+      "q": 4930.98
+     },
+     {
+      "t": 2000.3,
+      "q": 4830.15
+     },
+     {
+      "t": 2030.3,
+      "q": 4730.88
+     },
+     {
+      "t": 2060.3,
+      "q": 4633.42
+     },
+     {
+      "t": 2090.3,
+      "q": 4538.08
+     },
+     {
+      "t": 2120.3,
+      "q": 4444.18
+     },
+     {
+      "t": 2150.3,
+      "q": 4353.29
+     },
+     {
+      "t": 2180.3,
+      "q": 4266.22
+     },
+     {
+      "t": 2210.3,
+      "q": 4182.55
+     },
+     {
+      "t": 2240.3,
+      "q": 4099.31
+     },
+     {
+      "t": 2270.3,
+      "q": 4017.45
+     },
+     {
+      "t": 2300.3,
+      "q": 3937.23
+     },
+     {
+      "t": 2330.3,
+      "q": 3857.97
+     },
+     {
+      "t": 2360.3,
+      "q": 3780.27
+     },
+     {
+      "t": 2390.3,
+      "q": 3703.7
+     },
+     {
+      "t": 2420.3,
+      "q": 3629.18
+     },
+     {
+      "t": 2450.3,
+      "q": 3556.46
+     },
+     {
+      "t": 2480.3,
+      "q": 3485.19
+     },
+     {
+      "t": 2510.3,
+      "q": 3415.27
+     },
+     {
+      "t": 2540.3,
+      "q": 3347.84
+     },
+     {
+      "t": 2570.3,
+      "q": 3281.89
+     },
+     {
+      "t": 2600.3,
+      "q": 3216.81
+     },
+     {
+      "t": 2630.3,
+      "q": 3153.35
+     },
+     {
+      "t": 2660.3,
+      "q": 3091.11
+     },
+     {
+      "t": 2690.3,
+      "q": 3029.59
+     },
+     {
+      "t": 2720.3,
+      "q": 2969.46
+     },
+     {
+      "t": 2750.3,
+      "q": 2910.51
+     },
+     {
+      "t": 2780.3,
+      "q": 2852.89
+     },
+     {
+      "t": 2810.3,
+      "q": 2797.97
+     },
+     {
+      "t": 2840.3,
+      "q": 2744.96
+     },
+     {
+      "t": 2870.3,
+      "q": 2692.32
+     },
+     {
+      "t": 2900.3,
+      "q": 2640.42
+     },
+     {
+      "t": 2930.3,
+      "q": 2589.57
+     },
+     {
+      "t": 2960.3,
+      "q": 2539.43
+     },
+     {
+      "t": 2990.3,
+      "q": 2490.64
+     },
+     {
+      "t": 3020.3,
+      "q": 2442.87
+     },
+     {
+      "t": 3050.3,
+      "q": 2396.46
+     },
+     {
+      "t": 3080.3,
+      "q": 2351.89
+     },
+     {
+      "t": 3110.3,
+      "q": 2309.12
+     },
+     {
+      "t": 3140.3,
+      "q": 2268.05
+     },
+     {
+      "t": 3170.3,
+      "q": 2227.27
+     },
+     {
+      "t": 3200.3,
+      "q": 2186.26
+     },
+     {
+      "t": 3230.3,
+      "q": 2145.62
+     },
+     {
+      "t": 3260.3,
+      "q": 2105.66
+     },
+     {
+      "t": 3290.3,
+      "q": 2066.48
+     },
+     {
+      "t": 3320.3,
+      "q": 2028.48
+     },
+     {
+      "t": 3350.3,
+      "q": 1992.1
+     },
+     {
+      "t": 3380.3,
+      "q": 1957.26
+     },
+     {
+      "t": 3410.3,
+      "q": 1922.4
+     },
+     {
+      "t": 3440.3,
+      "q": 1887.87
+     },
+     {
+      "t": 3470.3,
+      "q": 1853.63
+     },
+     {
+      "t": 3500.3,
+      "q": 1819.94
+     },
+     {
+      "t": 3530.3,
+      "q": 1786.99
+     },
+     {
+      "t": 3560.3,
+      "q": 1755.14
+     },
+     {
+      "t": 3590.3,
+      "q": 1725
+     },
+     {
+      "t": 3620.3,
+      "q": 1696.97
+     },
+     {
+      "t": 3650.3,
+      "q": 1669.53
+     },
+     {
+      "t": 3680.3,
+      "q": 1641.85
+     },
+     {
+      "t": 3710.3,
+      "q": 1613.55
+     },
+     {
+      "t": 3740.3,
+      "q": 1585.35
+     },
+     {
+      "t": 3770.3,
+      "q": 1557.99
+     },
+     {
+      "t": 3800.3,
+      "q": 1530.91
+     },
+     {
+      "t": 3830.3,
+      "q": 1503.85
+     },
+     {
+      "t": 3860.3,
+      "q": 1477
+     },
+     {
+      "t": 3890.3,
+      "q": 1451.02
+     },
+     {
+      "t": 3920.3,
+      "q": 1426.05
+     },
+     {
+      "t": 3950.3,
+      "q": 1401.3
+     },
+     {
+      "t": 3980.3,
+      "q": 1376.88
+     },
+     {
+      "t": 4010.3,
+      "q": 1352.95
+     },
+     {
+      "t": 4040.3,
+      "q": 1329.44
+     },
+     {
+      "t": 4070.3,
+      "q": 1306.42
+     },
+     {
+      "t": 4100.3,
+      "q": 1283.96
+     },
+     {
+      "t": 4130.3,
+      "q": 1262.09
+     },
+     {
+      "t": 4160.3,
+      "q": 1241.12
+     },
+     {
+      "t": 4190.3,
+      "q": 1221.24
+     },
+     {
+      "t": 4220.3,
+      "q": 1201.63
+     },
+     {
+      "t": 4250.3,
+      "q": 1182.54
+     },
+     {
+      "t": 4280.3,
+      "q": 1163.91
+     },
+     {
+      "t": 4310.3,
+      "q": 1145.35
+     },
+     {
+      "t": 4340.3,
+      "q": 1126.91
+     },
+     {
+      "t": 4370.3,
+      "q": 1108.9
+     },
+     {
+      "t": 4400.3,
+      "q": 1091.14
+     },
+     {
+      "t": 4430.3,
+      "q": 1073.54
+     },
+     {
+      "t": 4460.3,
+      "q": 1056.14
+     },
+     {
+      "t": 4490.3,
+      "q": 1039.05
+     },
+     {
+      "t": 4520.3,
+      "q": 1022.67
+     },
+     {
+      "t": 4550.3,
+      "q": 1006.7
+     },
+     {
+      "t": 4580.3,
+      "q": 990.69
+     },
+     {
+      "t": 4610.3,
+      "q": 974.84
+     },
+     {
+      "t": 4640.3,
+      "q": 959.57
+     },
+     {
+      "t": 4670.3,
+      "q": 944.91
+     },
+     {
+      "t": 4700.3,
+      "q": 930.49
+     },
+     {
+      "t": 4730.3,
+      "q": 915.93
+     },
+     {
+      "t": 4760.3,
+      "q": 901.44
+     },
+     {
+      "t": 4790.3,
+      "q": 887.17
+     },
+     {
+      "t": 4820.3,
+      "q": 873.32
+     },
+     {
+      "t": 4850.3,
+      "q": 859.98
+     },
+     {
+      "t": 4880.3,
+      "q": 846.92
+     },
+     {
+      "t": 4910.3,
+      "q": 834.26
+     },
+     {
+      "t": 4940.3,
+      "q": 821.93
+     },
+     {
+      "t": 4970.3,
+      "q": 809.88
+     },
+     {
+      "t": 5000.3,
+      "q": 797.71
+     },
+     {
+      "t": 5030.3,
+      "q": 785.64
+     },
+     {
+      "t": 5060.3,
+      "q": 773.65
+     },
+     {
+      "t": 5090.3,
+      "q": 761.76
+     },
+     {
+      "t": 5120.3,
+      "q": 750.11
+     },
+     {
+      "t": 5150.3,
+      "q": 739
+     },
+     {
+      "t": 5180.3,
+      "q": 728.12
+     },
+     {
+      "t": 5210.3,
+      "q": 717.27
+     },
+     {
+      "t": 5240.3,
+      "q": 706.58
+     },
+     {
+      "t": 5270.3,
+      "q": 696.18
+     },
+     {
+      "t": 5300.3,
+      "q": 685.98
+     },
+     {
+      "t": 5330.3,
+      "q": 675.93
+     },
+     {
+      "t": 5360.3,
+      "q": 666.08
+     },
+     {
+      "t": 5390.3,
+      "q": 656.67
+     },
+     {
+      "t": 5420.3,
+      "q": 647.91
+     },
+     {
+      "t": 5450.3,
+      "q": 639.45
+     },
+     {
+      "t": 5480.3,
+      "q": 630.99
+     },
+     {
+      "t": 5510.3,
+      "q": 622.49
+     },
+     {
+      "t": 5540.3,
+      "q": 613.98
+     },
+     {
+      "t": 5570.3,
+      "q": 605.55
+     },
+     {
+      "t": 5600.3,
+      "q": 597.23
+     },
+     {
+      "t": 5630.3,
+      "q": 589.03
+     },
+     {
+      "t": 5660.3,
+      "q": 580.97
+     },
+     {
+      "t": 5690.3,
+      "q": 573.13
+     },
+     {
+      "t": 5720.3,
+      "q": 565.67
+     },
+     {
+      "t": 5750.3,
+      "q": 558.38
+     },
+     {
+      "t": 5780.3,
+      "q": 551.12
+     },
+     {
+      "t": 5810.3,
+      "q": 544.03
+     },
+     {
+      "t": 5840.3,
+      "q": 537.15
+     },
+     {
+      "t": 5870.3,
+      "q": 530.43
+     },
+     {
+      "t": 5900.3,
+      "q": 523.82
+     },
+     {
+      "t": 5930.3,
+      "q": 517.5
+     },
+     {
+      "t": 5960.3,
+      "q": 511.25
+     },
+     {
+      "t": 5990.3,
+      "q": 505
+     },
+     {
+      "t": 6020.3,
+      "q": 498.97
+     },
+     {
+      "t": 6050.3,
+      "q": 492.94
+     },
+     {
+      "t": 6080.3,
+      "q": 486.86
+     },
+     {
+      "t": 6110.3,
+      "q": 480.83
+     },
+     {
+      "t": 6140.3,
+      "q": 474.89
+     },
+     {
+      "t": 6170.3,
+      "q": 469.06
+     },
+     {
+      "t": 6200.3,
+      "q": 463.34
+     },
+     {
+      "t": 6230.3,
+      "q": 457.72
+     },
+     {
+      "t": 6260.3,
+      "q": 452.19
+     },
+     {
+      "t": 6290.3,
+      "q": 446.73
+     },
+     {
+      "t": 6320.3,
+      "q": 441.32
+     },
+     {
+      "t": 6350.3,
+      "q": 435.98
+     },
+     {
+      "t": 6380.3,
+      "q": 430.69
+     },
+     {
+      "t": 6410.3,
+      "q": 425.53
+     },
+     {
+      "t": 6440.3,
+      "q": 420.55
+     },
+     {
+      "t": 6470.3,
+      "q": 415.62
+     },
+     {
+      "t": 6500.3,
+      "q": 410.72
+     },
+     {
+      "t": 6530.3,
+      "q": 405.93
+     },
+     {
+      "t": 6560.3,
+      "q": 401.36
+     },
+     {
+      "t": 6590.3,
+      "q": 396.85
+     },
+     {
+      "t": 6620.3,
+      "q": 392.36
+     },
+     {
+      "t": 6650.3,
+      "q": 387.93
+     },
+     {
+      "t": 6680.3,
+      "q": 383.72
+     },
+     {
+      "t": 6710.3,
+      "q": 379.4
+     },
+     {
+      "t": 6740.3,
+      "q": 375.03
+     },
+     {
+      "t": 6770.3,
+      "q": 370.66
+     }
+    ],
+    "label": "Trishuli — routed debris flood from the Lhende avalanche (modelled: hazard-chain median member, not a measured hydrograph)"
    }
   ],
   "storms": [],
@@ -61,17 +970,25 @@
      "volume": 113000000,
      "iceFraction": 0.2,
      "fallHeight": 2300,
-     "pathLength": 13000
+     "pathLength": 13000,
+     "travelSpeed": 50
     },
-    "mode": "transientDam",
+    "mode": "directFlow",
     "damLength": 1500,
     "baseflow": 100
    },
    "profile": "chain.json",
+   "result": "chain-result.json",
    "rheology": {
-    "kind": "voellmy",
-    "mu": 0.05,
-    "xi": 500
+    "kind": "quadratic",
+    "cv": 0.3,
+    "material": {
+     "name": "Glenwood 1",
+     "a2": 0.0345,
+     "b2": 20.1,
+     "a1": 0.00283,
+     "b1": 23
+    }
    },
    "solver": {
     "uMax": 25
@@ -95,6 +1012,18 @@
      "tFront": 2580,
      "note": "Flood at Betrawati ~09:20; DHM station 447 (warning 4.1 m, danger 5.0 m) last read 3.55 m before it was destroyed.",
      "source": "NDRRMA SitRep #01 (1 Sep 2026); DHM station 447 page (dhm.gov.np/hydrology/hms-Single/52)"
+    },
+    {
+     "station": "Rasuwagadhi",
+     "tFront": 420,
+     "note": "CCTV recorded floodwaters destroying the Gyirong Port complex at the Rasuwagadhi crossing ~08:44, seven minutes after the seismic signal (secondary source).",
+     "source": "OPRI, \"The Langtang Collapse\" (Sep 2026), citing Xinhua/CCTV"
+    },
+    {
+     "station": "Betrawati",
+     "tFront": 1380,
+     "note": "The surge reaches Betrawati ~09:00 in this reconstruction, against ~09:20 in NDRRMA SitRep #01 (secondary source).",
+     "source": "OPRI, \"The Langtang Collapse\" (Sep 2026), citing ICIMOD/DHM"
     },
     {
      "station": "Galchhi",

@@ -23,8 +23,10 @@ import { listPresets, loadPreset } from '../../src/data/index';
 import { decodeElevation, type PresetMeta, setPresetBaseUrl, validatePresetMeta } from '../../src/data/presets';
 import { type CompactRoads, decodeRoads } from '../../src/data/roads';
 import { generateSandbox } from '../../src/data/sandbox';
-import type { ChainFile } from '../../src/hazard/types';
-import { hydrographVolume } from '../../src/sim/forcing';
+import { domainClockOffset, runChain, toWaterSource } from '../../src/hazard/chain';
+import type { BakedChainResult, ChainFile } from '../../src/hazard/types';
+import { clockAt, hydrographArea } from '../../scripts/bake-chain-result';
+import { FLOOR_DEPTH, flatFaces, MIN_FLOOR_WIDTH } from '../../scripts/chain-profile';
 
 const ROOT = path.resolve(import.meta.dirname, '../../public/presets');
 const FT = 0.3048;
@@ -707,38 +709,44 @@ function osmNode(id: string): { name: string | null; lat: number; lon: number } 
   return null;
 }
 
-test('nepal: a labelled scenario hydrograph, sourced numbers, and the caveats on screen', { skip: !fs.existsSync(path.join(ROOT, 'nepal/meta.json')) }, () => {
+test('nepal: the routed chain hydrograph, sourced numbers, and the caveats on screen', { skip: !fs.existsSync(path.join(ROOT, 'nepal/meta.json')) }, () => {
   const { meta } = load('nepal');
   const s = meta.scenario;
 
-  // 20 million m³ over 30 minutes = 11,111 m³/s, rounded to a hundred. Not presented as a peak anywhere.
+  /*
+   * The inflow is the hazard chain's routed hydrograph (scripts/bake-chain-result.ts): the ensemble's median member at
+   * the domain entry, not the old 20 million m³ spread evenly over 30 minutes. It rises from baseflow, peaks and
+   * recedes; with no stop the forcing holds its last value — the river's baseflow — afterwards.
+   */
   const surge = s.sources.find((x) => x.type === 'inflow')!;
   assert.equal(s.sources.length, 1, 'one forcing: the wave from upstream');
-  assert.equal(surge.type === 'inflow' && surge.discharge, 11100);
-  /*
-   * AND IT STOPS, after exactly the 30 minutes the label and the text both quote. Without a stop this source kept
-   * delivering the same peak for ever: 2.07e7 m³ by 31 simulated minutes, 5.15e7 by 78, against the 2.0e7 m³ DHM
-   * reported — the run outran its own sourced number and went on outrunning it. 11,100 × 1,800 s = 19.98 million m³,
-   * the reported total to within the rounding of the discharge to a hundred m³/s; tests/sim/conservation.test.ts
-   * asserts the solver actually delivers Q·stopAfter and then nothing.
-   */
-  assert.equal(surge.type === 'inflow' && surge.stopAfter, 30 * 60);
-  const delivered = (surge.type === 'inflow' && surge.discharge * surge.stopAfter!) as number;
-  assert.ok(Math.abs(delivered - 2.0e7) / 2.0e7 < 0.002, `the surge delivers ${(delivered / 1e6).toFixed(3)} million m³, not the reported 20`);
+  assert.ok(surge.type === 'inflow' && surge.hydrograph && surge.hydrograph.length > 50, 'a routed hydrograph');
+  if (surge.type !== 'inflow' || !surge.hydrograph) return;
+  const peak = Math.max(...surge.hydrograph.map((p) => p.q));
+  assert.equal(surge.discharge, Math.round(peak), 'discharge is the peak (labels and the CFL fallback read it)');
+  assert.ok(surge.hydrograph[0].q < 0.05 * peak && surge.hydrograph[surge.hydrograph.length - 1].q < 0.05 * peak, 'from baseflow, back to baseflow');
+  assert.equal(surge.stopAfter, undefined);
   assert.equal(s.stage, null, 'a stage slider would raise the whole reach at once — the opposite of this event');
   assert.equal(s.rainRate, 0);
   assert.equal(s.storms.length, 0);
-  // The label is what the UI puts beside the number, so the disclaimer has to live there and not only in prose.
-  assert.match(surge.label!, /scenario/i);
-  assert.match(surge.label!, /not a measured peak/);
-  assert.match(surge.label!, /20 million m³ over 30 minutes/);
+  // The label is what the UI puts beside the number, so the provenance has to live there and not only in prose.
+  assert.match(surge.label!, /modelled/);
+  assert.match(surge.label!, /hazard-chain median member/);
+  assert.match(surge.label!, /not a measured hydrograph/);
+  assert.equal(s.hazardChain?.result, 'chain-result.json');
 
-  // Published figures, exactly as published.
-  assert.match(s.description, /20 million m³/);
-  assert.match(s.description, /11,100 m³\/s/);
-  assert.match(s.description, /3\.55 m/, 'the gauge\u2019s last reading');
+  // Published figures, exactly as published, and the model's beside them on the event's own clock.
+  const cr = loadChainResult('nepal');
+  const bet = cr.stations.find((x) => x.name === 'Betrawati')!;
+  assert.match(s.description, /9:20 am/);
+  assert.match(s.description, /about 20 million m³ of excess water/);
+  assert.ok(s.description.includes(`the run starts at ${clockAt(cr.clockZero!, cr.domain.offset)}`), 'the 2-D clock is stated');
+  assert.ok(s.description.includes(`model puts the front at Betrawati at ${clockAt(cr.clockZero!, bet.tFront!)}`), 'the model front, from chain-result.json');
+  assert.ok(s.description.includes(`${Math.round(peak).toLocaleString('en-US')} m³/s`), 'the inflow peak, as shipped');
+  assert.match(s.description, /the model’s error/);
+  assert.match(s.description, /3\.55 m/, 'the gauge’s last reading');
   assert.match(s.description, /warning level 4\.1 m, danger level 5 m/);
-  assert.match(s.description, /an average rather than a measured peak/);
+  assert.match(s.description, /No gauge measured the peak/);
   // Caveats a visitor must not have to dig for. Each of the three below was in SOURCES.txt ALONE until the audit,
   // which is the same as nowhere: the on-screen sentence either says it or the app is overclaiming.
   assert.match(s.description, /surface model with canopy and buildings/);
@@ -755,13 +763,13 @@ test('nepal: a labelled scenario hydrograph, sourced numbers, and the caveats on
   const steepClaim = Number(/([0-9]+) % of this domain is steeper/.exec(s.description)?.[1]);
   assert.ok(Number.isFinite(steepClaim), 'the text states what share of the domain the filter skipped');
   /*
-   * (b) THE ARRIVAL TIMES ARE THE SOLVER'S SPEED CAP, not the terrain's answer. Measured on this bake the reported
-   * max speed is 15.0 m/s (SOLVER_DEFAULTS.uMax) by 32 simulated seconds and stays pinned there
-   * (artifacts/nepal-verify/nepal-run.json), so "when the water arrives" is a statement about the cap. The research
-   * brief is explicit that this must not be presented as reproducing the real arrival times.
+   * (b) INSIDE THE MAP THE SPEED IS THE SOLVER'S CAP, not the terrain's answer. Measured on the first bake the reported
+   * max speed sat on 15.0 m/s (SOLVER_DEFAULTS.uMax) from 32 simulated seconds on (artifacts/nepal-verify/
+   * nepal-run.json). The clock is now the event's (the chain's), but the text must still say the water inside the map
+   * moves at a capped speed, and that the model's front is late against the reports.
    */
   assert.match(s.description, /15 m\/s/);
-  assert.match(s.description, /not the real arrival times/);
+  assert.match(s.description, /later than reported/);
   /*
    * (c) THE IMAGERY SENTENCE MUST NOT CONTRADICT SOURCES.txt, which says Sentinel-2 L2A is open and COULD be
    * redistributed with credit — it simply was not composed. "there is no aerial photograph here that this project may
@@ -862,19 +870,26 @@ for (const id of BAKED_GLOBAL) test(`${id}: the share of the domain the bare-ear
 });
 
 const loadChain = (id: string) => JSON.parse(fs.readFileSync(path.join(ROOT, id, 'chain.json'), 'utf8')) as ChainFile;
+const loadChainResult = (id: string) => JSON.parse(fs.readFileSync(path.join(ROOT, id, 'chain-result.json'), 'utf8')) as BakedChainResult;
 
-test('nepal: the hazard chain is the 2026 mechanism, timed against the NDRRMA series, beside an untouched scenario', { skip: !hasChain('nepal') }, () => {
+test('nepal: the hazard chain is the 2026 mechanism, timed against the NDRRMA series', { skip: !hasChain('nepal') }, () => {
   /*
-   * The chain is ADDED to the Betrawati preset; the scenario a visitor runs today (one 11,100 m³/s inflow for 30
-   * minutes, asserted above) is not changed by it. What the chain must carry: the avalanche-dam mechanism (spec §C.3),
-   * the debris-flood rheology and 25 m/s cap (§I.3), the 09:15 SMS as the alert, and the published arrival times —
-   * every one of them tied to a station on the profile or marked as lying beyond it.
+   * What the chain must carry: the avalanche turned debris flood (spec §C.3 branch 2 — direct flow: s = 0 is where the
+   * mass met the river, there is no valley above it to pond, and the reports have the flood within minutes; a
+   * transient dam there took 10.5 h to fill), the avalanche's own 4.3 min of travel, the mud-flood rheology and 25 m/s
+   * cap for the 2-D run, the 09:15 SMS as the alert, and the published arrival times — every one of them tied to a
+   * station on the profile or marked as lying beyond it.
    */
   const { meta } = load('nepal');
   const hc = meta.scenario.hazardChain!;
   assert.equal(hc.trigger.kind, 'massIntoRiver');
-  assert.ok(hc.trigger.kind === 'massIntoRiver' && hc.trigger.mode === 'transientDam');
-  assert.deepEqual(hc.rheology, { kind: 'voellmy', mu: 0.05, xi: 500 });
+  assert.ok(hc.trigger.kind === 'massIntoRiver' && hc.trigger.mode === 'directFlow');
+  assert.ok(hc.trigger.kind === 'massIntoRiver' && hc.trigger.mass.travelSpeed === 50);
+  /*
+   * O'Brien–Julien "mud flood", not Voellmy μ 0.05: Voellmy's Coulomb term stops flow where the surface slope is under
+   * μ·cosθ ≈ 2.9°, and the Trishuli floor in this map falls ~2 %, so the 2-D surge stalled ~2 km in [C].
+   */
+  assert.deepEqual(hc.rheology, { kind: 'quadratic', cv: 0.3, material: { name: 'Glenwood 1', a2: 0.0345, b2: 20.1, a1: 0.00283, b1: 23.0 } });
   assert.equal(hc.solver?.uMax, 25);
   assert.equal(hc.alertTime, (9 * 60 + 15 - (8 * 60 + 37)) * 60, 'the 09:15 SMS, 38 minutes after 08:37');
   const c = loadChain('nepal');
@@ -902,30 +917,30 @@ test('nepal: the hazard chain is the 2026 mechanism, timed against the NDRRMA se
   assert.equal(c.domainEntry.gy, 8.5);
 });
 
-test('chungthang: a labelled placeholder hydrograph, the South Lhonak chain, and the caveats on screen', { skip: !fs.existsSync(path.join(ROOT, 'chungthang/meta.json')) }, () => {
+test('chungthang: the routed chain hydrograph, the South Lhonak chain, and the caveats on screen', { skip: !fs.existsSync(path.join(ROOT, 'chungthang/meta.json')) }, () => {
   const { meta } = load('chungthang');
   const s = meta.scenario;
   assert.equal(s.sources.length, 1, 'one forcing: the flood from upstream');
   const src = s.sources[0];
-  assert.ok(src.type === 'inflow' && src.hydrograph && src.hydrograph.length > 10, 'a hydrograph inflow');
+  assert.ok(src.type === 'inflow' && src.hydrograph && src.hydrograph.length > 50, 'a hydrograph inflow');
   if (src.type !== 'inflow' || !src.hydrograph) return;
   /*
-   * The placeholder carries the published numbers and nothing else: the HEC-RAS peak calibrated against the gauged
-   * Gazoldoba peak (7,355 m³/s) and the ~50 million m³ released at the lake (Sattar et al. 2025), on the spec's §B.4
-   * gamma shape — which is a SHAPE, so the label says the curve is parametric, not measured.
+   * The inflow is the hazard chain's routed outburst (scripts/bake-chain-result.ts), the ensemble's median member — no
+   * longer the parametric gamma placeholder on the 7,355 m³/s HEC-RAS peak. The published peaks at Chungthang are
+   * themselves reconstructions (7,355–14,673 m³/s), so the text gives that range beside the model's.
    */
   const peak = Math.max(...src.hydrograph.map((p) => p.q));
-  assert.equal(peak, 7355);
-  assert.equal(src.discharge, peak, 'discharge is the peak (labels and the CFL fallback read it)');
-  assert.equal(src.hydrograph[0].q, 0, 'the front arrives at t = 0, from nothing');
-  assert.equal(src.hydrograph[src.hydrograph.length - 1].q, 0, 'and the table closes at zero, so it is not held for ever');
-  const vol = hydrographVolume(src.hydrograph, 0, src.stopAfter ?? Infinity);
-  assert.ok(Math.abs(vol - 50e6) / 50e6 < 0.01, `the placeholder delivers ${(vol / 1e6).toFixed(2)} million m³, not the reported 50`);
-  assert.match(src.label!, /placeholder/);
+  assert.equal(src.discharge, Math.round(peak), 'discharge is the peak (labels and the CFL fallback read it)');
+  assert.ok(peak > 7355 * 0.5 && peak < 14673 * 1.5, `inflow peak ${peak} m³/s against the published 7,355–14,673`);
+  assert.match(src.label!, /modelled/);
   assert.match(src.label!, /not a measured hydrograph/);
-  assert.match(s.description, /parametric placeholder, not a measured hydrograph/);
+  assert.equal(s.hazardChain?.result, 'chain-result.json');
+  const cr = loadChainResult('chungthang');
+  const ch = cr.stations.find((x) => x.name === 'Chungthang')!;
   assert.match(s.description, /7,355 to 14,673 m³\/s/, 'the published range, not just the number used');
-  assert.match(s.description, /clock starts as the front reaches the north edge/);
+  assert.ok(s.description.includes(`the run starts at ${clockAt(cr.clockZero!, cr.domain.offset)}`), 'the 2-D clock is stated');
+  assert.ok(s.description.includes(`front at Chungthang at ${clockAt(cr.clockZero!, ch.tFront!)}`), 'the model front, from chain-result.json');
+  assert.match(s.description, /about 00:30 observed/);
   assert.match(s.description, /surface model with canopy and buildings/);
   assert.match(s.description, /flatter than 20°/);
   assert.match(s.description, /do not read street-level depths/);
@@ -942,7 +957,11 @@ test('chungthang: a labelled placeholder hydrograph, the South Lhonak chain, and
   assert.equal(hc.trigger.mass.volume, 14.7e6);
   assert.equal(hc.trigger.lake.area, 1.674e6);
   assert.equal(hc.trigger.breach.erosionRate, 100, 'trigger-driven breach, spec §B.3');
+  // The lateral-moraine geometry the impulse wave spreads over (scripts/chain-defs.ts): outlet ~1.33 km away, 77° off
+  // the slide's axis.
+  assert.deepEqual(hc.trigger.wave, { distance: 1330, angleDeg: 77 });
   assert.equal(hc.solver?.uMax, 25);
+  assert.equal(hc.rheology.kind, 'quadratic', 'mud flood, not the Voellmy law that stalled the 2-D front');
   const c = loadChain('chungthang');
   assert.equal(c.clockZero, '2023-10-03T22:13:20+05:30');
   assert.equal(hc.observations!.find((o) => o.station === 'Chungthang' && o.tFront !== undefined)!.tFront, 8200);
@@ -1038,6 +1057,24 @@ for (const id of BAKED.filter(hasChain)) {
       assert.ok(c.zBed[i] <= c.zBed[i - 1], `bed rises ${(c.zBed[i] - c.zBed[i - 1]).toFixed(2)} m at node ${i} (s ${c.s[i]})`);
     }
     assert.ok(c.zBed[0] - c.zBed[n - 1] > 100, 'a mountain valley falls more than 100 m over the profile');
+    /*
+     * SMOOTH, not a staircase (scripts/chain-profile.ts monotoneSmooth). The first bake's plain isotonic fit left 158 of
+     * Nepal's 638 faces exactly flat with drops of up to 45 m between them — pools and waterfalls to the router. Now no
+     * face is flat, and no 100 m node drops more than 25 m (Nepal's steepest smoothed reach: ~20 m).
+     */
+    assert.equal(flatFaces(c.zBed), 0, 'flat faces in the bed: the staircase is back');
+    let steepest = 0;
+    for (let i = 1; i < n; i++) steepest = Math.max(steepest, (c.zBed[i - 1] - c.zBed[i]) / ((c.s[i] - c.s[i - 1]) / 100));
+    assert.ok(steepest < 25, `a ${steepest.toFixed(1)} m drop per 100 m: a step, not a smoothed bed`);
+    /*
+     * A FLOOR, not a slot: every section is at least MIN_FLOOR_WIDTH (one DEM cell, 25 m) wide one metre above its bed
+     * (scripts/chain-profile.ts withFloor) — the first bake had gorge sections 3 m wide at 5 m of stage.
+     */
+    for (let i = 0; i < n; i++) {
+      const sec = c.sections[i];
+      const k = sec.stage.findIndex((z) => z >= c.zBed[i] + FLOOR_DEPTH - 0.005);
+      assert.ok(k > 0 && sec.width[k] >= MIN_FLOOR_WIDTH - 0.05, `section ${i} (s ${c.s[i]}) is ${sec.width[k]} m wide at ${FLOOR_DEPTH} m`);
+    }
     for (let i = 0; i < n; i++) {
       assert.ok(c.n[i] > 0.01 && c.n[i] < 0.2, `Manning n ${c.n[i]}`);
       const [lon, lat] = c.lonlat[i];
@@ -1167,3 +1204,55 @@ test('loadPreset fetches and decodes a baked preset with progress', { skip: !fs.
   const sb = await loadPreset('sandbox');
   assert.equal(sb.nx, 1024);
 });
+
+/*
+ * THE PRESETS USE THE CHAIN. A preset with chain.json floods from its hazard chain: its inflow is the routed entry
+ * hydrograph of the ensemble's median member (scripts/bake-chain-result.ts), and chain-result.json carries that run's
+ * numbers for the UI (src/hazard/types.ts BakedChainResult). Re-run here from the shipped chain.json and spec: the
+ * inflow must be exactly what the chain routes into the domain, and the file must say what the chain says.
+ */
+for (const id of BAKED.filter(hasChain)) {
+  test(`baked preset "${id}": the inflow is the chain's routed hydrograph, and chain-result.json is that run`, () => {
+    const { meta } = load(id);
+    const hc = meta.scenario.hazardChain!;
+    const c = loadChain(id);
+    const cr = loadChainResult(id);
+    assert.equal(cr.version, 1);
+    assert.equal(cr.preset, id);
+    assert.equal(cr.provenance, 'modelled');
+    assert.equal(cr.profile, hc.profile);
+    assert.equal(cr.clockZero, c.clockZero);
+    assert.deepEqual(cr.stations.map((s) => s.name), c.stations.map((s) => s.name), 'one entry per profile station, in order');
+    const m = cr.run.member!;
+    assert.ok(m && m.volumeFactor > 0, 'which ensemble member the inflow is');
+
+    const run = runChain(hc, c, { volumeFactor: m.volumeFactor, ...(m.erosionRate !== undefined ? { erosionRate: m.erosionRate } : {}), cv: m.cv });
+    const src = meta.scenario.sources.find((x) => x.id === cr.domain.sourceId)!;
+    assert.ok(src.type === 'inflow' && src.hydrograph, 'the chain inflow');
+    if (src.type !== 'inflow' || !src.hydrograph) return;
+    // Same clock: the 2-D t = 0 is the chain time five minutes before the front reaches the domain.
+    assert.ok(Math.abs(domainClockOffset(run) - cr.domain.offset) <= 1, `offset ${domainClockOffset(run)} vs ${cr.domain.offset}`);
+    // Same water: the shipped hydrograph (times to 0.1 s, discharges to 0.01 m³/s) carries the routed volume after the
+    // offset — what the chain hands the 2-D solver — to 0.1 %.
+    const ws = toWaterSource(run, c);
+    const half = run.entry.length > 1 ? (run.entry[1].t - run.entry[0].t) / 2 : 0;
+    const want = hydrographArea(ws.hydrograph!, half);
+    const got = hydrographArea(src.hydrograph, half);
+    assert.ok(Math.abs(got - want) / want < 1e-3, `inflow ${(got / 1e6).toFixed(3)} Mm³ vs the chain's ${(want / 1e6).toFixed(3)} Mm³`);
+    assert.ok(Math.abs(cr.domain.inflowVolume - got) / got < 1e-3, 'chain-result.json states the inflow volume');
+    // And it is the routed flood, not a trickle: the entry peak, at the chain's peak.
+    assert.ok(Math.abs(src.discharge - run.entryPeak) / run.entryPeak < 0.02, `inflow peak ${src.discharge} vs routed ${run.entryPeak.toFixed(0)}`);
+    // The stations' numbers are this run's.
+    for (const st of run.stations) {
+      const b = cr.stations.find((x) => x.name === st.name)!;
+      if (Number.isFinite(st.tFront)) assert.ok(Math.abs(b.tFront! - st.tFront) <= 1, `${st.name} front ${b.tFront} vs ${st.tFront}`);
+      else assert.equal(b.tFront, null);
+      assert.ok(Math.abs(b.qPeak - st.qPeak) <= Math.max(1, 1e-3 * st.qPeak), `${st.name} peak ${b.qPeak} vs ${st.qPeak}`);
+      assert.ok(b.band, `${st.name} has its ensemble band`);
+      const [lo, mid, hi] = b.band!.qPeak;
+      assert.ok(lo <= mid && mid <= hi, `${st.name} band not ordered`);
+    }
+    // Lead times are front − alert where an alert time is known.
+    if (hc.alertTime !== undefined) for (const st of cr.stations) if (st.tFront !== null) assert.equal(st.leadTime, st.tFront - hc.alertTime);
+  });
+}

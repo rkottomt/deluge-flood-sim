@@ -1,0 +1,367 @@
+{
+ "version": 1,
+ "preset": "nepal",
+ "profile": "chain.json",
+ "clockZero": "2026-08-26T08:37:00+05:45",
+ "generated": "2026-10-12",
+ "generator": "scripts/bake-chain-result.ts",
+ "provenance": "modelled",
+ "label": "Hazard chain, modelled: the ensemble's median member (volume ×1, source Cv 0.2) routed down Lhende Khola → Bhote Koshi → Trishuli",
+ "run": {
+  "routeDx": 100,
+  "memberDx": 100,
+  "members": 9,
+  "ms": 1879,
+  "member": {
+   "volumeFactor": 1,
+   "cv": 0.2
+  },
+  "note": "9 members (1662 ms), median member re-run to the end of its recession; the mass reaches the river 4.3 min after the collapse (13.0 km at 50 m/s); direct flow: 20.7 Mm³ of melt water, 25.9 Mm³ at Cv 0.20, peak 43261 m³/s"
+ },
+ "source": {
+  "trigger": "massIntoRiver",
+  "volume": 25905250,
+  "peak": 43261,
+  "tPeak": 662,
+  "cv": 0.2,
+  "notes": [
+   "the mass reaches the river 4.3 min after the collapse (13.0 km at 50 m/s)",
+   "direct flow: 20.7 Mm³ of melt water, 25.9 Mm³ at Cv 0.20, peak 43261 m³/s"
+  ]
+ },
+ "stations": [
+  {
+   "name": "Lhende Khola at 2,900 m (avalanche runout)",
+   "s": 0,
+   "kind": "source",
+   "tFront": 285,
+   "tPeak": 670,
+   "qPeak": 43198,
+   "stageMax": 2903.07,
+   "rise": 24,
+   "leadTime": -1995,
+   "band": {
+    "tFront": [
+     285,
+     285,
+     292
+    ],
+    "qPeak": [
+     24989,
+     43198,
+     74699
+    ]
+   }
+  },
+  {
+   "name": "Rasuwagadhi",
+   "s": 14976,
+   "kind": "town",
+   "tFront": 1059,
+   "tPeak": 1357,
+   "qPeak": 24129,
+   "stageMax": 1812.24,
+   "rise": 13.25,
+   "leadTime": -1221,
+   "band": {
+    "tFront": [
+     976,
+     1064,
+     1187
+    ],
+    "qPeak": [
+     11491,
+     24129,
+     60666
+    ]
+   },
+   "observed": [
+    {
+     "tFront": 180,
+     "note": "Flood at Rasuwagadhi ~08:40, about three minutes after the 08:37 seismic signal.",
+     "source": "NDRRMA Situation Report #01 (1 Sep 2026); YAE/KU rapid report (31 Aug 2026)"
+    },
+    {
+     "tFront": 420,
+     "note": "CCTV recorded floodwaters destroying the Gyirong Port complex at the Rasuwagadhi crossing ~08:44, seven minutes after the seismic signal (secondary source).",
+     "source": "OPRI, \"The Langtang Collapse\" (Sep 2026), citing Xinhua/CCTV"
+    }
+   ]
+  },
+  {
+   "name": "Rasuwagadhi HEP headworks",
+   "s": 15525,
+   "kind": "hydro",
+   "tFront": 1087,
+   "tPeak": 1427,
+   "qPeak": 25155,
+   "stageMax": 1782.45,
+   "rise": 10.53,
+   "leadTime": -1193,
+   "band": {
+    "tFront": [
+     1002,
+     1097,
+     1221
+    ],
+    "qPeak": [
+     11287,
+     25155,
+     56436
+    ]
+   }
+  },
+  {
+   "name": "Timure",
+   "s": 18461,
+   "kind": "town",
+   "tFront": 1284,
+   "tPeak": 1630,
+   "qPeak": 20808,
+   "stageMax": 1696.8,
+   "rise": 12.45,
+   "leadTime": -996,
+   "band": {
+    "tFront": [
+     1182,
+     1320,
+     1442
+    ],
+    "qPeak": [
+     9908,
+     20808,
+     46950
+    ]
+   }
+  },
+  {
+   "name": "Syafrubesi",
+   "s": 29700,
+   "kind": "town",
+   "tFront": 2066,
+   "tPeak": 2380,
+   "qPeak": 16944,
+   "stageMax": 1434.67,
+   "rise": 17.32,
+   "leadTime": -214,
+   "band": {
+    "tFront": [
+     1819,
+     2066,
+     2379
+    ],
+    "qPeak": [
+     7944,
+     16944,
+     36918
+    ]
+   }
+  },
+  {
+   "name": "Syafrubesi gauge (DHM, position approximate)",
+   "s": 29700,
+   "kind": "gauge",
+   "tFront": 2066,
+   "tPeak": 2380,
+   "qPeak": 16944,
+   "stageMax": 1434.67,
+   "rise": 17.32,
+   "leadTime": -214,
+   "band": {
+    "tFront": [
+     1819,
+     2066,
+     2379
+    ],
+    "qPeak": [
+     7944,
+     16944,
+     36918
+    ]
+   },
+   "observed": [
+    {
+     "tFront": 780,
+     "note": "The hydrometric station stopped transmitting at 08:50 (last reading 1.62 m) and was washed away — an upper bound on the arrival time, not a measurement of it.",
+     "source": "DHM Flood Forecasting Division technical report (27 Aug 2026), via Onlinekhabar and Kathmandu Post; NDRRMA SitRep #01"
+    }
+   ]
+  },
+  {
+   "name": "Chilime HEP powerhouse",
+   "s": 30648,
+   "kind": "hydro",
+   "tFront": 2135,
+   "tPeak": 2441,
+   "qPeak": 16828,
+   "stageMax": 1410.28,
+   "rise": 15.36,
+   "leadTime": -145,
+   "band": {
+    "tFront": [
+     1873,
+     2135,
+     2461
+    ],
+    "qPeak": [
+     7913,
+     16828,
+     36445
+    ]
+   }
+  },
+  {
+   "name": "Upper Trishuli-1 HEP (under construction)",
+   "s": 47233,
+   "kind": "hydro",
+   "tFront": 3360,
+   "tPeak": 3700,
+   "qPeak": 12620,
+   "stageMax": 922.9,
+   "rise": 7.6,
+   "leadTime": 1080,
+   "band": {
+    "tFront": [
+     2856,
+     3360,
+     3970
+    ],
+    "qPeak": [
+     5857,
+     12620,
+     27412
+    ]
+   }
+  },
+  {
+   "name": "Betrawati 2-D domain (north edge)",
+   "s": 53762,
+   "kind": "domainEdge",
+   "tFront": 3895,
+   "tPeak": 4213,
+   "qPeak": 11446,
+   "stageMax": 736.79,
+   "rise": 9.17,
+   "leadTime": 1615,
+   "band": {
+    "tFront": [
+     3284,
+     3895,
+     4627
+    ],
+    "qPeak": [
+     5202,
+     11446,
+     26059
+    ]
+   }
+  },
+  {
+   "name": "Upper Trishuli-3A HEP powerhouse",
+   "s": 53875,
+   "kind": "hydro",
+   "tFront": 3900,
+   "tPeak": 4221,
+   "qPeak": 11439,
+   "stageMax": 735.32,
+   "rise": 9.62,
+   "leadTime": 1620,
+   "band": {
+    "tFront": [
+     3286,
+     3900,
+     4641
+    ],
+    "qPeak": [
+     5198,
+     11439,
+     26040
+    ]
+   }
+  },
+  {
+   "name": "Upper Trishuli-3B HEP powerhouse",
+   "s": 57616,
+   "kind": "hydro",
+   "tFront": 4257,
+   "tPeak": 4520,
+   "qPeak": 11140,
+   "stageMax": 650.45,
+   "rise": 9.18,
+   "leadTime": 1977,
+   "band": {
+    "tFront": [
+     3563,
+     4257,
+     5086
+    ],
+    "qPeak": [
+     5064,
+     11140,
+     25186
+    ]
+   }
+  },
+  {
+   "name": "Betrawati",
+   "s": 60273,
+   "kind": "town",
+   "tFront": 4529,
+   "tPeak": 4890,
+   "qPeak": 9993,
+   "stageMax": 614.78,
+   "rise": 11.77,
+   "leadTime": 2249,
+   "band": {
+    "tFront": [
+     3771,
+     4529,
+     5423
+    ],
+    "qPeak": [
+     4744,
+     9993,
+     22130
+    ]
+   },
+   "observed": [
+    {
+     "tFront": 2580,
+     "note": "Flood at Betrawati ~09:20; DHM station 447 (warning 4.1 m, danger 5.0 m) last read 3.55 m before it was destroyed.",
+     "source": "NDRRMA SitRep #01 (1 Sep 2026); DHM station 447 page (dhm.gov.np/hydrology/hms-Single/52)"
+    },
+    {
+     "tFront": 1380,
+     "note": "The surge reaches Betrawati ~09:00 in this reconstruction, against ~09:20 in NDRRMA SitRep #01 (secondary source).",
+     "source": "OPRI, \"The Langtang Collapse\" (Sep 2026), citing ICIMOD/DHM"
+    }
+   ]
+  }
+ ],
+ "entry": {
+  "s": 53762,
+  "tFront": 3895,
+  "qPeak": 11446,
+  "volume": 21685210,
+  "baseflow": 100,
+  "band": {
+   "tFront": [
+    3284,
+    3895,
+    4627
+   ],
+   "qPeak": [
+    5202,
+    11446,
+    26059
+   ]
+  }
+ },
+ "alertTime": 2280,
+ "domain": {
+  "offset": 3595,
+  "sourceId": "trishuli-inflow",
+  "inflowVolume": 21356739,
+  "inflowPeak": 11444
+ }
+}

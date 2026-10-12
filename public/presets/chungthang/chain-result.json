@@ -1,0 +1,212 @@
+{
+ "version": 1,
+ "preset": "chungthang",
+ "profile": "chain.json",
+ "clockZero": "2023-10-03T22:13:20+05:30",
+ "generated": "2026-10-12",
+ "generator": "scripts/bake-chain-result.ts",
+ "provenance": "modelled",
+ "label": "Hazard chain, modelled: the ensemble's median member (volume ×1, breach 100 m/h, source Cv 0.4) routed down South Lhonak → Lhonak Chu → Lachen Chu → Teesta",
+ "run": {
+  "routeDx": 100,
+  "memberDx": 100,
+  "members": 27,
+  "ms": 13673,
+  "member": {
+   "volumeFactor": 1,
+   "erosionRate": 100,
+   "cv": 0.4
+  },
+  "note": "27 members (13115 ms), median member re-run to the end of its recession; the mass reaches the lake 0.2 min after the collapse (0.5 km at 50 m/s); impulse wave solitary: H 14.9 m, crest 8.3 m at the dam 1.33 km away (flume value 45.9 m; spreading β 90°, γ′ 77°); M = 14.30 outside the tested 0.11–10.02; P = 2.79: overtops by 7.3 m, 3.68 Mm³ pulse, breach at 100 m/h"
+ },
+ "source": {
+  "trigger": "massIntoLake",
+  "volume": 59014343,
+  "peak": 123529,
+  "tPeak": 20,
+  "cv": 0.4,
+  "notes": [
+   "the mass reaches the lake 0.2 min after the collapse (0.5 km at 50 m/s)",
+   "impulse wave solitary: H 14.9 m, crest 8.3 m at the dam 1.33 km away (flume value 45.9 m; spreading β 90°, γ′ 77°); M = 14.30 outside the tested 0.11–10.02",
+   "P = 2.79: overtops by 7.3 m, 3.68 Mm³ pulse, breach at 100 m/h"
+  ]
+ },
+ "stations": [
+  {
+   "name": "South Lhonak Lake",
+   "s": 0,
+   "kind": "lake",
+   "tFront": 15,
+   "tPeak": 49,
+   "qPeak": 69377,
+   "stageMax": 5219.41,
+   "rise": 28.32,
+   "band": {
+    "tFront": [
+     15,
+     15,
+     15
+    ],
+    "qPeak": [
+     67162,
+     73522,
+     81612
+    ]
+   },
+   "observed": [
+    {
+     "tFront": 0,
+     "note": "14.7 Mm³ of frozen moraine failed into the lake at 22:13:20 IST; displacement wave ~20 m; ~50 Mm³ (about half the lake) released; peak flow height ~11 m about 1 km downstream.",
+     "source": "Sattar et al. 2025, Science, doi:10.1126/science.ads2659 (via Eos / The Landslide Blog)"
+    }
+   ]
+  },
+  {
+   "name": "Lachen",
+   "s": 49663,
+   "kind": "town",
+   "tFront": 4960,
+   "tPeak": 5178,
+   "qPeak": 11832,
+   "stageMax": 2533.61,
+   "rise": 7.99,
+   "band": {
+    "tFront": [
+     4542,
+     5883,
+     6574
+    ],
+    "qPeak": [
+     4209,
+     11562,
+     17506
+    ]
+   }
+  },
+  {
+   "name": "Chungthang 2-D domain (north edge)",
+   "s": 63300,
+   "kind": "domainEdge",
+   "tFront": 6035,
+   "tPeak": 6584,
+   "qPeak": 9578,
+   "stageMax": 1871.58,
+   "rise": 8.93,
+   "band": {
+    "tFront": [
+     5508,
+     7223,
+     8510
+    ],
+    "qPeak": [
+     4089,
+     9578,
+     15341
+    ]
+   }
+  },
+  {
+   "name": "Chungthang",
+   "s": 69200,
+   "kind": "town",
+   "tFront": 6510,
+   "tPeak": 6656,
+   "qPeak": 9829,
+   "stageMax": 1599.62,
+   "rise": 6.9,
+   "band": {
+    "tFront": [
+     5939,
+     7710,
+     9333
+    ],
+    "qPeak": [
+     4133,
+     9829,
+     15318
+    ]
+   },
+   "observed": [
+    {
+     "tFront": 8200,
+     "note": "The flood reached Chungthang and the Teesta-III dam about 00:30 on 4 Oct (≈ 2 h 15 min after the failure) and destroyed the 60 m dam.",
+     "source": "Sattar et al. 2025, Science (via Eos / The Landslide Blog)"
+    },
+    {
+     "qPeak": 7355,
+     "note": "MODELLED peak (HEC-HMS/HEC-RAS reconstruction calibrated to the gauged peak at Gazoldoba); other studies give 10,282–14,673 m³/s here. No gauge measured it.",
+     "source": "Natural Hazards 121 (2025), doi:10.1007/s11069-025-07350-9; research spec §G.3"
+    }
+   ]
+  },
+  {
+   "name": "Chungthang bridge (North Sikkim Highway)",
+   "s": 69369,
+   "kind": "bridge",
+   "tFront": 6525,
+   "tPeak": 6634,
+   "qPeak": 10614,
+   "stageMax": 1599.48,
+   "rise": 6.75,
+   "band": {
+    "tFront": [
+     5953,
+     7725,
+     9348
+    ],
+    "qPeak": [
+     4131,
+     10614,
+     15593
+    ]
+   }
+  },
+  {
+   "name": "Teesta-III dam",
+   "s": 70081,
+   "kind": "hydro",
+   "tFront": 6586,
+   "tPeak": 7596,
+   "qPeak": 8503,
+   "stageMax": 1542.26,
+   "rise": 9.41,
+   "band": {
+    "tFront": [
+     6009,
+     7786,
+     9447
+    ],
+    "qPeak": [
+     4121,
+     8503,
+     14457
+    ]
+   }
+  }
+ ],
+ "entry": {
+  "s": 63300,
+  "tFront": 6035,
+  "qPeak": 9578,
+  "volume": 35454715,
+  "baseflow": 20,
+  "band": {
+   "tFront": [
+    5508,
+    7223,
+    8510
+   ],
+   "qPeak": [
+    4089,
+    9578,
+    15341
+   ]
+  }
+ },
+ "domain": {
+  "offset": 5735,
+  "sourceId": "lachen-chu-inflow",
+  "inflowVolume": 35341875,
+  "inflowPeak": 9578
+ }
+}

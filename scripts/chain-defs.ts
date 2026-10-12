@@ -7,6 +7,7 @@
  * published number (cited). Numbers that are this bake's ASSUMPTIONS rather than anyone's measurement say so, here
  * and in public/presets/SOURCES.txt.
  */
+import { MATERIAL_GLENWOOD_1 } from '../src/hazard/defaults';
 import type { HazardChainSpec } from '../src/hazard/types';
 
 export type LonLat = [number, number];
@@ -122,27 +123,49 @@ export const CHAIN_DEFS: ChainDef[] = [
       'Station positions: OpenStreetMap elements listed in scripts/chain-defs.ts.',
     hazardChain: {
       /*
-       * THE 2026 MECHANISM, per research spec §C.3 / §G.1: an ice-rock avalanche into the river that dammed it for a
-       * short time ("minutes", YAE/KU; an 18–19 h impoundment hypothesis exists and is not the default) and then let go.
+       * THE 2026 MECHANISM, per research spec §C.3 / §G.1: an ice-rock avalanche into the Lhende that turned into a
+       * debris flood, after blocking the river for "a few minutes" at most (YAE/KU; an 18–19 h impoundment hypothesis
+       * exists and is not the default).
+       *   mode        DIRECT FLOW (spec §C.3 branch 2), not a transient dam. Calibration, Oct 2026: s = 0 is where the
+       *               avalanche met the river, and the DEM profile has no valley above it to pond, so a transient dam
+       *               there "fills" for 10.5 h at baseflow and lets out 3.8 Mm³ at ~500 m³/s — the front reached
+       *               Betrawati after ~15 h against the reported 43 min. Moving s = 0 upstream would invent a lake no
+       *               report describes. Every timing source says the flood followed the collapse within minutes:
+       *               Rasuwagadhi ~3 min (NDRRMA) or ~7 min (CCTV at Gyirong Port, via OPRI), the Syafrubesi gauge dead
+       *               by 08:50. So the avalanche itself becomes the flood: its melted ice (20.7 Mm³ — DHM measured
+       *               19.96 Mm³ of excess water at Devghat) at the default source Cv.
        *   volume      113 Mm³ — YAE/KU's rough collapse estimate (assumed depths, "field verification required"; they
        *               add 29.4 Mm³ eroded for > 142 Mm³). NDRRMA describes "~1 km² of rock-glacier material".
        *   fallHeight  2,300 m — failure zone ~5,200 m (YAE/KU) down to the river at 2,900 m (profile s = 0).
        *   pathLength  13,000 m — ASSUMPTION: map distance from Langtang Lirung's north face to the profile's start.
        *               H/L ≈ 0.18, in the range of ice-rich rock avalanches (Chamoli 2021: 0.16, Shugar et al. 2021).
+       *   travelSpeed 50 m/s — the OPRI reconstruction ("The Langtang Collapse", Sep 2026) has the debris moving at
+       *               "roughly fifty metres a second"; the chain's clock (08:37) is the collapse's seismic signal, so the
+       *               water leaves s = 0 only 13 km / 50 m/s = 4.3 min later. The observed times include this travel;
+       *               the routing is not tuned to absorb it.
        *   iceFraction 0.2 — ASSUMPTION (the Chamoli rock:ice split, 80:20); no published split for this event.
-       *   damLength   1,500 m — spec default (1–2 km); baseflow 100 m³/s — ASSUMPTION, the low end of the spec's
-       *               monsoon 100–300 m³/s, because the dam sat on the Lhende, not on the larger Kyirong Tsangpo.
+       *   damLength   1,500 m — spec default (1–2 km), used only if the mode is switched back to transientDam.
+       *   baseflow    100 m³/s — ASSUMPTION, the low end of the spec's monsoon 100–300 m³/s for the Lhende.
        */
       trigger: {
         kind: 'massIntoRiver',
-        mass: { volume: 113e6, iceFraction: 0.2, fallHeight: 2300, pathLength: 13000 },
-        mode: 'transientDam',
+        mass: { volume: 113e6, iceFraction: 0.2, fallHeight: 2300, pathLength: 13000, travelSpeed: 50 },
+        mode: 'directFlow',
         damLength: 1500,
         baseflow: 100,
       },
       profile: 'chain.json',
-      // Research spec §I.3 "debris flood" preset; uMax 25 m/s — ICIMOD timed ~20 m/s Rasuwagadhi → Betrawati.
-      rheology: { kind: 'voellmy', mu: 0.05, xi: 500 },
+      result: 'chain-result.json',
+      /*
+       * 2-D rheology: O'Brien–Julien quadratic, "mud flood" Cv 0.3 with the Glenwood 1 material (spec §D.1; FLO-2D
+       * default K). Not the Voellmy μ 0.05 / ξ 500 of the first version: its Coulomb term stops flow wherever the surface
+       * slope is under μ·cosθ ≈ 2.9°, and the Trishuli floor in this domain falls ~2 %, so the 2-D surge stalled ~2 km
+       * into the map (solver engineer's headless runs, Oct 2026: front row at 450 s — water 456, Voellmy 401,
+       * quadratic Cv 0.3 436, Cv 0.45 336) [C]. The spec notes the yield/Coulomb terms matter little for debris floods
+       * at Cv 0.1–0.35. uMax 25 m/s — ICIMOD timed ~20 m/s Rasuwagadhi → Betrawati. (The 1-D routing does not read
+       * this: it carries its own Cv and Manning × n_td(Cv).)
+       */
+      rheology: { kind: 'quadratic', cv: 0.3, material: { ...MATERIAL_GLENWOOD_1 } },
       solver: { uMax: 25 },
       // The first DHM SMS alerts went out at about 09:15 NPT (DHM issued warnings 09:00–09:16; 632,295–679,295 SMS).
       alertTime: 38 * 60,
@@ -164,6 +187,23 @@ export const CHAIN_DEFS: ChainDef[] = [
           tFront: 43 * 60,
           note: 'Flood at Betrawati ~09:20; DHM station 447 (warning 4.1 m, danger 5.0 m) last read 3.55 m before it was destroyed.',
           source: 'NDRRMA SitRep #01 (1 Sep 2026); DHM station 447 page (dhm.gov.np/hydrology/hms-Single/52)',
+        },
+        /*
+         * A second, secondary reconstruction (think-tank synthesis of seismic, CCTV and official sources) puts both
+         * crossings at different times. Kept beside the official series so the spread of the observations is on
+         * screen too: Betrawati at 23 or 43 minutes is itself a ±30 % uncertainty.
+         */
+        {
+          station: 'Rasuwagadhi',
+          tFront: 7 * 60,
+          note: 'CCTV recorded floodwaters destroying the Gyirong Port complex at the Rasuwagadhi crossing ~08:44, seven minutes after the seismic signal (secondary source).',
+          source: 'OPRI, "The Langtang Collapse" (Sep 2026), citing Xinhua/CCTV',
+        },
+        {
+          station: 'Betrawati',
+          tFront: 23 * 60,
+          note: 'The surge reaches Betrawati ~09:00 in this reconstruction, against ~09:20 in NDRRMA SitRep #01 (secondary source).',
+          source: 'OPRI, "The Langtang Collapse" (Sep 2026), citing ICIMOD/DHM',
         },
         {
           station: 'Galchhi',
@@ -248,6 +288,15 @@ export const CHAIN_DEFS: ChainDef[] = [
        *               lateral-moraine slope into the lake); none was published in the sources read.
        *   breach      weir + linear erosion (§B.3) with the spec's trigger-driven k = 100 m/h; finalDepth 40 m is the
        *               spec's ASSUMED value for this lake (§B.3 table), with r = 2, side slope 1, p = 1.5 defaults.
+       *   wave        where the outlet lies relative to the slide, for the impulse wave's spreading (mass.ts
+       *               impulseWave; Evers et al. 2019 manual §4.2.1). A LATERAL moraine runs along the lake's side, so
+       *               the slide enters across the lake and the outlet, at the lake's end, is off to its side. From the
+       *               published numbers: the outlet (OSM Goma Chu head) is 1.3 km from the lake centroid (Eos), and
+       *               the lake is ~2.9 km long (EGU24-18788) so ~0.58 km wide (1.674 km² / 2.9 km). Impact taken at
+       *               the centroid, half a width from the shore: distance √(1300² + 290²) ≈ 1,330 m, angle
+       *               atan(1300 / 290) ≈ 77° — ASSUMPTIONS built from those numbers; the failure's exact place on
+       *               the shore was not in the sources read. Result (Oct 2026): wave height 15 m at the outlet
+       *               (≈ 20 m observed) where the flume equations gave 46 m.
        */
       trigger: {
         kind: 'massIntoLake',
@@ -263,10 +312,16 @@ export const CHAIN_DEFS: ChainDef[] = [
         },
         mass: { volume: 14.7e6, iceFraction: 0.2, fallHeight: 150, pathLength: 500 },
         breach: { model: 'weirErosion', erosionRate: 100, finalDepth: 40, widthRatio: 2, sideSlope: 1, hypsometry: 1.5 },
+        wave: { distance: 1330, angleDeg: 77 },
       },
       profile: 'chain.json',
-      // §I.3 "debris flood": ~270 Mm³ of sediment was mobilised (Sattar et al. 2025).
-      rheology: { kind: 'voellmy', mu: 0.05, xi: 500 },
+      result: 'chain-result.json',
+      /*
+       * ~270 Mm³ of sediment was mobilised (Sattar et al. 2025): a debris flood. 2-D rheology O'Brien–Julien quadratic,
+       * "mud flood" Cv 0.3, Glenwood 1 (spec §D.1), not Voellmy μ 0.05 — whose Coulomb term stalls flow on surface
+       * slopes under ~2.9°, which lagged the 2-D front here as on the Trishuli (solver engineer's runs, Oct 2026) [C].
+       */
+      rheology: { kind: 'quadratic', cv: 0.3, material: { ...MATERIAL_GLENWOOD_1 } },
       solver: { uMax: 25 },
       observations: [
         {

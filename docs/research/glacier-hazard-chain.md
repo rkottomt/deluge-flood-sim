@@ -212,9 +212,13 @@ Heller & Hager 2010 (J. Waterway Port Coastal Ocean Eng. 136(3):145–155) impul
 ```
 F = v_s/√(g h)   S = s/h   M = m_s/(ρ_w b h²)      (v_s slide impact velocity, s slide thickness, m_s slide mass,
 P = F · S^½ · M^¼ · {cos[(6/7)α]}^½                  b slide width, h still-water depth, α slide impact angle)
-a_M/h = (4/9) P^(4/5)        H_M/h = (5/9) P^(4/5)          (max amplitude / height, near field)        [M]
-a(x)/h = (3/5) [P·X^(−1/3)]^(4/5),  H(x)/h = (3/4)[P·X^(−1/3)]^(4/5),  X = x/h  (decay)                   [M]
+a_M/h = (4/9) P^(4/5)        H_M/h = (5/9) P^(4/5)          (max amplitude / height, near field)        [V]
+a(x)/h = (3/5) [P·X^(−1/3)]^(4/5),  H(x)/h = (3/4)[P·X^(−1/3)]^(4/5),  X = x/h  (decay)                   [V]
 ```
+
+[V] since Oct 2026 against Evers et al. 2019 (SFOE manual, 2nd ed. v2.1, eqs. 3.13–3.19). These are the FLUME (2-D)
+equations; a lake spreads the wave (manual §4.2.1, Ruffini et al. 2019), and the dam is overtopped by the crest
+amplitude a, not the height H — see §G.9 for what the engine does with that.
 
 Impact velocity from energy line: v_s ≈ √(2 g (H_fall − μ_eff L_path)), μ_eff ≈ H/L from C.1, cap at 60 m/s.
 
@@ -587,6 +591,57 @@ the bake from OSM/DEM before display).
   village, Lonza dammed into a lake; ~300 residents evacuated 9 days earlier; 1 death [S]. Damage estimates
   CHF 200–500 M from a low-reliability page [S — do not show]. Blatten ≈ 46.42 N, 7.82 E (≈). A good "warning worked"
   counterexample but outside the Himalayan data pipeline.
+
+### G.9 Calibration of the chain engine against G.1 and G.3 (October 2026)
+
+What was changed, why, and what is left. Every number below is reproduced by `npx tsx scripts/bake-chain.ts &&
+npx tsx scripts/bake-chain-result.ts` and asserted in tests/hazard/calibration.test.ts.
+
+* **Profile (both presets, scripts/chain-profile.ts).** (a) The bed was a plain isotonic fit — a staircase (Nepal 158 of
+  638 faces flat, steps to 45 m per node; Chungthang 63 flat). Now: isotonic fit → linear interpolation between the
+  pooled blocks' centroids → ±300 m moving average; exactly monotone, no flat face, RMS 6 m from the median-filtered
+  DEM samples. (b) Gorge sections were slots (3 m wide at 5 m of stage): every floor is widened to one DEM cell, 25 m
+  [H — a resolution floor; bankfull relations w ≈ 4–5·Q^0.5 give 45–80 m here, so it errs narrow]. 318 / 639 Nepal
+  and 271 / 729 Chungthang sections were widened.
+* **Nepal trigger.** `transientDam` at s = 0 had no valley above it to pond: a 10.5 h fill, 3.8 Mm³ at ~500 m³/s,
+  Betrawati after ~15 h. Switched to `directFlow` (C.3 branch 2): every timing source has the flood within minutes,
+  and the melt water (20.7 Mm³) matches DHM's 19.96 Mm³ excess at Devghat. Moving s = 0 upstream would invent a lake.
+* **Avalanche travel.** The clock is the collapse's seismic signal; the mass needs pathLength / v to reach the river
+  (MassMovement.travelSpeed, default 50 m/s — OPRI's "roughly fifty metres a second" [S]): 4.3 min for Nepal, added
+  to the source, not absorbed by the routing.
+* **Debris-flow resistance.** Considered, NOT changed: lowering the resistance of a debris flood is not supported —
+  Rickenmann 1999 gives n ≈ 0.1 for debris flows against 0.067 for clear-water torrents, consistent with the router's
+  Lin et al. (2005) dispersive factor (×1.5 at Cv 0.4). Manning n stays 0.05.
+* **Impulse wave (C.2).** Checked against the primary text — Evers, Heller, Fuchs, Hager & Boes, *Landslide-generated
+  Impulse Waves in Reservoirs — Basics and Computation*, 2nd ed. v2.1 (SFOE, 2023): H_M = (5/9)P^(4/5)h (3.13),
+  x_M = (11/2)P^½h (3.14), a = (4/5)H (3.16), H(x) = (3/4)(P·X^(−1/3))^(4/5)h (3.19), T(x) = 9P^¼X^(5/16)√(h/g)
+  (3.20): the coefficients above were RIGHT, now [V]. What was wrong was their use: they are the laterally confined
+  (flume) case, and the overtopping test used the height H, not the crest amplitude a (manual: a > f). The engine now
+  applies Ruffini et al. 2019's spreading (manual §4.2.1, eqs. 4.2–4.4: H = κ·H_M·(b/l_w)^½·cos²(2γ′/3), l_w =
+  b + 2r′β), compares a with the freeboard, and caps a at 0.78 h (non-breaking solitary wave, manual §3.3.3). South
+  Lhonak with the lateral-moraine geometry (outlet 1.33 km away, 77° off the slide axis — built from the published
+  centroid, outlet, area and length): H = 15 m against ~20 m observed; the flume value is 46 m. M ≈ 14 lies above the
+  manual's tested 10 and the engine says so.
+* **2-D rheology.** Voellmy μ 0.05 / ξ 500 stalled the 2-D surge (Coulomb term stops flow below ~2.9° of surface
+  slope; the Trishuli floor falls ~2 %). Both presets now use O'Brien–Julien quadratic, Cv 0.3, Glenwood 1 [C].
+* **The presets use the chain.** meta.json's inflow is the routed entry hydrograph of the ensemble's median member
+  (scripts/bake-chain-result.ts), and chain-result.json (BakedChainResult) carries fronts, peaks, bands and lead times.
+
+| Station (model = ensemble median member; band = p10–p90) | before | after | observed |
+|---|---|---|---|
+| Nepal, Rasuwagadhi front | 667 min (dam) / 18 min (direct flow, old profile) | 18 min (16–20) | ~3 min NDRRMA, ~7 min CCTV |
+| Nepal, Syafrubesi gauge front | 739 / 42 min | 34 min (30–40) | ≤ 13 min (gauge dead at 08:50) |
+| Nepal, Betrawati front | 884 / 104 min | 75 min (63–90) | 43 min NDRRMA, ~23 min OPRI |
+| Chungthang front | 80 min | 109 min (99–156) | ~137 min |
+| Chungthang peak | 18,177 m³/s | 9,829 m³/s (4,133–15,318) | 7,355–14,673 (reconstructions) |
+| South Lhonak wave at the outlet | 46 m (H vs freeboard) | 15 m H, 8 m crest | ~20 m |
+
+**Residual, honestly:** Nepal's front is still ~75 % late at Betrawati and the first two observations are out of
+reach. Diagnosis: on this DEM profile even a SUSTAINED 20,000 m³/s step reaches Betrawati only after 71 min (its mean
+velocity at n = 0.05 is ~15 m/s), while the reports imply ~20 m/s from Rasuwagadhi down and ~40–50 m/s above it — the
+speed of the avalanche-born debris flow itself (OPRI). Lowering n to 0.035 would close much of the gap and is
+exactly the fudge this calibration refused; what would justify it is a flood-stage resistance law or surveyed gorge
+sections. Chungthang is within its band.
 
 ---------------------------------------------------------------------------------------------------------------------
 
