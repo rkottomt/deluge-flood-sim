@@ -132,8 +132,10 @@ function sourceOf(trigger: HazardTrigger, file: ChainFile, ov: ChainOverrides, b
       return { series: h.series, info: info(ov.cv ?? 0, h.volume > 0), extraBase: 0 };
     }
     case 'massIntoLake': {
-      const { lake, breach } = trigger;
-      const mass = scaledMass(trigger.mass, vf);
+      // The volume factor scales the LAKE (its band is what the ensemble samples), not the mass.
+      const { breach } = trigger;
+      const lake = { ...trigger.lake, volume: { ...trigger.lake.volume, median: trigger.lake.volume.median * vf } };
+      const mass = trigger.mass;
       const ro = runout(mass);
       if (!ro.reaches) {
         notes.push(`the mass stops short of the lake (path H/L ${ro.pathRatio.toFixed(2)} < mobility ${ro.mobility.toFixed(2)})`);
@@ -175,7 +177,7 @@ function sourceOf(trigger: HazardTrigger, file: ChainFile, ov: ChainOverrides, b
       const qIn = trigger.baseflow > 0 ? trigger.baseflow : baseflow;
       const fill = qIn > 0 ? imp.volume / qIn : Infinity;
       const k = ov.erosionRate ?? EROSION_RATE_AVALANCHE_DAM;
-      const b: Hydrograph = breachHydrograph(imp.volume * 1, { model: 'weirErosion', erosionRate: k, finalDepth: H, widthRatio: 2, sideSlope: 1, hypsometry: p });
+      const b: Hydrograph = breachHydrograph(imp.volume, { model: 'weirErosion', erosionRate: k, finalDepth: H, widthRatio: 2, sideSlope: 1, hypsometry: p });
       notes.push(`avalanche dam ${H.toFixed(0)} m high impounds ${(imp.volume / 1e6).toFixed(2)} Mm³ over ${(imp.length / 1000).toFixed(1)} km; fills in ${(fill / 3600).toFixed(1)} h at ${qIn.toFixed(0)} m³/s, then breaches at ${k} m/h`);
       if (!Number.isFinite(fill)) return { series: zeroSeries(), info: info(0, false, { runout: ro, dam: { height: H, impounded: imp.volume, fillTime: fill } }), extraBase: 0 };
       // The river's own baseflow keeps flowing in the routing while the lake fills (simplification: the dry river bed
