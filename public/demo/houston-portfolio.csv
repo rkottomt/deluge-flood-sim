@@ -1,0 +1,20 @@
+asset_id,name,lat,lon,occupancy,floors,replacement_value,contents_value,currency,first_floor_height_m,critical_elev_m,daily_revenue,gross_margin,deductible,limit,tags
+WH-01,Demo Warehouse 1,29.77253,-95.38365,warehouse,1,10700000,6000000,USD,0.15,,45000,0.30,250000,15000000,fictional-demo logistics
+WH-02,Demo Warehouse 2 (dock-high),29.77326,-95.38361,warehouse,1,10300000,5500000,USD,1.2,,40000,0.30,250000,15000000,fictional-demo logistics
+WH-03,Demo Warehouse 3,29.77175,-95.38349,warehouse,1,7200000,4000000,USD,0.15,,30000,0.30,250000,10000000,fictional-demo logistics
+WH-04,Demo Warehouse 4,29.77027,-95.37767,warehouse,1,3000000,1500000,USD,0.15,,12000,0.30,100000,4500000,fictional-demo logistics
+WH-05,Demo Warehouse 5,29.73457,-95.40532,warehouse,1,3300000,2000000,USD,0.15,,15000,0.30,100000,5000000,fictional-demo logistics
+IN-01,Demo Light Industrial 1,29.78045,-95.40852,industrial,1,5400000,3000000,USD,0.15,,25000,0.25,100000,8000000,fictional-demo industrial
+DC-01,Demo Distribution Center,29.77212,-95.34737,warehouse,1,12000000,18000000,USD,1.2,,120000,0.25,500000,25000000,fictional-demo logistics
+DATA-01,Demo Data Center,29.78468,-95.41062,datacenter,2,60000000,90000000,USD,0.6,1.0,250000,0.40,1000000,100000000,fictional-demo critical
+RT-01,Demo Retail 1,29.73924,-95.41132,retail,1,9000000,3000000,USD,0.15,,60000,0.35,100000,12000000,fictional-demo retail
+RT-02,Demo Retail 2,29.74525,-95.39011,retail,1,8700000,2500000,USD,0.15,,55000,0.35,100000,11000000,fictional-demo retail
+RT-03,Demo Retail 3,29.75266,-95.40734,retail,1,8300000,2500000,USD,0.15,,50000,0.35,100000,10000000,fictional-demo retail
+RT-04,Demo Retail 4 (big box),29.78870,-95.41107,retail,1,24000000,9000000,USD,0.15,,150000,0.30,250000,25000000,fictional-demo retail
+AP-01,Demo Apartments 1,29.76006,-95.39056,apt,4,115000000,5000000,USD,0.3,,60000,0.60,500000,25000000,fictional-demo multifamily
+AP-02,Demo Apartments 2,29.77300,-95.35244,apt,4,82000000,3500000,USD,0.3,,42000,0.60,500000,25000000,fictional-demo multifamily
+AP-03,Demo Apartments 3,29.74297,-95.41660,apt,4,57000000,2500000,USD,0.3,,30000,0.60,250000,20000000,fictional-demo multifamily
+AP-04,Demo Apartments 4,29.77138,-95.41687,apt,4,54000000,2500000,USD,0.3,,28000,0.60,250000,20000000,fictional-demo multifamily
+CL-01,Demo Clinic,29.73075,-95.38605,hospital,2,14000000,6000000,USD,0.3,0.5,40000,0.20,100000,20000000,fictional-demo healthcare
+OF-01,Demo Office 1,29.73220,-95.41409,office,6,70000000,10000000,USD,0.3,,0,,500000,25000000,fictional-demo office
+OF-02,Demo Office 2,29.76578,-95.39881,office,5,22000000,3000000,USD,0.3,,0,,250000,15000000,fictional-demo office
