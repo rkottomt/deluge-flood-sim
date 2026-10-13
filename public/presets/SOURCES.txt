@@ -587,3 +587,18 @@ bare-earth filtered · Terrain shading: no aerial imagery (hypsometric tint) · 
 Live areas loaded in the app are fetched at runtime and never stored in the repository. They use Esri World Imagery
 (© Esri and its imagery providers, under Esri's terms) and, as fallbacks, Mapzen Terrarium elevation tiles (AWS Open
 Data) and OpenStreetMap roads (© OpenStreetMap contributors, ODbL).
+
+Critical facilities (facilities.json, every baked preset)
+---------------------------------------------------------
+
+  facilities.json Substations and power plants, hospitals and clinics, fire and police stations, water and wastewater
+                 works, telecom exchanges, bridges on major roads and fuel stations, from OpenStreetMap through the
+                 Overpass API (one query per preset over its bounds, scripts/bake-facilities.ts; the query text is
+                 overpassFacilitiesQuery() in src/data/facilities.ts). Tags: power=substation|plant;
+                 amenity=hospital|clinic|fire_station|police|fuel; healthcare=hospital;
+                 man_made=water_works|wastewater_plant; telecom=exchange|central_office|data_center; bridge=* on
+                 highway=motorway|trunk|primary|secondary(_link). (c) OpenStreetMap contributors, Open Database
+                 License (ODbL) 1.0; the file is a derived database offered under the ODbL like its source, and the
+                 on-screen attribution is the same OpenStreetMap credit the buildings carry. The OSM snapshot date
+                 is stored in each file (osmDate). OSM coverage of these features is uneven: chamoli has none mapped,
+                 chungthang one, and a missing substation or hospital on the map is not proof there is none.
