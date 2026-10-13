@@ -662,13 +662,14 @@ test('prep: arrival and hazard views map the solver hazard accumulators into mis
   assert.deepEqual(errors, []);
 });
 
-test('prep: a footprint the solver blocks (buildings as obstacles) shows no water, the street around it does', async () => {
+test('prep: a footprint the solver blocks (buildings as obstacles) shows no roof film, an overtopped one its water, the street around it all of it', async () => {
   const { createPipelines } = await import('../../src/render/pipelines');
   const device = await getDevice();
   const errors: string[] = [];
   device.onuncapturederror = (e) => errors.push(e.error.message);
   const P = await createPipelines(device, 'bgra8unorm');
-  // Flat street at 100 m under 0.4 m of water; a 4×4-cell building at (20…23, 20…23) holding a 3 cm roof film.
+  // Flat street at 100 m under 0.4 m of water; a 4×4-cell building at (20…23, 20…23) holding a 3 cm roof film, and a
+  // 2×2-cell shed at (40…41, 40…41) the flood has overtopped (0.6 m over its roof).
   const bed = new Float32Array(N * N).fill(100);
   const obstacle = new Float32Array(N * N);
   const state = new Float32Array(N * N * 4);
@@ -676,9 +677,11 @@ test('prep: a footprint the solver blocks (buildings as obstacles) shows no wate
     const i = c % N;
     const j = Math.floor(c / N);
     const inside = i >= 20 && i < 24 && j >= 20 && j < 24;
+    const shed = i >= 40 && i < 42 && j >= 40 && j < 42;
     if (inside) obstacle[c] = 12;
-    state[c * 4] = inside ? 0.03 : 0.4;
-    state[c * 4 + 3] = inside ? 0.03 : 0.5;
+    if (shed) obstacle[c] = 3;
+    state[c * 4] = inside ? 0.03 : shed ? 0.6 : 0.4;
+    state[c * 4 + 3] = inside ? 0.03 : shed ? 0.7 : 0.5;
   }
   const tex = (format: GPUTextureFormat, data: Float32Array, bpp: number) => {
     const t = device.createTexture({ size: [N, N], format, usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
@@ -742,6 +745,8 @@ test('prep: a footprint the solver blocks (buildings as obstacles) shows no wate
   assert.ok(Math.abs(off.depth(21, 21) - 0.03) < 1e-4, `without obstacles the footprint shows its film: ${off.depth(21, 21)}`);
   assert.equal(on.depth(21, 21), 0, 'a blocked footprint shows no water');
   assert.equal(on.maxDepth(21, 21), 0, 'nor any max depth');
+  assert.ok(Math.abs(on.depth(40, 40) - 0.6) < 1e-3, 'an overtopped roof shows the water over it');
+  assert.ok(Math.abs(on.maxDepth(40, 40) - 0.7) < 2e-3);
   assert.ok(Math.abs(on.depth(19, 21) - 0.4) < 1e-3, 'the street against the wall keeps its water');
   assert.ok(Math.abs(on.maxDepth(19, 21) - 0.5) < 2e-3);
   assert.deepEqual(errors, []);

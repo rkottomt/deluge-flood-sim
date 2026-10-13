@@ -245,7 +245,7 @@ export const SITE_METHOD_NOTES: ReadonlyArray<{ title: string; text: string }> =
 ];
 
 export const SITE_LIMITATIONS: readonly string[] = [
-  'Bare-earth terrain at the grid cell size: no buildings, storm drains, basements or flood walls not drawn on the map; water flows through buildings.',
+  'Bare-earth terrain at the grid cell size unless the Advanced land-surface layers are on: by default no buildings, storm drains, basements or flood walls not drawn on the map, and water flows through buildings.',
   'A river stage is held at the domain edges and raised at a limited rate; real crests last hours to days, so wet durations here are lower bounds.',
   'Pittsburgh and Nashville are regulated rivers: historic crests before the flood-control reservoirs (1936 at Pittsburgh) would crest lower today.',
   'Return periods are inputs. Where none is published here, the EAL rests on yours; with one or two points it is a rough bracket, not a figure.',

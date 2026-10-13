@@ -115,15 +115,19 @@ ${AIDR_CLASS_WGSL}
  * The cell state as the cells pass shows it. In the probability view the max-depth channel is the ensemble's envelope
  * — the deepest water any member reached — so the map is drawn on every cell some member flooded, not only on the
  * last run's extent (the solver has been reset to the user's own scenario by then). A footprint the solver blocks
- * (buildings as obstacles) shows no water at all: the film of rain running off its roof is not a flood, and the water
- * around it stops at its walls.
+ * (buildings as obstacles) shows no water unless the flood has overtopped it: the film of rain running off a roof (a few
+ * centimetres at most) is not a flood, and the water around the building stops at its walls.
  */
+const ROOF_FILM: f32 = 0.1;
 fn cstate(p: vec2i) -> vec4f {
-  if (P.hasObst != 0 && textureLoad(obstTex, cl(p), 0).r > 0.0) { return vec4f(0.0); }
   var s = state(p);
   if (P.field == 3 && P.hasEns != 0) {
     let c = cl(p);
     s.a = ensBuf[u32(c.y) * u32(P.nx) + u32(c.x)].w;
+  }
+  if (P.hasObst != 0 && textureLoad(obstTex, cl(p), 0).r > 0.0) {
+    if (s.r < ROOF_FILM) { s = vec4f(0.0, 0.0, 0.0, s.a); }
+    if (s.a < ROOF_FILM) { s.a = 0.0; }
   }
   return s;
 }

@@ -43,9 +43,11 @@ export const METHOD_NOTES: readonly MethodNote[] = [
       'For every footprint the solver’s per-cell accumulators are sampled over the cells it covers: maximum depth, ' +
       'maximum speed, maximum depth × speed, first arrival and time under water — the worst cell, since water on ' +
       'one side of a building is in its ground floor. Cells that were already wet when the scenario started (rivers, ' +
-      `lakes) are left out. A building is "reached" at ${REACHED_DEPTH} m. The terrain is bare earth: water flows through ` +
+      `lakes) are left out. A building is "reached" at ${REACHED_DEPTH} m. By default the terrain is bare earth: water flows through ` +
       'buildings in the model, so depths are street depths at the footprint and speeds are open-ground speeds where real ' +
-      'flow would go around the walls. A building wet along one edge only (a riverside wall, a footprint a levee cuts ' +
+      'flow would go around the walls. With "Buildings block flow" on (Advanced) the water goes round them instead, and ' +
+      'each building is read in the open cells against its walls, counting only the water above its own lowest ground. ' +
+      'A building wet along one edge only (a riverside wall, a footprint a levee cuts ' +
       'through) is flagged "edge only" with the share of its footprint that was reached.',
   },
   {

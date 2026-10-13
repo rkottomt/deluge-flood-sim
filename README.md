@@ -363,9 +363,9 @@ base in the terrain shader with an 8-cell feather. It buys 2.4–2.7× the texel
 cameras fly, costs 89.5 MB of GPU memory and 3.5–5.1 MB on disk each, and measures free on both load (−23 ms,
 interleaved A/B) and frame time (deltas inside sample noise, one of them negative). The other three domains are
 already at 1.22–1.46 m/texel, close enough to NAIP's own ~1 m limit that an inset would add megabytes and no detail.
-`public/presets` totals 120.1 MB across eleven presets against a 125 MB static-host budget enforced by
+`public/presets` totals 121.6 MB across eleven presets against a 125 MB static-host budget enforced by
 `tests/data/presets.test.ts`. A visitor never downloads that number — presets load one at a time, so the cost is the
-largest single preset (Asheville, 17.0 MB), which a separate 25 MB per-preset cap holds down; the directory total is
+largest single preset (Asheville, 17.1 MB), which a separate 25 MB per-preset cap holds down; the directory total is
 a host-and-repo budget, and the rationale for where it sits is in
 [ARCHITECTURE.md §5](ARCHITECTURE.md#5-data).
 
@@ -406,6 +406,7 @@ From `npm test` (the solver tests run on a real GPU through Dawn); the grid-conv
 | The same under 100 mm/hr rain ([reference-run](scripts/reference-run.ts)) | flooded area −0.55 %, flood-extent IoU 78.2 %, max-depth RMSE 0.22 m (median 5 cm) |
 | All seven baked cities in the production build, offline, at 1470x956 DPR 2 ([e2e](scripts/e2e.mjs) flow 7, [presets](tests/data/presets.test.ts)) | load 606–744 ms, 58.7–60 fps, sim 48–134× real time, mass error ≤ 6·10⁻⁸, no console or WebGPU errors, zero network requests |
 | Every scene's streets, shelters and evacuation routing ([e2e](scripts/e2e.mjs) flow 5) | 1,224–11,053 road edges, 4–5 shelters, a route plans dry and re-plans as streets flood, on all seven |
+| Optional land-surface layers: off or neutral they are the old solver bit for bit; GPU vs Float64 CPU reference with buildings, a roughness map and drains; drains booked exactly ([landSurface](tests/sim/landSurface.test.ts)) | bit-identical; max \|Δh\| 1.2·10⁻⁴ m; mass error ≤ 1.4·10⁻⁷ in every evaluation run |
 
 In the running app the HUD's mass-balance error stays below 0.001 % at the 1936 crest, with or without hurricane rain.
 
@@ -643,13 +644,22 @@ a simulation. `Deluge.app` serves the same build with `frame-ancestors 'none'` a
 
 * **Hydro-flattened elevation.** 3DEP has no river bathymetry, so channels are burned to a nominal depth (6 m for
   Pittsburgh's rivers); river volumes and speeds are approximate.
-* **Bare-earth terrain.** Buildings, bridge decks and culverts are not in the DEM; water flows through blocks and under
-  viaducts, and storm drains are not modelled. Road and highway embankments therefore dam small creeks: under heavy
-  rain water ponds several metres deep behind them (8.5 m behind I-376 in Pittsburgh's Saw Mill Run valley at
-  100 mm/hr; up to 14 m in a pit beside US 40 after an hour of Ellicott City's storm), which also sets the HUD's max
-  depth.
-* **Uniform roughness.** One Manning's n for the whole map (0.035, adjustable under Advanced); no land-cover roughness
-  map.
+* **Bare-earth terrain by default.** Bridge decks and culverts are not in the DEM, so water flows under viaducts, and
+  road and highway embankments dam small creeks: under heavy rain water ponds several metres deep behind them (8.5 m
+  behind I-376 in Pittsburgh's Saw Mill Run valley at 100 mm/hr; up to 14 m in a pit beside US 40 after an hour of
+  Ellicott City's storm), which also sets the HUD's max depth. Buildings, a land-cover roughness map and storm drains
+  are optional layers (Advanced → *Land surface*), **off by default** because none has been checked against an observed
+  flood here ([ARCHITECTURE.md §3.11](ARCHITECTURE.md#311-land-surface-buildings-as-obstacles-a-roughness-map-storm-drains)):
+  * *Buildings block flow* raises every footprint into the bed the water sees. On the 7.8 m grid it closes gaps between
+    houses narrower than a cell, and a roof's rain lands in the cells against its walls (real downspouts feed the
+    sewers), so under rain it puts water against many more buildings than bare earth does.
+  * *Land-cover roughness* takes Manning's n from NLCD 2021 (US) or ESA WorldCover 2021; the values are mid-range
+    literature values, not calibrated, and they change loss through flow speed (Pittsburgh's crest loss −54 % with the
+    map alone).
+  * *Storm drains* remove standing water on developed land at the rate the sewers were designed for (runoff coefficient
+    × NOAA Atlas 14's 2-year 1-hour rain): a spread-out sink, not a pipe network — no inlets, no pipe limits, and it
+    keeps draining when a flooded river would back the outfalls up. Without them a 2-year storm floods ~100 km of
+    Houston's streets more than 30 cm deep; with them, ~7 km. US presets only; live areas have no land cover.
 * **Protected land is a still-water estimate.** The green "kept dry" land and its acres compare the water level held
   back by the walls with and without them; they ignore how long water leaking through a gap would take to fill the
   land behind it.
@@ -687,6 +697,9 @@ that forbids redistribution (details, per city, in [public/presets/SOURCES.txt](
 * Validation data (`public/validation`, [docs/VALIDATION.md](docs/VALIDATION.md)): **USGS** STN high-water marks and
   NWIS peaks, **FEMA** National Flood Hazard Layer (public domain); damage grading © European Union, 2026,
   **Copernicus Emergency Management Service** (EMSR927)
+* Land cover: **NLCD 2021** (USGS / MRLC) for the US presets; the drain design rainfall from **NOAA Atlas 14**. The three
+  Himalayan presets use **ESA WorldCover 2021** (© ESA WorldCover project 2021 / Contains modified Copernicus Sentinel
+  data (2021) processed by ESA WorldCover consortium, CC BY 4.0), credited on screen with the rest of their data
 
 Rain return periods (Site check's rain ladder): **NOAA Atlas 14** precipitation-frequency estimates, Volumes 1–4 and
 6–12 (NOAA / National Weather Service, Office of Water Prediction, Hydrometeorological Design Studies Center), public
