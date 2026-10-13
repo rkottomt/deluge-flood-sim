@@ -6,8 +6,10 @@
  *                                                     semi-implicit friction, θ smoothing, velocity cap)
  *   Pass B  continuity    state[p] + flux ──▶ state[1−p]  (+ accounting buffer)
  *                                                    (positivity limiter, ∂h/∂t = −∇·q, rain, sources,
- *                                                     infiltration, stage levels with no momentum inside a
- *                                                     stage disc, open boundaries closed next to inflows)
+ *                                                     infiltration, storm drains, stage levels with no momentum
+ *                                                     inside a stage disc, open boundaries closed next to inflows)
+ *   Land surface (setLandSurface, optional): building obstacles in the state bed (rebuilt in place by the brush pass),
+ *            a per-cell Manning factor read by pass A and a drain capacity read by pass B (one rg32float texture).
  * ── On demand ──────────────────────────────────────────────────────────────────────────────────────────
  *   Brush   walls / erase / water / dig over a rectangle (CPU mirrors of ground + walls kept in sync)
  *   Raise   raiseWaterSurface: h = max(h, base + offset − bed) in place (river crests), booked as inflow
