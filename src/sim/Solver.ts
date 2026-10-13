@@ -1115,6 +1115,7 @@ export class GpuFloodSolver implements FloodSolver {
         const blocked = new Uint8Array(N);
         for (let c = 0; c < N; c++) if (this.obstacle[c] > 0) blocked[c] = 1;
         fields.blocked = blocked;
+        fields.ground = this.ground.slice();
       }
       return fields;
     } finally {

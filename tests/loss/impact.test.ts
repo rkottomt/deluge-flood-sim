@@ -320,3 +320,26 @@ test('with obstacles the street depth against the walls is booked, not the dry f
   assert.equal(report.summary.reached, 1);
   assert.ok(report.summary.loss > 0);
 });
+
+test('with obstacles, water in a gutter below the building pad counts only above the building’s ground', () => {
+  const set = buildings([[10, 10, 14, 14, 'house', 6]]);
+  const blocked = blockedMask(set);
+  // Pad at 1.0 m; the street west of it at 0.8 m with 0.9 m of water (0.7 m above the pad), the street north at 0.95 m
+  // with 0.18 m (0.13 m above the pad: not reached), the yard east uphill at 1.3 m with 0.2 m (its own depth counts).
+  const ground = new Float32Array(NX * NY).fill(1.0);
+  for (let j = 0; j < NY; j++) {
+    ground[j * NX + 9] = 0.8;
+    ground[j * NX + 14] = 1.3;
+  }
+  for (let i = 10; i < 14; i++) ground[9 * NX + i] = 0.95;
+  const f = fields((i, j) =>
+    i === 9 && j >= 10 && j < 14 ? { d: 0.9, v: 1, fw: 400 } : j === 9 && i >= 10 && i < 14 ? { d: 0.18, v: 1, fw: 200 } : i === 14 && j >= 10 && j < 14 ? { d: 0.2, v: 0.5, fw: 300 } : {},
+  );
+  const fp = rasterizeFootprints(set, NX, NY, CELL);
+  const s = sampleCells({ ...f, blocked, ground }, fp.cells, fp.offsets[0], fp.offsets[1]);
+  assert.ok(Math.abs(s.maxDepth - 0.7) < 1e-6, `depth above the pad ${s.maxDepth}`);
+  assert.ok(Math.abs(s.maxDV - 0.7) < 1e-6, `depth × speed scaled with the depth that reaches the wall: ${s.maxDV}`);
+  // North cells (0.13 m above the pad) are not an arrival; the east yard (its own 0.2 m) at 300 s is the first.
+  assert.equal(s.firstWet, 300);
+  assert.equal(s.reachedCells, 4 + 4, 'west and east walls reached, north not');
+});

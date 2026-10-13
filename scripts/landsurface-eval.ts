@@ -35,6 +35,8 @@ Object.assign(globalThis, globals);
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const arg = (name: string, d: string) => process.argv.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3) ?? d;
+/** --rain=<mm/hr>: rain-only runs at this rate (e.g. the 2-year 1-hour design storm); unset = the scenario's forcing. */
+const RAIN = Number(arg('rain', '-1'));
 
 const VARIANTS: Record<string, LandSurfaceFlags> = {
   base: { buildings: false, roughness: false, drains: false },
@@ -109,7 +111,7 @@ async function run(device: GPUDevice, id: 'pittsburgh' | 'houston', variant: str
   const flags = VARIANTS[variant];
   const { nx, ny, cellSize } = terrain;
   const N = nx * ny;
-  const solver = await createSolver(device, terrain, { rainRate: meta.scenario.rainRate, boundary: 'open' }, { gpuBudgetMs: Infinity });
+  const solver = await createSolver(device, terrain, { rainRate: RAIN >= 0 ? RAIN : meta.scenario.rainRate, boundary: 'open' }, { gpuBudgetMs: Infinity });
   solver.setInitialWater(initialWater);
   const layers = buildLandSurface(terrain, initialWater, flags);
   solver.setLandSurface(layers);
@@ -118,7 +120,8 @@ async function run(device: GPUDevice, id: 'pittsburgh' | 'houston', variant: str
   levels.resetFrom(sources);
   solver.setSources(levels.apply(sources, 0));
   solver.setStorms(meta.scenario.storms);
-  const crest = id === 'pittsburgh';
+  // --rain replaces the scenario's rain and holds the rivers at normal pool (a rain-only run).
+  const crest = id === 'pittsburgh' && !(RAIN >= 0);
   const ramp = new StageRamp();
   const stage = meta.scenario.stage;
   const channelBase = crest ? channelBaseSurface(initialWater, (k) => terrain.elevation[k], nx, ny, sources) : null;
@@ -198,10 +201,12 @@ async function run(device: GPUDevice, id: 'pittsburgh' | 'houston', variant: str
   // cell centre), to separate what the sampling rule changes from what the physics changes.
   const ring = new Uint8Array(N);
   for (let c = 0; c < N; c++) if (raster[c] > 0 && !(initialWater[c] >= 0.01)) ring[c] = 1;
-  const sRing = blocked ? s : analyze({ fields: { ...fields, blocked: ring }, terrain, velocityKnown: true, debrisFlow: false }).report!.summary;
+  const sRing = blocked ? s : analyze({ fields: { ...fields, blocked: ring, ground: terrain.elevation }, terrain, velocityKnown: true, debrisFlow: false }).report!.summary;
   const km2 = (n: number) => (n * cellSize * cellSize) / 1e6;
   const out = {
     case: id,
+    rainMmHr: RAIN >= 0 ? RAIN : meta.scenario.rainRate,
+    crest,
     variant,
     minutes,
     blockedCells: blocked ? blocked.reduce((n, v) => n + (v > 0 ? 1 : 0), 0) : 0,
@@ -246,14 +251,14 @@ async function main() {
       console.log(
         `${c.padEnd(10)} ${v.padEnd(20)} flooded ${r.flooded15km2.toFixed(3)} km² (open ${r.openFlooded15km2.toFixed(3)}) ` +
           `>0.5 m ${r.flooded50km2.toFixed(3)}  roads>0.3m ${r.roadKmOver30cm.toFixed(1)} km  road depth mean ${r.roadDepthMean.toFixed(2)} p90 ${r.roadDepthP90.toFixed(2)} m  ` +
-          `loss $${(r.loss / 1e9).toFixed(3)} B (wall-sampled $${(r.lossWallSampled / 1e9).toFixed(3)} B)  reached ${r.reached} (${r.reachedWallSampled})  massErr ${r.massError.toExponential(1)}  ${r.substeps} substeps ${r.wallS.toFixed(0)} s`,
+          `loss $${(r.loss / 1e9).toFixed(3)} B (wall-sampled $${(r.lossWallSampled / 1e9).toFixed(3)} B)  reached ${r.reached} (${r.reachedWallSampled}) damaged ${r.damaged} destroyed ${r.destroyed}  massErr ${r.massError.toExponential(1)}  ${r.substeps} substeps ${r.wallS.toFixed(0)} s`,
       );
       results.push(r);
     }
   }
   const outDir = path.join(ROOT, 'artifacts/landsurface-eval');
   fs.mkdirSync(outDir, { recursive: true });
-  fs.writeFileSync(path.join(outDir, 'results.json'), JSON.stringify({ gpu: description, at: new Date().toISOString(), results }, null, 1));
+  fs.writeFileSync(path.join(outDir, RAIN >= 0 ? `results-rain${RAIN}.json` : 'results.json'), JSON.stringify({ gpu: description, at: new Date().toISOString(), results }, null, 1));
   await device.queue.onSubmittedWorkDone();
 }
 

@@ -611,6 +611,11 @@ export interface HazardFields {
    * not enter a blocked cell, so impact sampling reads the open cells around it instead (src/loss/impact.ts).
    */
   blocked?: Uint8Array;
+  /**
+   * Extension, present with `blocked`: the ground elevation per cell (m), so impact sampling can tell how much of the
+   * water against a wall stands above the building's own ground.
+   */
+  ground?: Float32Array;
 }
 
 // ────────────────────────────────────────────────────────────────────────────────────────────
