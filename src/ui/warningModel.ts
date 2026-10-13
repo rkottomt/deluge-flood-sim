@@ -156,7 +156,9 @@ export function kindLabel(kind: Sensor['kind']): string {
 /**
  * What the OBSERVED arrivals say a sensor would have given a target: when the sensor sits within 500 m of a station
  * with an observed front and the target has one too — observed front(target) − observed front(sensor) − latencies.
- * (The Nepal 2026 observations: Rasuwagadhi ~08:40, Betrawati ~09:20.) Null otherwise.
+ * (The Nepal 2026 observations: Rasuwagadhi ~08:40, Betrawati ~09:20 — the official series; both coincide with gauge
+ * timestamps, a last normal reading and a lost signal, research spec §G.9.) Bounds ("upper bound", a gauge washed
+ * away) and secondary reconstructions are not mixed into the official series. Null otherwise.
  */
 export function observedLead(observations: readonly ChainObservation[] | undefined, file: ChainFile, sensor: Sensor, target: string, seismicTrigger: boolean): number | null {
   if (!observations) return null;
@@ -165,7 +167,7 @@ export function observedLead(observations: readonly ChainObservation[] | undefin
   if (tTarget === undefined) return null;
   const lat = sensor.detectionLatency + sensor.alertLatency;
   if (sensor.kind === 'seismic' && seismicTrigger) return tTarget - lat;
-  const near = file.stations.filter((st) => Math.abs(st.s - sensor.s) <= 500 && obs(st.name) !== undefined && !/upper bound|washed away/i.test(observations.find((o) => o.station === st.name)?.note ?? ''));
+  const near = file.stations.filter((st) => Math.abs(st.s - sensor.s) <= 500 && obs(st.name) !== undefined && !/upper bound|washed away|secondary source/i.test(observations.find((o) => o.station === st.name)?.note ?? ''));
   if (!near.length) return null;
   return tTarget - obs(near[0].name)! - lat;
 }
