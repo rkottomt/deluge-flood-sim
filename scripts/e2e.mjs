@@ -2528,12 +2528,12 @@ const FLOWS = [
       await calm();
       const off = await land();
       r.metrics.off = off;
-      check(r, 'Pittsburgh has footprints and NLCD 2021 land cover; every layer starts off', !!off.status && off.status.obstacleCells > 20_000 && off.status.landCover === 'NLCD 2021' && off.solver?.obstacles === 0 && !off.solver.roughness && !off.solver.drains, JSON.stringify(off.status));
+      check(r, 'Pittsburgh has footprints and NLCD 2021 land cover; every layer starts off', !!off.status && off.status.obstacleCells > 20_000 && off.status.porousCells > 50_000 && off.status.landCover === 'NLCD 2021' && off.solver?.obstacles === 0 && !off.solver.roughness && !off.solver.drains, JSON.stringify(off.status));
       check(r, 'the Advanced panel shows the switches and the honest fine print', 'Buildings block flow' in off.switches && 'Storm drains' in off.switches && /not a pipe network/.test(off.note), Object.keys(off.switches).join(', '));
       await setSim({ buildingObstacles: true, roughnessMap: true, drainage: true });
       const on = await land();
       r.metrics.on = on;
-      check(r, 'switching on reaches the solver and the panel', on.solver?.obstacles === off.status.obstacleCells && on.solver.roughness && on.solver.drains && on.switches['Buildings block flow'] === 'true', JSON.stringify(on.solver));
+      check(r, 'switching on reaches the solver and the panel', on.solver?.obstacles === off.status.obstacleCells && on.solver.porous === off.status.porousCells && on.solver.roughness && on.solver.drains && on.switches['Buildings block flow'] === 'true', JSON.stringify(on.solver));
       const before = await stats();
       await D(() => window.__deluge.setRain(100));
       await runFor(600);
@@ -2565,7 +2565,7 @@ const FLOWS = [
       await shot('24-land-surface');
       await setSim({ buildingObstacles: false, roughnessMap: false, drainage: false });
       const back = await land();
-      check(r, 'switching off restores the bare-earth solver', back.solver?.obstacles === 0 && !back.solver.roughness && !back.solver.drains, JSON.stringify(back.solver));
+      check(r, 'switching off restores the bare-earth solver', back.solver?.obstacles === 0 && back.solver.porous === 0 && !back.solver.roughness && !back.solver.drains, JSON.stringify(back.solver));
       await D(() => {
         window.__deluge.setRain(0);
         window.__deluge.setWaterMode('realistic');

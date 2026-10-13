@@ -44,11 +44,36 @@ function layers(depth: Float32Array): Record<string, LandSurface> {
       if (i % 6 < 3 && j % 6 < 3 && depth[c] === 0) obstacles[c] = 10;
     }
   }
+  // Porosity: a half-covered ring of cells round every block (the pattern src/data/porosity.ts gives a city), roofs
+  // shedding into their own open half.
+  const cell = new Float32Array(N).fill(1);
+  const faceE = new Float32Array(N).fill(1);
+  const faceS = new Float32Array(N).fill(1);
+  const roof = new Float32Array(N);
+  for (let j = 0; j < n; j++) {
+    for (let i = 0; i < n; i++) {
+      const c = j * n + i;
+      if (obstacles[c] > 0 || depth[c] > 0 || i < 3 || j < 3 || i >= n - 3 || j >= n - 3) continue;
+      if (i % 6 < 4 && j % 6 < 4) {
+        cell[c] = 0.5;
+        roof[c] = 0.5;
+      }
+    }
+  }
+  for (let j = 0; j < n; j++) {
+    for (let i = 0; i < n; i++) {
+      const c = j * n + i;
+      if (i < n - 1) faceE[c] = Math.min(cell[c], cell[c + 1]);
+      if (j < n - 1) faceS[c] = Math.min(cell[c], cell[c + n]);
+    }
+  }
+  const porosity = { cell, faceE, faceS, roof, spout: roof.slice() };
   return {
     roughness: { roughness },
     drains: { drainCapacity },
     obstacles: { obstacles },
-    all: { roughness, drainCapacity, obstacles },
+    'buildings (blocks + porosity)': { obstacles, porosity },
+    all: { roughness, drainCapacity, obstacles, porosity },
   };
 }
 

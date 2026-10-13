@@ -46,17 +46,38 @@ struct Sim {
 `;
 
 /**
- * Land-surface texture (rg32float, nx×ny), bound to the momentum and continuity passes:
+ * Land-surface texture (rgba32float, nx×ny), bound to the momentum and continuity passes:
  *   r = Manning roughness factor of the cell, relative to the global n (SimParams.manningN): a face's n is
  *       manningN · (r_L + r_R)/2, so n² = sim.n2 · r_f². r = 1 everywhere reproduces the uniform-n solver bit for bit.
  *   g = storm-drain capacity of the cell, m/s of depth (× sim.drainScale).
+ *   b = downspout factor with no drains: roof area (in cells) whose rain lands on this cell (LandSurfacePorosity.spout).
  * Each pass reads it only in its pipeline variant that has the layer on (the pipeline-overridable constants
- * ROUGHNESS_MAP and STORM_DRAINS, false in the default pipelines): with a layer off the code that reads it is not
- * compiled at all, so the default solver costs what it did before the layers existed.
+ * ROUGHNESS_MAP, STORM_DRAINS and POROSITY, false in the default pipelines): with a layer off the code that reads it is
+ * not compiled at all, so the default solver costs what it did before the layers existed.
  */
 export const SURFACE_WGSL = /* wgsl */ `
-fn surf(i: i32, j: i32) -> vec2f {
-  return textureLoad(surfTex, vec2i(clamp(i, 0, sim.nx - 1), clamp(j, 0, sim.ny - 1)), 0).rg;
+fn surf(i: i32, j: i32) -> vec4f {
+  return textureLoad(surfTex, vec2i(clamp(i, 0, sim.nx - 1), clamp(j, 0, sim.ny - 1)), 0);
+}
+`;
+
+/**
+ * Building porosity texture (rgba32float, nx×ny; LandSurface.porosity, src/data/porosity.ts), read only by the POROSITY
+ * pipeline variants of the momentum, continuity and export passes:
+ *   r = storage porosity φ of the cell (open share of its area), g / b = conveyance porosity ψ of its east / south face,
+ *   a = roof share of the cell (its rain goes to the downspouts).
+ * With porosity on, the state's h channel holds V, the water VOLUME per unit cell area, and the stored discharges are
+ * per unit CELL width (ψ × the discharge per unit open width): continuity, the limiter and the mass ledger are then
+ * the plain solver's, exactly. The momentum and export passes work in the open part: true depth V/φ, discharge q/ψ.
+ */
+export const POROSITY_WGSL = /* wgsl */ `
+fn por(i: i32, j: i32) -> vec4f {
+  return textureLoad(porTex, vec2i(clamp(i, 0, sim.nx - 1), clamp(j, 0, sim.ny - 1)), 0);
+}
+// The state as the open part of the cell sees it: (true depth V/φ, east and south discharge per unit open width, z).
+// A closed face (ψ = 0) stores no discharge.
+fn openState(s: vec4f, p: vec4f) -> vec4f {
+  return vec4f(s.r / p.r, select(0.0, s.g / p.g, p.g > 0.0), select(0.0, s.b / p.b, p.b > 0.0), s.a);
 }
 `;
 

@@ -50,6 +50,12 @@ export interface SchemeStepParams {
   roughness?: ArrayLike<number> | null;
   /** Storm-drain capacity per cell, m/s (already scaled), removed after infiltration. Absent = no drains. */
   drain?: ArrayLike<number> | null;
+  /**
+   * Building porosity as the solver applies it (shaders/common.ts POROSITY_WGSL): h then holds the volume per unit cell
+   * area and qx/qy the discharge per unit cell width; the momentum pass works on h/φ and q/ψ and stores ψ·q. roof and
+   * spout route the rain on roofs (continuity.ts DOWNSPOUTS). Absent = no porosity.
+   */
+  porosity?: { cell: ArrayLike<number>; faceE: ArrayLike<number>; faceS: ArrayLike<number>; roof: ArrayLike<number>; spout: ArrayLike<number> } | null;
   /** Debris-flow rheology (src/sim/rheology.ts rheologyCoefficients); absent or kind 0 = water (Manning). Robust mode only. */
   rheology?: RheologyCoefficients;
 }
@@ -278,8 +284,27 @@ export class CpuReferenceSolver {
   }
 
   step(p: SchemeStepParams): void {
-    const { nx, ny, h, z, qx, qy } = this;
+    const { nx, ny, z } = this;
     const N = nx * ny;
+    // The stored state (volume per unit area and discharge per unit cell width with porosity), read by pass B…
+    const hV = this.h;
+    const qxV = this.qx;
+    const qyV = this.qy;
+    // …and as pass A sees it: with porosity, the open part of each cell (depth V/φ, discharge q/ψ per unit open width).
+    const por = p.porosity ?? null;
+    let h = hV;
+    let qx = qxV;
+    let qy = qyV;
+    if (por) {
+      h = new Float64Array(N);
+      qx = new Float64Array(N);
+      qy = new Float64Array(N);
+      for (let c = 0; c < N; c++) {
+        h[c] = hV[c] / por.cell[c];
+        qx[c] = por.faceE[c] > 0 ? qxV[c] / por.faceE[c] : 0;
+        qy[c] = por.faceS[c] > 0 ? qyV[c] / por.faceS[c] : 0;
+      }
+    }
     const at = (i: number, j: number) => Math.min(ny - 1, Math.max(0, j)) * nx + Math.min(nx - 1, Math.max(0, i));
 
     // Face depths of the OLD state (clamped neighbours at the domain edge, like textureLoad).
@@ -359,7 +384,7 @@ export class CpuReferenceSolver {
             adv = (advWeight(hf, hfW, hfE, hfS, hfN) * (mR - mL + (gS - gN))) / p.dx;
           }
           const dq = wet(hf) ? smoothingIncrement(hf, qx[c], qW, hfW, qE, hfE, div[e] - div[c], p) : 0;
-          fx[c] = momentum(hf, S, z[e] - z[c], qx[c], dq, qPerp, adv, p, n2Face(c, e));
+          fx[c] = momentum(hf, S, z[e] - z[c], qx[c], dq, qPerp, adv, p, n2Face(c, e)) * (por ? por.faceE[c] : 1);
         }
         if (j < ny - 1) {
           const s = c + nx;
@@ -390,7 +415,7 @@ export class CpuReferenceSolver {
             adv = (advWeight(hf, hfN, hfS, hfE, hfW) * (mD - mU + (gE - gW))) / p.dx;
           }
           const dq = wet(hf) ? smoothingIncrement(hf, qy[c], qN, hfN, qS, hfS, div[s] - div[c], p) : 0;
-          fy[c] = momentum(hf, S, z[s] - z[c], qy[c], dq, qPerp, adv, p, n2Face(c, s));
+          fy[c] = momentum(hf, S, z[s] - z[c], qy[c], dq, qPerp, adv, p, n2Face(c, s)) * (por ? por.faceS[c] : 1);
         }
       }
     }
@@ -400,15 +425,15 @@ export class CpuReferenceSolver {
     // Face fluxes of an arbitrary cell (boundary faces from the open-boundary rule, closed near inflow sources).
     const faces = (i: number, j: number): [number, number, number, number] => {
       const c = j * nx + i;
-      const qE = i === nx - 1 ? boundaryFluxMasked(h, z, qx, qy, nx, ny, i, j, -1, 0, p) : fx[c];
-      const qW = i === 0 ? -boundaryFluxMasked(h, z, qx, qy, nx, ny, i, j, 1, 0, p) : fx[c - 1];
-      const qS = j === ny - 1 ? boundaryFluxMasked(h, z, qx, qy, nx, ny, i, j, 0, -1, p) : fy[c];
-      const qN = j === 0 ? -boundaryFluxMasked(h, z, qx, qy, nx, ny, i, j, 0, 1, p) : fy[c - nx];
+      const qE = i === nx - 1 ? boundaryFluxMasked(hV, z, qxV, qyV, nx, ny, i, j, -1, 0, p) : fx[c];
+      const qW = i === 0 ? -boundaryFluxMasked(hV, z, qxV, qyV, nx, ny, i, j, 1, 0, p) : fx[c - 1];
+      const qS = j === ny - 1 ? boundaryFluxMasked(hV, z, qxV, qyV, nx, ny, i, j, 0, -1, p) : fy[c];
+      const qN = j === 0 ? -boundaryFluxMasked(hV, z, qxV, qyV, nx, ny, i, j, 0, 1, p) : fy[c - nx];
       return [qE, qW, qS, qN];
     };
     const kOf = (i: number, j: number) => {
       const [qE, qW, qS, qN] = faces(i, j);
-      return limiterK(h[j * nx + i], qE, qW, qS, qN, r);
+      return limiterK(hV[j * nx + i], qE, qW, qS, qN, r);
     };
 
     const newH = new Float64Array(N);
@@ -429,7 +454,7 @@ export class CpuReferenceSolver {
           qS *= qS >= 0 || j === ny - 1 ? kc : kOf(i, j + 1);
           qN *= qN < 0 || j === 0 ? kc : kOf(i, j - 1);
         }
-        let hn = h[c] + r * (qW - qE + (qN - qS));
+        let hn = hV[c] + r * (qW - qE + (qN - qS));
         // Outflow through domain-edge faces (only ever outward).
         let bOut = 0;
         if (i === nx - 1) bOut += qE;
@@ -453,6 +478,10 @@ export class CpuReferenceSolver {
             const d = Math.hypot(gx - f.data[o], gy - f.data[o + 1]);
             if (d < f.data[o + 2]) rate += f.data[o + 3] * stormWeight(d, f.data[o + 2]);
           }
+        }
+        // Rain and storms (rainRate) vs inflow sources, which are not rain (porosity below splits the rain only).
+        const rainRate = rate;
+        if (f) {
           for (let k = 0; k < f.nSources; k++) {
             const o = 8 * k;
             if (f.data[o + 3] !== 0) continue;
@@ -461,15 +490,27 @@ export class CpuReferenceSolver {
             if (d < R + 0.5) rate += f.data[o + 4] * footprintWeight(d, R);
           }
         }
+        // Downspouts (porosity): the roof share's rain is piped into the drains first (the rest spills onto the cell),
+        // or with no drains lands where the roofs discharge (spout).
+        let piped = 0;
+        if (por) {
+          if (p.drain) {
+            piped = Math.min(rainRate * por.roof[c], p.drain[c]);
+            rate -= piped;
+          } else {
+            rate += rainRate * (por.spout[c] - por.roof[c]);
+          }
+        }
         const h2 = hn + p.dt * rate;
         volIn += h2 - hn;
         // Infiltration: only where there is water, never more than is available.
         let h3 = h2;
-        if (h2 > 0) h3 = h2 - Math.min(p.infiltration * p.dt, h2);
+        if (h2 > 0) h3 = h2 - Math.min(p.infiltration * p.dt * (por ? 1 - por.roof[c] : 1), h2);
         volOut += h2 - h3;
-        // Storm drains: the cell's capacity, never more than is there (booked as outflow, like infiltration).
+        // Storm drains: the cell's capacity (less the roof rain piped into it), never more than is there (booked as
+        // outflow, like infiltration).
         if (p.drain && h3 > 0) {
-          const cap = p.drain[c] * p.dt;
+          const cap = (p.drain[c] - piped) * p.dt;
           if (cap > 0) {
             const d = Math.min(cap, h3);
             h3 -= d;
@@ -493,7 +534,7 @@ export class CpuReferenceSolver {
               if (j < ny - 1 && Math.hypot(gx - f.data[o], gy + 1 - f.data[o + 1]) <= R - 0.5) qSs = 0;
             }
             const a = p.stageAlpha * footprintWeight(d, R);
-            const target = Math.max(0, f.data[o + 4] - z[c]);
+            const target = Math.max(0, f.data[o + 4] - z[c]) * (por ? por.cell[c] : 1);
             const before = h4;
             h4 = h4 + a * (target - h4);
             const dv = h4 - before;

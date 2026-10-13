@@ -31,9 +31,18 @@
  *   • infiltration and stage changes are snapped to the grid of the depth they change and booked as applied.
  * Left unbooked: a sum carrying into the next power of two, or h off the grid because an increment exceeds it
  * (a cell filling from nearly dry): half a ULP at most, once, random in sign.
+ *
+ * POROSITY (the POROSITY pipeline variant; LandSurface.porosity; POROSITY_WGSL in common.ts). The state's h is then the
+ * water volume per unit cell area and the fluxes are per unit cell width (the momentum pass multiplies by ψ), so this
+ * pass — limiter, continuity, the exact ledger — runs unchanged on volumes. What changes is what falls on the cell:
+ *  DOWNSPOUTS. The roof share a of the cell (porTex.a) does not take its rain: with storm drains on it is piped into
+ *    the cell's drain capacity first (never entering the surface water, so never booked) and only the excess spills
+ *    onto the cell; the capacity left drains standing water as before. With no drains it lands on the cells the CPU
+ *    routed it to (surfTex.b, the roof area per cell discharging there, its own roof included).
+ *  Infiltration acts on the open ground only (× (1 − a)), and a stage level fills the open share φ of the cell.
  */
 import { INFLOW_EDGE_MASK_CELLS } from '../constants';
-import { ACC_PER_CELL, FORCING_WGSL, HELPERS_WGSL, SIM_WGSL, SNAP_WGSL, SURFACE_WGSL } from './common';
+import { ACC_PER_CELL, FORCING_WGSL, HELPERS_WGSL, POROSITY_WGSL, SIM_WGSL, SNAP_WGSL, SURFACE_WGSL } from './common';
 
 export const continuityWGSL = /* wgsl */ `
 ${SIM_WGSL}
@@ -47,9 +56,13 @@ ${FORCING_WGSL}
 @group(0) @binding(6) var surfTex: texture_2d<f32>;
 // Pipeline variant: storm drains on (the land-surface layer). False in the default pipeline.
 override STORM_DRAINS: bool = false;
+@group(0) @binding(7) var porTex: texture_2d<f32>;
+// Pipeline variant: building porosity on (see POROSITY in the header). False in the default pipeline.
+override POROSITY: bool = false;
 ${HELPERS_WGSL}
 ${SNAP_WGSL}
 ${SURFACE_WGSL}
+${POROSITY_WGSL}
 
 // Open-boundary outflow of an edge cell, closed near inflow sources: an inflow sits on a river just inside the edge
 // it enters through, and the mound it builds would otherwise pour part of the discharge straight back out of that
@@ -184,11 +197,28 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     let d = distance(p, sc4.xy);
     if (d < sc4.z) { rate = rate + sc4.w * (1.0 - smoothstep(0.3 * sc4.z, sc4.z, d)); }
   }
+  let rainRate = rate;
   for (var k = 0; k < sim.nSrc; k++) {
     let a = forcing.src[2 * k];
     if (a.w != 0.0) { continue; }
     let d = distance(p, a.xy);
     if (d < a.z + 0.5) { rate = rate + forcing.src[2 * k + 1].x * (1.0 - smoothstep(a.z - 0.5, a.z + 0.5, d)); }
+  }
+  // Building porosity: the cell's porosities, and where the rain on its roof goes (see DOWNSPOUTS in the header). Rain
+  // and storms only (rainRate): an inflow source's discharge is not rain. Applied as a correction to the total so that
+  // neutral porosity (no roofs) leaves it untouched to the bit.
+  var pz = vec4f(1.0, 1.0, 1.0, 0.0);
+  var pipedRate = 0.0;
+  if (POROSITY) {
+    pz = por(i, j);
+    if (STORM_DRAINS) {
+      // Into the sewer up to its capacity; the rest of the roof rain spills onto the cell.
+      pipedRate = min(rainRate * pz.a, surf(i, j).g * sim.drainScale);
+      rate = rate - pipedRate;
+    } else {
+      // Off this cell's roof, onto the cells its downspouts discharge to (its own open part included).
+      rate = rate + rainRate * (surf(i, j).b - pz.a);
+    }
   }
   let rainT = sim.dt * rate;
   // One grid for h and every increment: the ULP of the largest of them, so the sum below is exact.
@@ -210,7 +240,10 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
 
   // ── Infiltration: only where there is water, never more than is available ──
   if (sim.infil > 0.0 && h > 0.0) {
-    let infQ = snapInc(h, min(sim.infil * sim.dt, h));
+    var infT = sim.infil * sim.dt;
+    // With porosity, only the open ground infiltrates (not the roofs).
+    if (POROSITY) { infT = infT * (1.0 - pz.a); }
+    let infQ = snapInc(h, min(infT, h));
     h = h - infQ;
     aOut = aOut + infQ;
   }
@@ -218,7 +251,8 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
   // ── Storm drains (land-surface layer): a per-cell sink at the drain capacity, never more than is there, booked
   //    with the outflow exactly like infiltration ──
   if (STORM_DRAINS && h > 0.0) {
-    let cap = surf(i, j).g * sim.drainScale * sim.dt;
+    // With porosity, the roof rain piped into this cell's sewer above has used part of its capacity.
+    let cap = (surf(i, j).g * sim.drainScale - pipedRate) * sim.dt;
     if (cap > 0.0) {
       let drQ = snapInc(h, min(cap, h));
       h = h - drQ;
@@ -245,7 +279,9 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
       if (j < ny1 && distance(p + vec2f(0.0, 1.0), a.xy) <= a.z - 0.5) { qSs = 0.0; }
     }
     let alpha = sim.stageAlpha * (1.0 - smoothstep(a.z - 0.5, a.z + 0.5, d));
-    let goal = max(0.0, forcing.src[2 * k + 1].x - sc.a);
+    var goal = max(0.0, forcing.src[2 * k + 1].x - sc.a);
+    // With porosity the state holds volume per unit area: a level fills the open share of the cell.
+    if (POROSITY) { goal = goal * pz.r; }
     let before = h4;
     let dv = snapInc(before, alpha * (goal - before));
     h4 = before + dv;

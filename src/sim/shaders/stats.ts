@@ -52,6 +52,10 @@ ${SIM_WGSL}
 @group(0) @binding(3) var<storage, read> dryMask: array<u32>;
 @group(0) @binding(4) var<storage, read_write> depthOut: array<f32>;
 @group(0) @binding(5) var<storage, read_write> blocks: array<f32>;
+// The internal state the export was made from: its h is the water volume per unit cell area, which the volume sum
+// needs. The exported depth is the same value except with building porosity on, where it is the depth V/φ of the open
+// part of the cell (shaders/common.ts POROSITY_WGSL) — the depth every other statistic here describes.
+@group(0) @binding(6) var stateTex: texture_2d<f32>;
 
 const WET = ${f(WET_DEPTH)};
 const FLOODED = ${f(FLOODED_DEPTH)};
@@ -82,7 +86,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
       let a = ${ACC_PER_CELL}u * c;
       mIn = max(mIn, abs(acc[a]));
       mOut = max(mOut, abs(acc[a + 1u]));
-      let h = textureLoad(exportTex, vec2i(i, j), 0).r;
+      let h = textureLoad(stateTex, vec2i(i, j), 0).r;
       if (finite(h)) { mH = max(mH, abs(h)); }
     }
   }
@@ -126,9 +130,10 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
         nonFinite = nonFinite + 1.0;
         continue;
       }
-      let hQ = snapE(h, eH);
+      let vc = textureLoad(stateTex, vec2i(i, j), 0).r;
+      let hQ = snapE(vc, eH);
       vol = vol + hQ;
-      volLo = volLo + (h - hQ);
+      volLo = volLo + (vc - hQ);
       maxH = max(maxH, h);
       minH = min(minH, h);
       if (h >= sim.velDepth) {

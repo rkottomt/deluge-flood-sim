@@ -396,13 +396,39 @@ export interface LandSurface {
   roughness?: Float32Array | null;
   /** Storm-drain capacity per cell, mm/hr of water depth removed while water stands there (× SimParams.drainageScale). */
   drainCapacity?: Float32Array | null;
+  /**
+   * Buildings that only partly cover a cell (integral porosity, simplified; src/data/porosity.ts) and where the rain on
+   * every roof goes (downspouts). null = no porosity: every cell fully open, roof rain falls where it lands.
+   */
+  porosity?: LandSurfacePorosity | null;
+}
+
+/**
+ * Building porosity per cell (LandSurface.porosity), every array nx·ny row-major. The solver then stores water volume
+ * per unit cell area in its state and solves for the depth of the open part, h = V/φ (ARCHITECTURE.md §3.11).
+ */
+export interface LandSurfacePorosity {
+  /** Storage porosity φ: share of the cell's area open to water, (0, 1]; 1 = no building. */
+  cell: Float32Array;
+  /** Conveyance porosity ψ of the cell's EAST face: share of its length open, [0, 1] (the solver caps it at min φ). */
+  faceE: Float32Array;
+  /** Conveyance porosity ψ of the cell's SOUTH face. */
+  faceS: Float32Array;
+  /** Share of the cell's area that is roof, [0, 1]: its rain goes to the downspouts, not onto the cell. */
+  roof: Float32Array;
+  /** Roof area, in cells, whose downspouts discharge onto this cell when there are no storm drains (≥ 0). */
+  spout: Float32Array;
 }
 
 /** The land-surface data a scene has, whether or not its layers are switched on (AppState.landSurface). */
 export interface LandSurfaceStatus {
-  /** Building footprints in the scene, and the grid cells they would block (0 = none: no footprint data). */
+  /**
+   * Building footprints in the scene, the grid cells they would block (90 % or more covered) and the cells they only
+   * partly cover, which stay passable with a porosity (0 = none: no footprint data).
+   */
   buildings: number;
   obstacleCells: number;
+  porousCells: number;
   /** Land-cover product, e.g. "NLCD 2021", or null (live areas, the sandbox). */
   landCover: string | null;
   /** Cells with storm drains, and the design rainfall their capacity comes from (mm/hr; 0 = no drain data). */
