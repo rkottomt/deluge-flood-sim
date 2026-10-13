@@ -243,6 +243,14 @@ Same start. Skip Evacuate; don't wait for a beat to finish before talking.
 Rehearsal with a shared GPU: the whole sequence took 45 s of clicking (crest 16 s after Raise, green 10 s after Build a
 levee). The crest comes ~3 s after Raise on a quiet GPU, so the timings above have slack.
 
+### If a judge asks "who pays for this?"
+
+**Use cases → Narrated stories → *Should we build here?*** (`?story=site-decision`, about two minutes). Let it play:
+Site check sweeps both demo parcels on screen (≈30 s), the card reads Parcel A's verdict, egress and floor level, then
+Parcel B, then the pick. For investors, follow with ***Is the levee worth it?*** (`?story=levee-bca`: the BCR with its
+range and the break-even cost). Online only: ***A dam upstream*** (`?story=dam-upstream`, Edenville, arrival times
+for the county). Every figure in the captions is the one the run computed. Esc at any point puts your own scene back.
+
 ---
 
 ## 4. The hard part

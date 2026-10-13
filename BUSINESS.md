@@ -448,6 +448,11 @@ one-page *What Deluge answers for your business* brief, which prints. Or link st
   NID id works, and the card without `nid=` searches the index
 * `?usecase=surge&at=26.4515,-81.9506` — Fort Myers Beach against NOAA's tide-gauge water levels (§4.6)
 
+Each decision can also be watched: **Use cases → Narrated stories →** *Should we build here?* (`?story=site-decision`,
+§4.1), *Is the levee worth it?* (`?story=levee-bca`, §4.1's investment view) and *A dam upstream*
+(`?story=dam-upstream`, §4.5, which needs the internet for the valley). Each runs the analysis live in about two
+minutes, and every figure in its captions is the one the run computed.
+
 ![The Use cases dialog: three cards, and the business brief behind the button at the bottom](docs/business/use-cases.jpg)
 
 The value is matched exactly against those six words, `at=` must be two plain decimals inside the US, and `nid=` an NID id; anything else is ignored with a fixed message. The demo
