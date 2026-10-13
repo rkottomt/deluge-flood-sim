@@ -1,0 +1,274 @@
+/* Narrated story mode (src/ui/storyPlayer.ts). Prefix dl-nar- ("narration"): dl-story is the Scenario text. */
+
+.dl-nar {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 760px;
+  max-width: 100%;
+  padding: 12px 16px 12px;
+  border-radius: 14px;
+  box-shadow:
+    inset 0 0 0 1px rgba(114, 210, 255, 0.3),
+    0 18px 44px -12px rgba(0, 0, 0, 0.7);
+  pointer-events: auto;
+}
+.dl-nar[hidden] {
+  display: none;
+}
+.dl-nar-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.dl-nar-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px 2px 6px;
+  border-radius: 999px;
+  background: var(--dl-accent-bg);
+  color: var(--dl-accent-2);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  flex: none;
+}
+.dl-nar-title {
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--dl-text);
+  white-space: nowrap;
+  flex: none;
+}
+.dl-nar-sub {
+  font-size: 12px;
+  color: var(--dl-text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.dl-nar-count {
+  font-size: 11.5px;
+  color: var(--dl-text-3);
+  font-variant-numeric: tabular-nums;
+  margin-right: 2px;
+  flex: none;
+}
+.dl-nar-head .dl-icon-btn {
+  flex: none;
+}
+.dl-nar-prev svg {
+  transform: rotate(180deg);
+}
+.dl-nar-kicker {
+  margin-top: 2px;
+  font-size: 11.5px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--dl-accent-2);
+  font-variant-numeric: tabular-nums;
+}
+.dl-nar-kicker:empty {
+  display: none;
+}
+.dl-nar-caption {
+  margin: 0;
+  font-size: 17px;
+  line-height: 1.45;
+  font-weight: 500;
+  color: var(--dl-text);
+  text-wrap: pretty;
+}
+.dl-nar-source {
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--dl-text-3);
+  font-style: italic;
+}
+.dl-nar-source:empty {
+  display: none;
+}
+.dl-nar-end {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+.dl-nar-end[hidden] {
+  display: none;
+}
+.dl-nar-progress {
+  display: flex;
+  gap: 4px;
+  margin-top: 4px;
+}
+.dl-nar-seg {
+  flex: 1;
+  height: 4px;
+  padding: 0;
+  border: 0;
+  border-radius: 2px;
+  background: var(--dl-line-2);
+  overflow: hidden;
+  cursor: pointer;
+}
+.dl-nar-seg:hover {
+  background: rgba(255, 255, 255, 0.22);
+}
+.dl-nar-seg:focus-visible {
+  outline: 2px solid var(--dl-accent-2);
+  outline-offset: 2px;
+}
+.dl-nar-seg-fill {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: var(--dl-accent);
+  transition: width 0.25s linear;
+}
+.dl-nar-seg.dl-done .dl-nar-seg-fill {
+  width: 100% !important;
+}
+.dl-nar-enter .dl-nar-kicker,
+.dl-nar-enter .dl-nar-caption,
+.dl-nar-enter .dl-nar-source {
+  animation: dl-nar-in 0.5s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+@keyframes dl-nar-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Highlights: a station chip on the valley timeline, the route chip, a panel section. */
+.dl-nar-hl {
+  outline: 2px solid var(--dl-accent-2);
+  outline-offset: 2px;
+  border-radius: 8px;
+  animation: dl-nar-pulse 1.6s ease-in-out infinite;
+}
+@keyframes dl-nar-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(114, 210, 255, 0.45);
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgba(114, 210, 255, 0);
+  }
+}
+
+/* Map pins */
+.dl-nar-pins {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+.dl-nar-pin {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: -7px 0 0 -7px;
+  will-change: transform;
+}
+.dl-nar-pin-dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--dl-warn);
+  box-shadow:
+    0 0 0 3px rgba(10, 14, 20, 0.85),
+    0 0 0 6px rgba(255, 181, 71, 0.35);
+  flex: none;
+}
+.dl-nar-pin-label {
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: rgba(10, 14, 20, 0.82);
+  color: var(--dl-text);
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* Story mode: the map and the story, little else. */
+.dl-ui.dl-nar-mode .dl-toolbar,
+.dl-ui.dl-nar-mode .dl-options,
+.dl-ui.dl-nar-mode .dl-welcome,
+.dl-ui.dl-nar-mode .dl-hud,
+.dl-ui.dl-nar-mode .dl-toast.dl-notice {
+  display: none !important;
+}
+.dl-ui.dl-nar-mode .dl-notices-bottom {
+  left: var(--dl-gap);
+}
+
+/* Entry points */
+.dl-nar-watch-row {
+  margin-top: 6px;
+}
+.dl-nar-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: 8px;
+  margin-top: 16px;
+}
+.dl-nar-row-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--dl-text-2);
+}
+.dl-nar-chip {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  height: auto;
+  padding: 6px 10px;
+  text-align: left;
+}
+.dl-nar-chip-title {
+  font-weight: 600;
+}
+.dl-nar-chip-sub {
+  font-size: 11px;
+  color: var(--dl-text-3);
+}
+
+@media (max-width: 760px) {
+  .dl-nar-sub {
+    display: none;
+  }
+  .dl-nar-caption {
+    font-size: 15px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dl-nar-enter .dl-nar-kicker,
+  .dl-nar-enter .dl-nar-caption,
+  .dl-nar-enter .dl-nar-source,
+  .dl-nar-hl {
+    animation: none;
+  }
+  .dl-nar-seg-fill {
+    transition: none;
+  }
+}

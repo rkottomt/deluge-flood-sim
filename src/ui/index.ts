@@ -24,6 +24,7 @@ import { createRouteChip } from './routeChip';
 import { createChainTimeline } from './chainTimeline';
 import { createTutorial } from './tutorial';
 import { createUseCases } from './useCases';
+import { createStoryPlayer } from './storyPlayer';
 import { selectTool } from './toolDefs';
 
 export { createToolController } from './tools';
@@ -77,7 +78,9 @@ export function mountUI(root: HTMLElement, store: Store, actions: AppActions): v
   const routeChip = createRouteChip(ctx, { reveal: () => panel.reveal('evac') });
   // The valley timeline sits at the bottom of the map strip, under the route chip (the column stacks upwards).
   const chainline = createChainTimeline(ctx);
-  const notices = createNotices(ctx, { top: [createWelcome(ctx)], bottom: [chainline.el, routeChip] });
+  // Narrated stories (src/story): the caption card stacks above the valley timeline and the route chip.
+  const story = createStoryPlayer(ctx, { panel, root, applyUseCase: (id) => useCases.apply(id) });
+  const notices = createNotices(ctx, { top: [createWelcome(ctx)], bottom: [chainline.el, routeChip, story.el] });
   const loading = createLoadingOverlay(ctx);
   const tutorial = createTutorial(ctx);
   ctx.startTutorial = () => tutorial.start();
@@ -86,10 +89,13 @@ export function mountUI(root: HTMLElement, store: Store, actions: AppActions): v
   const how = createHowItWorks(ctx);
   const picker = createLocationPicker(ctx);
   const useCases = createUseCases(ctx, { panel });
+  // Story entry points: a row under the use-case cards, and "Watch the story" in the Scenario section.
+  useCases.modal.el.querySelector('[data-uc-view="cards"]')?.append(story.storyRow());
+  panel.el.querySelector('.dl-story-row')?.after(h('div', { class: 'dl-row dl-nar-watch-row' }, story.watchButton));
 
   installSceneReset(ctx);
 
-  const layer = h('div', { class: 'dl-layer' }, ...panel.overlays, topbar.el, toolbar, options, hud, panel.el, notices.top, notices.bottom, probe.el);
+  const layer = h('div', { class: 'dl-layer' }, ...panel.overlays, story.pinsEl, topbar.el, toolbar, options, hud, panel.el, notices.top, notices.bottom, probe.el);
   root.append(layer, loading, help.el, how.el, picker.el, useCases.modal.el, tutorial.el);
 
   const removeTooltips = installTooltips(root);
@@ -118,7 +124,7 @@ export function mountUI(root: HTMLElement, store: Store, actions: AppActions): v
 
   // Automation / dev hook (not part of the contract), compiled out of a released build: FINDINGS.json SEC-07.
   if (import.meta.env.DEV || __DELUGE_DEBUG_API__) {
-    (root as HTMLElement & { __delugeUI?: unknown }).__delugeUI = { picker, help, how, panel, tutorial, useCases };
+    (root as HTMLElement & { __delugeUI?: unknown }).__delugeUI = { picker, help, how, panel, tutorial, useCases, story };
   }
 }
 
