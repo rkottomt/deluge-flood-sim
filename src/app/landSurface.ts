@@ -34,7 +34,8 @@ export function buildLandSurface(
   flags: LandSurfaceFlags,
 ): { obstacles: Float32Array | null; roughness: Float32Array | null; drainCapacity: Float32Array | null } {
   const { nx, ny } = terrain;
-  const obstacles = flags.buildings ? obstacleHeights(terrain.buildings ?? null, nx, ny) : null;
+  // One flat roof per group of touching footprints (see obstacleHeights), on the terrain as loaded.
+  const obstacles = flags.buildings ? obstacleHeights(terrain.buildings ?? null, nx, ny, null, terrain.elevation) : null;
   const lc = terrain.landCover ?? null;
   let roughness: Float32Array | null = null;
   let drainCapacity: Float32Array | null = null;

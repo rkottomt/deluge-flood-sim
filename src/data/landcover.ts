@@ -199,17 +199,58 @@ export function landSurfaceFromCover(
  */
 export const MIN_OBSTACLE_HEIGHT = 3;
 
-export function obstacleHeights(set: BuildingSet | null | undefined, nx: number, ny: number, raster?: Float32Array | null): Float32Array | null {
+/**
+ * With `ground` (nx·ny, m), every 4-connected group of footprint cells gets ONE flat roof at the highest roof elevation
+ * in the group (ground + height), and the obstacle is that roof minus each cell's ground. Without it, a block of
+ * touching buildings of different heights is a set of bowls: in Houston under Harvey's hour the lower roofs between
+ * taller ones filled with the runoff shed onto them, up to 0.86 m deep — rain a real roof drains through its gutters.
+ * A flat roof sheds its own rain from its edges as a film instead. The flood is blocked either way (no flood here comes
+ * near a 3 m roof).
+ */
+export function obstacleHeights(
+  set: BuildingSet | null | undefined,
+  nx: number,
+  ny: number,
+  raster?: Float32Array | null,
+  ground?: Float32Array | null,
+): Float32Array | null {
   const r = raster ?? set?.heightRaster ?? null;
-  if (!r || r.length !== nx * ny) return null;
-  const out = new Float32Array(nx * ny);
+  const N = nx * ny;
+  if (!r || r.length !== N) return null;
+  const out = new Float32Array(N);
   let any = false;
-  for (let c = 0; c < out.length; c++) {
+  for (let c = 0; c < N; c++) {
     const h = r[c];
     if (h > 0) {
       out[c] = Math.max(MIN_OBSTACLE_HEIGHT, h);
       any = true;
     }
   }
-  return any ? out : null;
+  if (!any) return null;
+  if (!ground || ground.length !== N) return out;
+  // Flatten each connected group of footprint cells to its highest roof.
+  const seen = new Uint8Array(N);
+  const stack = new Int32Array(N);
+  const members: number[] = [];
+  for (let s = 0; s < N; s++) {
+    if (!(out[s] > 0) || seen[s]) continue;
+    members.length = 0;
+    let top = 0;
+    stack[top++] = s;
+    seen[s] = 1;
+    let roof = -Infinity;
+    while (top > 0) {
+      const c = stack[--top];
+      members.push(c);
+      roof = Math.max(roof, ground[c] + out[c]);
+      const i = c % nx;
+      const j = (c - i) / nx;
+      if (i > 0 && out[c - 1] > 0 && !seen[c - 1]) (seen[c - 1] = 1), (stack[top++] = c - 1);
+      if (i < nx - 1 && out[c + 1] > 0 && !seen[c + 1]) (seen[c + 1] = 1), (stack[top++] = c + 1);
+      if (j > 0 && out[c - nx] > 0 && !seen[c - nx]) (seen[c - nx] = 1), (stack[top++] = c - nx);
+      if (j < ny - 1 && out[c + nx] > 0 && !seen[c + nx]) (seen[c + nx] = 1), (stack[top++] = c + nx);
+    }
+    for (const c of members) out[c] = roof - ground[c];
+  }
+  return out;
 }

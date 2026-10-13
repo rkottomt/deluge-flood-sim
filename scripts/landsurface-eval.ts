@@ -182,6 +182,16 @@ async function run(device: GPUDevice, id: 'pittsburgh' | 'houston', variant: str
       if (open) o50++;
     }
   }
+  // Water on roofs (blocked cells): the runoff film, and how many blocked cells ever held 1 cm (the renderer's wet depth).
+  let roofMax = 0;
+  let roofWet = 0;
+  if (blocked) {
+    for (let c = 0; c < N; c++) {
+      if (!(blocked[c] > 0)) continue;
+      roofMax = Math.max(roofMax, fields.maxDepth[c]);
+      if (fields.maxDepth[c] >= 0.01) roofWet++;
+    }
+  }
   const roads = roadCells(terrain, initialWater);
   const roadDepth: number[] = [];
   const roadSpeed: number[] = [];
@@ -220,6 +230,8 @@ async function run(device: GPUDevice, id: 'pittsburgh' | 'houston', variant: str
     roadDepthP90: quantile(roadDepth, 0.9),
     roadSpeedP90: quantile(roadSpeed, 0.9),
     maxDepth: snap.stats.maxDepth,
+    roofMaxDepth: roofMax,
+    roofCellsOver1cm: roofWet,
     volumeOut: snap.stats.volumeOut,
     massError: snap.stats.massError,
     loss: s.loss,
@@ -251,7 +263,7 @@ async function main() {
       console.log(
         `${c.padEnd(10)} ${v.padEnd(20)} flooded ${r.flooded15km2.toFixed(3)} km² (open ${r.openFlooded15km2.toFixed(3)}) ` +
           `>0.5 m ${r.flooded50km2.toFixed(3)}  roads>0.3m ${r.roadKmOver30cm.toFixed(1)} km  road depth mean ${r.roadDepthMean.toFixed(2)} p90 ${r.roadDepthP90.toFixed(2)} m  ` +
-          `loss $${(r.loss / 1e9).toFixed(3)} B (wall-sampled $${(r.lossWallSampled / 1e9).toFixed(3)} B)  reached ${r.reached} (${r.reachedWallSampled}) damaged ${r.damaged} destroyed ${r.destroyed}  massErr ${r.massError.toExponential(1)}  ${r.substeps} substeps ${r.wallS.toFixed(0)} s`,
+          `loss $${(r.loss / 1e9).toFixed(3)} B (wall-sampled $${(r.lossWallSampled / 1e9).toFixed(3)} B)  reached ${r.reached} (${r.reachedWallSampled}) damaged ${r.damaged} destroyed ${r.destroyed}  roof max ${(r.roofMaxDepth * 1000).toFixed(0)} mm (${r.roofCellsOver1cm} cells ≥ 1 cm)  massErr ${r.massError.toExponential(1)}  ${r.substeps} substeps ${r.wallS.toFixed(0)} s`,
       );
       results.push(r);
     }

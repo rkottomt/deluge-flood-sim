@@ -141,6 +141,19 @@ test('obstacleHeights: footprint cells at their roof height, never below the min
   assert.equal(obstacleHeights({ heightRaster: new Float32Array(3) } as unknown as BuildingSet, nx, ny), null);
 });
 
+test('obstacleHeights with the ground: one flat roof per group of touching footprints, no bowls between roofs', () => {
+  // Row 0: a 12 m tower, a 3 m annex and a 20 m tower touching (one group, ground rising 0–2 m); row 1: a lone shed.
+  const nx = 4;
+  const ny = 2;
+  const raster = Float32Array.from([12, 3, 20, 0, 0, 0, 0, 2]);
+  const ground = Float32Array.from([0, 1, 2, 0, 5, 5, 5, 5]);
+  const o = obstacleHeights({ heightRaster: raster } as unknown as BuildingSet, nx, ny, null, ground)!;
+  const roof = [0, 1, 2].map((c) => ground[c] + o[c]);
+  assert.deepEqual(roof, [22, 22, 22], 'the group sits under the tallest roof');
+  assert.equal(o[3], 0);
+  assert.equal(o[7], MIN_OBSTACLE_HEIGHT, 'a lone low building keeps its own (minimum) height');
+});
+
 test('decodeLandCover rejects a size mismatch and an unknown scheme', () => {
   const meta = { scheme: 'nlcd' as const, year: 2021, width: 16, height: 16, designRainMmHr: 30, designRainSource: '' };
   assert.throws(() => decodeLandCover(new ArrayBuffer(10), meta), /bytes/);

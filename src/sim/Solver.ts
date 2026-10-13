@@ -1792,6 +1792,14 @@ export class GpuFloodSolver implements FloodSolver {
     return this.obstacleCount > 0 ? this.obstacle : null;
   }
 
+  /**
+   * r32float, nx×ny: the building obstacles in force, m above the ground (0 = open; all 0 when off). The renderer's prep
+   * pass reads it to show no water in a blocked footprint. Created with the solver and never replaced.
+   */
+  get obstacleTexture(): GPUTexture {
+    return this.obstacleTex;
+  }
+
   /** Which land-surface layers are switched on, and how many cells the obstacles block. */
   get landSurfaceState(): { obstacles: number; roughness: boolean; drains: boolean } {
     return { obstacles: this.obstacleCount, roughness: this.roughnessOn, drains: this.drainsOn };
