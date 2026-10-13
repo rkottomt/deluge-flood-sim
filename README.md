@@ -2,9 +2,23 @@
 
 ![Pittsburgh at the 1936 St. Patrick's Day crest: downtown, the North Shore and the Strip District under water](docs/hero-1936-crest.jpg)
 
-Deluge loads real USGS elevation data for a place in the US and solves the 2-D shallow-water equations on the GPU with
-WebGPU compute shaders, live in a browser tab. Raise the rivers to the 1936 crest, build a levee and see the land it
-keeps dry, crank the rain, and watch an evacuation route re-plan as roads go under.
+Deluge loads real elevation data — USGS 3DEP in the US, Copernicus GLO-30 elsewhere — and solves the 2-D
+shallow-water equations on the GPU with WebGPU compute shaders, live in a browser tab. Raise the rivers to the 1936
+crest, build a levee and see the land it keeps dry, crank the rain, and watch an evacuation route re-plan as roads go
+under.
+
+Beyond rising water:
+
+* **Glacier hazards.** A rock-ice avalanche or a glacial-lake outburst high in the Himalaya, its breach hydrograph,
+  the wave routed tens of kilometres down the valley past hydropower plants and towns, then the debris flood on the
+  2-D map — on three real events (Nepal 2026, Sikkim 2023, Chamoli 2021), each run against what was observed.
+  An early-warning designer shows how many minutes a sensor upstream would buy each town and plant.
+  [Glacier hazards](#glacier-hazards) below.
+* **What it costs, and what to do about it.** Damage and dollar loss per building, a parcel-level **Site check**
+  for developers and lenders (depth, warning time, when the escape route closes, indicative floor height, what a
+  wall or a raised floor would save), portfolio CSVs, expected annual loss and benefit–cost ratios.
+* **How sure it is.** Flood-probability maps from a GPU ensemble of perturbed runs, and **future climate** (2050 /
+  2080 / 2100 rain, sea level and glacial-lake growth).
 
 Built for SteelHacks, *No Wrapper* track: no language models anywhere in the product. How it works in depth:
 [ARCHITECTURE.md](ARCHITECTURE.md). Module contracts: [src/contracts.ts](src/contracts.ts). The business case — site
@@ -60,7 +74,7 @@ sub-path (`.github/workflows/pages.yml` publishes it to GitHub Pages once the re
 "GitHub Actions"). A hosted copy still needs WebGPU; keep `npm run demo` as the offline path.
 
 URL options: `?preset=pittsburgh|johnstown|ellicott|asheville|nashville|houston|boulder|sandbox` (the full list is
-under *Scenario → Change*, and in [Seven cities, offline](#seven-cities-offline) below), or any US area with
+under *Scenario → Change*, and in [Ten scenarios, offline](#ten-scenarios-offline) below), or any US area with
 `?live=<lat>,<lon>,<km>`
 (e.g. `?live=29.95,-90.07,6` for New Orleans; this needs the internet for USGS, Esri and Census TIGERweb).
 `?usecase=site|glacier|portfolio` opens one of the business use cases below, set up with its demo data.
@@ -162,6 +176,36 @@ buildings reached and **$5.5 B** (±1σ curve range $3.8–7.0 B); the one-click
 are screening numbers for one simulated event on bare-earth terrain: not a flood study, not an insurance valuation,
 not a catastrophe model, and the real uncertainty is wider than the band (values, terrain, missing drains).
 
+## Glacier hazards
+
+Three Himalayan scenarios start their flood upstream of the map, in a **hazard chain** (`src/hazard/`, design in
+[docs/research/glacier-hazard-chain.md](docs/research/glacier-hazard-chain.md)): a source (lake volume from its area,
+a moraine breach eroding at a set rate, or a rock-ice avalanche and the ice it melts) → its outflow hydrograph → a
+1-D routing of the wave down a valley profile baked from the DEM (`chain.json`: 32–73 km of thalweg and
+cross-sections, with hydropower plants, towns and gauges on it) → the routed hydrograph enters the 2-D map as an
+inflow that delivers exactly its volume → the 2-D solver runs it with a **debris-flow rheology** (O'Brien–Julien,
+Voellmy or Bingham, ARCHITECTURE.md §3.9) and a 25 m/s speed cap. The chain runs in a Web Worker in about a second,
+plus a 27-member ensemble for p10–p90 bands; each preset also ships the calibrated run it was baked with.
+
+The **valley timeline** under the map shows the profile, the front moving down it in step with the simulation clock,
+each station lighting up as it passes with its modelled and observed arrival in the event's own clock ("09:46 NPT"),
+and the hydrograph at the source and at the map edge. The **Early warning** designer places sensors on that profile
+(gauge, trip-wire, camera, seismic; detection and alert latencies) and gives each town and plant its lead time, the
+best single sensor site, and the lead time against sensor position. `?usecase=glacier` opens it on Nepal.
+
+| Scenario | Event | Model vs observed (median run) |
+| --- | --- | --- |
+| **Betrawati — Trishuli** (`nepal`) | 26 Aug 2026: Langtang Lirung rock-ice avalanche → Bhote Koshi → Trishuli; ~20 Mm³ of excess water, the Betrawati bridge lost | front at Betrawati **70 min** after the avalanche vs **43 min** reported — the model is late |
+| **Chungthang — Teesta** (`chungthang`) | 3–4 Oct 2023: South Lhonak lake outburst, 68 km upstream; the 1,200 MW Teesta-III dam destroyed | front at Chungthang **109 min** vs **~137 min**; peak **~9,600–9,800 m³/s** vs 7,355–14,673 reconstructed |
+| **Raini–Tapovan** (`chamoli`) | 7 Feb 2021: Ronti peak collapse → debris flow; Rishiganga (13.2 MW) and Tapovan-Vishnugad (520 MW) plants hit | peak at Raini **~10,900 m³/s** vs 8,200–14,200; front at the Tapovan barrage **21 min** vs **~15 min** |
+
+These are honest residuals, not fits: the calibration changed physics (trigger mechanism, a smoothed bed, a minimum
+channel width, the avalanche's own travel time, Ferguson's boulder-bed resistance law with a literature grain size)
+and refused to tune Manning n to the clock. The model is late in Nepal and Chamoli and early at Chungthang, so no
+single resistance setting explains both; the likelier causes are the sources and the 30 m radar DEM's gorge sections.
+Every scenario's on-screen text gives its own error. Lead times from the designer are therefore best read as
+differences between sensor designs, not absolute minutes.
+
 ## Future climate
 
 Anyone building or lending for 30–50 years gets asked what the site looks like in 2050 or 2080 (IFRS S2 scenario
@@ -186,10 +230,10 @@ report (return periods stay today's). Both runs of a level are exactly as long a
 climate, not run length. Forcing-scaled, not downscaled projections; method, sources and gaps in
 [docs/research/climate-scenarios.md](docs/research/climate-scenarios.md), code in [`src/climate`](src/climate).
 
-## Seven cities, offline
+## Ten scenarios, offline
 
-Every scene below is baked into the repo and needs no network: real USGS elevation, real NAIP photography, real Census
-streets, and a scenario built from that city's own gauge records (sources and licences:
+Every scene is baked into the repo and needs no network. The seven US cities in the table below have real USGS
+elevation, real NAIP photography, real Census streets, and a scenario built from that city's own gauge records (sources and licences:
 [public/presets/SOURCES.txt](public/presets/SOURCES.txt)). Load time, frame rate and sim speed are measured in the
 production build at 1470x956 DPR 2 on the demo MacBook Air M4, offline, with the scene's own camera and forcing —
 one fresh browser context per scene, on a machine that was in Low Power Mode and sharing its GPU, so read them as an
@@ -206,7 +250,12 @@ buys while the flood plays; it swings ±10 % run to run.
 | **Houston — Buffalo Bayou** | Hurricane Harvey, Aug 2017: 173 mm/hr over a dead-flat plain | 8.0 km / 7.81 m | 1.95 + 3.0 km inset at 0.73 | 10,529 | 691 ms | 60 | ~63× |
 | **Boulder — Canyon Mouth** | 2013 Front Range flash flood out of Boulder Canyon | 5.0 km / 4.88 m | 1.22 m/texel | 1,749 | 636 ms | 60 | ~48× |
 
-Plus a procedural **sandbox** (river town, reservoir and dam) that uses no external data at all.
+Also baked, and not in the M4 measurements above: **Fort Myers — Caloosahatchee** (Hurricane Ian's 2022 storm surge
+up a tidal river, 8.0 km / 7.81 m), and the three Himalayan glacier scenarios of [Glacier hazards](#glacier-hazards)
+— **Betrawati** and **Chungthang** (8.0 km / 7.81 m) and **Raini–Tapovan** (12.0 km / 11.72 m) — built from Copernicus
+GLO-30 radar elevation through a bare-earth filter, OpenStreetMap roads and buildings, and no aerial photograph (each
+licence is in SOURCES.txt). Plus a procedural **sandbox** (river town, reservoir and dam) that uses no external data
+at all.
 
 **The close-up inset.** Four of the domains are wide enough that a single 4096² photo lands at ~1.7–2.0 m/texel, which
 is mush at street level — so those four carry a second 4096² NAIP photo over the middle 2.5–3.0 km, blended into the
