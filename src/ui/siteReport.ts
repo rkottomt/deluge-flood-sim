@@ -21,6 +21,8 @@ import {
   egressClause,
   exceedanceCurve,
   fmtMinutes,
+  formatReturnPeriod,
+  RAIN_LADDER_CAVEATS,
   type FfeRecommendation,
   type SiteMitigation,
   type SiteRun,
@@ -111,8 +113,8 @@ export function sweepRows(sum: SweepSummary, money: (v: number) => string): Arra
     const e = row.run.egress;
     const above = depthAboveFloor(row.run);
     return [
-      row.level.label + (Number.isFinite(row.level.ft) ? ` · ${fmtNum(row.level.ft, 1)} ft` : ''),
-      row.level.returnPeriod ? `${fmtNum(row.level.returnPeriod)} yr${row.level.rpFrom === 'user' ? ' (your input)' : ''}` : '—',
+      row.level.label + (Number.isFinite(row.level.ft) ? ` · ${fmtNum(row.level.ft, 1)} ft` : row.level.rainMmH != null && Number.isFinite(row.level.rainMmH) ? ` · ${fmtNum(row.level.rainMmH, 0)} mm/h` : ''),
+      row.level.returnPeriod ? `${formatReturnPeriod(row.level.returnPeriod)} yr${row.level.rpFrom === 'user' ? ' (your input)' : ''}` : '—',
       r?.reached ? num(r.depth, 2) : 'dry',
       Number.isFinite(above) && above >= DAMAGE_MIN_DEPTH ? num(above, 2) : '—',
       r?.reached && r.firstWet > 0 ? formatClock(r.firstWet) : '—',
@@ -220,7 +222,7 @@ export const SITE_METHOD_NOTES: ReadonlyArray<{ title: string; text: string }> =
   {
     title: 'The sweep',
     text:
-      'Each level resets the water, sets the river stage (or scales the scenario’s rain and inflows) and runs the solver for the chosen simulated ' +
+      'Each level resets the water, sets the river stage (or scales the scenario’s rain and inflows, or — on the NOAA Atlas 14 rain ladder — rains the level’s 1-hour intensity uniformly for one hour, then stops) and runs the solver for the chosen simulated ' +
       'duration with the walls on the map, as fast as the GPU allows. The river rises to each stage at the app’s limited rate (about 3 m per simulated ' +
       'minute), so a short run under-fills a high stage. Return periods come from the ladder’s sources where one is published, and otherwise from you.',
   },
@@ -283,7 +285,7 @@ export interface SiteReportInput {
   currency: string;
   alertTime: number;
   current: { simTime: number; source: 'gpu' | 'snapshots' } | null;
-  sweep: { durationS: number; source: 'gpu' | 'snapshots'; ladder: 'stage' | 'scale'; gaugeLabel: string; sourceKeys: string[]; levels: number; cancelled: boolean } | null;
+  sweep: { durationS: number; source: 'gpu' | 'snapshots'; ladder: 'stage' | 'scale' | 'rain'; gaugeLabel: string; sourceKeys: string[]; levels: number; cancelled: boolean } | null;
   sites: SiteReportSite[];
 }
 
@@ -303,7 +305,8 @@ export function buildSiteReport(i: SiteReportInput): HTMLElement {
   const runRows: Array<[string, string]> = [];
   if (i.current) runRows.push(['This run', `${formatClock(i.current.simTime)} simulated · ${i.current.source === 'gpu' ? 'solver accumulators (depth, speed, arrival)' : 'depth snapshots only — no speeds'}`]);
   if (i.sweep) {
-    runRows.push(['Sweep', `${i.sweep.levels} level${i.sweep.levels === 1 ? '' : 's'}, ${fmtMinutes(i.sweep.durationS)} simulated each, ${i.sweep.ladder === 'stage' ? i.sweep.gaugeLabel : 'scenario forcing × multiplier'}${i.sweep.cancelled ? ' — CANCELLED before the end; levels not run are missing' : ''}`]);
+    runRows.push(['Sweep', `${i.sweep.levels} level${i.sweep.levels === 1 ? '' : 's'}, ${fmtMinutes(i.sweep.durationS)} simulated each, ${i.sweep.ladder === 'stage' ? i.sweep.gaugeLabel : i.sweep.ladder === 'rain' ? 'NOAA Atlas 14 1-hour rain at the map centre, rain only' : 'scenario forcing × multiplier'}${i.sweep.cancelled ? ' — CANCELLED before the end; levels not run are missing' : ''}`]);
+    if (i.sweep.ladder === 'rain') RAIN_LADDER_CAVEATS.forEach((c, k) => runRows.push([k === 0 ? 'Rain ladder caveats' : '', c]));
     runRows.push(['Sweep hazard data', i.sweep.source === 'gpu' ? 'solver accumulators' : 'depth snapshots after each minute of simulation (arrival times to the minute; no speeds)']);
   }
   if (runRows.length) sections.push(h('section', null, h('h2', null, 'Runs'), kvList(runRows)));

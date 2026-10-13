@@ -243,6 +243,8 @@ export class UIBridge {
   readonly ensembleChanged = new Channel<EnsembleView | null>();
   /** The portfolio the Impact section has loaded (its parsed assets), for the ensemble's per-asset probabilities. */
   portfolio: PortfolioAsset[] | null = null;
+  /** Open "Check an address" (set by src/ui/useCases.ts; Site check's button calls it). */
+  openAddressCheck: (() => void) | null = null;
   private readonly notices = new Channel<Notice>();
   /** Notices posted before the UI mounted are delivered when it subscribes. */
   private pending: Notice[] = [];

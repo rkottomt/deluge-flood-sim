@@ -142,3 +142,15 @@ test('no third-party host in src/data escapes the policy', () => {
   }
   assert.deepEqual(uncovered, [], 'add these to src/data/csp.ts (or to this test\u2019s EXEMPT list with a reason)');
 });
+
+/**
+ * NOAA Atlas 14 (src/data/atlas14.ts): the PFDS point service sends no CORS headers, so the app never calls it — the
+ * rain return periods come from a grid baked into this app's own origin ('self'). If someone wires the PFDS in
+ * directly, it must be a deliberate policy change, not an accident: the host stays out of the policy.
+ */
+test('NOAA Atlas 14 is read from this origin, never from the PFDS host', async () => {
+  const { atlas14GridUrl } = await import('../../src/data/atlas14');
+  assert.ok(!/^https?:/i.test(atlas14GridUrl()), `same-origin path, got ${atlas14GridUrl()}`);
+  assert.equal(cspAllows('https://hdsc.nws.noaa.gov/cgi-bin/new/cgi_readH5.py?lat=29.76&lon=-95.37&type=pf&data=intensity&units=metric&series=pds', 'connect-src'), false);
+  assert.doesNotMatch(contentSecurityPolicy(), /noaa\.gov/);
+});

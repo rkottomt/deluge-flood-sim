@@ -1,0 +1,40 @@
+NOAA Atlas 14 rain return periods — source and terms
+====================================================
+
+pf60m-pds.bin   1-hour (60-minute) precipitation-frequency estimates at 2, 10, 25, 100 and 500 years, partial-duration
+                series, in mm/h, for the United States: CONUS (1/12 degree), Alaska (1/6 degree), Hawaii and Puerto Rico /
+                US Virgin Islands (1/24 degree). Gzip-compressed binary (format: src/data/atlas14.ts), 0.73 MB.
+
+SOURCE          NOAA Atlas 14, Precipitation-Frequency Atlas of the United States, Volumes 1 (Semiarid Southwest),
+                2 (Ohio River Basin and Surrounding States), 3 (Puerto Rico and the U.S. Virgin Islands), 4 (Hawaiian
+                Islands), 6 (California), 7 (Alaska), 8 (Midwestern States), 9 (Southeastern States), 10 (Northeastern
+                States), 11 (Texas) and 12 (Interior Northwest). NOAA / National Weather Service, Office of Water
+                Prediction, Hydrometeorological Design Studies Center (HDSC).
+                Grids: https://hdsc.nws.noaa.gov/pub/hdsc/data/<region>/<region><T>yr60ma.zip
+                (ESRI ASCII, 30 arc-seconds, NAD83, 60-minute depth in 1/1000 inch, -9 = no data), downloaded October 2026.
+                Point service used to check the result: https://hdsc.nws.noaa.gov/pfds/ (PFDS).
+
+TERMS           Public domain. Each grid's FGDC metadata: "n/a, no restrictions apply and data is public domain."
+                Use constraint: "Acknowledgement of NOAA/National Weather Service, Office of Water Prediction,
+                Hydrometeorological Design Studies Center (HDSC)" — given in the app's site reports (src/loss/ladders.ts
+                LADDER_SOURCES['noaa-atlas14']), the README and here. "Users must assume responsibility to determine the
+                appropriate use of these data."
+
+HOW IT WAS MADE scripts/bake-atlas14.ts. Each output cell is the mean of the valid 30-arc-second source cells inside it,
+                taken from one volume (where volumes overlap at their borders, the one covering more of the cell; ties go
+                to the newer volume). Intensity = 60-minute depth (in) x 25.4 mm. Stored in 0.1 mm/h steps.
+                Reproduce:  node --import tsx scripts/bake-atlas14.ts --download --cache=<dir>
+                            node --import tsx scripts/bake-atlas14.ts --cache=<dir>
+                Check:      node --import tsx scripts/bake-atlas14.ts --verify=tests/fixtures/atlas14
+                At the eleven captured PFDS points (Houston, Asheville, Denver, Phoenix, Los Angeles, Missoula, Miami,
+                Boston, Honolulu, San Juan, Anchorage) the grid is within 3.4 % of the PFDS 1-hour value at every return
+                period (PFDS prints whole mm/h, so part of that is its rounding).
+
+NOT COVERED     Western Washington and Oregon (Atlas 14 Volume 12 covers only Idaho, Montana and Wyoming of the
+                Northwest; the coast is still on NOAA Atlas 2), the western Aleutians beyond 180 degrees, Guam and the
+                Pacific islands (Volume 5). The app reports "no NOAA Atlas 14 estimate" there and offers no rain ladder.
+
+WHY NOT LIVE    The PFDS sends no CORS headers (checked October 2026), so a browser page cannot read it. NOAA Atlas 15 will
+                supersede Atlas 14; as of October 2026 only a Montana pilot is published, with CONUS preliminary estimates
+                "no earlier than September 2026" and published estimates "no earlier than September 2027"
+                (https://water.noaa.gov/about/atlas15). Re-bake from Atlas 15 grids once they are published.

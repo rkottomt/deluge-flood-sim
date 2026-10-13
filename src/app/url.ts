@@ -1,7 +1,7 @@
 import type { LiveAreaRequest } from '../contracts';
 import { isPresetId, linkPlaceLabel } from '../data';
 import { APP_CONFIG } from './defaults';
-import { parseUseCase, useCaseById, USE_CASE_PARAM } from '../ui/useCaseDefs';
+import { ADDRESS_AREA_M, ADDRESS_PARAM, ADDRESS_WARNING, addressAreaRequest, parseAddressAt, parseUseCase, useCaseById, USE_CASE_PARAM } from '../ui/useCaseDefs';
 import { parseStoryParam, storyById, STORY_PARAM } from '../story/registry';
 
 export type SceneRequest = { kind: 'preset'; id: string } | { kind: 'live'; req: LiveAreaRequest };
@@ -12,9 +12,11 @@ export type SceneRequest = { kind: 'preset'; id: string } | { kind: 'live'; req:
  *   ?live=<lat>,<lon>,<sizeKm>[&res=512|1024|2048][&name=...]
  *   ?usecase=site|glacier|portfolio (src/ui/useCaseDefs.ts) opens on the use case's own preset, ahead of ?preset= and
  *                                   ?live=; src/ui/useCases.ts then sets up the rest of it
+ *   ?usecase=address&at=<lat>,<lon> a 5 km live area centred on the point (strict numbers only, nothing else from the
+ *                                   link); a missing or bad at= is a fixed warning, and the rest of the URL applies
  *   ?story=<id>                     (src/story/registry.ts) opens on the story's own preset, ahead of everything else;
  *                                   src/ui/storyPlayer.ts then plays it
- * An invalid ?live=, ?usecase= or ?story= value is reported through `warnings` (a fixed sentence) and ignored.
+ * An invalid ?live=, ?usecase= (or its at=) or ?story= value is reported through `warnings` (a fixed sentence) and ignored.
  */
 export function parseStartupRequest(search: string): { request: SceneRequest; warnings: string[] } {
   const params = new URLSearchParams(search);
@@ -25,7 +27,15 @@ export function parseStartupRequest(search: string): { request: SceneRequest; wa
   if (story) return { request: { kind: 'preset', id: story.preset }, warnings };
   const uc = parseUseCase(search);
   warnings.push(...uc.warnings);
-  if (uc.useCase) return { request: { kind: 'preset', id: useCaseById(uc.useCase).preset }, warnings };
+  if (uc.useCase === 'address') {
+    // Only numbers from the link (parseAddressAt); no name — the loader reverse-geocodes the point itself.
+    const { at, warnings: w } = parseAddressAt(search);
+    warnings.push(...w);
+    if (at) return { request: { kind: 'live', req: addressAreaRequest(at) }, warnings };
+    if (!w.length) warnings.push(ADDRESS_WARNING);
+  } else if (uc.useCase) {
+    return { request: { kind: 'preset', id: useCaseById(uc.useCase).preset! }, warnings };
+  }
   const live = params.get('live');
   if (live) {
     const parts = live.split(',').map((p) => Number(p.trim()));
@@ -75,7 +85,10 @@ export function writeSceneToUrl(request: SceneRequest): void {
     url.searchParams.delete('name');
     // A use-case link stays in the address bar only while its own scene is on screen, so a reload after switching
     // scenes reopens what is shown rather than the use case.
-    if (url.searchParams.has(USE_CASE_PARAM) && !useCaseMatches(url.search, request)) url.searchParams.delete(USE_CASE_PARAM);
+    if (url.searchParams.has(USE_CASE_PARAM) && !useCaseMatches(url.search, request)) {
+      url.searchParams.delete(USE_CASE_PARAM);
+      url.searchParams.delete(ADDRESS_PARAM);
+    }
     // Likewise a story link: kept only while the story's own preset is on screen.
     if (url.searchParams.has(STORY_PARAM) && !storyMatches(url.search, request)) url.searchParams.delete(STORY_PARAM);
     if (request.kind === 'preset') {
@@ -94,10 +107,18 @@ export function writeSceneToUrl(request: SceneRequest): void {
   }
 }
 
-/** Whether the address bar's `?usecase=` names a use case whose preset is the scene `request` loads. */
+/**
+ * Whether the address bar's `?usecase=` names a use case whose scene is the one `request` loads: its preset, or — for
+ * the address case — the live area around its `at=` point.
+ */
 export function useCaseMatches(search: string, request: SceneRequest): boolean {
   const uc = parseUseCase(search).useCase;
-  return !!uc && request.kind === 'preset' && request.id === useCaseById(uc).preset;
+  if (!uc) return false;
+  if (uc === 'address') {
+    const at = parseAddressAt(search).at;
+    return !!at && request.kind === 'live' && Math.abs(request.req.center.lat - at.lat) < 1e-5 && Math.abs(request.req.center.lon - at.lon) < 1e-5 && request.req.sizeMeters === ADDRESS_AREA_M;
+  }
+  return request.kind === 'preset' && request.id === useCaseById(uc).preset;
 }
 
 /** Whether the address bar's `?story=` names a story whose preset is the scene `request` loads. */

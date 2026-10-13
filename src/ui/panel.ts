@@ -38,7 +38,7 @@ import { blockedText, routeDetail } from './routeText';
 import { MAX_SOURCES, MAX_STORMS } from './tools';
 import { formatStage, hasGauge, stageSub, weatherBadge } from './stageText';
 import { createImpactSection } from './impact';
-import { createSiteSection } from './siteCheck';
+import { createSiteSection, type SiteSection } from './siteCheck';
 import { createEnsembleSection } from './ensemble';
 import { bridgeFor } from './bridge';
 import { sitesFor } from './sites';
@@ -57,6 +57,8 @@ export interface Panel {
   overlays: HTMLElement[];
   /** Hand Impact & loss a portfolio CSV the app supplies (the use cases' demo portfolio; impact.ts loadPortfolioText). */
   loadPortfolio(name: string, text: string, opts?: { auto?: boolean }): void;
+  /** Site check's hooks for the address use case (siteCheck.ts SiteSection). */
+  siteCheck: Pick<SiteSection, 'useRainLadder' | 'runSweep'>;
 }
 
 function section(
@@ -827,6 +829,7 @@ export function createPanel(ctx: UIContext): Panel {
     el,
     overlays: [impact.overlay, site.overlay],
     loadPortfolio: (name, text, opts) => impact.loadPortfolioText(name, text, opts),
+    siteCheck: { useRainLadder: () => site.useRainLadder(), runSweep: () => site.runSweep() },
     isOpen: () => open,
     setOpen(v: boolean) {
       open = v;

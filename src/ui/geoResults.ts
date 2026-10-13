@@ -7,7 +7,8 @@
  * "Something went wrong" toast and left a NaN selection behind (FINDINGS.json SEC-09); a 5,000-entry answer to a
  * `limit=5` request used to render 5,000 buttons. Labels are cleaned like every other untrusted place name (SEC-01).
  */
-import { cleanPlaceLabel } from '../data/placeName';
+import { fetchJSON, MB } from '../data/net';
+import { cleanPlaceLabel, NOMINATIM_SEARCH } from '../data/placeName';
 
 /** Nominatim search result (the fields used). Every one is untrusted, hence the loose types. */
 export interface GeoResult {
@@ -65,4 +66,25 @@ export function geoChoices(list: unknown, max = MAX_GEO_RESULTS): GeoChoice[] {
     out.push({ lat, lon, first, rest: parts.slice(1).filter(Boolean) });
   }
   return out;
+}
+
+/** Longest query sent to the geocoder (an address is far shorter; the rest is dropped, never sent). */
+export const MAX_GEO_QUERY = 200;
+let lastSearchAt = -Infinity;
+
+/**
+ * Search US places with Nominatim — the one geocoder call, shared by the location picker and "Check an address" so
+ * Nominatim's usage policy (≤ 1 request per second) holds across both. One capped, timed-out attempt through net.ts
+ * (a geocoder answer is kilobytes); the answer goes through geoChoices, so nothing unusable comes back.
+ */
+export async function searchUSPlaces(query: string, signal?: AbortSignal): Promise<GeoChoice[]> {
+  const q = query.trim().slice(0, MAX_GEO_QUERY);
+  if (!q) return [];
+  const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+  const wait = Math.max(0, 1000 - (now() - lastSearchAt));
+  if (wait) await new Promise((r) => setTimeout(r, wait));
+  signal?.throwIfAborted();
+  lastSearchAt = now();
+  const url = `${NOMINATIM_SEARCH}?q=${encodeURIComponent(q)}&format=json&limit=${MAX_GEO_RESULTS}&countrycodes=us&addressdetails=0`;
+  return geoChoices(await fetchJSON<unknown>(url, { signal, retries: 0, timeoutMs: 10000, maxBytes: MB }));
 }

@@ -6108,8 +6108,50 @@ select.dl-num-input {
 }
 .dl-uc-cards {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(2, 1fr);
   gap: 12px;
+}
+.dl-uc-addr-form {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.dl-uc-addr-input {
+  font: inherit;
+  font-size: 13.5px;
+  color: var(--dl-text);
+  border: 0;
+  outline: none;
+  flex: 1;
+  min-width: 0;
+  height: 38px;
+  padding: 0 12px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.32);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+  user-select: text;
+  -webkit-user-select: text;
+}
+.dl-uc-addr-input::placeholder {
+  color: var(--dl-text-3);
+}
+.dl-uc-addr-input:focus {
+  box-shadow:
+    inset 0 0 0 1px rgba(90, 185, 255, 0.8),
+    0 0 0 3px rgba(58, 168, 255, 0.2);
+}
+.dl-uc-addr-status {
+  margin: 10px 0 6px !important;
+  font-size: 12.5px;
+  color: var(--dl-text-2);
+}
+.dl-uc-addr-status:empty {
+  display: none;
+}
+.dl-uc-addr-results {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 .dl-uc-card {
   display: flex;

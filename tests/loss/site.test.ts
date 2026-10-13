@@ -394,3 +394,58 @@ test('?sites= hostile input: bounded, strict, never echoed', () => {
   assert.ok(many.warnings.length === 1);
   assert.deepEqual(decodeSites(null), { sites: [], warnings: [] });
 });
+
+// ─── The NOAA Atlas 14 rain ladder ──────────────────────────────────────────────────────────────────────────────────
+
+test('rain ladder: Atlas 14 1-hour intensities become sourced levels with annual-chance return periods', async () => {
+  const { rainLadder, annualReturnPeriod, RAIN_DESIGN_DURATION_S, RAIN_LADDER_CAVEATS } = await import('../../src/loss/ladders');
+  // Houston's PFDS 60-minute row (tests/fixtures/atlas14/pfds-houston.txt).
+  const houston = { levels: [2, 10, 25, 100, 500].map((ari, i) => ({ ari, mmPerHour: [57, 82, 98, 123, 162][i] })) };
+  const L = rainLadder(houston);
+  assert.deepEqual(L.map((l) => l.mmPerHour), [57, 82, 98, 123, 162]);
+  assert.ok(L.every((l) => l.source === 'noaa-atlas14' && LADDER_SOURCES[l.source]));
+  // Langbein: AEP = 1 − e^(−1/ARI). 2-yr ARI is a 39 % annual chance; 100-yr is 0.995 %.
+  assert.ok(Math.abs(L[0].returnPeriod - 2.5415) < 1e-3, `${L[0].returnPeriod}`);
+  assert.ok(Math.abs(L[3].returnPeriod - 100.5008) < 1e-3);
+  assert.ok(Math.abs(1 / annualReturnPeriod(100) - 0.00995) < 1e-5);
+  for (const l of L) assert.ok(l.returnPeriod > l.ari && l.returnPeriod - l.ari < 0.55, `${l.ari}: ${l.returnPeriod}`);
+  assert.equal(RAIN_DESIGN_DURATION_S, 3600);
+  assert.ok(RAIN_LADDER_CAVEATS.some((c) => /stationary/i.test(c)) && RAIN_LADDER_CAVEATS.some((c) => /river/i.test(c)));
+  // Junk levels are dropped, never turned into a rain rate.
+  assert.equal(rainLadder({ levels: [{ ari: 2, mmPerHour: NaN }, { ari: 0, mmPerHour: 10 }, { ari: 10, mmPerHour: -1 }] }).length, 0);
+});
+
+test('rain ladder sweep: EAL with sourced return periods, the 100-yr rain is the 1 % design level', async () => {
+  const { rainLadder } = await import('../../src/loss/ladders');
+  const { formatReturnPeriod, isOnePercent } = await import('../../src/loss/site');
+  const L = rainLadder({ levels: [2, 10, 25, 100, 500].map((ari, i) => ({ ari, mmPerHour: [57, 82, 98, 123, 162][i] })) });
+  const depths = [0, 0.1, 0.3, 0.7, 1.4];
+  // Out of order on purpose: the summary orders rain levels by intensity.
+  const rows: SweepRow[] = L.map((l, i) => {
+    const f = uniform(depths[i]);
+    const lv: SweepLevelInfo = { id: l.id, label: l.label, ft: NaN, scale: NaN, rainMmH: l.mmPerHour, returnPeriod: l.returnPeriod, rpFrom: 'source', durationS: 7200 };
+    return { level: lv, run: assessSiteRun(site(), f, ctx(f)) };
+  }).reverse();
+  const sum = summarizeSweep(rows);
+  assert.deepEqual(sum.rows.map((r) => r.level.rainMmH), [57, 82, 98, 123, 162]);
+  assert.equal(sum.points.length, 5);
+  assert.ok(sum.eal && sum.eal.high > sum.eal.low && sum.eal.low > 0, JSON.stringify(sum.eal));
+  assert.equal(sum.userReturnPeriods, false);
+  const design = pickDesign(sum.rows, null)!;
+  assert.equal(design.basis, '100-yr');
+  assert.equal(design.row.level.id, 'a14-100');
+  assert.ok(isOnePercent(100) && isOnePercent(100.5008) && !isOnePercent(125) && !isOnePercent(null));
+  assert.deepEqual(L.map((l) => formatReturnPeriod(l.returnPeriod)), ['2.5', '10.5', '25.5', '100.5', '500.5']);
+  assert.equal(formatReturnPeriod(2), '2');
+  const v = siteVerdict('Lot 9', sum, money).join(' ');
+  assert.match(v, /Atlas 14 25-yr 1-hour rain \(98 mm\/h\)/);
+  assert.match(v, /Expected annual loss/);
+});
+
+test('rain ladder: Today vs future compares it under a rain multiplier', async () => {
+  const { sweepComparable } = await import('../../src/climate/apply');
+  const base = { identity: false, chainInflows: false, riverStageUnscaled: true, seaRiseM: 0, rainMult: 1.2, inflowMult: 1.2 } as unknown as Parameters<typeof sweepComparable>[0];
+  assert.equal(sweepComparable(base, 'rain').ok, true);
+  assert.equal(sweepComparable({ ...base, rainMult: 1 } as typeof base, 'rain').ok, false);
+  assert.equal(sweepComparable(base, 'stage').ok, false);
+});
