@@ -250,10 +250,11 @@ export const BRIEF: readonly BriefItem[] = [
     where: 'Site check · Evacuation',
     numbers: [
       'When the last road route from the site to a dry shelter closes, against when the water arrives',
+      'The share of occupants out before it closes — departures after the alert from a published flood-warning response curve, cars queuing at the exit — and the clearance time against that window',
       'A live evacuation route that re-plans as streets flood, or turns red when every way out is cut',
     ],
     caveat:
-      'Roads are Census centre-lines, and a road counts as cut at 0.3 m of water, where cars and trucks stop. Traffic, debris on bridges and people who leave late are not modelled.',
+      'Roads are Census centre-lines, and a road counts as cut at 0.3 m of water, where cars and trucks stop. Departures follow an average curve (Sorensen & Mileti 2015) and the cars queue at one bottleneck with assumed lanes: other evacuating traffic and debris on bridges are not modelled, so the clearance time is a lower bound.',
   },
   {
     question: 'What would protection cost, and what would it save?',
