@@ -58,6 +58,10 @@ const PORT = Number(argv.port ?? 5703);
 const EXTERNAL_URL = String(argv.url ?? process.env.DELUGE_TEST_URL ?? '');
 const JSON_OUT = String(argv.json ?? path.join(OUT_DIR, 'security-results.json'));
 const SKIP_AUDIT = process.env.DELUGE_SEC_SKIP_AUDIT === '1' || QUICK;
+/** CAP-*: idle stretch for the same-page drift control, ms (about as long as searchFlow's wait). */
+const CAP_IDLE_MS = 2500;
+/** CAP-*: live-heap growth allowed on top of a quarter of the payload, MB: twice the ~1.5 MB noise floor after a forced GC. */
+const CAP_HEAP_SLACK_MB = 3;
 const CASE_FILTER = argv.case ? String(argv.case) : null;
 
 // ── payloads ────────────────────────────────────────────────────────────────────────────────────
@@ -577,7 +581,10 @@ try {
   /**
    * Nominatim's search is capped at 1 MB (src/ui/locationPicker.ts). Each variant puts a unique marker in the FIRST
    * result, so the marker can only reach the screen if the oversized body was read and parsed: seeing it is the
-   * failure. Memory is sampled too — a cap that only throws after buffering has not protected anything.
+   * failure. Memory is sampled too — a cap that only throws after buffering has not protected anything: the live heap
+   * after a forced GC, right before and right after the search (liveHeap below). That catches a body that is kept
+   * (the string, or what parsing it builds, stays live: at least its own size); a body read in full and then dropped is
+   * the streaming cap's job, tested chunk by chunk in tests/data/hostileUpstream.test.ts.
    */
   const capCases = [
     {
@@ -612,6 +619,28 @@ try {
       },
     },
   ];
+  /**
+   * Live JS heap after a forced full GC, bytes (Chromium DevTools protocol: HeapProfiler.collectGarbage, then
+   * Runtime.getHeapUsage). performance.memory alone — what this check used to read — is the heap including garbage
+   * not yet collected, coarsened by Chromium: on Windows even the 0-byte CAP-DECLARED case read +44–164 MB, which is
+   * the running simulation's per-readback allocations waiting for the next GC, not anything the response did.
+   * Falls back to that (marked not forced) where CDP is unavailable.
+   */
+  async function liveHeap(page) {
+    try {
+      const cdp = await page.context().newCDPSession(page);
+      try {
+        await cdp.send('HeapProfiler.collectGarbage');
+        await cdp.send('HeapProfiler.collectGarbage'); // a second pass frees what the first one's finalizers released
+        const { usedSize } = await cdp.send('Runtime.getHeapUsage');
+        return { bytes: usedSize, forced: true };
+      } finally {
+        await cdp.detach().catch(() => {});
+      }
+    } catch {
+      return { bytes: await page.evaluate(() => performance.memory?.usedJSHeapSize ?? null), forced: false };
+    }
+  }
   for (const c of capCases.filter((c) => shouldRun(c.id))) {
     const { body, opts } = c.build(c.marker);
     const wire = opts.gzip ? zlib.gzipSync(Buffer.from(body)).length : Buffer.byteLength(body);
@@ -620,25 +649,44 @@ try {
     });
     await page.goto(`${baseUrl}?preset=pittsburgh`, { waitUntil: 'load', timeout: 120000 });
     await waitForApp(page);
-    const before = await page.evaluate(() => performance.memory?.usedJSHeapSize ?? null);
+    // Baseline on the same page right before the search, after a forced full GC (see liveHeap); and, for the report
+    // only, the app's own drift over an idle stretch as long as the search, just before that (not subtracted: the app
+    // does not drift at a steady rate, so taking it off could hide a kept body).
+    const base0 = await liveHeap(page);
+    const t0 = Date.now();
+    await page.waitForTimeout(CAP_IDLE_MS);
+    const base1 = await liveHeap(page);
+    const idleMs = Date.now() - t0;
     const flow = await searchFlow(page, 'pittsburgh');
-    const after = await page.evaluate(() => performance.memory?.usedJSHeapSize ?? null);
+    const after = await liveHeap(page);
     const text = await visibleText(page);
     const alive = await page.evaluate(() => !!document.querySelector('.dl-scene-name'));
     const leaked = text.includes(c.marker);
-    const growthMB = before !== null && after !== null ? +((after - before) / 1048576).toFixed(1) : null;
-    // 12 MB of inflated JSON must not become 12 MB of live heap; a generous bound still catches "buffer it all".
-    const memoryOk = growthMB === null || growthMB < 64;
+    const payloadMB = Buffer.byteLength(body) / 1048576;
+    const mb = (b) => +(b / 1048576).toFixed(1);
+    const known = base0.bytes !== null && base1.bytes !== null && after.bytes !== null;
+    const driftMB = known ? mb(base1.bytes - base0.bytes) : null;
+    const growthMB = known ? mb(after.bytes - base1.bytes) : null;
+    // Holding on to the oversized body — the raw string, or what parsing it builds — keeps at least its size live.
+    // Measured after a full GC, the noise is ~1.5 MB (the app's own drift), so the bound can be a fraction of the
+    // payload: a kept 4 MB body (3.9 MB live as the string alone, 7.8 MB with its parse, measured) cannot pass 3 + 1 MB.
+    const limitMB = CAP_HEAP_SLACK_MB + 0.25 * payloadMB;
+    const memoryOk = growthMB === null || !after.forced || growthMB < limitMB;
     const ok = !leaked && alive && memoryOk;
+    const heapText = known
+      ? after.forced
+        ? `live heap +${growthMB} MB after GC (limit ${limitMB.toFixed(1)}; the app alone drifted ${driftMB >= 0 ? '+' : ''}${driftMB} MB over ${(idleMs / 1000).toFixed(1)} s idle)`
+        : `heap +${growthMB} MB (GC could not be forced: not judged)`
+      : 'heap not measurable';
     record(
       c.id,
       'SEC-03',
       c.what,
       flow.typed ? (ok ? 'pass' : 'fail') : 'pending',
       flow.typed
-        ? `${(Buffer.byteLength(body) / 1048576).toFixed(1)} MB payload (${(wire / 1024).toFixed(0)} KB on the wire), marker ${leaked ? 'RENDERED' : 'never rendered'}, heap +${growthMB ?? '?'} MB, app ${alive ? 'alive' : 'DEAD'}`
+        ? `${payloadMB.toFixed(1)} MB payload (${(wire / 1024).toFixed(0)} KB on the wire), marker ${leaked ? 'RENDERED' : 'never rendered'}, ${heapText}, app ${alive ? 'alive' : 'DEAD'}`
         : 'search UI not reachable — case not exercised',
-      { leaked, alive, growthMB, wireBytes: wire },
+      { leaked, alive, growthMB, driftMB, limitMB, gcForced: after.forced, wireBytes: wire },
     );
     await page.close();
   }
