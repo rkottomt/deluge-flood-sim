@@ -1557,6 +1557,9 @@ const FLOWS = [
         await sleep(300);
         await page.locator('[data-section="chain"]').screenshot({ path: path.join(OUT, `16-${id}-panel.png`) });
       }
+      // Leave the page on the suite's own preset: later flows assume it (the ensemble flow frames Pittsburgh's crest).
+      await D((p) => window.__deluge.loadPreset(p), PRESET);
+      await waitReady(120_000);
     },
   },
   {
