@@ -12,7 +12,7 @@
  * SECURITY. Every string shown comes from the baked index through cleanDamName or from constant text, set with h()
  * (textContent). The link carries `nid=` (a strict id pattern), `breach=` and `method=` (fixed words) — never a name.
  */
-import type { TerrainData } from '../contracts';
+import type { RenderSettings, TerrainData } from '../contracts';
 import { fetchDEM } from '../data/dem';
 import { makeGeoToGrid, squareDomain } from '../data/geo';
 import { BREACH_METHODS, BREACH_MODES, damScenario, DRY_DAM_NOTE, sunnyDayPossible, type BreachMethod, type BreachMode, type DamScenario } from '../dams/breachModel';
@@ -270,6 +270,21 @@ export function createDamView(ctx: UIContext, deps: { panel: Pick<Panel, 'reveal
   }
 
   let last: { spec: DamBreachSpec; terrain: TerrainData } | null = null;
+  /** The view and clock before the first breach on this scenario, and what the view set them to. */
+  let raised: { waterMode: RenderSettings['waterMode']; timeScale: number; set: { waterMode: RenderSettings['waterMode']; timeScale: number } } | null = null;
+  ctx.bind(
+    (s) => !!s.scenario?.damBreach,
+    (on) => {
+      if (on || !raised) return;
+      const r = raised;
+      raised = null;
+      const s = store.get();
+      // A new scene opens in its own view (src/app/scene.ts); on the same map, a view still on the breach's is put back.
+      const sameMap = !!last && (bridge.scene?.getTerrain() ?? null) === last.terrain;
+      if (sameMap && s.render.waterMode === r.set.waterMode) ctx.setRender({ waterMode: r.waterMode });
+      if (s.sim.timeScale === r.set.timeScale) store.set({ sim: { ...s.sim, timeScale: r.timeScale } });
+    },
+  );
 
   function install(dam: NidDam, s: DamScenario): void {
     const def = useCaseById('dam');
@@ -284,12 +299,18 @@ export function createDamView(ctx: UIContext, deps: { panel: Pick<Panel, 'reveal
       postNotice(store, { kind: 'warn', key: 'usecase', title: def.title, message: 'The dam is not on the loaded map.' });
       return;
     }
+    // The arrival view and a faster clock while the wave runs; what they were is put back when the breach goes
+    // (another scene, or the scenario restored without it) — unless the user has changed them since.
+    const before = { waterMode: store.get().render.waterMode, timeScale: store.get().sim.timeScale };
     store.set({ scenario: out.scenario });
     ctx.actions.restoreScenario();
     ctx.actions.resetWater();
     ctx.setRender({ waterMode: 'arrival' });
     const sim = store.get().sim;
-    store.set({ paused: false, sim: { ...sim, timeScale: Math.max(sim.timeScale, DAM_TIME_SCALE) } });
+    const timeScale = Math.max(sim.timeScale, DAM_TIME_SCALE);
+    store.set({ paused: false, sim: { ...sim, timeScale } });
+    raised ??= { ...before, set: { waterMode: 'arrival', timeScale } };
+    raised.set = { waterMode: 'arrival', timeScale };
     last = { spec: out.spec, terrain: t };
     writeLink(dam, s.mode);
     renderReadout(null);
@@ -303,7 +324,8 @@ export function createDamView(ctx: UIContext, deps: { panel: Pick<Panel, 'reveal
       kind: 'info',
       key: 'usecase',
       title: `${dam.name}: ${BREACH_MODES[s.mode].short.toLowerCase()} breach`,
-      message: `Peak outflow ${fmtQ(out.spec.peak)} at ${fmtMin(out.spec.tPeak)}, ${fmtNum(out.spec.volume / 1e6, 1)} million m³. ${def.howTo}`,
+      // The breach's own peak with the breach's own volume; the river's flood under it is named separately.
+      message: `Peak breach outflow ${fmtQ(out.spec.peak)} at ${fmtMin(out.spec.tPeak)}, ${fmtNum(s.result.breachVolume / 1e6, 1)} million m³ through the breach${s.result.input.baseFlow > 0 ? ` (${fmtNum(out.spec.volume / 1e6, 1)} million m³ in all with the river’s flood under it)` : ''}. ${def.howTo}`,
       durationMs: 30000,
       action: { label: 'Read arrivals', run: () => void openReadout() },
     });
@@ -329,6 +351,11 @@ export function createDamView(ctx: UIContext, deps: { panel: Pick<Panel, 'reveal
       return null;
     }
     const fields = await solver.readHazardFields();
+    // The readback is asynchronous: the scene, its solver or the breach may have changed meanwhile.
+    if ((bridge.scene?.getSolver() ?? null) !== solver || (bridge.scene?.getTerrain() ?? null) !== t || (store.get().scenario?.damBreach ?? null) !== spec) {
+      renderReadout(null, 'The scene changed while the arrivals were being read. Breach a dam first: the readout follows the flow path below it.');
+      return null;
+    }
     const rows = readDownstream(fields, spec.path);
     renderReadout(rows, null, fields.simTime);
     return rows;
