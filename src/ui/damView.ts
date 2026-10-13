@@ -15,7 +15,8 @@
 import type { RenderSettings, TerrainData } from '../contracts';
 import { fetchDEM } from '../data/dem';
 import { makeGeoToGrid, squareDomain } from '../data/geo';
-import { BREACH_METHODS, BREACH_MODES, damScenario, DRY_DAM_NOTE, sunnyDayPossible, type BreachMethod, type BreachMode, type DamScenario } from '../dams/breachModel';
+import { BREACH_METHOD_IDS, BREACH_METHODS, BREACH_MODES, damScenario, DEFAULT_BREACH_METHOD, DRY_DAM_NOTE, sunnyDayPossible, type BreachMethod, type BreachMode, type DamScenario } from '../dams/breachModel';
+import { ARRIVAL_EXPONENT, relationById, scaledArrival } from '../dams/breachRelations';
 import { damById, loadNidIndex, searchDams, type NidDam, type NidIndex } from '../dams/nidIndex';
 import { areaCentreForDam, downstreamBearing, readDownstream, type DownstreamReading } from '../dams/placement';
 import { damBreachScenario, withoutDamText, type DamBreachSpec } from '../dams/scenario';
@@ -45,6 +46,14 @@ export interface DamView {
 const fmtInt = (v: number) => Math.round(v).toLocaleString('en-US');
 const fmtQ = (q: number) => `${fmtInt(q >= 1000 ? Math.round(q / 10) * 10 : q)} m³/s`;
 const fmtMin = (s: number) => (s < 90 * 60 ? `${fmtNum(s / 60, 0)} min` : `${fmtNum(s / 3600, 1)} h`);
+/** An arrival range: '12–19 min', or '1.2–1.8 h' when both ends are long. */
+function fmtMinRange(a: number, b: number): string {
+  if (a >= 90 * 60 && b >= 90 * 60) return `${fmtNum(a / 3600, 1)}–${fmtNum(b / 3600, 1)} h`;
+  if (a < 90 * 60 && b < 90 * 60) return `${fmtNum(a / 60, 0)}–${fmtNum(b / 60, 0)} min`;
+  return `${fmtMin(a)} – ${fmtMin(b)}`;
+}
+/** Which hydrograph a method sends to the map, in a few words. */
+const METHOD_SHORT: Record<BreachMethod, string> = { central: 'central case', low: 'low case', high: 'high case', parametric: 'Froehlich 2008 breach, routed' };
 
 function damLine(d: NidDam): string {
   return `${d.id}${d.state ? ` · ${d.state}` : ''} · ${fmtNum(d.heightM, 0)} m · ${fmtInt(d.storageAcFt)} acre-ft · ${d.hazard} hazard`;
@@ -182,10 +191,31 @@ export function createDamView(ctx: UIContext, deps: { panel: Pick<Panel, 'reveal
       ['Head at failure', `${fmtNum(s.headM, 1)} m above the streambed`],
       ['Breach width (Froehlich 2008)', `${fmtNum(r.avgWidthM, 0)} m average, ${fmtNum(r.bottomWidthM, 0)} m at the bottom`],
       ['Breach formation time', fmtMin(r.formationTimeS)],
-      [`Peak outflow — ${method === 'parametric' ? 'modelled' : 'Froehlich 2016'}`, `${fmtQ(r.peak)} at ${fmtMin(r.tPeak)}`],
-      ...r.relations.map((x): [string, string] => [`Peak — ${x.label}`, fmtQ(x.peak)]),
+      [`Peak outflow sent to the map (${METHOD_SHORT[s.method]})`, `${fmtQ(r.peak)} at ${fmtMin(r.tPeak)}`],
+      [
+        `Peak range, ${r.band.values.length} published relations`,
+        `${fmtQ(r.band.low.peak)} – ${fmtQ(r.band.high.peak)} (central ${fmtQ(r.band.central.peak)}, ${relationById(r.band.central.id).label})`,
+      ],
       ...(r.input.baseFlow > 0 ? [['River flood under it', fmtQ(r.input.baseFlow)] as [string, string]] : []),
     ];
+    // Every relation, lowest to highest, with the band's ends and the central one marked.
+    const ordered = [...r.band.values].sort((a, b) => a.peak - b.peak);
+    const tag = (id: string) => (id === r.band.central.id ? ' · central' : id === r.band.low.id ? ' · low' : id === r.band.high.id ? ' · high' : '');
+    const relations = h(
+      'details',
+      { class: 'dl-impact-methods', 'data-dam': 'relations' },
+      h('summary', null, `The ${ordered.length} relations, and how they did on 21 past failures`),
+      h(
+        'table',
+        { class: 'dl-site-table dl-dam-table' },
+        h('tbody', null, ...ordered.map((x) => h('tr', { 'data-relation': x.id }, h('th', null, `${x.label}${tag(x.id)}`), h('td', null, fmtQ(x.peak)), h('td', { class: 'dl-dam-cite' }, x.cite)))),
+      ),
+      h(
+        'p',
+        { class: 'dl-impact-fine' },
+        'Routed relations give a breach width and formation time, and the peak comes from draining this reservoir through that breach; the others give the peak directly. The central case is the relation with the smallest error on 21 documented failures with measured peaks (U.S. Bureau of Reclamation, Wahl 1998): Froehlich 1995, every one within a factor of two. That check is in-sample (the relations were fitted to many of the same failures), and on Teton 1976 the central case was a third low; the routed Froehlich 2008 breach, this tool’s earlier default, was 64 % high.',
+      ),
+    );
     detail.replaceChildren(
       h('h3', { class: 'dl-dam-name' }, d.name),
       h('p', { class: 'dl-uc-addr-status' }, `${damLine(d)} · ${d.damType}${d.year ? `, ${d.year}` : ''} · owner: ${d.owner}`),
@@ -197,8 +227,9 @@ export function createDamView(ctx: UIContext, deps: { panel: Pick<Panel, 'reveal
         radio('dam-mode', 'flood', s.mode, BREACH_MODES.flood.label, (v) => (mode = v)),
       ),
       sunnyDayPossible(d) ? h('span') : h('p', { class: 'dl-uc-addr-status', 'data-dam': 'dry' }, DRY_DAM_NOTE),
-      h('div', { class: 'dl-dam-choices', role: 'radiogroup', 'aria-label': 'Hydrograph method' }, radio('dam-method', 'parametric', method, BREACH_METHODS.parametric, (v) => (method = v)), radio('dam-method', 'regression', method, BREACH_METHODS.regression, (v) => (method = v))),
+      h('div', { class: 'dl-dam-choices dl-dam-methods', role: 'radiogroup', 'aria-label': 'Hydrograph sent to the map' }, ...BREACH_METHOD_IDS.map((id) => radio('dam-method', id, method, BREACH_METHODS[id], (v) => (method = v)))),
       h('table', { class: 'dl-site-table dl-dam-table', 'data-dam': 'params' }, h('tbody', null, ...rows.map(([k, v]) => h('tr', null, h('th', null, k), h('td', null, v))))),
+      relations,
       notes.length ? h('ul', { class: 'dl-impact-issues', 'data-dam': 'assumptions' }, ...notes.map((a) => h('li', null, a))) : h('span'),
       h('details', { class: 'dl-impact-methods', 'data-dam': 'caveats' }, h('summary', null, 'What this leaves out'), h('ul', { class: 'dl-impact-issues' }, ...s.caveats.map((c) => h('li', null, c)))),
       h('div', { class: 'dl-row dl-dam-go' }, h('label', { class: 'dl-num-field' }, h('span', { class: 'dl-num-label' }, 'Area'), sizeSel), go),
@@ -220,7 +251,7 @@ export function createDamView(ctx: UIContext, deps: { panel: Pick<Panel, 'reveal
       url.searchParams.set(USE_CASE_PARAM, 'dam');
       url.searchParams.set(DAM_PARAM, dam.id);
       url.searchParams.set(BREACH_PARAM, breachMode);
-      if (method !== 'parametric') url.searchParams.set(METHOD_PARAM, method);
+      if (method !== DEFAULT_BREACH_METHOD) url.searchParams.set(METHOD_PARAM, method);
       else url.searchParams.delete(METHOD_PARAM);
       url.search = url.search.replace(/%2C/gi, ',');
       if (url.href !== window.location.href) window.history.replaceState(null, '', url);
@@ -325,7 +356,7 @@ export function createDamView(ctx: UIContext, deps: { panel: Pick<Panel, 'reveal
       key: 'usecase',
       title: `${dam.name}: ${BREACH_MODES[s.mode].short.toLowerCase()} breach`,
       // The breach's own peak with the breach's own volume; the river's flood under it is named separately.
-      message: `Peak breach outflow ${fmtQ(out.spec.peak)} at ${fmtMin(out.spec.tPeak)}, ${fmtNum(s.result.breachVolume / 1e6, 1)} million m³ through the breach${s.result.input.baseFlow > 0 ? ` (${fmtNum(out.spec.volume / 1e6, 1)} million m³ in all with the river’s flood under it)` : ''}. ${def.howTo}`,
+      message: `Peak breach outflow ${fmtQ(out.spec.peak)} at ${fmtMin(out.spec.tPeak)} (${METHOD_SHORT[s.method]}; published relations ${fmtQ(out.spec.band.low.peak)} – ${fmtQ(out.spec.band.high.peak)}), ${fmtNum(s.result.breachVolume / 1e6, 1)} million m³ through the breach${s.result.input.baseFlow > 0 ? ` (${fmtNum(out.spec.volume / 1e6, 1)} million m³ in all with the river’s flood under it)` : ''}. ${def.howTo}`,
       durationMs: 30000,
       action: { label: 'Read arrivals', run: () => void openReadout() },
     });
@@ -375,12 +406,20 @@ export function createDamView(ctx: UIContext, deps: { panel: Pick<Panel, 'reveal
       ? h(
           'table',
           { class: 'dl-site-table dl-dam-table', 'data-dam': 'arrivals' },
-          h('thead', null, h('tr', null, h('th', null, 'Downstream'), h('th', null, 'Wave arrives'), h('th', null, 'Peak depth'), h('th', null, 'Peak speed'))),
+          h('thead', null, h('tr', null, h('th', null, 'Downstream'), h('th', null, 'Wave arrives'), h('th', null, 'If the peak were high – low*'), h('th', null, 'Peak depth'), h('th', null, 'Peak speed'))),
           h(
             'tbody',
             null,
             ...rows.map((r) =>
-              h('tr', null, h('td', null, `${fmtNum(r.distanceM / 1000, 1)} km`), h('td', null, r.arrivalS === null ? 'not yet' : fmtMin(r.arrivalS)), h('td', null, `${fmtNum(r.maxDepth, 1)} m`), h('td', null, `${fmtNum(r.maxSpeed, 1)} m/s`)),
+              h(
+                'tr',
+                null,
+                h('td', null, `${fmtNum(r.distanceM / 1000, 1)} km`),
+                h('td', null, r.arrivalS === null ? 'not yet' : fmtMin(r.arrivalS)),
+                h('td', { 'data-dam': 'arrival-band' }, r.arrivalS === null || !spec?.band ? '—' : fmtMinRange(scaledArrival(r.arrivalS, spec.peak, spec.band.high.peak), scaledArrival(r.arrivalS, spec.peak, spec.band.low.peak))),
+                h('td', null, `${fmtNum(r.maxDepth, 1)} m`),
+                h('td', null, `${fmtNum(r.maxSpeed, 1)} m/s`),
+              ),
             ),
           ),
         )
@@ -389,6 +428,13 @@ export function createDamView(ctx: UIContext, deps: { panel: Pick<Panel, 'reveal
       head,
       body,
       h('p', { class: 'dl-impact-fine' }, `After ${fmtMin(simTime)} of simulated time since the breach started. Arrival: the first time water stood 0.15 m deep within ~6 cells of the flow path, on ground that was dry at the start. Peak depth is the deepest water near the path, the river channel included. Distances follow the steepest-descent path on the elevation model from the dam’s toe.`),
+      spec?.band
+        ? h(
+            'p',
+            { class: 'dl-impact-fine', 'data-dam': 'arrival-note' },
+            `* Not simulated: the arrival above rescaled to the published relations’ highest and lowest peaks (${fmtQ(spec.band.high.peak)}, ${spec.band.high.label}; ${fmtQ(spec.band.low.peak)}, ${spec.band.low.label}) against this run’s ${fmtQ(spec.peak)}, by the kinematic-wave rule that travel time goes as peak^−${ARRIVAL_EXPONENT} (Manning flow in a wide channel). Indicative only — to see either case on the map, pick the low or high case and breach again.`,
+          )
+        : h('span'),
     );
   }
 
