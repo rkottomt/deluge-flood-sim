@@ -273,7 +273,12 @@ export function createEnsembleSection(ctx: UIContext): EnsembleSection {
         m,
         apply: () => {
           const f = memberForcing(base, m, { stageMax: stage ? stage.maxOffset : null, chainSourceId: chain ? 'chain-inflow' : null });
-          store.set({ sources: f.sources, storms: f.storms, stageOffset: f.stageOffset, sim: { ...store.get().sim, rainRate: f.rainRate, manningN: f.manningN } });
+          // Two updates, not one: f.sources are the BASE sources (their stage levels at base.stageOffset) with the
+          // member's inflow factor, and SimSync records sources that change together with the offset as already
+          // including it — one combined update left every member's river boundaries at the base stage. Setting them
+          // with the base offset records them correctly; the offset change then moves the stage levels.
+          store.set({ sources: f.sources, storms: f.storms, stageOffset: base.stageOffset, sim: { ...store.get().sim, rainRate: f.rainRate, manningN: f.manningN } });
+          store.set({ stageOffset: f.stageOffset });
           if (demOn) {
             const td = performance.now();
             solver.setBedPerturbation!(demPerturbation({ nx: terrain.nx, ny: terrain.ny, cellSize: terrain.cellSize, sigma: ranges.demSigmaM, corrLenM: ranges.demCorrM, seed: m.seed, initialDepth, elevation: ground0 }));

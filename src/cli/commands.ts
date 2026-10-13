@@ -507,7 +507,10 @@ async function runEnsemble(env: CliEnv, p: Prepared, n: number, seed: number, as
     for (const m of params) {
       const f = memberForcing(base, m, { stageMax: stage ? stage.maxOffset : null, chainSourceId: chain ? scene.chain!.sourceId : null });
       const apply = () => {
-        scene.applyPatch({ sources: f.sources, storms: f.storms, stageOffset: f.stageOffset, sim: { ...scene.state.sim, rainRate: f.rainRate, manningN: f.manningN } });
+        // Two patches, as in src/ui/ensemble.ts: the member's sources carry the BASE stage levels, so they go in with
+        // the base offset (recorded correctly), and the offset change then moves the stage levels.
+        scene.applyPatch({ sources: f.sources, storms: f.storms, stageOffset: base.stageOffset, sim: { ...scene.state.sim, rainRate: f.rainRate, manningN: f.manningN } });
+        scene.applyPatch({ stageOffset: f.stageOffset });
         if (demOn) scene.setBedPerturbation(demPerturbation({ nx: terrain.nx, ny: terrain.ny, cellSize: terrain.cellSize, sigma: ranges.demSigmaM, corrLenM: ranges.demCorrM, seed: m.seed, initialDepth: scene.initialWater, elevation: ground0 }));
       };
       const tr = performance.now();

@@ -272,6 +272,30 @@ test('sim sync: sources added by the UI keep the invariant level = base + offset
   assert.equal(solver.sources.length, 3);
 });
 
+test('sim sync: an ensemble member moves the stage boundaries only when its sources go in before its offset', () => {
+  // src/ui/ensemble.ts and src/cli/commands.ts: a member's sources are the BASE sources (stage levels at the base
+  // offset) with its own inflow factor. In ONE update with the member's offset, SimSync takes the levels as already
+  // including that offset and the boundaries stay at the base stage; sources with the base offset, then the offset,
+  // move them by the member's stage delta.
+  const base = [stage('ohio', 216.4), inflow('creek', 50)];
+  const member = [stage('ohio', 216.4), inflow('creek', 60)];
+
+  const one = makeSync();
+  one.levels.resetFrom(base);
+  one.store.set({ sources: base, stageOffset: 2 });
+  one.store.set({ sources: member, stageOffset: 2.3 });
+  assert.equal((one.solver.sources[0] as { level: number }).level, 216.4, 'one update: the boundary does not move');
+
+  const two = makeSync();
+  two.levels.resetFrom(base);
+  two.store.set({ sources: base, stageOffset: 2 });
+  two.store.set({ sources: member, stageOffset: 2 });
+  two.store.set({ stageOffset: 2.3 });
+  const lv = (two.solver.sources[0] as { level: number }).level;
+  assert.ok(Math.abs(lv - 216.7) < 1e-9, `two updates: the boundary rises by the member's 0.3 m (level ${lv})`);
+  assert.equal((two.solver.sources[1] as { discharge: number }).discharge, 60, 'and the inflow factor is kept');
+});
+
 test('sim sync: params push on identity change and overrides do not leak into the store', () => {
   const { store, solver, sync } = makeSync();
   store.set({ sim: { ...store.get().sim, rainRate: 100 } });
