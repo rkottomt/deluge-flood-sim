@@ -43,6 +43,13 @@ export interface SchemeStepParams {
   /** Stage relaxation factor for this step, 0..1. */
   stageAlpha: number;
   forcing?: PackedForcing | null;
+  /**
+   * Land-cover roughness factor per cell (row-major), relative to manningN: a face uses n = manningN · (r_L + r_R)/2
+   * (shaders/momentum.ts ROUGHNESS MAP). Absent = uniform n.
+   */
+  roughness?: ArrayLike<number> | null;
+  /** Storm-drain capacity per cell, m/s (already scaled), removed after infiltration. Absent = no drains. */
+  drain?: ArrayLike<number> | null;
   /** Debris-flow rheology (src/sim/rheology.ts rheologyCoefficients); absent or kind 0 = water (Manning). Robust mode only. */
   rheology?: RheologyCoefficients;
 }
@@ -200,9 +207,18 @@ export function rheoMomentum(
  *   (smoothingIncrement); qPerp: mean of the 4 surrounding perpendicular faces; adv: convective acceleration
  *   ∂(q·u)/∂x + ∂(q·v)/∂y at this face.
  */
-export function momentum(hf: number, S: number, dz: number, qc: number, dq: number, qPerp: number, adv: number, p: SchemeStepParams): number {
+export function momentum(
+  hf: number,
+  S: number,
+  dz: number,
+  qc: number,
+  dq: number,
+  qPerp: number,
+  adv: number,
+  p: SchemeStepParams,
+  n2: number = p.manningN * p.manningN,
+): number {
   if (!(hf >= p.hMin)) return 0;
-  const n2 = p.manningN * p.manningN;
   const qmag = Math.sqrt(qc * qc + qPerp * qPerp);
   const hf73 = Math.pow(hf, 7 / 3);
   if (p.robust) {
@@ -297,6 +313,15 @@ export class CpuReferenceSolver {
       }
     }
 
+    // Manning n² of the face between cells a and b: uniform, or from the roughness map (mean factor of the two cells).
+    const n2u = p.manningN * p.manningN;
+    const rough = p.roughness;
+    const n2Face = (a: number, b: number) => {
+      if (!rough) return n2u;
+      const rf = 0.5 * (rough[a] + rough[b]);
+      return n2u * rf * rf;
+    };
+
     // ── Pass A: momentum on interior faces ──────────────────────────────────────────────────────────
     const fx = new Float64Array(N);
     const fy = new Float64Array(N);
@@ -334,7 +359,7 @@ export class CpuReferenceSolver {
             adv = (advWeight(hf, hfW, hfE, hfS, hfN) * (mR - mL + (gS - gN))) / p.dx;
           }
           const dq = wet(hf) ? smoothingIncrement(hf, qx[c], qW, hfW, qE, hfE, div[e] - div[c], p) : 0;
-          fx[c] = momentum(hf, S, z[e] - z[c], qx[c], dq, qPerp, adv, p);
+          fx[c] = momentum(hf, S, z[e] - z[c], qx[c], dq, qPerp, adv, p, n2Face(c, e));
         }
         if (j < ny - 1) {
           const s = c + nx;
@@ -365,7 +390,7 @@ export class CpuReferenceSolver {
             adv = (advWeight(hf, hfN, hfS, hfE, hfW) * (mD - mU + (gE - gW))) / p.dx;
           }
           const dq = wet(hf) ? smoothingIncrement(hf, qy[c], qN, hfN, qS, hfS, div[s] - div[c], p) : 0;
-          fy[c] = momentum(hf, S, z[s] - z[c], qy[c], dq, qPerp, adv, p);
+          fy[c] = momentum(hf, S, z[s] - z[c], qy[c], dq, qPerp, adv, p, n2Face(c, s));
         }
       }
     }
@@ -442,6 +467,15 @@ export class CpuReferenceSolver {
         let h3 = h2;
         if (h2 > 0) h3 = h2 - Math.min(p.infiltration * p.dt, h2);
         volOut += h2 - h3;
+        // Storm drains: the cell's capacity, never more than is there (booked as outflow, like infiltration).
+        if (p.drain && h3 > 0) {
+          const cap = p.drain[c] * p.dt;
+          if (cap > 0) {
+            const d = Math.min(cap, h3);
+            h3 -= d;
+            volOut += d;
+          }
+        }
         // Stage sources relax the depth toward max(0, level − z).
         let h4 = h3;
         let qEs = qE;

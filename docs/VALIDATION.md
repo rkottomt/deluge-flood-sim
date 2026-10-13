@@ -264,12 +264,37 @@ either domain. What can be checked — the hazard chain's arrival times and reco
 [docs/research/glacier-hazard-chain.md](research/glacier-hazard-chain.md). The app's Validation block says so rather
 than showing a number.
 
+## Buildings, a land-cover roughness map and storm drains
+
+The app has three optional land-surface layers (Advanced → *Land surface*; [ARCHITECTURE.md §3.11](../ARCHITECTURE.md#311-land-surface-buildings-as-obstacles-a-roughness-map-storm-drains)):
+building footprints as obstacles, Manning's n from NLCD 2021, and storm drains sized to the 2-year storm. The scenes
+above were re-run with each of them, through the same runs and the same scoring (`npx tsx
+scripts/validation/landsurface.ts`; a blocked footprint cell is scored at the water surface of its wettest open
+neighbour, the level a mark on its wall would record):
+
+| Scene and observation | none (shipped) | buildings | roughness | buildings + roughness | drains | all three |
+| --- | --- | --- | --- | --- | --- | --- |
+| Fort Myers, Ian marks: bias / RMSE | +0.07 / 0.14 m | +0.07 / 0.14 m | +0.01 / 0.17 m | +0.06 / 0.14 m | | |
+| Fort Myers, FEMA 1 % zone: CSI | **87.9 %** | 86.6 % | 80.9 % | 86.7 % | | |
+| Nashville, FEMA 1 % zone: CSI / profile bias | **82.3 %** / +0.26 m | 80.2 % / +0.27 m | 79.3 % / +0.24 m | 79.6 % / +0.28 m | | |
+| Pittsburgh, FEMA 1 % zone: CSI / profile bias | **60.9 %** / −0.38 m | 60.5 % / −0.38 m | 59.1 % / −0.40 m | 60.9 % / −0.38 m | | |
+| Asheville, gauge peaks: French Broad / Swannanoa | −1.44 / −1.22 m | −1.45 / −1.27 m | −1.69 / +0.00 m | −1.45 / −1.02 m | | |
+| Houston, Harvey marks (not like-for-like): bias / RMSE | −1.85 / 2.56 m | −1.01 / 2.40 m | −1.87 / 2.44 m | | −1.89 / 2.61 m | −1.07 / 2.48 m |
+
+None improves a like-for-like score: buildings cost 0.4–2.1 CSI points, the roughness map 1.8–7.0, the two together
+0–2.7. The roughness map moves the two Helene gauges in opposite directions, so Asheville's error is the discharge and
+the burned channel, not the floodplain's n. That is why the shipped scenes — and the numbers above them on this page —
+stay on bare earth with one n. The layers remain available for what they do model (flow round blocks, drained
+ordinary storms), with the caveats in ARCHITECTURE.md.
+
 ## What these numbers do not cover
 
 * **Bare-earth terrain, no drains.** Every U.S. DEM is 3DEP bare earth at the preset's 4.9–7.8 m cells: no buildings
-  (the app draws them, the solver does not see them), no storm drains, no culverts, no flood walls unless the DEM
-  carries them. Pluvial scenes (Houston, Ellicott City) are the most affected.
-* **One roughness.** Manning's n is 0.035 everywhere. Asheville's −1.3 m is the clearest symptom.
+  (the app draws them; the solver sees them only with the optional *Buildings block flow*), no storm drains (optional,
+  off), no culverts, no flood walls unless the DEM carries them. Pluvial scenes (Houston, Ellicott City) are the most
+  affected.
+* **One roughness.** Manning's n is 0.035 everywhere. A land-cover map is optional and did not score better (above):
+  it does not close Asheville's −1.3 m either, which points at the discharge and the burned channel instead.
 * **Scenario simplifications.** Stage scenes hold a nearly level water surface between their boundaries (Pittsburgh's
   profile); event scenes run a constant peak or one hour of rain, not the event's hydrograph (Houston).
 * **Small samples.** 25, 9 and 2 points, and three like-for-like extent maps. The FEMA zone is itself a model

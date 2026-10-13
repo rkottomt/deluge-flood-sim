@@ -1,7 +1,7 @@
 /// <reference types="node" />
 /**
  * Bake real-world presets into public/presets/<id>/{meta.json, elevation.f32, imagery.jpg, imagery-detail.jpg,
- * roads.json}.
+ * roads.json, landcover.u8}.
  *
  *   npx tsx scripts/bake-presets.ts            # all presets
  *   npx tsx scripts/bake-presets.ts johnstown  # one preset
@@ -22,7 +22,8 @@
  * the domain edges → initial fill seeds along the centerlines (verified: no water outside the channel) →
  * shelters snapped to high road nodes (verified above the maximum stage) → aerial imagery 4096² JPEG →
  * close-up imagery inset for the middle of the domain (PresetDef.detail, another 4096² JPEG) →
- * TIGERweb roads → compact roads.json.
+ * TIGERweb roads → compact roads.json → land cover (NLCD 2021 / ESA WorldCover 2021, landcover.u8;
+ * scripts/bake-landcover.ts).
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -60,6 +61,7 @@ import {
   roadStats,
 } from '../src/data/roads';
 import { makeGeoToGrid } from '../src/data/geo';
+import { bakeLandCover } from './bake-landcover';
 
 const FT = 0.3048;
 /** Baked imagery edge length, pixels. */
@@ -2267,7 +2269,11 @@ async function main() {
   const only = process.argv.slice(2).filter((a) => !a.startsWith('--'));
   const defs = only.length ? PRESET_DEFS.filter((d) => only.includes(d.id)) : PRESET_DEFS;
   if (!defs.length) throw new Error(`unknown preset(s): ${only.join(', ')}; known: ${PRESET_DEFS.map((d) => d.id).join(', ')}`);
-  for (const d of defs) await bake(d);
+  for (const d of defs) {
+    await bake(d);
+    // Land cover (scripts/bake-landcover.ts) registers itself in the meta.json bake() just wrote.
+    await bakeLandCover(d.id, OUT, REFRESH);
+  }
   let total = 0;
   for (const id of fs.readdirSync(OUT)) {
     const dir = path.join(OUT, id);

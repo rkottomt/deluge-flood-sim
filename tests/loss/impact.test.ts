@@ -14,6 +14,7 @@ import {
   buildingAccess,
   computeBuildingImpacts,
   footprintIndex,
+  openCells,
   rasterizeFootprints,
   regionAt,
   sampleCells,
@@ -268,4 +269,77 @@ test('analyze() through a mocked solver.readHazardFields, and the depth-only fal
   acc.feed(snap(0), NX, NY, 5);
   assert.equal(acc.fields()!.maxDepth[NX + 1], 0);
   assert.equal(acc.startedAt, 5);
+});
+
+// ── Buildings as obstacles (HazardFields.blocked) ──────────────────────────────────────────────────────────────────────
+
+/** What the solver blocks: every cell whose centre is inside a footprint (the same rasterisation rule). */
+function blockedMask(set: BuildingSet): Uint8Array {
+  const fp = rasterizeFootprints(set, NX, NY, CELL);
+  const m = new Uint8Array(NX * NY);
+  for (let q = 0; q < fp.cells.length; q++) m[fp.cells[q]] = 1;
+  return m;
+}
+
+test('openCells: a blocked footprint reads the open cells against its walls, through neighbours when walled in', () => {
+  // A 2×2-cell house alone, and a terrace of three touching ones (the middle one is open only front and back).
+  const set = buildings([
+    [10, 10, 12, 12, 'house', 6],
+    [20, 20, 22, 22, 'house', 6],
+    [22, 20, 24, 22, 'house', 6],
+    [24, 20, 26, 22, 'house', 6],
+  ]);
+  const blocked = blockedMask(set);
+  const fp = rasterizeFootprints(set, NX, NY, CELL);
+  const alone = openCells(fp.cells, fp.offsets[0], fp.offsets[1], blocked, NX, NY)!;
+  assert.equal(alone.length, 8, 'the cells against the walls of a 2×2 block');
+  for (const c of alone) assert.equal(blocked[c], 0);
+  const middle = openCells(fp.cells, fp.offsets[2], fp.offsets[3], blocked, NX, NY)!;
+  // Front and back only: rows 19 and 22 over its own columns 22–23.
+  assert.equal(middle.length, 4);
+  for (const c of middle) assert.equal(blocked[c], 0);
+  // A footprint with no blocked cell is sampled as is.
+  assert.equal(openCells(fp.cells, fp.offsets[0], fp.offsets[1], new Uint8Array(NX * NY), NX, NY), null);
+  // Walled in deeper than OPEN_RING_MAX rings: nothing to read.
+  assert.deepEqual(openCells([20 * NX + 20], 0, 1, new Uint8Array(NX * NY).fill(1), NX, NY), []);
+});
+
+test('with obstacles the street depth against the walls is booked, not the dry footprint', () => {
+  const set = buildings([[10, 10, 14, 14, 'house', 6]]);
+  const blocked = blockedMask(set);
+  // 0.9 m in the street along the west wall only; the footprint itself is dry (the solver keeps water out of it).
+  const f = fields((i, j) => (!blocked[j * NX + i] && i === 9 && j >= 9 && j <= 14 ? { d: 0.9, v: 0.5, fw: 400 } : {}));
+  const fp = rasterizeFootprints(set, NX, NY, CELL);
+  const dry = sampleCells(f, fp.cells, fp.offsets[0], fp.offsets[1]);
+  assert.equal(dry.maxDepth, 0, 'without the mask the footprint reads dry');
+  const wet = sampleCells({ ...f, blocked }, fp.cells, fp.offsets[0], fp.offsets[1]);
+  assert.ok(Math.abs(wet.maxDepth - 0.9) < 1e-6, `perimeter depth ${wet.maxDepth}`);
+  assert.equal(wet.firstWet, 400);
+  assert.equal(wet.sampled, 16, 'the 16 cells against the walls of a 4×4 block');
+  const report = computeBuildingImpacts({ ...f, blocked }, set, fp, { region: US });
+  assert.equal(report.summary.reached, 1);
+  assert.ok(report.summary.loss > 0);
+});
+
+test('with obstacles, water in a gutter below the building pad counts only above the building’s ground', () => {
+  const set = buildings([[10, 10, 14, 14, 'house', 6]]);
+  const blocked = blockedMask(set);
+  // Pad at 1.0 m; the street west of it at 0.8 m with 0.9 m of water (0.7 m above the pad), the street north at 0.95 m
+  // with 0.18 m (0.13 m above the pad: not reached), the yard east uphill at 1.3 m with 0.2 m (its own depth counts).
+  const ground = new Float32Array(NX * NY).fill(1.0);
+  for (let j = 0; j < NY; j++) {
+    ground[j * NX + 9] = 0.8;
+    ground[j * NX + 14] = 1.3;
+  }
+  for (let i = 10; i < 14; i++) ground[9 * NX + i] = 0.95;
+  const f = fields((i, j) =>
+    i === 9 && j >= 10 && j < 14 ? { d: 0.9, v: 1, fw: 400 } : j === 9 && i >= 10 && i < 14 ? { d: 0.18, v: 1, fw: 200 } : i === 14 && j >= 10 && j < 14 ? { d: 0.2, v: 0.5, fw: 300 } : {},
+  );
+  const fp = rasterizeFootprints(set, NX, NY, CELL);
+  const s = sampleCells({ ...f, blocked, ground }, fp.cells, fp.offsets[0], fp.offsets[1]);
+  assert.ok(Math.abs(s.maxDepth - 0.7) < 1e-6, `depth above the pad ${s.maxDepth}`);
+  assert.ok(Math.abs(s.maxDV - 0.7) < 1e-6, `depth × speed scaled with the depth that reaches the wall: ${s.maxDV}`);
+  // North cells (0.13 m above the pad) are not an arrival; the east yard (its own 0.2 m) at 300 s is the first.
+  assert.equal(s.firstWet, 300);
+  assert.equal(s.reachedCells, 4 + 4, 'west and east walls reached, north not');
 });

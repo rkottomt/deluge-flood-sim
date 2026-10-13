@@ -103,6 +103,7 @@ const MIME = Object.freeze({
   '.css': 'text/css; charset=utf-8',
   '.json': 'application/json',
   '.f32': 'application/octet-stream',
+  '.u8': 'application/octet-stream', // landcover.u8 (src/data/landcover.ts)
   '.jpg': 'image/jpeg',
   '.png': 'image/png',
   '.svg': 'image/svg+xml',

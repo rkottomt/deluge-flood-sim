@@ -137,6 +137,7 @@ test('prep: water surface, shoreline extension, walls and wet pyramid', async ()
         { binding: 7, resource: cells.createView() },
         { binding: 8, resource: { buffer: noHazard(device) } },
         { binding: 9, resource: { buffer: noHazard(device) } },
+        { binding: 10, resource: bedTex.createView() },
       ],
     }),
   );
@@ -299,6 +300,7 @@ test('prep: water surface, shoreline extension, walls and wet pyramid', async ()
         { binding: 7, resource: out('rg32float', N, N).createView() },
         { binding: 8, resource: { buffer: noHazard(device) } },
         { binding: 9, resource: { buffer: noHazard(device) } },
+        { binding: 10, resource: bedTex.createView() },
       ],
     }),
   );
@@ -458,6 +460,7 @@ test('prep: blown-up cells never reach the geometry and are flagged for the glit
         { binding: 7, resource: cells.createView() },
         { binding: 8, resource: { buffer: noHazard(device) } },
         { binding: 9, resource: { buffer: noHazard(device) } },
+        { binding: 10, resource: bedTex.createView() },
       ],
     }),
   );
@@ -593,6 +596,7 @@ test('prep: arrival and hazard views map the solver hazard accumulators into mis
           { binding: 7, resource: cells.createView() },
           { binding: 8, resource: { buffer: hasHazard ? hazardBuf : noHazard(device) } },
           { binding: 9, resource: { buffer: ensemble ? ensBuf : noHazard(device) } },
+          { binding: 10, resource: bedTex.createView() },
         ],
       }),
     );
@@ -655,5 +659,95 @@ test('prep: arrival and hazard views map the solver hazard accumulators into mis
     assert.equal(noEns[c * 4 + 3], 0);
     assert.ok(Math.abs(noEns[c * 4 + 1] - state[c * 4 + 3]) < 2e-3 * Math.max(1, state[c * 4 + 3]));
   }
+  assert.deepEqual(errors, []);
+});
+
+test('prep: a footprint the solver blocks (buildings as obstacles) shows no roof film, an overtopped one its water, the street around it all of it', async () => {
+  const { createPipelines } = await import('../../src/render/pipelines');
+  const device = await getDevice();
+  const errors: string[] = [];
+  device.onuncapturederror = (e) => errors.push(e.error.message);
+  const P = await createPipelines(device, 'bgra8unorm');
+  // Flat street at 100 m under 0.4 m of water; a 4×4-cell building at (20…23, 20…23) holding a 3 cm roof film, and a
+  // 2×2-cell shed at (40…41, 40…41) the flood has overtopped (0.6 m over its roof).
+  const bed = new Float32Array(N * N).fill(100);
+  const obstacle = new Float32Array(N * N);
+  const state = new Float32Array(N * N * 4);
+  for (let c = 0; c < N * N; c++) {
+    const i = c % N;
+    const j = Math.floor(c / N);
+    const inside = i >= 20 && i < 24 && j >= 20 && j < 24;
+    const shed = i >= 40 && i < 42 && j >= 40 && j < 42;
+    if (inside) obstacle[c] = 12;
+    if (shed) obstacle[c] = 3;
+    state[c * 4] = inside ? 0.03 : shed ? 0.6 : 0.4;
+    state[c * 4 + 3] = inside ? 0.03 : shed ? 0.7 : 0.5;
+  }
+  const tex = (format: GPUTextureFormat, data: Float32Array, bpp: number) => {
+    const t = device.createTexture({ size: [N, N], format, usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
+    device.queue.writeTexture({ texture: t }, data as Float32Array<ArrayBuffer>, { bytesPerRow: N * bpp }, [N, N]);
+    return t;
+  };
+  const bedTex = tex('r32float', bed, 4);
+  const obstTex = tex('r32float', obstacle, 4);
+  const stateTex = tex('rgba32float', state, 16);
+  const out = (format: GPUTextureFormat) =>
+    device.createTexture({ size: [N, N], format, usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC });
+  const run = async (hasObst: number) => {
+    const params = device.createBuffer({ size: 64, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    const pb = new ArrayBuffer(64);
+    const pi = new Int32Array(pb);
+    const pf = new Float32Array(pb);
+    pi[0] = N;
+    pi[1] = N;
+    pi[2] = N + 1;
+    pi[3] = N + 1;
+    pi[4] = 1;
+    pf[6] = 0.01;
+    pf[7] = 8;
+    pf[8] = 0.05;
+    pi[15] = hasObst;
+    device.queue.writeBuffer(params, 0, pb);
+    const cells = out('rg32float');
+    const surf = out('rgba16float');
+    const misc = out('rgba16float');
+    const enc = device.createCommandEncoder();
+    const cp = enc.beginComputePass();
+    cp.setPipeline(P.prepCells);
+    cp.setBindGroup(
+      0,
+      device.createBindGroup({
+        layout: P.prepCells.getBindGroupLayout(0),
+        entries: [
+          { binding: 0, resource: { buffer: params } },
+          { binding: 1, resource: bedTex.createView() },
+          { binding: 2, resource: tex('r32float', new Float32Array(N * N), 4).createView() },
+          { binding: 3, resource: stateTex.createView() },
+          { binding: 4, resource: surf.createView() },
+          { binding: 5, resource: out('rgba16float').createView() },
+          { binding: 6, resource: misc.createView() },
+          { binding: 7, resource: cells.createView() },
+          { binding: 8, resource: { buffer: noHazard(device) } },
+          { binding: 9, resource: { buffer: noHazard(device) } },
+          { binding: 10, resource: (hasObst ? obstTex : bedTex).createView() },
+        ],
+      }),
+    );
+    cp.dispatchWorkgroups(N / 16, N / 16);
+    cp.end();
+    device.queue.submit([enc.finish()]);
+    const c2 = await readTexture(device, surf, N, N);
+    const m4 = await readTexture(device, misc, N, N);
+    return { depth: (i: number, j: number) => c2[(j * N + i) * 4], maxDepth: (i: number, j: number) => m4[(j * N + i) * 4 + 1] };
+  };
+  const off = await run(0);
+  const on = await run(1);
+  assert.ok(Math.abs(off.depth(21, 21) - 0.03) < 1e-4, `without obstacles the footprint shows its film: ${off.depth(21, 21)}`);
+  assert.equal(on.depth(21, 21), 0, 'a blocked footprint shows no water');
+  assert.equal(on.maxDepth(21, 21), 0, 'nor any max depth');
+  assert.ok(Math.abs(on.depth(40, 40) - 0.6) < 1e-3, 'an overtopped roof shows the water over it');
+  assert.ok(Math.abs(on.maxDepth(40, 40) - 0.7) < 2e-3);
+  assert.ok(Math.abs(on.depth(19, 21) - 0.4) < 1e-3, 'the street against the wall keeps its water');
+  assert.ok(Math.abs(on.maxDepth(19, 21) - 0.5) < 2e-3);
   assert.deepEqual(errors, []);
 });

@@ -23,9 +23,10 @@ export const ACC_PER_CELL = 2;
  * read by the export pass alone (its hazard accumulators, shaders/exportState.ts): the simulated time the export
  * describes and the simulated seconds since the previous export. The rheo* fields are the scenario's debris-flow
  * rheology (src/sim/rheology.ts; read by the momentum pass alone, rheoKind 0 = water); rheoPad keeps the struct a
- * multiple of 16 bytes.
+ * multiple of 16 bytes. drainScale multiplies the per-cell storm-drain capacity of the land-surface texture (read only by
+ * the continuity pass's STORM_DRAINS pipeline); surfPad* keep the struct a multiple of 16 bytes.
  */
-export const SIM_UNIFORM_BYTES = 144;
+export const SIM_UNIFORM_BYTES = 160;
 /** Byte size of the `Forcing` uniform. */
 export const FORCING_UNIFORM_BYTES = (2 * MAX_SOURCES + MAX_STORMS) * 16;
 
@@ -40,7 +41,23 @@ struct Sim {
   bFrMax: f32, wallAdv: f32, hzTime: f32, hzSpan: f32,
   rheoKind: i32, rheoTau: f32, rheoMu: f32, rheoVisc: f32,
   rheoN2: f32, rheoGXi: f32, rheoHVisc: f32, rheoPad: f32,
+  drainScale: f32, surfPad0: f32, surfPad1: f32, surfPad2: f32,
 };
+`;
+
+/**
+ * Land-surface texture (rg32float, nx×ny), bound to the momentum and continuity passes:
+ *   r = Manning roughness factor of the cell, relative to the global n (SimParams.manningN): a face's n is
+ *       manningN · (r_L + r_R)/2, so n² = sim.n2 · r_f². r = 1 everywhere reproduces the uniform-n solver bit for bit.
+ *   g = storm-drain capacity of the cell, m/s of depth (× sim.drainScale).
+ * Each pass reads it only in its pipeline variant that has the layer on (the pipeline-overridable constants
+ * ROUGHNESS_MAP and STORM_DRAINS, false in the default pipelines): with a layer off the code that reads it is not
+ * compiled at all, so the default solver costs what it did before the layers existed.
+ */
+export const SURFACE_WGSL = /* wgsl */ `
+fn surf(i: i32, j: i32) -> vec2f {
+  return textureLoad(surfTex, vec2i(clamp(i, 0, sim.nx - 1), clamp(j, 0, sim.ny - 1)), 0).rg;
+}
 `;
 
 export const FORCING_WGSL = /* wgsl */ `

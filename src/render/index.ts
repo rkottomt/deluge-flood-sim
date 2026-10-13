@@ -281,7 +281,7 @@ interface SceneGPU {
   waterBG: GPUBindGroup;
   overlayBG: GPUBindGroup;
   prepParams: GPUBuffer;
-  prepCache: Map<GPUTexture, { bed: GPUTexture; barrier: GPUTexture; hazard: GPUBuffer; ens: GPUBuffer; cells: GPUBindGroup }>;
+  prepCache: Map<GPUTexture, { bed: GPUTexture; barrier: GPUTexture; hazard: GPUBuffer; ens: GPUBuffer; obst: GPUTexture; cells: GPUBindGroup }>;
   /** Per-cell (depth, water surface) written by the cells pass for the verts pass. */
   cellTex: GPUTexture;
   /** Per-vertex bed, rebuilt only when the terrain changes (see terrainKey). */
@@ -1419,8 +1419,10 @@ class DelugeRenderer implements DelugeRendererAPI {
     const barrier = solver.barrierTexture;
     const hazard = solver.hazardBuffer ?? this.dummyHazard;
     const ens = this.ensembleFor(s)?.buffer ?? this.dummyHazard;
+    // Building obstacles (solver extension); the bed texture stands in (same format, never read) without them.
+    const obst = (solver as FloodSolver & { obstacleTexture?: GPUTexture }).obstacleTexture ?? bed;
     const cached = s.prepCache.get(state);
-    if (cached && cached.bed === bed && cached.barrier === barrier && cached.hazard === hazard && cached.ens === ens) return cached;
+    if (cached && cached.bed === bed && cached.barrier === barrier && cached.hazard === hazard && cached.ens === ens && cached.obst === obst) return cached;
     if (s.prepCache.size >= 4) s.prepCache.clear();
     const d = this.device;
     const common = [
@@ -1440,9 +1442,10 @@ class DelugeRenderer implements DelugeRendererAPI {
         { binding: 7, resource: s.cellTex.createView() },
         { binding: 8, resource: { buffer: hazard } },
         { binding: 9, resource: { buffer: ens } },
+        { binding: 10, resource: obst.createView() },
       ],
     });
-    const entry = { bed, barrier, hazard, ens, cells };
+    const entry = { bed, barrier, hazard, ens, obst, cells };
     s.prepCache.set(state, entry);
     return entry;
   }
@@ -1648,6 +1651,9 @@ class DelugeRenderer implements DelugeRendererAPI {
         pf[12] = ens?.members ?? 0;
         pi[13] = ensSlot;
         pi[14] = ens ? 1 : 0;
+        // Building obstacles in force (solver extension): the cells pass shows no water in a blocked footprint.
+        const ls = (s.solver as FloodSolver & { landSurfaceState?: { obstacles: number } }).landSurfaceState;
+        pi[15] = ls && ls.obstacles > 0 ? 1 : 0;
         s.wetValid = true;
         this.lastPrepUseMaxBuilt = useMax;
         d.queue.writeBuffer(s.prepParams, 0, prep);

@@ -48,6 +48,7 @@ import { createValidationBlock } from './validationBlock';
 import { createCompareSection } from './compareDesigns';
 import { createProjectSection } from './projectPanel';
 import { projectHooksFor } from './projectState';
+import { landSurfaceText } from './landSurfaceText';
 
 export interface Panel {
   el: HTMLElement;
@@ -709,15 +710,51 @@ export function createPanel(ctx: UIContext): Panel {
   bind((s) => s.sim.manningN, (v) => manning.set(v));
 
   const infil = slider({
-    label: 'Infiltration & drains',
+    label: 'Infiltration',
     toPos: (v) => Math.sqrt(clamp(v, 0, 60) / 60),
     fromPos: (t) => Math.round(t * t * 60 * 2) / 2,
     format: formatRain,
-    sub: (v) => (v === 0 ? 'none' : v < 5 ? 'clay / pavement' : v < 20 ? 'loam soil' : 'sand / storm drains'),
+    sub: (v) => (v === 0 ? 'none' : v < 5 ? 'clay / pavement' : v < 20 ? 'loam soil' : 'sand / gravel'),
     onInput: (v) => ctx.setSim({ infiltrationRate: v }),
-    tip: 'Water soaked into the ground or carried away by drains',
+    tip: 'Water soaked into the ground: a uniform loss wherever water stands (storm drains are a switch below)',
   });
   bind((s) => s.sim.infiltrationRate, (v) => infil.set(v));
+
+  // Land surface (src/app/landSurface.ts, ARCHITECTURE.md §3.11): what the scene's own data can add to bare earth. Each
+  // switch says what it does and what this scene has; a scene without the data leaves the switch inert and says so.
+  const tObstacles = toggleSwitch('Buildings block flow', (on) => ctx.setSim({ buildingObstacles: on }), {
+    icon: 'layers',
+    tip: 'Raise every building footprint into the terrain the water flows over, so streets channel the flood around blocks',
+  });
+  const tRoughness = toggleSwitch('Land-cover roughness', (on) => ctx.setSim({ roughnessMap: on }), {
+    icon: 'mountain',
+    tip: "Manning's n per cell from land cover (forest slows water, pavement does not); the slider above scales the whole map",
+  });
+  const tDrains = toggleSwitch('Storm drains', (on) => ctx.setSim({ drainage: on }), {
+    icon: 'water',
+    tip: 'Remove water from developed land at the rate its storm sewers were designed for',
+  });
+  const drainScale = slider({
+    label: 'Drain capacity',
+    toPos: (v) => clamp(v, 0, 3) / 3,
+    fromPos: (t) => Math.round(t * 30) / 10,
+    format: (v) => `×${fmtNum(v, 1)}`,
+    sub: (v) => (v === 0 ? 'blocked' : v < 0.75 ? 'clogged / undersized' : v <= 1.25 ? 'as designed' : 'oversized'),
+    onInput: (v) => ctx.setSim({ drainageScale: v }),
+    tip: 'Scale the design capacity: below 1 for clogged inlets or old pipes, above 1 for a bigger system',
+  });
+  const landNote = h('p', { class: 'dl-impact-fine' });
+  bind((s) => !!s.sim.buildingObstacles, (v) => tObstacles.set(v));
+  bind((s) => !!s.sim.roughnessMap, (v) => tRoughness.set(v));
+  bind((s) => !!s.sim.drainage, (v) => {
+    tDrains.set(v);
+    drainScale.setDisabled(!v);
+  });
+  bind((s) => s.sim.drainageScale ?? 1, (v) => drainScale.set(v));
+  bind(
+    (s) => s.landSurface ?? null,
+    (ls) => setText(landNote, landSurfaceText(ls)),
+  );
 
   const boundary = segmented<'open' | 'wall'>(
     [
@@ -759,6 +796,10 @@ export function createPanel(ctx: UIContext): Panel {
     [
       manning.el,
       infil.el,
+      label('Land surface'),
+      h('div', { class: 'dl-switches' }, tObstacles.el, tRoughness.el, tDrains.el),
+      drainScale.el,
+      landNote,
       label('Map edges'),
       boundary.el,
       cfl.el,

@@ -7,15 +7,17 @@
  * fills its ground floor. Cells that were already wet at reset (rivers, lakes: firstWet = 0) are left out, so a
  * riverside building whose footprint clips the channel is not booked the river's depth.
  *
- * The terrain is bare earth: the solver lets water flow THROUGH buildings, so the depth on a footprint is the depth
- * the street would have there, and the speed is open-ground speed where real flow would split around the walls.
- * Both are what the loss curves and hazard classes are usually fed in screening studies, and both are stated.
+ * On bare-earth terrain the solver lets water flow THROUGH buildings, so the depth on a footprint is the depth the
+ * street would have there, and the speed is open-ground speed where real flow would split around the walls. Both are
+ * what the loss curves and hazard classes are usually fed in screening studies, and both are stated. With buildings as
+ * obstacles (FloodSolver.setLandSurface, HazardFields.blocked) no water stands in a footprint: the footprint's blocked
+ * cells are replaced by the open cells around it (footprints.ts openCells), i.e. the depth and speed against its walls.
  */
 import type { BuildingSet, HazardFields } from '../contracts';
 import { BUILDING_KINDS, HEIGHT_SOURCES, type HeightProfile } from '../data/buildings';
 import { ACCESS_CUT, ACCESS_NO_ROAD, type AccessIndex, type AccessInfo, type AccessResult } from './access';
 import type { Curve } from './curves';
-import type { FootprintIndex } from './footprints';
+import { openCells, type FootprintIndex } from './footprints';
 import {
   ACCESS_CLEARING_DAYS,
   aidrClass,
@@ -100,28 +102,59 @@ export function quantile(v: Float64Array, q: number): number {
 }
 
 export function sampleCells(f: HazardFields, cells: ArrayLike<number>, start = 0, end = cells.length): CellSample {
+  // Buildings as obstacles: water never stands in a blocked footprint, so read the open cells against its walls
+  // (footprints.ts openCells). Where those lie lower than the building's own lowest ground (a gutter, a street below a
+  // building pad), only the water above that ground reaches the building: each wall cell's depth is lowered by how far
+  // its ground lies below the footprint's — never raised, so a wall cell uphill of a sloping footprint reads its own.
+  let gRef = NaN;
+  const ground = f.blocked ? f.ground : undefined;
+  if (f.blocked) {
+    const open = openCells(cells, start, end, f.blocked, f.nx, f.ny);
+    if (open) {
+      if (ground) {
+        gRef = Infinity;
+        for (let q = start; q < end; q++) if (f.blocked[cells[q]] && ground[cells[q]] < gRef) gRef = ground[cells[q]];
+      }
+      cells = open;
+      start = 0;
+      end = open.length;
+    }
+  }
+  const lifted = !!ground && Number.isFinite(gRef);
   const s: CellSample = { sampled: 0, reachedCells: 0, maxDepth: 0, maxSpeed: 0, maxDV: 0, structSpeed: 0, structDV: 0, firstWet: -1, wetSeconds: 0 };
   let speedNaN = false;
   const speeds = new Float64Array(Math.max(0, end - start));
   const dvs = new Float64Array(speeds.length);
   for (let q = start; q < end; q++) {
     const c = cells[q];
-    const fw = f.firstWet[c];
+    let fw = f.firstWet[c];
     if (fw === 0) continue;
     s.sampled++;
-    const d = f.maxDepth[c];
+    let d = f.maxDepth[c];
+    let dv = f.maxDV[c];
+    let w = f.wetSeconds[c];
+    const lift = lifted ? Math.max(0, gRef - ground![c]) : 0;
+    if (lift > 0) {
+      // Depth × speed scales with the depth that reaches the wall; water that never stands REACHED_DEPTH above the
+      // building's ground has not reached it (no arrival, no wet time).
+      const de = Math.max(0, d - lift);
+      dv = d > 0 ? (dv * de) / d : 0;
+      d = de;
+      if (d < REACHED_DEPTH) {
+        fw = -1;
+        w = 0;
+      }
+    }
     if (d > s.maxDepth) s.maxDepth = d;
     if (d >= REACHED_DEPTH) s.reachedCells++;
     const v = f.maxSpeed[c];
     if (Number.isNaN(v)) speedNaN = true;
     else if (v > s.maxSpeed) s.maxSpeed = v;
-    const dv = f.maxDV[c];
     if (dv > s.maxDV) s.maxDV = dv;
     const k = s.sampled - 1;
     speeds[k] = Number.isFinite(v) ? v : 0;
     dvs[k] = Number.isFinite(dv) ? dv : 0;
     if (fw > 0 && (s.firstWet < 0 || fw < s.firstWet)) s.firstWet = fw;
-    const w = f.wetSeconds[c];
     if (w > s.wetSeconds) s.wetSeconds = w;
   }
   s.structSpeed = quantile(speeds.subarray(0, s.sampled), STRUCTURAL_QUANTILE);

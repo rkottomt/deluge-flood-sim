@@ -16,9 +16,9 @@
  *
  * Mass accounting: every change to h other than an exchange with a neighbour is added to the accounting buffer
  * (ACC_PER_CELL slots per cell): rain, inflow, stage refills and Float32 rounding (signed, ~1e-7 of the volume) to
- * "in"; open-boundary outflow, infiltration and stage drains to "out". The stats pass sums it exactly per block and
- * zeroes it in the same command encoder as the depth readback; the CPU adds the blocks in Float64, so
- * SimStats.massError is real.
+ * "in"; open-boundary outflow, infiltration, storm drains (land-surface layer) and stage drains to "out". The stats
+ * pass sums it exactly per block and zeroes it in the same command encoder as the depth readback; the CPU adds the
+ * blocks in Float64, so SimStats.massError is real.
  *
  * EXACT TO THE LAST BIT. On a 20 m deep river one Float32 ULP of h is 1.9e-6 m while a substep moves ~1e-6–1e-5 m, so
  * h + Δ rounds by up to half a ULP, with the same sign substep after substep on a steady cell. The old booking
@@ -33,7 +33,7 @@
  * (a cell filling from nearly dry): half a ULP at most, once, random in sign.
  */
 import { INFLOW_EDGE_MASK_CELLS } from '../constants';
-import { ACC_PER_CELL, FORCING_WGSL, HELPERS_WGSL, SIM_WGSL, SNAP_WGSL } from './common';
+import { ACC_PER_CELL, FORCING_WGSL, HELPERS_WGSL, SIM_WGSL, SNAP_WGSL, SURFACE_WGSL } from './common';
 
 export const continuityWGSL = /* wgsl */ `
 ${SIM_WGSL}
@@ -44,8 +44,12 @@ ${FORCING_WGSL}
 @group(0) @binding(3) var fluxTex: texture_2d<f32>;
 @group(0) @binding(4) var stateOut: texture_storage_2d<rgba32float, write>;
 @group(0) @binding(5) var<storage, read_write> acc: array<f32>;
+@group(0) @binding(6) var surfTex: texture_2d<f32>;
+// Pipeline variant: storm drains on (the land-surface layer). False in the default pipeline.
+override STORM_DRAINS: bool = false;
 ${HELPERS_WGSL}
 ${SNAP_WGSL}
+${SURFACE_WGSL}
 
 // Open-boundary outflow of an edge cell, closed near inflow sources: an inflow sits on a river just inside the edge
 // it enters through, and the mound it builds would otherwise pour part of the discharge straight back out of that
@@ -209,6 +213,17 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     let infQ = snapInc(h, min(sim.infil * sim.dt, h));
     h = h - infQ;
     aOut = aOut + infQ;
+  }
+
+  // ── Storm drains (land-surface layer): a per-cell sink at the drain capacity, never more than is there, booked
+  //    with the outflow exactly like infiltration ──
+  if (STORM_DRAINS && h > 0.0) {
+    let cap = surf(i, j).g * sim.drainScale * sim.dt;
+    if (cap > 0.0) {
+      let drQ = snapInc(h, min(cap, h));
+      h = h - drQ;
+      aOut = aOut + drQ;
+    }
   }
 
   // ── Stage sources: relax depth toward max(0, level − z) ──

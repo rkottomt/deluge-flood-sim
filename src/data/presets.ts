@@ -8,11 +8,13 @@
  *   imagery-detail.jpg  optional finer NAIP photo over `imageryDetail` (grid cells) — the close-up inset
  *   roads.json     CompactRoads (see roads.ts)
  *   buildings.json CompactBuildings (see buildings.ts) — optional; building footprints with heights
+ *   landcover.u8   optional; land-cover class codes (NLCD / WorldCover), meta.landcover.width × height (see landcover.ts)
  */
 import type { GeoBounds, GridRect, ImageryDetail, PresetInfo, ProgressFn, ScenarioPreset, TerrainData } from '../contracts';
 import { type CompactBuildings, decodeBuildings, rasterizeBuildingHeights, validateCompactBuildings } from './buildings';
 import { decodeImageBitmap, isValidDetailRect } from './imagery';
 import { fetchBytes, fetchJSON } from './net';
+import { decodeLandCover, type LandCover, type LandCoverMeta, validateLandCoverMeta } from './landcover';
 import { type CompactRoads, decodeRoads } from './roads';
 import { generateSandbox, SANDBOX_NAME } from './sandbox';
 
@@ -54,8 +56,17 @@ export interface PresetMeta {
   bounds: GeoBounds;
   attribution: string;
   scenario: ScenarioPreset;
-  /** `buildings` and `imageryDetail` are absent in presets baked before those features existed. */
-  files: { elevation: string; imagery: string | null; roads: string | null; buildings?: string | null; imageryDetail?: string | null };
+  /** `buildings`, `imageryDetail` and `landcover` are absent in presets baked before those features existed. */
+  files: {
+    elevation: string;
+    imagery: string | null;
+    roads: string | null;
+    buildings?: string | null;
+    imageryDetail?: string | null;
+    landcover?: string | null;
+  };
+  /** Land-cover raster description (scripts/bake-landcover.ts); required when files.landcover is set. */
+  landcover?: LandCoverMeta | null;
   /** Grid rectangle (cells) covered by `files.imageryDetail`, if the preset has a detail inset. */
   imageryDetail?: GridRect | null;
   /** Provenance / QA info written by the bake script (informational). */
@@ -165,6 +176,10 @@ export function validatePresetMeta(m: PresetMeta): string[] {
     if (!inside(c.target.gx, c.target.gy) || !(c.distance > 0) || !(c.pitch > 0 && c.pitch <= Math.PI / 2)) {
       errs.push('bad camera pose');
     }
+  }
+  if (m.files?.landcover) {
+    const lc = validateLandCoverMeta(m.landcover);
+    if (lc.length) errs.push(`files.landcover without a valid landcover block: ${lc.join('; ')}`);
   }
   if (m.files?.imageryDetail && !isValidDetailRect(m.imageryDetail, m.nx, m.ny)) {
     errs.push('files.imageryDetail without a valid imageryDetail rectangle');
@@ -292,7 +307,28 @@ export async function loadPreset(id: string, onProgress?: ProgressFn): Promise<T
         })
     : Promise.resolve(null);
 
-  const [elevation, imagery, imageryDetail, roads, buildings] = await Promise.all([elevationP, imageryP, detailP, roadsP, buildingsP]);
+  /**
+   * Land cover (src/data/landcover.ts): optional and best-effort like the photo — 64–256 KB, so it is not weighted in
+   * the progress bar. Without it the solver keeps uniform roughness and has no drains.
+   */
+  const landCoverP: Promise<LandCover | null> =
+    meta.files.landcover && meta.landcover
+      ? fetchBytes(`${dir}${meta.files.landcover}`, { timeoutMs: 60000, retries: 2 })
+          .then((buf) => decodeLandCover(buf, meta.landcover as LandCoverMeta))
+          .catch((e) => {
+            console.warn(`[data] land cover for ${id} unavailable:`, e);
+            return null;
+          })
+      : Promise.resolve(null);
+
+  const [elevation, imagery, imageryDetail, roads, buildings, landCover] = await Promise.all([
+    elevationP,
+    imageryP,
+    detailP,
+    roadsP,
+    buildingsP,
+    landCoverP,
+  ]);
   onProgress?.('Ready', 1);
   return {
     name: meta.name,
@@ -305,6 +341,7 @@ export async function loadPreset(id: string, onProgress?: ProgressFn): Promise<T
     imageryDetail: imagery ? imageryDetail : null,
     roads,
     buildings,
+    landCover,
     attribution: meta.attribution,
     scenario: meta.scenario,
   };

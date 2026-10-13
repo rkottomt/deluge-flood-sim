@@ -12,7 +12,7 @@
   "east": 79.72254822803767,
   "north": 30.543883984513112
  },
- "attribution": "Elevation: Copernicus DEM GLO-30 (© DLR e.V. 2010–2014 / © Airbus Defence and Space GmbH, ESA), bare-earth filtered · Terrain shading: no aerial imagery (hypsometric tint) · Roads © OpenStreetMap contributors (ODbL) · Buildings © OpenStreetMap contributors & Microsoft ML Building Footprints (ODbL)",
+ "attribution": "Elevation: Copernicus DEM GLO-30 (© DLR e.V. 2010–2014 / © Airbus Defence and Space GmbH, ESA), bare-earth filtered · Terrain shading: no aerial imagery (hypsometric tint) · Roads © OpenStreetMap contributors (ODbL) · Buildings © OpenStreetMap contributors & Microsoft ML Building Footprints (ODbL) · Land cover: © ESA WorldCover project 2021 / Contains modified Copernicus Sentinel data (2021) processed by ESA WorldCover consortium (CC BY 4.0)",
  "scenario": {
   "description": "Raini stands where the Rishiganga meets the Dhauliganga, and the 13.2 MW Rishiganga hydropower plant stood beside it; 6 km downstream, at Tapovan, the barrage of the 520 MW Tapovan-Vishnugad project was being built. At 10:21 on the morning of 7 February 2021 about 27 million m³ of rock and glacier ice broke from the north face of Ronti Peak, 5,500 m up and some 15 km away. Its ice melted on the way down, and the avalanche became a debris flow that ran down the Ronti Gad and the Rishiganga at about 25 m/s, destroyed the Rishiganga plant, reached the Tapovan barrage about a quarter of an hour after the collapse and destroyed it too. Most of the people it took were workers at the two projects (Shugar et al., Science, 2021). Nothing gauged the flow; the published reconstruction gives a mean discharge of 8,200 to 14,200 m³/s at the Rishiganga plant over 10–20 minutes, and 2,900 to 4,900 m³/s below Tapovan. The flood entering this map is modelled, not measured: a 1-D hazard-chain model runs the avalanche down its path and the upper Ronti Gad as a sliding mass, then turns its melted ice into a debris flow — about 6 million m³ of it, 5 million m³ of that water — and routes it 12 km down the Ronti Gad and the Rishiganga; this is the median of its 9 runs, peaking at about 11,841 m³/s at the east edge, 9,412 m³/s at Raini and 5,568 m³/s below Tapovan. The clock is the event's: the run starts at 10:24, five minutes before the modelled front reaches the east edge. The model puts the front at the Tapovan barrage at 10:39 (its runs span 10:36–10:44) against about 10:36–10:37 in the seismic records — later than the real flow, and that gap is the model’s error: its valley comes from a 30 m elevation model and its channel roughness is a published boulder-bed law (Ferguson 2007) on an assumed, not surveyed, boulder size. Inside the map the flow moves as one fluid under a uniform debris-flow friction law (O’Brien–Julien, 45 % solids by volume) with a 25 m/s speed cap; it neither picks up nor drops sediment, so the 8 million m³ the real flow left near the Ronti Gad and the mud it laid down at Tapovan are not here. The terrain is Copernicus 30 m radar data, a surface model with canopy and buildings in it, acquired in 2011–2015, before the Tapovan barrage was finished. The radar cannot see the floor of the Rishiganga gorge and puts false dams across it, so a 60 m wide floor has been cut along the river for the flow to run on. The bare-earth filter only runs on ground flatter than 20°, and 90 % of this domain is steeper: the valley floor is filtered and still a metre or two high, the walls above it are the raw surface model. No photograph is baked in, so the ground is shaded by height instead. OpenStreetMap maps the Joshimath–Malari road and a few village lanes here. The rivers start dry and get five minutes of the modelled baseflow before the front, so almost every drop you see is the modelled flow. Watch where it goes and in what order, and do not read street-level depths.",
   "sources": [
@@ -854,7 +854,8 @@
   "elevation": "elevation.f32",
   "imagery": null,
   "roads": "roads.json",
-  "buildings": "buildings.json"
+  "buildings": "buildings.json",
+  "landcover": "landcover.u8"
  },
  "bake": {
   "bakedAt": "2026-10-12T18:55:27.453Z",
@@ -1001,6 +1002,28 @@
    "maxHeight": 12.2,
    "bytes": 107072,
    "cellsBuiltOn": 1607
+  },
+  "landcover": {
+   "bakedAt": "2026-10-13T03:07:25.286Z",
+   "waterShare": null
+  }
+ },
+ "landcover": {
+  "scheme": "worldcover",
+  "year": 2021,
+  "width": 512,
+  "height": 512,
+  "designRainMmHr": 0,
+  "designRainSource": "none: no drainage design data outside the US (no drains)",
+  "classCounts": {
+   "10": 95507,
+   "30": 150121,
+   "40": 71,
+   "50": 779,
+   "60": 6348,
+   "70": 198,
+   "80": 1348,
+   "100": 7772
   }
  }
 }

@@ -12,7 +12,7 @@
   "east": -86.74962151976024,
   "north": 36.18521782648162
  },
- "attribution": "Elevation: USGS 3DEP · Imagery: USDA NAIP via USGS The National Map · Roads: U.S. Census Bureau TIGER/Line · Buildings © OpenStreetMap contributors (ODbL)",
+ "attribution": "Elevation: USGS 3DEP · Imagery: USDA NAIP via USGS The National Map · Roads: U.S. Census Bureau TIGER/Line · Buildings © OpenStreetMap contributors (ODbL) · Land cover: NLCD 2021 (USGS / MRLC)",
  "scenario": {
   "description": "Downtown Nashville stands on the west bank of the Cumberland River, which crosses the city as a navigation pool between Old Hickory Dam upstream and Cheatham Dam downstream. The pool in this elevation model reads about 24.5 ft on the Nashville gauge; flood stage is 40 ft. On May 1–2, 2010 a stalled front dropped 13.57 inches of rain on Nashville — double the previous two-day record of 6.68 inches — and on May 3 the river crested at 51.86 ft, the highest since the dams were built (USGS measured the peak at 52.55 ft and 188,000 ft³/s). Second Avenue, the Country Music Hall of Fame, the Schermerhorn Symphony Center and the stadium all took water; 18 people died in Middle Tennessee and damage passed $2 billion. Before the dams the river reached 53.90 ft in 1937 and a record 56.20 ft in 1927. Raise the river stage to replay those crests and watch the riverfront go under — then try a wall along First Avenue.",
   "sources": [
@@ -154,7 +154,8 @@
   "elevation": "elevation.f32",
   "imagery": "imagery.jpg",
   "roads": "roads.json",
-  "buildings": "buildings.json"
+  "buildings": "buildings.json",
+  "landcover": "landcover.u8"
  },
  "bake": {
   "bakedAt": "2026-09-19T18:11:09.909Z",
@@ -284,6 +285,31 @@
    "maxHeight": 188,
    "bytes": 762545,
    "cellsBuiltOn": 187200
+  },
+  "landcover": {
+   "bakedAt": "2026-10-13T03:07:27.055Z",
+   "waterShare": 0.797
+  }
+ },
+ "landcover": {
+  "scheme": "nlcd",
+  "year": 2021,
+  "width": 256,
+  "height": 256,
+  "designRainMmHr": 40,
+  "designRainSource": "NOAA Atlas 14 Volume 2 Version 3, 2-year 60-minute intensity (partial-duration series) at 36.158, -86.783",
+  "classCounts": {
+   "11": 1255,
+   "21": 3376,
+   "22": 15514,
+   "23": 23163,
+   "24": 22026,
+   "31": 67,
+   "41": 37,
+   "52": 6,
+   "71": 39,
+   "81": 43,
+   "95": 10
   }
  }
 }

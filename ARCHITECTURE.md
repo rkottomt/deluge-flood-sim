@@ -67,12 +67,13 @@ world space in metres with X east, Y up, Z south.
 ### 3.1 Equations
 
 ```
-∂h/∂t + ∂qx/∂x + ∂qy/∂y = R − I + S
+∂h/∂t + ∂qx/∂x + ∂qy/∂y = R − I − D + S
 ∂qx/∂t + ∂(qx·u)/∂x + ∂(qx·v)/∂y = −g·h·∂η/∂x − g·n²·qx·|q| / h^{7/3}          (and the same for qy)
 ```
 
 `h` depth, `q = (qx, qy)` unit discharge (m²/s), `η = z + h` water surface, `z` bed (ground + walls), `n` Manning
-roughness, `R` rain and storms, `I` infiltration, `S` inflow sources.
+roughness (uniform, or per cell from land cover, §3.11), `R` rain and storms, `I` infiltration, `D` storm drains
+(§3.11, off by default), `S` inflow sources. `z` includes building footprints when they are obstacles (§3.11).
 
 ### 3.2 Scheme: local inertial plus upwind advection
 
@@ -139,8 +140,8 @@ stencil. Then `h_new = h + dt/dx·(qW − qE + qN − qS)`.
 
 ### 3.5 Exact mass accounting
 
-Every external change (rain, sources, stages, infiltration, open-boundary outflow, brush edits, in-place stage raises,
-Float32 limiter residue) is added to a per-cell in/out accounting buffer as exactly what it did to `h`. That cannot be
+Every external change (rain, sources, stages, infiltration, storm drains, open-boundary outflow, brush edits, in-place
+stage raises, Float32 limiter residue) is added to a per-cell in/out accounting buffer as exactly what it did to `h`. That cannot be
 measured as `(h + Δ) − h` on the GPU: shader compilers (Metal) fold the expression into `Δ`, and after hours of a crest
 the unbooked rounding on deep cells turned the HUD yellow. Instead every increment is snapped to the Float32 ULP grid
 of the depth it changes (`SNAP_WGSL` in `shaders/common.ts`), so the snapped value is exactly what lands in `h`. Face
@@ -430,6 +431,191 @@ probabilities at the flood's edges), and the bed perturbation's lake-at-rest / r
 (`tests/sim/ensemble.test.ts`), the prep pass's field 3 (`tests/render/prep.test.ts`), and e2e flow 17 (a 3-member
 ensemble on Pittsburgh: completes, scenario restored, legend and site card, legend-vs-pixels agreement).
 
+### 3.11 Land surface: buildings as obstacles, a roughness map, storm drains
+
+Bare earth leaves out three things a city has: buildings the water has to go round, ground of different roughness,
+and storm sewers. `FloodSolver.setLandSurface({ obstacles, roughness, drainCapacity })` (`src/contracts.ts`
+`LandSurface`) adds each as an optional layer built from the scene's own data (`src/app/landSurface.ts`), switched in
+Advanced → *Land surface* (`SimParams.buildingObstacles` / `roughnessMap` / `drainage`, `drainageScale`). **All three
+are off by default** — see *Defaults* below for why. Off, null or neutral (zero obstacles, zero drains, a uniform map
+at the default n), a layer is the old solver bit for bit: the same 600-substep rough-terrain runs (rain, inflow,
+stage disc, infiltration; open, walled and naive mode) hash to the same SHA-256 as `v2` before the change, and
+`tests/sim/landSurface.test.ts` checks the identity within a build.
+
+**Buildings: the building-block method.** Schubert & Sanders (2012, *Adv. Water Resour.* 41, "Building treatments
+for urban flood inundation models and implications for predictive skill and modeling efficiency") compared four
+treatments: *building resistance* (a high Manning n inside footprints), *building block* (footprints raised into the
+bed), *building hole* (footprints cut out of the mesh as walls) and *integral porosity* (Sanders, Schubert & Gallegos
+2008, sub-grid storage and conveyance porosities). Resistance was the least accurate — water still flows through the
+blocks, just slowly — while block and hole were the most accurate wherever the mesh resolves the gaps between
+buildings, and porosity is the efficient choice on meshes too coarse for that. Deluge uses the **building block**:
+
+* the obstacle is the footprint's roof height above the ground (`BuildingSet.heightRaster`, rasterised by cell centre,
+  never below 3 m), part of the state bed `z = ground + barrier + obstacle` and nowhere else — `bedTexture` and the
+  CPU ground/barrier mirrors are unchanged, because the renderer draws the buildings itself;
+* each group of touching footprints gets one flat roof at its highest roof elevation (`obstacleHeights`). Stepped
+  roofs are bowls: in Houston under Harvey's hour the lower roofs between taller ones filled with the runoff the taller
+  ones shed onto them, up to 0.86 m deep; flat, the deepest roof film is 4 cm;
+* nothing new runs per substep: the existing face depth `hf = max(η) − max(z)` and the wet/dry rules already treat a
+  cell 10–300 m higher as a wall (free-slip advection, no flux), so mass stays exact by construction, a lake at rest
+  stays at rest among buildings, and an obstacle is bit for bit the same height raised into the terrain;
+* rain on a roof stays in the model and runs off the roof edge as a film (1–2 mm on a house under 80 mm/hr), which is
+  what downspouts do — the building-hole method would delete that rain;
+* cells wet in the initial water (rivers, docks, a footprint mapped over the channel) are never blocked;
+* switching it on mid-flood rebuilds the state bed in place (`shaders/brush.ts` kind 4, one full-grid pass) and keeps
+  `h`: water standing in a footprint is lifted onto the roof and spills off, mass unchanged (`landSurface.test.ts`).
+
+Integral porosity would suit a 7.8 m grid better — many houses are 1–3 cells, and side yards narrower than a cell
+close up, so a row of houses becomes a wall with the occasional gap — but it changes the continuity equation's
+storage term and every face's conveyance, i.e. the exact Float32 ledger of §3.5 and both passes. The block is exact and
+free; its known bias is that sub-cell gaps between buildings are closed. Footprints smaller than a cell block nothing.
+
+**Loss with buildings blocked.** No water stands in a footprint, so `src/loss` reads the cells against its walls
+instead (`openCells` in `src/loss/footprints.ts`: the open cells sharing an edge with the footprint, searching up to
+three cells out through touching buildings, so a terrace house reads its front and back). A wall cell lower than the
+footprint's lowest ground — a gutter, a street below a building pad — counts only the water above that ground
+(`sampleCells`; `HazardFields.blocked` and `.ground` carry what it needs). Read this way, the bare-earth fields give
+the footprint-sampled losses back to within 6 % (Pittsburgh crest $13.1 B vs $12.7 B, Houston $2.31 B vs $2.45 B), so
+the change of sampling rule does not itself move the numbers. Site check reads the same cells.
+
+**Roughness map.** Each cell has a Manning n from land cover (`src/data/landcover.ts`): NLCD 2021 in the US, ESA
+WorldCover 2021 elsewhere, values inside the ranges of the HEC-RAS 2D User's Manual table for the NLCD classes (forest
+0.10–0.12, shrub 0.08, grass and crops 0.035, wetlands 0.06–0.08, barren 0.027). Developed land has two values:
+with buildings unresolved it carries their resistance (0.04 / 0.08 / 0.10 / 0.13 for open space / low / medium / high
+intensity, the HEC-RAS intent), with buildings as obstacles it is the open ground between them (0.035 lawns down to
+0.02 for pavement with curbs and cars; Chow 1959). Open water — and every cell wet in the initial water, since NLCD's
+30 m pixels class a narrow creek as the forest along it — keeps 0.035, the uniform value every preset was set up with,
+so river conveyance is unchanged. The momentum pass reads the factor `r = n/0.035` of both cells of a face and uses
+`n_f = manningN·(r_L + r_R)/2` (`faceN2` in `shaders/momentum.ts`), so the global slider scales the whole map and
+`n² = sim.n2·r_f²` is exactly the uniform value when `r = 1`. Open-boundary normal flow keeps the global n, and a
+debris rheology (§3.9) keeps its own uniform coefficients. The ensemble's Manning band (§3.10) becomes a multiplier on
+the map (×0.71–1.43).
+
+**Storm drains.** US storm sewers are designed for the 2- to 10-year storm (FHWA HEC-22 *Urban Drainage Design
+Manual*, 3rd ed. 2009; ASCE/WEF MOP 77). Each developed cell removes up to `C × i₂` mm/hr of standing water: `i₂` the
+2-year 60-minute rainfall intensity at the preset (NOAA Atlas 14 PFDS, fetched at bake time: Pittsburgh 30, Johnstown
+31, Asheville 35, Ellicott City 36, Nashville 40, Houston 57, Boulder 20, Fort Myers 60 mm/hr), `C` the Rational-method
+runoff coefficient of the class (0.2 / 0.45 / 0.65 / 0.85 for open space / low / medium / high intensity) — the inflow
+the pipes under that land were sized for. The continuity pass applies it after infiltration with the same rule:
+`snapInc(h, min(cap·dt, h))`, booked in the outflow slot of the ledger, so it never takes more than is there and the
+mass balance stays exact (`landSurface.test.ts`: the drained volume matches capacity × time to 0.14 %, the Float32
+grid of a 1 m depth; massError 7·10⁻¹⁵). `drainageScale` (0–3) scales it for clogged or oversized systems. It is a
+distributed sink, not a pipe network: no inlet locations, no pipe limits downstream, and it keeps draining when a
+flooded river would back the outfalls up. Non-US presets and live areas have no drains (no design data; live areas
+have no land cover — no land-cover host is on the CSP allow-list, `src/data/csp.ts`).
+
+**GPU.** One `rg32float` surface texture (roughness factor, drain capacity in m/s) bound to the momentum and
+continuity passes, and one `r32float` obstacle texture read by the brush pass (and the renderer). Which layers run is a
+choice of pipeline, not a uniform: each pass is compiled twice, with the pipeline-overridable constant
+`ROUGHNESS_MAP` / `STORM_DRAINS` false (the default) and true, sharing one bind group layout, and `encodeFrame` picks
+the variant. With a layer off, the code that reads the texture is not compiled at all. A first version branched on a
+uniform flag instead and cost the default solver 3 % (2,285–2,328 against 2,376–2,392 substeps/s at 1024²); with the
+variants the default path is unchanged — 2,377–2,387 against 2,380–2,384 substeps/s, interleaved runs of
+`tests/sim/bench.ts 1024` against `v2` on the GTX 1660 Ti — and bit for bit the old solver. The Sim uniform grew 144 →
+160 bytes (`drainScale`, padding). Cost of a layer when on, per substep at 1024², interleaved A/B against the plain
+solver (`node --import tsx tests/sim/benchLand.ts`, 15 rounds, median; ±3 % between runs): roughness +6 %, drains
++6–9 % (with rain on every cell, every cell reads the texture), obstacles 0 ± 2 % (nothing runs per substep), all three
++16 %.
+
+**Tests** (`tests/sim/landSurface.test.ts`, GTX 1660 Ti / D3D12):
+
+| Check | Result |
+| --- | --- |
+| Neutral layers (uniform map at 0.035, zero obstacles and drains, nulls, every layer on then off) vs the plain solver, 400 steps | bit-identical h, q, z |
+| An obstacle vs the same height raised into the terrain, rain and an inflow | bit-identical |
+| GPU vs Float64 CPU reference (`cpuReference.ts` mirrors the map and drains), roughness 0.02–0.15, drains, obstacles, 300 free steps | max \|Δh\| 1.2·10⁻⁴ m, per step 1.1·10⁻⁶ m, volume 1.3·10⁻⁶, volumeOut 1.3·10⁻⁶ |
+| Drains on standing water, closed basin | drained = capacity × time (0.14 %), massError 7·10⁻¹⁵; a film drains to exactly 0 |
+| Lake at rest, 568 blocked cells and a roughness map, 2000 steps | max \|u\| 1.2·10⁻⁴ m/s, massError 3·10⁻¹³; footprints under the lake stay open |
+| Obstacles switched on under 1.5 m of standing water | volume unchanged to 10⁻⁸, roofs dry after the spill, bedTexture unchanged |
+| Channel, 60 m³/s past three 2×2-cell buildings with 1–2-cell streets | no water or flux into a footprint, all 60 m³/s between them, 2.3 cm afflux upstream |
+
+**What each layer does to the shipped scenarios** (`npx tsx scripts/landsurface-eval.ts`; the app's forcing, 5-s
+ticks of CFL substeps, hazard maxima sampled every tick, the app's loss model; flooded = land dry at the start whose
+max depth passed the threshold, *open* = the same over cells outside every footprint):
+
+Pittsburgh, stage ramped to the 1936 crest (46 ft) and held, 45 simulated minutes:
+
+| Layers | Flooded ≥ 0.15 m (open ground) | ≥ 0.5 m | Roads > 0.3 m | Road depth mean / p90 | Loss | Reached / destroyed |
+| --- | --- | --- | --- | --- | --- | --- |
+| none (today) | 6.56 km² (4.94) | 6.27 km² | 123.1 km | 2.62 / 4.75 m | $12.66 B | 1,348 / 93 |
+| buildings | 4.88 km² (4.88) | 4.68 km² | 117.8 km | 2.62 / 4.73 m | $15.26 B | 1,323 / 203 |
+| roughness | 6.43 km² (4.84) | 6.14 km² | 119.3 km | 2.57 / 4.59 m | $5.82 B | 1,304 / 16 |
+| buildings + roughness | 4.94 km² (4.94) | 4.74 km² | 120.6 km | 2.65 / 4.80 m | $17.41 B | 1,364 / 285 |
+| drains | 6.56 km² (4.94) | 6.27 km² | 123.1 km | 2.62 / 4.75 m | $12.66 B | 1,348 / 93 |
+| all three | 4.94 km² (4.94) | 4.73 km² | 120.6 km | 2.65 / 4.80 m | $17.41 B | 1,364 / 285 |
+
+Houston, Harvey's worst hour (173 mm/hr) with Buffalo Bayou at its peak, 30 simulated minutes:
+
+| Layers | Flooded ≥ 0.15 m (open ground) | ≥ 0.5 m | Roads > 0.3 m | Road depth mean / p90 | Loss | Reached |
+| --- | --- | --- | --- | --- | --- | --- |
+| none (today) | 11.85 km² (11.04) | 1.31 km² | 203.1 km | 0.30 / 0.45 m | $2.45 B | 4,162 |
+| buildings | 12.38 km² (12.38) | 1.36 km² | 214.3 km | 0.30 / 0.45 m | $4.53 B | 12,516 |
+| roughness | 12.16 km² (11.37) | 0.99 km² | 176.5 km | 0.28 / 0.41 m | $2.51 B | 4,249 |
+| buildings + roughness | 12.10 km² (12.10) | 1.46 km² | 218.0 km | 0.31 / 0.47 m | $4.45 B | 12,208 |
+| drains | 8.89 km² (8.40) | 0.94 km² | 122.3 km | 0.28 / 0.41 m | $1.94 B | 2,589 |
+| all three | 9.23 km² (9.23) | 1.01 km² | 132.3 km | 0.28 / 0.42 m | $3.64 B | 9,814 |
+
+The 2-year 1-hour design storm itself, 60 minutes of rain with the rivers as the scenario leaves them:
+
+| | Flooded ≥ 0.15 m | Roads > 0.3 m | Reached |
+| --- | --- | --- | --- |
+| Houston 57 mm/hr: none / buildings / drains / all three | 7.82 / 8.13 / 1.77 / 1.81 km² | 102.5 / 104.0 / 6.9 / 6.9 km | 2,034 / 8,282 / 228 / 689 |
+| Pittsburgh 30 mm/hr: none / buildings / drains / all three | 1.88 / 2.23 / 0.83 / 0.92 km² | 31.2 / 35.4 / 12.1 / 11.7 km | 893 / 10,206 / 463 / 4,793 |
+
+Mass error stayed ≤ 1.4·10⁻⁷ in every run.
+
+Reading them: at the crest, buildings take their own 1.7 km² out of the flooded area and leave the open-ground flood
+and the street depths where they were (the stage boundary sets the level); what they change is speed — water squeezed
+between blocks runs faster, so the fast-water collapse rule fires on 2.2× as many buildings and the loss rises 16 %
+(against the bare-earth fields read at the walls). The roughness map on its own does the opposite: developed land at
+n 0.10–0.13 slows the floodplain flow, collapses fall from 93 to 16 and the loss halves — the *building resistance*
+treatment Schubert & Sanders found least accurate. Drains do nothing to a river crest. Under rain, drains are the
+largest single change (−25 % flooded area, −40 % flooded road in Harvey's hour), and buildings concentrate each
+roof's runoff into the cells against its walls.
+
+**Against the observed floods.** The same layers through the runs and scores of [docs/VALIDATION.md](docs/VALIDATION.md)
+(`npx tsx scripts/validation/landsurface.ts`; with buildings blocked, a footprint cell is scored at the water surface
+of its wettest open neighbour, the level a mark on its wall would record):
+
+| Scene and observation | none (today) | buildings | roughness | buildings + roughness | drains | all three |
+| --- | --- | --- | --- | --- | --- | --- |
+| Fort Myers, Ian high-water marks: bias / RMSE | +0.07 / 0.14 m | +0.07 / 0.14 m | +0.01 / 0.17 m | +0.06 / 0.14 m | | |
+| Fort Myers, FEMA 1 % zone at the 1 % stillwater: CSI | **87.9 %** | 86.6 % | 80.9 % | 86.7 % | | |
+| Nashville, FEMA 1 % zone: CSI / 1 % profile bias | **82.3 %** / +0.26 m | 80.2 % / +0.27 m | 79.3 % / +0.24 m | 79.6 % / +0.28 m | | |
+| Pittsburgh, FEMA 1 % zone: CSI / 1 % profile bias | **60.9 %** / −0.38 m | 60.5 % / −0.38 m | 59.1 % / −0.40 m | 60.9 % / −0.38 m | | |
+| Asheville, Helene gauge peaks: French Broad / Swannanoa | −1.44 / −1.22 m | −1.45 / −1.27 m | −1.69 / +0.00 m | −1.45 / −1.02 m | | |
+| Houston, Harvey marks (not like-for-like: 1 h of a 4-day event): bias / RMSE | −1.85 / 2.56 m | −1.01 / 2.40 m | −1.87 / 2.44 m | | −1.89 / 2.61 m | −1.07 / 2.48 m |
+
+Mass error ≤ 6·10⁻⁸ in every run. Where the comparison is like-for-like — the measured stillwater or FEMA's own 1 %
+level imposed, then extent and marks scored — no layer improves the fit: buildings cost 0.4–2.1 CSI points, the
+roughness map 1.8–7.0 (its slower floodplain flow leaves the 1 % zone's fringe dry at Fort Myers), and the combination
+lands 0–2.7 points below bare earth. The Helene gauges, set by how much discharge the valley carries, move both
+ways under the roughness map (Swannanoa from −1.22 m to 0.00, French Broad from −1.44 to −1.69 m), which says the
+error there is the burned channel and the inflow, not the floodplain n. Houston's marks record four days of Harvey;
+an hour of its rain cannot be scored against them, and buildings bring its mean 0.8 m closer only because they pile
+the same rain onto less ground.
+
+**Defaults.** On that evidence, all three stay off:
+
+* *Buildings* are the right physics for flow paths, and exact, but they do not improve any like-for-like score, and on
+  a 7.8 m grid they close sub-cell gaps between houses; under rain each roof's runoff lands in the one cell against
+  its wall: a 2-year storm in Pittsburgh then puts 15 cm against 10,206 buildings, 11 times as many as bare earth
+  (4,793 against 463 with the drains on) — real roofs drain into the sewers through their downspouts, which the model
+  does not connect. A few roofs lower than the hillside or embankment beside them also fill like pits (up to 1.6 m on
+  a handful of Pittsburgh cells in that storm). The crest loss rises 16 % through faster street flow, a change the loss
+  model's fast-water thresholds (set on bare-earth speeds) were not tuned for.
+* *The roughness map* makes every like-for-like score worse and moves the crest loss by −54 % (bare) or +14 % (with
+  buildings) through flow speed alone. The literature values need calibrating per city before they belong in a default.
+* *Drains* are the best supported physically: without them the model floods 102 km of Houston's streets more than
+  30 cm deep in a 2-year storm, which the sewers are built to carry; with them, 7 km. But no observation here tests a
+  storm of that size, and the shipped rain scenario is Harvey's worst hour — three times the design intensity, with the
+  bayou in flood at the outfalls — when real sewers surcharge: a sink at full design capacity then under-floods
+  (−25 % area, −21 % loss), the non-conservative direction for a screening tool. Recommended on for studies of
+  ordinary storms.
+
+What would change this: a city's calibrated n by land-cover class; roofs connected to the drains; observed extents of a
+design-size rain event.
+
 ## 4. Rivers, stages and crests
 
 The Pittsburgh preset's river stage slider is in feet on the Point gauge (NWS PTTP1 / USGS 03085152): normal pool
@@ -514,6 +700,14 @@ Monongahela and Ohio cross the domain edge.
   KTX2/ASTC — which this M4 supports and which would cut 89.5 MB to ~5.6 MB — is the right long-term answer but needs
   an encoder and a container reader that the repo does not have.
 * **Roads:** US Census TIGER/Line via TIGERweb, fallback OpenStreetMap; noded into a graph in grid coordinates.
+* **Land cover** (`landcover.u8` + the `landcover` block of `meta.json`; `scripts/bake-landcover.ts`, which
+  `bake-presets.ts` runs after each bake). US presets: NLCD 2021 (USGS/MRLC, public domain, 30 m) read from the MRLC
+  WCS in its native EPSG:5070 grid and reprojected here (Conus Albers, Snyder 1987) onto the preset's Web-Mercator
+  grid at 256² (31 m) — 64 KB each. Elsewhere: ESA WorldCover 2021 v200 (10 m, CC BY 4.0, credited in the preset's
+  attribution) read by window from the ESA bucket's COGs, at 512² (15.6 m) — 256 KB each. The solver grid upsamples it
+  by nearest neighbour. Registration check (`tests/data/landcover.test.ts`): 82 % of Pittsburgh's, 80 % of Nashville's
+  and 97 % of Fort Myers' burned river cells sit on NLCD open water. The bake also stores NOAA Atlas 14's 2-year
+  60-minute intensity for the drains (§3.11). Live areas have none (uniform roughness, no drains).
 * **Presets** (`public/presets/<id>/`: `meta.json`, `elevation.f32`, `imagery.jpg`, `roads.json`, and
   `imagery-detail.jpg` where the base photo is too coarse) are baked by `npx tsx scripts/bake-presets.ts` and work
   fully offline. Eight cities plus a procedural sandbox:
@@ -540,9 +734,10 @@ Monongahela and Ohio cross the domain edge.
   level is MEASURED from the DEM's own flat estuary surface (-0.28 m NAVD88, essentially MLLW — the lidar was flown
   near low tide) rather than assumed.
 * **Deploy budget.** `public/presets` is served from a public static host, so `tests/data/presets.test.ts` caps the
-  whole directory at **125 MB** and each preset at 25 MB. It currently stands at **120.1 MB across eleven presets** —
-  Asheville is the largest single city at 17.0 MB, the three Himalayan glacier presets (no photo) are 4.4–5.0 MB each,
-  and close-up insets account for 16.5 MB of the total.
+  whole directory at **125 MB** and each preset at 25 MB. It currently stands at **121.6 MB across eleven presets** —
+  Asheville is the largest single city at 17.1 MB, the three Himalayan glacier presets (no photo) are 4.7–5.3 MB each,
+  close-up insets account for 16.5 MB of the total and land cover for 1.3 MB (64 KB per US preset, 256 KB per
+  WorldCover one).
 
   The two caps guard different things, which is why they moved differently. **The per-preset cap is the one a visitor
   feels**: presets load one at a time, so what anyone downloads is bounded by the largest single preset (15.9 MB), not
@@ -617,9 +812,14 @@ before they can alias.
 *Water.* The waterline is read from the same per-vertex texture the water mesh is built from, so it lands exactly
 where the water pass draws its surface: a dark wet band above it, moving foam at the contact line (with a
 screen-space minimum width, or it vanishes at 300 m), a stain at the high-water mark, and Beer–Lambert attenuation
-below it — past about two metres the wall is dropped outright and the water owns the pixel. Buildings do **not**
-take part in the physics: they are not in the solver's barrier field, and the NWS validation numbers in §9 were
-measured without any such coupling.
+below it — past about two metres the wall is dropped outright and the water owns the pixel. By default buildings do
+**not** take part in the physics: they are not in the solver's barrier field, and the NWS validation numbers in §9 were
+measured without any such coupling. With *Buildings block flow* on (§3.11) the footprints are raised into the solver's
+bed but not into `bedTexture`, so the terrain mesh is unchanged and the water stops at the walls the city already
+draws. The prep pass reads the solver's `obstacleTexture` and shows no water in a blocked cell shallower than 10 cm —
+the film of rain running off a roof (up to 4 cm on the largest flat roofs under Harvey's 173 mm/hr) is not a flood,
+and with the buildings hidden or culled it must not paint the footprints blue — while a roof the flood has overtopped
+(13 cells of low riverside buildings at Pittsburgh's crest) shows the water over it (`tests/render/prep.test.ts`).
 
 *Cost.* Buildings are stored in Morton order, so a contiguous slice is a contiguous patch of city: chunks of 384
 are frustum-culled whole, and inside a chunk they are sorted tallest-first so "only what is worth a few pixels from
@@ -682,6 +882,12 @@ at 58–60 fps (p95 19–24 ms), sim speed falls to ~15–20× and quality steps
 Air runs the crest flood like the table (~70× at 60 fps, ~90× under Chrome's 30 fps battery cap); as it heats up sim
 speed degrades toward ~15–20× while the frame rate holds at 60 fps. Plug it in and keep it cool before judging.
 
+**Land-surface layers (§3.11).** Off — the default — they cost nothing: the passes are separate pipeline variants and
+the default ones are the old shaders (2,377–2,387 against 2,380–2,384 substeps/s at 1024², GTX 1660 Ti). On, they add
+to the solver's share of the frame: roughness +6 %, drains +6–9 %, buildings nothing per substep (one full-grid rebed
+pass when switched), all three +16 %. The governor (§8) absorbs it as a few percent less simulated speed at the same
+frame rate. Not measured on the M4.
+
 ## 9. Validation
 
 From `npm test` (tests run on the real GPU through Dawn); the grid-convergence rows from
@@ -706,6 +912,8 @@ From `npm test` (tests run on the real GPU through Dawn); the grid-convergence r
 | The convergence harness's own arithmetic (refinement, masks, IoU, percentiles, arrival times) | 21 checks | `tests/sim/referenceMetrics.test.ts` |
 | All seven baked cities in the production build, offline, 1470x956 DPR 2: cold load, scenario play, streets, routing | load 606–744 ms, 60 fps, sim 48–125× real time, mass error ≤ 6.6·10⁻⁸, 0 console/WebGPU errors, 0 network requests | `scripts/e2e.mjs` flow 7 |
 | Each preset's files, grid, scenario, shelters on high ground, confined initial water, inset registration and deploy size | 7 cities × 5 checks | `tests/data/presets.test.ts` |
+| Land-surface layers (§3.11): neutral layers bit-identical, GPU vs CPU with a roughness map, drains and obstacles, exact drain booking, lake at rest among buildings, a channel past buildings | bit-identical; max \|Δh\| 1.2·10⁻⁴ m free-running; drained = capacity × time (0.14 %); max \|u\| 1.2·10⁻⁴ m/s; no flux into a footprint | `tests/sim/landSurface.test.ts` |
+| Land cover registered on the grid, every class in the table, credited | 80–97 % of the big rivers on the water class | `tests/data/landcover.test.ts` |
 
 `npm run e2e` drives 13 end-to-end demo flows (load, raise to the crest, levee, rain, evacuation, presets, tools,
 frame rate, idle power, cancelling a stalled `?live=` link, the one-click levee, the screen wake lock, and a GPU
@@ -905,7 +1113,11 @@ their own port and drive it in headless Chromium on the real GPU:
 
 * A second-order Kurganov–Petrova central-upwind solver (full shallow-water equations) as a selectable mode for
   dam-break and supercritical scenarios.
-* Measured channel bathymetry instead of a nominal burned depth, and culverts/storm drains.
+* Measured channel bathymetry instead of a nominal burned depth, and culverts.
+* Land surface (§3.11): validate each layer against an observed extent or high-water marks before switching it on by
+  default; integral porosity (Sanders et al. 2008) for sub-cell gaps between buildings; roofs connected to the drains
+  (downspouts) instead of shedding into the cells against their walls; a pipe network with surcharge in place of the
+  distributed drain sink; land cover for live areas.
 * Coverage beyond 3DEP (the Terrarium fallback works worldwide but is coarse).
 
 References: Bates, Horritt & Fewtrell (2010), *J. Hydrology* 387; de Almeida, Bates, Freer & Souvignet (2012), *Water

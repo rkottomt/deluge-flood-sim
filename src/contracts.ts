@@ -24,6 +24,7 @@
 
 import type { HazardChainSpec, Rheology } from './hazard/types';
 import type { ClimateSelection } from './climate/scenarios';
+import type { LandCover } from './data/landcover';
 
 // ────────────────────────────────────────────────────────────────────────────────────────────
 // Geography / terrain data
@@ -145,6 +146,12 @@ export interface TerrainData {
    * any preset baked before buildings existed). Renderers must feature-detect: `terrain.buildings ?? null`.
    */
   buildings?: BuildingSet | null;
+  /**
+   * EXTENSION: land-cover classes over the domain (NLCD 2021 in the US, ESA WorldCover 2021 elsewhere; src/data/landcover.ts),
+   * or null (live areas, the sandbox, presets baked before land cover existed). Feeds the solver's roughness map and
+   * storm drains (FloodSolver.setLandSurface).
+   */
+  landCover?: LandCover | null;
   /** Attribution line(s) for the data shown on screen. */
   attribution: string;
   /** Optional scenario that comes with a preset. */
@@ -343,6 +350,52 @@ export interface SimParams {
    *   this mode (reset() fully recovers).
    */
   stabilityMode: 'robust' | 'naive';
+  /**
+   * Extension: multiplier on the storm-drain capacity of the land-surface layer (FloodSolver.setLandSurface
+   * drainCapacity; 1 = the land-cover table's design capacity). Absent = 1. No effect without a drain layer.
+   */
+  drainageScale?: number;
+  /**
+   * Extension, read by the app (src/app/landSurface.ts), not by the solver: which land-surface layers the app builds
+   * for the solver from the scene's data — building footprints as obstacles, the land-cover roughness map, storm
+   * drains. Absent = off. A scene without the data (live areas have no land cover) keeps that layer off.
+   */
+  buildingObstacles?: boolean;
+  roughnessMap?: boolean;
+  drainage?: boolean;
+}
+
+/**
+ * Land-surface layers for the solver (FloodSolver.setLandSurface, extension; ARCHITECTURE.md §3.11). Every array is
+ * nx·ny, row-major. null switches a layer off (the solver then behaves exactly as without it); a key left out keeps
+ * the layer the solver already has.
+ */
+export interface LandSurface {
+  /**
+   * Building obstacles: height above the ground, m, raised into the bed the water sees ("building block"), 0 = open.
+   * Cells already wet in the initial water (rivers, lakes) are never blocked. Not part of bedTexture (the renderer
+   * draws the buildings themselves) nor of the ground / barrier CPU mirrors.
+   */
+  obstacles?: Float32Array | null;
+  /**
+   * Manning's n per cell from land cover, s·m^-1/3, as it applies at the default global n (DEFAULT_SIM_PARAMS.manningN):
+   * the global n then scales the whole map (n_cell × manningN / 0.035). A face takes the mean n of its two cells.
+   */
+  roughness?: Float32Array | null;
+  /** Storm-drain capacity per cell, mm/hr of water depth removed while water stands there (× SimParams.drainageScale). */
+  drainCapacity?: Float32Array | null;
+}
+
+/** The land-surface data a scene has, whether or not its layers are switched on (AppState.landSurface). */
+export interface LandSurfaceStatus {
+  /** Building footprints in the scene, and the grid cells they would block (0 = none: no footprint data). */
+  buildings: number;
+  obstacleCells: number;
+  /** Land-cover product, e.g. "NLCD 2021", or null (live areas, the sandbox). */
+  landCover: string | null;
+  /** Cells with storm drains, and the design rainfall their capacity comes from (mm/hr; 0 = no drain data). */
+  drainCells: number;
+  designRainMmHr: number;
 }
 
 export const DEFAULT_SIM_PARAMS: SimParams = {
@@ -518,6 +571,13 @@ export interface FloodSolver {
    */
   setBedPerturbation?(delta: Float32Array | null): void;
 
+  /**
+   * Extension (GpuFloodSolver): building obstacles, a land-cover roughness map and storm drains (LandSurface). Takes
+   * effect from the next step without a reset: switching obstacles on lifts any water standing in a footprint onto
+   * the roof (it then spills off), which conserves mass. reset() keeps the layers.
+   */
+  setLandSurface?(layers: LandSurface): void;
+
   destroy(): void;
 }
 
@@ -546,6 +606,16 @@ export interface HazardFields {
   firstWet: Float32Array;
   /** Total simulated seconds the cell has been wet. */
   wetSeconds: Float32Array;
+  /**
+   * Extension: 1 where a building obstacle blocks the cell (LandSurface.obstacles), absent when none does. Water does
+   * not enter a blocked cell, so impact sampling reads the open cells around it instead (src/loss/impact.ts).
+   */
+  blocked?: Uint8Array;
+  /**
+   * Extension, present with `blocked`: the ground elevation per cell (m), so impact sampling can tell how much of the
+   * water against a wall stands above the building's own ground.
+   */
+  ground?: Float32Array;
 }
 
 // ────────────────────────────────────────────────────────────────────────────────────────────
@@ -940,6 +1010,11 @@ export interface AppState {
   scenario: ScenarioPreset | null;
   /** Terrain metadata for UI unit conversions (null before load). */
   grid: { nx: number; ny: number; cellSize: number } | null;
+  /**
+   * EXTENSION: what land-surface data the current scene has (src/app/landSurface.ts), for the Advanced panel's honest
+   * text. Absent or null before a scene loads.
+   */
+  landSurface?: LandSurfaceStatus | null;
   stats: SimStats | null;
   stepInfo: StepInfo | null;
   fps: number;

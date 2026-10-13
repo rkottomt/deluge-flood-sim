@@ -12,7 +12,7 @@
   "east": -95.34410729973756,
   "north": 29.798426166651232
  },
- "attribution": "Elevation: USGS 3DEP · Imagery: USDA NAIP via USGS The National Map · Roads: U.S. Census Bureau TIGER/Line · Buildings © OpenStreetMap contributors (ODbL)",
+ "attribution": "Elevation: USGS 3DEP · Imagery: USDA NAIP via USGS The National Map · Roads: U.S. Census Bureau TIGER/Line · Buildings © OpenStreetMap contributors (ODbL) · Land cover: NLCD 2021 (USGS / MRLC)",
  "scenario": {
   "description": "Houston is built on a dead-flat coastal plain drained by slow bayous, and Buffalo Bayou runs in a deep trench past downtown. Hurricane Harvey stalled over the city in August 2017 and dropped more than 40 inches of rain in four days over much of Harris County — 60.58 inches at Nederland, a US tropical-cyclone record — with bands that trained over the same ground long enough to put 6.8 inches on southeast Houston in a single hour. Buffalo Bayou crested at 41.90 ft at the Shepherd Drive gauge on August 28 carrying 32,600 ft³/s, its biggest flood since 1935, swollen by emergency releases from the Addicks and Barker reservoirs upstream. Here the bayou runs at that peak while the city takes Harvey's worst hour of rain, 6.8 inches an hour: the bayou's own flood stays in its trench, 12 m below the streets, so with nowhere for the rain to drain the water rises in the streets instead — which is how Houston actually flooded.",
   "sources": [
@@ -689,7 +689,8 @@
   "imagery": "imagery.jpg",
   "roads": "roads.json",
   "imageryDetail": "imagery-detail.jpg",
-  "buildings": "buildings.json"
+  "buildings": "buildings.json",
+  "landcover": "landcover.u8"
  },
  "imageryDetail": {
   "x0": 326,
@@ -826,6 +827,33 @@
    "maxHeight": 305,
    "bytes": 2282472,
    "cellsBuiltOn": 237670
+  },
+  "landcover": {
+   "bakedAt": "2026-10-13T03:07:26.958Z",
+   "waterShare": 0.01
+  }
+ },
+ "landcover": {
+  "scheme": "nlcd",
+  "year": 2021,
+  "width": 256,
+  "height": 256,
+  "designRainMmHr": 57,
+  "designRainSource": "NOAA Atlas 14 Volume 11 Version 2, 2-year 60-minute intensity (partial-duration series) at 29.762, -95.385",
+  "classCounts": {
+   "11": 4,
+   "21": 1248,
+   "22": 6480,
+   "23": 26789,
+   "24": 30861,
+   "31": 6,
+   "41": 12,
+   "42": 84,
+   "43": 10,
+   "71": 1,
+   "81": 7,
+   "90": 33,
+   "95": 1
   }
  }
 }

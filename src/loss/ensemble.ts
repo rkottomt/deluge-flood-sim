@@ -115,7 +115,7 @@ export const PERTURBATION_NOTES: ReadonlyArray<{ key: string; title: string; tex
   {
     key: 'manning',
     title: 'Manning n 0.025–0.05, log-uniform',
-    text: 'One roughness for the whole map per member (the solver has no land-cover roughness). 0.025–0.05 spans short grass and pavement to light brush and urban floodplains in Chow (1959, table 5-6). On a debris-flow preset the friction law replaces Manning, so this input has no effect there.',
+    text: 'One roughness for the whole map per member — or, with the land-cover roughness map on (Advanced), a multiplier on that map (n/0.035, so ×0.71–1.43). 0.025–0.05 spans short grass and pavement to light brush and urban floodplains in Chow (1959, table 5-6). On a debris-flow preset the friction law replaces Manning, so this input has no effect there.',
   },
   {
     key: 'dem',
@@ -126,7 +126,7 @@ export const PERTURBATION_NOTES: ReadonlyArray<{ key: string; title: string; tex
 
 /** The caveat every ensemble result carries. */
 export const ENSEMBLE_CAVEAT =
-  'Not a calibrated probability of the real event: the share of these members — the same scenario with its inputs nudged within the bands above — in which the water got that deep. Everything the model leaves out (drains, buildings, river bathymetry) is the same in every member, so real uncertainty is wider.';
+  'Not a calibrated probability of the real event: the share of these members — the same scenario with its inputs nudged within the bands above — in which the water got that deep. Everything the model leaves out or fixes (river bathymetry; buildings, roughness map and drains whether on or off) is the same in every member, so real uncertainty is wider.';
 
 // ─── Deterministic sampling ─────────────────────────────────────────────────────────────────────────────────────
 
