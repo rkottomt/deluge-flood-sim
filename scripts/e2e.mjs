@@ -2213,6 +2213,9 @@ const FLOWS = [
         check(r, 'the address bar carries the coordinates, never the typed address', /usecase=address/.test(out.url) && /at=29\.76040,-95\.36980/.test(out.url) && !/Smith|1600/i.test(decodeURIComponent(out.url)) && (nameParam === null || /^Area near /.test(nameParam)), out.url);
         const siteName = await D(() => document.querySelector('.dl-site-item .dl-impact-name')?.textContent ?? '');
         check(r, 'the site is named after the street address (kept in this tab only)', /^1600 Smith Street$/.test(siteName), siteName);
+        await page.click('[data-site="share-link"]');
+        const shared = await D(() => new URLSearchParams(location.search).get('sites'));
+        check(r, 'its Share link (?sites=) carries the coordinates, not the address', !!shared && /29\.7604/.test(shared) && !/smith|1600/i.test(shared), String(shared));
         await addressSweep(r, '21');
         // The same link, reloaded: a fresh page reopens the area, the site and the rain ladder, and no ?name= spoof.
         await page.goto(new URL('?usecase=address&at=29.7604,-95.3698&name=EVACUATE%20NOW%20call%20555-0100', ctx.baseUrl).href, { waitUntil: 'domcontentloaded' });

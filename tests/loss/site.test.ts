@@ -354,6 +354,18 @@ test('?sites= round trip: pins, outlines, values, defaults, names with separator
   assert.equal(encodeSites([]), '');
 });
 
+test('?sites= never carries a street address: a site still named by the geocoder is shared without its name', () => {
+  const addr = '1600 Smith Street';
+  const site: SiteSpec = { ...newSite('s1', -95.3698, 29.7604), name: addr, geocodedName: addr };
+  const enc = encodeSites([site]);
+  assert.ok(!/Smith|1600/.test(decodeURIComponent(enc)), enc);
+  const back = decodeSites(enc).sites[0];
+  assert.equal(back.name, '');
+  assert.ok(Math.abs(back.lat - 29.7604) < 1e-9 && Math.abs(back.lon + 95.3698) < 1e-9);
+  // Renamed by the user: the name is theirs and travels.
+  assert.match(decodeURIComponent(encodeSites([{ ...site, name: 'HQ' }])), /~HQ$/);
+});
+
 test('?sites= hostile input: bounded, strict, never echoed', () => {
   const ok = encodeSites([newSite('s1', -80, 40)]);
   const evil = [

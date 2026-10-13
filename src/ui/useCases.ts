@@ -212,6 +212,9 @@ export function createUseCases(ctx: UIContext, deps: { panel: Pick<Panel, 'revea
   async function findAddress(): Promise<void> {
     const q = addrInput.value.trim().slice(0, MAX_GEO_QUERY);
     addrResults.replaceChildren();
+    // A search still in flight must not land on top of this one (typed coordinates included).
+    addrAbort?.abort();
+    addrAbort = null;
     if (!q) return setText(addrStatus, 'Type an address first.');
     const typed = LATLON_TYPED.exec(q);
     if (typed) {
@@ -220,15 +223,15 @@ export function createUseCases(ctx: UIContext, deps: { panel: Pick<Panel, 'revea
       if (!isLikelyUS(lat, lon)) return setText(addrStatus, 'That point is outside the United States: NOAA Atlas 14 and USGS 3DEP cover the US only.');
       return showAddressChoices([{ lat, lon, first: `${lat.toFixed(5)}, ${lon.toFixed(5)}`, rest: ['coordinates as typed'] }]);
     }
-    addrAbort?.abort();
-    addrAbort = new AbortController();
+    const mine = (addrAbort = new AbortController());
     setText(addrStatus, 'Searching…');
     try {
-      const choices = await searchUSPlaces(q, addrAbort.signal);
+      const choices = await searchUSPlaces(q, mine.signal);
+      if (addrAbort !== mine) return;
       if (!choices.length) return setText(addrStatus, 'No US place found. Try street, city and state, e.g. “1600 Smith St, Houston, TX”.');
       showAddressChoices(choices);
     } catch (err) {
-      if ((err as Error)?.name === 'AbortError') return;
+      if ((err as Error)?.name === 'AbortError' || addrAbort !== mine) return;
       setText(addrStatus, 'The address search is unavailable right now (it needs internet). You can type the point as “lat, lon” instead.');
     }
   }
@@ -387,7 +390,8 @@ export function createUseCases(ctx: UIContext, deps: { panel: Pick<Panel, 'revea
       if (site) registry.select(site.id);
       else {
         site = registry.add(at.lon, at.lat);
-        if (site) registry.update(site.id, { name });
+        // Named after the address on screen; geocodedName keeps that name out of share links (encodeSites).
+        if (site) registry.update(site.id, label ? { name, geocodedName: name } : { name });
       }
       deps.panel.reveal('site');
       flyTo(at.lon, at.lat, 900);

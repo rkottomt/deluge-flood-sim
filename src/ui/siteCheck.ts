@@ -224,6 +224,7 @@ export function createSiteSection(ctx: UIContext): SiteSection {
   const addressBtn = button('Check an address', () => bridge.openAddressCheck?.(), { icon: 'search', className: 'dl-btn-sm', tip: 'Type any US address: load 5 km around it, drop a site there and sweep NOAA Atlas 14 rain return periods', side: 'top' });
   addressBtn.dataset.site = 'check-address';
   const shareBtn = button('Share link', () => shareLink(), { className: 'dl-btn-sm', tip: 'Put the sites in the address bar (?sites=) so a copied link reopens them. Nothing is uploaded.', side: 'top' });
+  shareBtn.dataset.site = 'share-link';
   const listEl = h('div', { class: 'dl-site-list' });
   const formEl = h('div', { class: 'dl-site-form' });
   const status = h('p', { class: 'dl-impact-status', 'aria-live': 'polite' });

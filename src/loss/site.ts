@@ -67,6 +67,12 @@ export interface SiteSpec {
   firstFloorHeight: number | null;
   /** Critical equipment (switchgear, servers) above grade, m; null = not given. */
   criticalElev: number | null;
+  /**
+   * The name the geocoder gave the place ("Check an address": the street address the user typed, cleaned). Shown on
+   * screen in this tab only: while the site still carries it, links (?sites=, encodeSites) leave the name out — they
+   * carry coordinates, never the address. Renaming the site makes the name the user's own again.
+   */
+  geocodedName?: string;
 }
 
 /**
@@ -710,8 +716,10 @@ export function encodeSites(sites: readonly SiteSpec[]): string {
   const parts = sites.slice(0, SITE_LIMITS.maxSites).map((s) => {
     const coords = [num6(s.lat), num6(s.lon)];
     if (s.ring) for (let i = 0; i + 1 < s.ring.length && i < SITE_LIMITS.maxRing * 2; i += 2) coords.push(num6(s.ring[i + 1]), num6(s.ring[i]));
-    // encodeURIComponent leaves `~` alone (unreserved), and `~` is the field separator.
-    const name = encodeURIComponent(cleanPlaceLabel(s.name, SITE_LIMITS.nameChars)).replace(/~/g, '%7E');
+    // encodeURIComponent leaves `~` alone (unreserved), and `~` is the field separator. A name that is still the
+    // geocoder's (a street address) stays out of the link: the site reopens named by the app.
+    const shared = s.geocodedName !== undefined && s.name === s.geocodedName ? '' : s.name;
+    const name = encodeURIComponent(cleanPlaceLabel(shared, SITE_LIMITS.nameChars)).replace(/~/g, '%7E');
     return [coords.join(','), s.occupancy, String(Math.round(s.floors)), numShort(s.value === null ? null : Math.round(s.value)), numShort(s.firstFloorHeight), numShort(s.criticalElev), numShort(s.footprintM2), name].join('~');
   });
   return parts.length ? SITE_PREFIX + parts.join(';') : '';
