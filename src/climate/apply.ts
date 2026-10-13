@@ -81,9 +81,21 @@ export const DEFAULT_PROFILE: PresetClimateProfile = { region: 'us', stage: null
  * movement or an outburst upstream, never from rain, so its inflows are chain inflows whatever the table says — a
  * chain preset missing from PRESET_CLIMATE must not fall back to rain-scaled US defaults.
  */
-export function climateProfile(presetId: string | null | undefined, scenario?: { hazardChain?: unknown } | null): PresetClimateProfile {
-  const p = presetId && Object.prototype.hasOwnProperty.call(PRESET_CLIMATE, presetId) ? PRESET_CLIMATE[presetId] : DEFAULT_PROFILE;
-  return scenario?.hazardChain && !p.chainInflows ? { ...p, chainInflows: true } : p;
+export function climateProfile(presetId: string | null | undefined, scenario?: ClimateScenarioHints | null): PresetClimateProfile {
+  let p = presetId && Object.prototype.hasOwnProperty.call(PRESET_CLIMATE, presetId) ? PRESET_CLIMATE[presetId] : DEFAULT_PROFILE;
+  if (scenario?.hazardChain && !p.chainInflows) p = { ...p, chainInflows: true };
+  // A dam-breach wave is a reservoir's volume, not rain (src/dams): never scaled.
+  if (scenario?.damBreach) p = { ...p, fixedInflows: [...(p.fixedInflows ?? []), 'dam-breach'], note: p.note ?? 'The dam-breach wave is the reservoir’s volume, not rain: it is not scaled.' };
+  // A coastal live area (src/surge): its stage is the sea at its NOAA tide station, which carries its own SLR record.
+  if (scenario?.coastal) p = { ...p, stage: { sea: scenario.coastal.slr?.id ?? `coops-${scenario.coastal.stationId}` } };
+  return p;
+}
+
+/** The parts of a scenario the climate layer reads. */
+export interface ClimateScenarioHints {
+  hazardChain?: unknown;
+  damBreach?: unknown;
+  coastal?: { stationId: string; slr: TideGaugeSlr | null } | null;
 }
 
 export interface LakeChange {
@@ -156,7 +168,7 @@ export function lakeChange(lake: LakeTrend, pathway: ClimatePathway, horizon: Cl
 export function climateForcing(
   selection: ClimateSelection | null | undefined,
   presetId: string | null | undefined,
-  scenario?: { hazardChain?: unknown } | null,
+  scenario?: ClimateScenarioHints | null,
 ): ClimateForcing {
   const sel = selection ?? CLIMATE_TODAY;
   const profile = climateProfile(presetId, scenario);
@@ -166,7 +178,7 @@ export function climateForcing(
   const identity = sel.horizon === 'today';
   const rainMult = identity ? 1 : rainMultiplier(warming.best, alpha);
   const rainMultRange: [number, number] = identity ? [1, 1] : [rainMultiplier(warming.lo, alpha), rainMultiplier(warming.hi, alpha)];
-  const seaGauge = profile.stage && typeof profile.stage === 'object' ? (TIDE_GAUGE_SLR[profile.stage.sea] ?? null) : null;
+  const seaGauge = scenario?.coastal ? (scenario.coastal.slr ?? null) : profile.stage && typeof profile.stage === 'object' ? (TIDE_GAUGE_SLR[profile.stage.sea] ?? null) : null;
   const seaRiseM = seaGauge && !identity ? seaLevelRise(seaGauge, sel.pathway, sel.horizon) : 0;
   const lakeTrend = profile.lake ? (LAKE_TRENDS[profile.lake] ?? null) : null;
   const lake = lakeTrend ? lakeChange(lakeTrend, sel.pathway, sel.horizon) : null;

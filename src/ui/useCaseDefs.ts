@@ -21,7 +21,7 @@
 import type { LiveAreaRequest } from '../contracts';
 import { isLikelyUS } from '../data/geo';
 
-export const USE_CASE_IDS = ['site', 'glacier', 'portfolio', 'address'] as const;
+export const USE_CASE_IDS = ['site', 'glacier', 'portfolio', 'address', 'dam', 'surge'] as const;
 export type UseCaseId = (typeof USE_CASE_IDS)[number];
 
 /** URL parameter that opens a use case. */
@@ -73,7 +73,61 @@ export const USE_CASES: readonly UseCaseDef[] = [
     blurb: 'Type an address: Deluge loads 5 km of terrain, imagery and roads around it, drops a site there and sweeps it through NOAA Atlas 14 rain return periods to an expected annual loss.',
     howTo: 'The site is in Site check with the NOAA Atlas 14 rain ladder ticked (2- to 500-year, 1-hour storm). Press Run sweep for depth, egress and expected annual loss.',
   },
+  {
+    id: 'dam',
+    preset: null,
+    title: 'Dam-breach inundation',
+    who: 'Dam owners, emergency managers, downstream owners',
+    blurb: 'Pick any of ~55,000 U.S. dams from the National Inventory of Dams: Deluge breaches it (sunny-day or flood-induced, Froehlich 2008), loads the valley below and shows when the wave arrives and how deep it gets.',
+    howTo: 'The breach wave enters at the toe of the dam. Watch the Arrival view (minutes until the water came), press Read arrivals in the Dams dialog for times along the valley, or use Site check and Impact & loss as usual.',
+  },
+  {
+    id: 'surge',
+    preset: null,
+    title: 'Coastal surge exposure',
+    who: 'Coastal developers, lenders, insurers',
+    blurb: 'Pick a place on the U.S. coast: Deluge loads 8 km around it, holds the sea at NOAA’s 1- to 100-year still-water levels from the nearest tide gauge, and sweeps the site to an expected annual loss — today and with NOAA’s 2022 sea-level rise.',
+    howTo: 'The site is in Site check with the NOAA extreme-water-level ladder ticked (1- to 100-year). Press Run sweep for depth, egress and expected annual loss; Today vs future adds sea-level rise.',
+  },
 ];
+
+// ─── The dam and surge use cases ────────────────────────────────────────────────────────────────────────────────────
+
+/** Link parameters of the dam case: `nid=<NID id>`, `breach=sunny|flood`, `method=parametric|regression`. */
+export const DAM_PARAM = 'nid';
+export const BREACH_PARAM = 'breach';
+export const METHOD_PARAM = 'method';
+export const DAM_WARNING = 'Ignoring an invalid dam link value (expected nid= an NID id such as CA00035, breach=sunny or flood)';
+/** Side of the live area loaded below a dam, m (default) and the choices offered. */
+export const DAM_AREA_M = 12000;
+export const DAM_AREA_CHOICES_M = [8000, 12000, 16000, 20000] as const;
+/** Side of the live area loaded for the surge case, m. */
+export const SURGE_AREA_M = 8000;
+
+/**
+ * Read the dam link strictly: an NID id (two capital letters and 3–6 capitals or digits), and optional fixed words for
+ * the breach and the method. Nothing else; a bad value gives a fixed warning and no dam.
+ */
+export function parseDamLink(search: string): { nid: string | null; breach: 'sunny' | 'flood'; method: 'parametric' | 'regression'; warnings: string[] } {
+  let p: URLSearchParams;
+  try {
+    p = new URLSearchParams(search);
+  } catch {
+    p = new URLSearchParams();
+  }
+  const raw = p.get(DAM_PARAM);
+  const b = p.get(BREACH_PARAM);
+  const m = p.get(METHOD_PARAM);
+  const warnings: string[] = [];
+  const nid = raw !== null && raw.length <= 8 && /^[A-Z]{2}[A-Z0-9]{3,6}$/.test(raw) ? raw : null;
+  if ((raw !== null && raw !== '' && !nid) || (b !== null && b !== 'sunny' && b !== 'flood') || (m !== null && m !== 'parametric' && m !== 'regression')) warnings.push(DAM_WARNING);
+  return { nid, breach: b === 'flood' ? 'flood' : 'sunny', method: m === 'regression' ? 'regression' : 'parametric', warnings };
+}
+
+/** The live area the surge case loads around a point. */
+export function surgeAreaRequest(at: { lat: number; lon: number }): LiveAreaRequest {
+  return { center: { lat: at.lat, lon: at.lon }, sizeMeters: SURGE_AREA_M, resolution: ADDRESS_RESOLUTION };
+}
 
 // ─── The address use case ───────────────────────────────────────────────────────────────────────────────────────────
 
@@ -129,7 +183,7 @@ export function isUseCaseId(v: unknown): v is UseCaseId {
 }
 
 /** Fixed warning for a `?usecase=` value that is not one of the ids (the value itself is never shown). */
-export const USE_CASE_WARNING = 'Ignoring an unknown ?usecase= link value (expected site, glacier, portfolio or address)';
+export const USE_CASE_WARNING = 'Ignoring an unknown ?usecase= link value (expected site, glacier, portfolio, address, dam or surge)';
 
 /**
  * Read `?usecase=` strictly: exactly one of the ids, case-sensitive, no surrounding junk. A missing or empty value is
@@ -222,6 +276,28 @@ export const BRIEF: readonly BriefItem[] = [
     ],
     caveat:
       'Assets are matched to OpenStreetMap footprints within 30 m (or your own WKT outline). Values left blank are estimated from footprint area × storeys × a national unit cost.',
+  },
+  {
+    question: 'If our dam failed, who would be under water, and when?',
+    where: 'Use cases → Dam-breach inundation',
+    numbers: [
+      'Any of ~55,000 dams in the USACE National Inventory of Dams: a sunny-day or a flood-induced breach',
+      'Breach width and formation time (Froehlich 2008), the breach outflow hydrograph, and the published peak relations as a band',
+      'Arrival time and peak depth along the valley below the dam, the Arrival and Max-depth maps, and Site check / Impact & loss downstream',
+    ],
+    caveat:
+      'Screening for emergency planning, not an Emergency Action Plan inundation map: the reservoir is the NID’s storage and area, the breach is a regression, and spillways, gates and downstream structures are not modelled.',
+  },
+  {
+    question: 'How exposed is this coastal site to storm surge?',
+    where: 'Use cases → Coastal surge exposure · Site check',
+    numbers: [
+      'NOAA’s 1-, 2-, 10-, 50- and 100-year still-water levels at the nearest long-term tide gauge, on the map’s datum',
+      'Depth, egress and loss at the site for each level, and the expected annual loss from them',
+      'The same ladder with NOAA’s 2022 sea-level-rise scenarios at that gauge (Today vs future)',
+    ],
+    caveat:
+      'Still water only: wave run-up and waves on top of the surge are not included, one gauge stands for the whole map, and seawalls are only there if you draw them.',
   },
   {
     question: 'How much warning would a glacier flood give?',

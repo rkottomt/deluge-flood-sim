@@ -25,6 +25,8 @@
 import type { HazardChainSpec, Rheology } from './hazard/types';
 import type { ClimateSelection } from './climate/scenarios';
 import type { LandCover } from './data/landcover';
+import type { DamBreachSpec } from './dams/scenario';
+import type { CoastalSurgeSpec } from './surge/coastal';
 
 // ────────────────────────────────────────────────────────────────────────────────────────────
 // Geography / terrain data
@@ -219,6 +221,16 @@ export interface ScenarioPreset {
    * times and the rheology the 2-D solver should use.
    */
   hazardChain?: HazardChainSpec;
+  /**
+   * Extension: a dam breach on a live area (src/dams): the NID dam, its breach scenario and where its outflow enters
+   * the map. The inflow it describes is one of `sources` (id 'dam-breach'); the climate layer never scales it.
+   */
+  damBreach?: DamBreachSpec;
+  /**
+   * Extension: a coastal live area set up for storm surge (src/surge): the sea boundary on the seaward edges follows the
+   * stage control, and Site check sweeps the nearest NOAA tide station's extreme-water-level ladder.
+   */
+  coastal?: CoastalSurgeSpec;
 }
 
 /** A demo levee (ScenarioPreset.levee). */

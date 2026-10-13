@@ -83,6 +83,8 @@ check('the allowlist rejects the things SEC-02 and R10 call out', () => {
     'https://nominatim.openstreetmap.org/searchx', // exact paths stay exact
     'https://imagery.nationalmap.gov/arcgis/rest/services/USGSNAIPPlus/ImageServer/exportImage', // bake script only
     'https://hdsc.nws.noaa.gov/cgi-bin/new/cgi_readH5.py', // NOAA PFDS: no CORS; Atlas 14 is baked into public/atlas14
+    'https://nid.sec.usace.army.mil/api/dams/CA00035/inventory', // USACE NID: no CORS; baked into public/dams
+    'https://api.tidesandcurrents.noaa.gov/dpapi/prod/webapi/product.json', // NOAA CO-OPS: baked into public/surge
   ];
   for (const url of rejected) {
     assert.equal(isAllowedDataUrl(new URL(url)), false, `allowlist should reject ${url}`);

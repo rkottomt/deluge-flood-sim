@@ -1993,7 +1993,7 @@ const FLOWS = [
         cards: [...document.querySelectorAll('.dl-uc-card')].map((c) => c.getAttribute('data-usecase')),
         welcomeLink: !!document.querySelector('.dl-welcome-uc'),
       }));
-      check(r, 'top bar opens the four use-case cards (the Try-it strip links to them too)', modal.cards.join() === 'site,glacier,portfolio,address' && modal.welcomeLink, modal.cards.join(', '));
+      check(r, 'top bar opens the six use-case cards (the Try-it strip links to them too)', modal.cards.join() === 'site,glacier,portfolio,address,dam,surge' && modal.welcomeLink, modal.cards.join(', '));
       await sleep(300);
       await shot('19-usecases-modal');
       await page.click('[data-uc="toggle"]');
@@ -2197,7 +2197,7 @@ const FLOWS = [
         await page.click('.dl-uc-btn');
         await page.waitForSelector('[data-modal="usecases"].dl-open [data-usecase="address"]');
         const cards = await D(() => [...document.querySelectorAll('.dl-uc-card')].map((c) => c.getAttribute('data-usecase')).join());
-        check(r, 'the use-case dialog offers the address card next to the other three', cards === 'site,glacier,portfolio,address', cards);
+        check(r, 'the use-case dialog offers the address card next to the others', cards === 'site,glacier,portfolio,address,dam,surge', cards);
         await page.click('[data-usecase="address"]');
         await page.fill('[data-uc="address-input"]', '1600 Smith St, Houston, TX');
         await page.click('[data-uc="address-search"]');
@@ -2659,7 +2659,321 @@ const FLOWS = [
       await calm();
     },
   },
+  {
+    id: 26,
+    name: 'Dam breach: NID search → valley below the dam → breach wave → arrivals; link (fixtures)',
+    timeoutMs: 600_000,
+    resetsPage: true,
+    async run(r, ctx) {
+      // Hermetic: USGS 3DEP is answered from a synthetic valley falling south from Edenville Dam's NID point (a 222 m
+      // dam ridge across it, a flat reservoir north of it); everything else external is refused. The dam index is the
+      // real baked file from our own server.
+      const intercepted = [];
+      await page.route((u) => !isLocalUrl(u.href), (route) => damFixtures(route, intercepted, EDENVILLE));
+      try {
+        await damFlow(r, ctx, { tag: '26', fixtures: true });
+        // Hostile link: a bad nid is a fixed warning, never echoed, and the dam search opens.
+        await page.goto(new URL('?usecase=dam&nid=%3Cimg%20src%3Dx%20onerror%3Dalert(1)%3E&breach=EVACUATE', ctx.baseUrl).href, { waitUntil: 'domcontentloaded' });
+        await waitReady(120_000);
+        const asks = await page.waitForSelector('[data-modal="usecases"].dl-open [data-uc-view="dam"]:not([hidden])', { timeout: 30_000 }).then(() => true, () => false);
+        const bad = await D(() => ({ text: document.body.innerText, pwned: !!window.__pwned, imgs: document.querySelectorAll('img[src="x"]').length }));
+        check(r, 'link: a hostile nid= is a fixed warning, never echoed; the dam search opens', asks && !/EVACUATE|onerror/.test(bad.text) && /invalid dam link value/.test(bad.text) && !bad.pwned && bad.imgs === 0, `search ${asks ? 'open' : 'closed'}`);
+        r.metrics.intercepted = intercepted.slice(0, 12);
+      } finally {
+        await page.unrouteAll({ behavior: 'ignoreErrors' }).catch(() => {});
+        await page.goto(ctx.appUrl, { waitUntil: 'domcontentloaded' });
+        await waitReady(120_000);
+      }
+    },
+  },
+  {
+    id: 27,
+    name: 'Coastal surge: point → live area → sea boundary → NOAA EWL ladder sweep → EAL (fixtures)',
+    timeoutMs: 900_000,
+    resetsPage: true,
+    async run(r, ctx) {
+      // Hermetic: 3DEP is a synthetic coast west of downtown Fort Myers (open water at 0 m, land rising east through the
+      // site at ~1.5 m NAVD88); the NOAA station table is the real baked file. The point is typed as lat, lon, so no
+      // geocoder is involved.
+      const intercepted = [];
+      await page.route((u) => !isLocalUrl(u.href), (route) => surgeFixtures(route, intercepted, FTM_POINT));
+      try {
+        await surgeFlow(r, ctx, { tag: '27', fixtures: true, minutes: 30 });
+        r.metrics.intercepted = intercepted.slice(0, 12);
+      } finally {
+        await page.unrouteAll({ behavior: 'ignoreErrors' }).catch(() => {});
+        await page.goto(ctx.appUrl, { waitUntil: 'domcontentloaded' });
+        await waitReady(120_000);
+      }
+    },
+  },
+  {
+    id: 28,
+    name: 'Dam breach against the real services (network): Edenville Dam, flood-induced',
+    timeoutMs: 900_000,
+    optIn: 'live',
+    network: true,
+    resetsPage: true,
+    async run(r, ctx) {
+      await damFlow(r, ctx, { tag: '28', fixtures: false, simMinutes: Number(args['dam-minutes'] ?? 90) });
+    },
+  },
+  {
+    id: 29,
+    name: 'Coastal surge against the real services (network): Fort Myers Beach, EWL sweep, EAL',
+    timeoutMs: 1_500_000,
+    optIn: 'live',
+    network: true,
+    resetsPage: true,
+    async run(r, ctx) {
+      // Fort Myers Beach (Estero Island), where Hurricane Ian's surge did its worst; --surge-at=lat,lon for another point.
+      const at = String(args['surge-at'] ?? '26.4515,-81.9506').split(',').map(Number);
+      await surgeFlow(r, ctx, { tag: '29', fixtures: false, minutes: Number(args['surge-minutes'] ?? 90), point: { lat: at[0], lon: at[1] }, ffh: 0 });
+    },
+  },
 ];
+
+
+// ─── Dam breach and coastal surge helpers (flows 23–26) ─────────────────────────────────────────────────────────
+
+/** Edenville Dam, Michigan (NID MI00549) — failed 19 May 2020. The NID point, as baked (1e-5°). */
+const EDENVILLE = { nid: 'MI00549', lat: 43.81667, lon: -84.38833 };
+/** Downtown Fort Myers on the Caloosahatchee (near NOAA 8725520). */
+const FTM_POINT = { lat: 26.6406, lon: -81.8723 };
+const R_EARTH = 6378137;
+const mercOf = (lat, lon) => ({ x: (R_EARTH * lon * Math.PI) / 180, y: R_EARTH * Math.log(Math.tan(Math.PI / 4 + (lat * Math.PI) / 360)) });
+
+/** A 3DEP exportImage answered from `ground(dn, de)` — metres north and east of `at` on the ground. */
+function demFixture(route, intercepted, at, ground) {
+  const url = route.request().url();
+  intercepted.push(url.slice(0, 120));
+  const u = new URL(url);
+  if (u.hostname === 'elevation.nationalmap.gov' && u.pathname.endsWith('/exportImage')) {
+    const [w, h] = (u.searchParams.get('size') ?? '64,64').split(',').map(Number);
+    const [xmin, ymin, xmax, ymax] = (u.searchParams.get('bbox') ?? '0,0,1,1').split(',').map(Number);
+    const c = mercOf(at.lat, at.lon);
+    const k = Math.cos((at.lat * Math.PI) / 180);
+    const tiff = float32Tiff(w, h, (fx, fy) => ground((ymax - fy * (ymax - ymin) - c.y) * k, (xmin + fx * (xmax - xmin) - c.x) * k));
+    return route.fulfill({ status: 200, headers: { 'content-type': 'image/tiff', 'access-control-allow-origin': '*' }, body: tiff });
+  }
+  if (u.hostname === 'elevation.nationalmap.gov') {
+    return route.fulfill({ status: 200, headers: { 'content-type': 'application/json', 'access-control-allow-origin': '*' }, body: '{}' });
+  }
+  return route.abort('internetdisconnected');
+}
+
+/** A valley falling south from the dam: 222 m crest across it, a 215 m reservoir north of it, 190 m at its toe. */
+function damFixtures(route, intercepted, dam) {
+  return demFixture(route, intercepted, dam, (dn, de) => {
+    const walls = 0.04 * Math.max(0, Math.abs(de) - 300);
+    if (dn > 60) return Math.max(215, 205 + walls);
+    if (dn >= -60) return 222 + 0.01 * Math.abs(de);
+    return 190 + 0.004 * dn + walls;
+  });
+}
+
+/** A coast: open water from 500 m west of the point, land rising east at 0.8 m/km (0.7 m NAVD88 at the point). */
+function surgeFixtures(route, intercepted, at) {
+  return demFixture(route, intercepted, at, (_dn, de) => (de < -500 ? 0 : 0.3 + 0.0008 * (de + 500)));
+}
+
+async function openUseCase(id) {
+  await page.click('.dl-uc-btn');
+  await page.waitForSelector('[data-modal="usecases"].dl-open');
+  // The dialog reopens on the view it was left on: back to the cards first.
+  const card = `[data-modal="usecases"].dl-open [data-usecase="${id}"]`;
+  if (!(await page.isVisible(card))) await page.click('[data-uc="toggle"]');
+  await page.waitForSelector(card);
+  await page.click(card);
+}
+
+/** Flows 23 / 25: search the NID, breach Edenville flood-induced, run the wave, read the arrivals, reopen the link. */
+async function damFlow(r, ctx, { tag, fixtures, simMinutes = 30 }) {
+  await page.goto(new URL('?preset=pittsburgh', ctx.baseUrl).href, { waitUntil: 'domcontentloaded' });
+  await waitReady(120_000);
+  await openUseCase('dam');
+  await page.fill('[data-dam="input"]', 'Edenville');
+  await page.click('[data-dam="search"]');
+  const found = await page.waitForSelector(`[data-dam="result"][data-nid="${EDENVILLE.nid}"]`, { timeout: 30_000 }).then(() => true, () => false);
+  check(r, 'the NID index finds Edenville Dam (MI00549) by name', found, found ? 'found' : 'not found');
+  if (!found) return;
+  await page.click(`[data-dam="result"][data-nid="${EDENVILLE.nid}"]`);
+  await page.click('[data-dam="dam-mode-flood"]');
+  const params = await D(() => document.querySelector('[data-dam="params"]')?.textContent ?? '');
+  check(r, 'the breach card shows Froehlich 2008 width and time, the modelled peak and the published band', /Froehlich 2008/.test(params) && /MacDonald/.test(params) && /Froehlich 2016/.test(params) && /River flood under it/.test(params), params.slice(0, 160));
+  await shot(`${tag}-dam-card`);
+  const t0 = Date.now();
+  await page.click('[data-dam="breach"]');
+  const ok = await page
+    .waitForFunction((nid) => window.__deluge?.getScenario()?.damBreach?.nidId === nid && !window.__deluge.getState().loading, EDENVILLE.nid, { timeout: fixtures ? 180_000 : 400_000 })
+    .then(() => true, () => false);
+  r.metrics.loadSeconds = (Date.now() - t0) / 1000;
+  const s = await D(() => {
+    const d = window.__deluge;
+    const sc = d.getScenario();
+    const g = d.getState().grid;
+    const c = g ? d.gridToGeo(g.nx / 2, g.ny / 2) : null;
+    const src = sc?.sources.find((x) => x.id === 'dam-breach') ?? null;
+    return {
+      spec: sc?.damBreach ? { mode: sc.damBreach.mode, peak: sc.damBreach.peak, tPeak: sc.damBreach.tPeak, volume: sc.damBreach.volume, dam: sc.damBreach.dam, inflow: sc.damBreach.inflow, pathKm: sc.damBreach.path.at(-1)?.s / 1000 } : null,
+      src: src ? { gx: src.gx, gy: src.gy, points: src.hydrograph?.length ?? 0, discharge: src.discharge } : null,
+      centreLat: c ? c.lat : NaN,
+      size: g ? g.nx * g.cellSize : 0,
+      mode: d.getState().render.waterMode,
+      url: location.search,
+    };
+  });
+  r.metrics.dam = s;
+  check(r, 'the valley below the dam loads, with the breach inflow at its toe', ok && !!s.spec && !!s.src && s.src.points > 50 && Math.abs(s.size - 12000) < 1, ok ? `peak ${Math.round(s.spec?.peak ?? 0)} m³/s at ${Math.round((s.spec?.tPeak ?? 0) / 60)} min, ${((s.spec?.volume ?? 0) / 1e6).toFixed(1)} Mm³, path ${s.spec?.pathKm?.toFixed(1)} km, load ${r.metrics.loadSeconds.toFixed(1)} s` : 'not set up');
+  if (!ok || !s.spec) return;
+  if (fixtures) {
+    check(r, 'the area is centred downstream (south) of the dam, the inflow below it', s.centreLat < EDENVILLE.lat - 0.02 && s.spec.inflow.gy > s.spec.dam.gy, `centre ${s.centreLat.toFixed(4)} vs dam ${EDENVILLE.lat}; inflow gy ${s.spec.inflow.gy.toFixed(0)} vs dam ${s.spec.dam.gy.toFixed(0)}`);
+  }
+  check(r, 'the link carries the NID id and the scenario, never the dam’s name; the Arrival view is on', /usecase=dam/.test(s.url) && /nid=MI00549/.test(s.url) && /breach=flood/.test(s.url) && !/Edenville[+ ]Dam/i.test(decodeURIComponent(s.url)) && s.mode === 'arrival', `${s.url} · ${s.mode}`);
+  const v0 = (await stats())?.volume ?? 0;
+  const wall = await runFor(simMinutes * 60);
+  await D(() => window.__deluge.waitFrames(30));
+  const v1 = (await stats())?.volume ?? 0;
+  r.metrics.runSeconds = wall;
+  check(r, `the breach wave enters the map (${simMinutes} simulated min)`, v1 > v0 + 1e5, `volume ${m3(v0)} → ${m3(v1)} in ${num(wall, 1)} s`);
+  await shot(`${tag}-dam-arrival`);
+  await openUseCase('dam');
+  await page.click('[data-dam="read"]');
+  const rows = await page
+    .waitForFunction(() => {
+      const rows = [...document.querySelectorAll('[data-dam="arrivals"] tbody tr')].map((tr) => [...tr.querySelectorAll('td')].map((td) => td.textContent ?? ''));
+      return rows.length ? rows : null;
+    }, null, { timeout: 30_000 })
+    .then((h) => h.jsonValue(), () => []);
+  r.metrics.arrivals = rows;
+  const arrived = rows.filter((row) => /min|h$/.test(row[1]));
+  const mins = arrived.map((row) => (/h$/.test(row[1]) ? 60 * parseFloat(row[1]) : parseFloat(row[1])));
+  const depths = rows.map((row) => parseFloat(row[2]));
+  check(r, 'the downstream readout gives arrival times that grow with distance, and peak depths', rows.length >= 3 && arrived.length >= 2 && mins.every((m, i) => i === 0 || m >= mins[i - 1] - 1) && depths[0] > 0.3, rows.map((row) => `${row[0]}: ${row[1]}, ${row[2]}`).join(' · '));
+  await sleep(300);
+  await shot(`${tag}-dam-readout`);
+  await page.keyboard.press('Escape');
+  if (!fixtures) return;
+  // The link, reloaded: the same breach on the same area.
+  const link = s.url;
+  await page.goto(new URL(link, ctx.baseUrl).href, { waitUntil: 'domcontentloaded' });
+  await waitReady(120_000);
+  const again = await page
+    .waitForFunction((nid) => window.__deluge?.getScenario()?.damBreach?.nidId === nid && !window.__deluge.getState().loading, EDENVILLE.nid, { timeout: 180_000 })
+    .then(() => true, () => false);
+  const peak2 = await D(() => window.__deluge.getScenario()?.damBreach?.peak ?? 0);
+  check(r, 'link: reopening it breaches the same dam the same way', again && Math.abs(peak2 - s.spec.peak) < 1e-6 * s.spec.peak, `${again ? 'set up' : 'not set up'}, peak ${Math.round(peak2)} m³/s`);
+}
+
+/** Flows 24 / 26: a coastal point → the surge scenario → the EWL sweep → EAL → the report → the link. */
+async function surgeFlow(r, ctx, { tag, fixtures, minutes, point = FTM_POINT, ffh }) {
+  await page.goto(new URL('?preset=pittsburgh', ctx.baseUrl).href, { waitUntil: 'domcontentloaded' });
+  await waitReady(120_000);
+  await openUseCase('surge');
+  await page.fill('[data-surge="input"]', `${point.lat}, ${point.lon}`);
+  await page.click('[data-surge="search"]');
+  await page.waitForSelector('[data-surge="choice"]', { timeout: 15_000 });
+  const t0 = Date.now();
+  await page.click('[data-surge="choice"]');
+  const ready = await page
+    .waitForFunction(
+      () => {
+        const s = window.__deluge?.getState();
+        return !!s && !s.loading && !!s.scenario?.coastal && document.querySelector('[data-site="ladder"]')?.value === 'stage' && document.querySelectorAll('.dl-site-ladder input[data-level^="ewl-"]').length === 5 && document.querySelectorAll('.dl-site-item').length >= 1;
+      },
+      null,
+      { timeout: fixtures ? 180_000 : 400_000 },
+    )
+    .then(() => true, () => false);
+  r.metrics.loadSeconds = (Date.now() - t0) / 1000;
+  const s = await D(() => {
+    const sc = window.__deluge.getScenario();
+    return {
+      coastal: sc?.coastal ? { station: sc.coastal.stationName, km: sc.coastal.stationKm, datum: sc.coastal.datum, mhhw: sc.coastal.mhhw, runs: sc.coastal.seaRuns, l100: sc.coastal.levels.at(-1)?.elevation } : null,
+      sea: sc?.sources.filter((x) => x.type === 'stage').map((x) => ({ id: x.id, gx: Math.round(x.gx), gy: Math.round(x.gy), r: Math.round(x.radius) })) ?? [],
+      stage: sc?.stage?.label ?? '',
+      levels: [...document.querySelectorAll('.dl-site-ladder tbody tr')].map((tr) => [...tr.querySelectorAll('.dl-impact-meta')].map((m) => m.textContent ?? '').join(' ')),
+      url: location.search,
+    };
+  });
+  r.metrics.surge = s;
+  check(r, 'an 8 km coastal area loads with the sea boundary on its seaward edges at the nearest NOAA gauge', ready && !!s.coastal && (!fixtures || s.coastal.station === 'Fort Myers') && s.sea.length >= 1 && s.sea.every((x) => x.id.startsWith('sea-')), ready ? `${s.coastal?.station} ${s.coastal?.km} km, MHHW ${s.coastal?.mhhw} m ${s.coastal?.datum}, 1 % ${s.coastal?.l100} m; ${s.sea.length} sea source(s) ${JSON.stringify(s.sea).slice(0, 80)}; load ${r.metrics.loadSeconds.toFixed(1)} s` : 'not set up');
+  if (!ready) return;
+  if (fixtures) check(r, 'the sea boundary is on the west (open-water) side only', s.sea.every((x) => x.gx < 400 || x.gy < 0 || x.gy > 1024), JSON.stringify(s.sea));
+  const rps = s.levels.map((t) => (/([\d.]+) yr · source/.exec(t) ?? [])[1]);
+  check(r, 'Site check offers the NOAA 1- to 100-yr ladder with sourced return periods', rps.join() === '1.01,2,10,50,100' || rps.join() === '1,2,10,50,100', `${rps.join(', ')} yr`);
+  check(r, 'the link carries the coordinates only', /usecase=surge/.test(s.url) && s.url.includes(`at=${point.lat.toFixed(5)},${point.lon.toFixed(5)}`), s.url);
+  if (ffh !== undefined && (await page.isVisible('[data-site-field="ffh"]'))) {
+    // A slab-on-grade building (ground-floor retail): the first floor at grade.
+    await page.fill('[data-site-field="ffh"]', String(ffh));
+    await page.dispatchEvent('[data-site-field="ffh"]', 'change');
+    r.notes.push(`first floor ${ffh} m above grade`);
+  }
+  await page.fill('[data-site-field="duration"]', String(minutes));
+  await page.dispatchEvent('[data-site-field="duration"]', 'change');
+  const before = await D(() => {
+    const st = window.__deluge.getState();
+    return { rain: st.sim.rainRate, stageOffset: st.stageOffset, sources: st.sources.length };
+  });
+  await shot(`${tag}-surge-site`);
+  const ts = Date.now();
+  await page.click('[data-site="run-sweep"]');
+  const done = await page
+    .waitForFunction(() => /^(Done|Sweep stopped|Cancelled)/.test(document.querySelector('[data-site="sweep-status"]')?.textContent ?? ''), null, { timeout: 1_200_000 })
+    .then(() => true, () => false);
+  const sweepS = (Date.now() - ts) / 1000;
+  const out = await D(() => ({
+    status: document.querySelector('[data-site="sweep-status"]')?.textContent ?? '',
+    verdict: [...document.querySelectorAll('[data-site="verdict"] p')].map((p) => p.textContent ?? ''),
+    rows: [...document.querySelectorAll('.dl-site-sweep-out .dl-site-table tbody tr')].map((tr) => [...tr.querySelectorAll('td')].map((td) => td.textContent ?? '')),
+    caveats: !!document.querySelector('[data-site="surge-caveats"]'),
+    after: (() => {
+      const st = window.__deluge.getState();
+      return { rain: st.sim.rainRate, stageOffset: st.stageOffset, sources: st.sources.length };
+    })(),
+  }));
+  const eal = out.verdict.find((v) => /Expected annual loss/.test(v)) ?? '';
+  r.metrics.sweepSeconds = sweepS;
+  r.metrics.sweepRows = out.rows;
+  r.metrics.verdict = out.verdict;
+  check(r, 'the five-level surge sweep completes', done && /^Done: 5 levels/.test(out.status), `${out.status.slice(0, 80)} (${num(sweepS, 1)} s wall)`);
+  check(r, 'EAL comes from NOAA’s return periods (no “needs your input”), and the low site has one', /Expected annual loss \$/.test(eal) && (!fixtures || !/Expected annual loss \$0\b/.test(eal)) && !/your input|No expected annual loss/.test(out.verdict.join(' ')), eal.slice(0, 160));
+  check(r, 'the surge ladder’s caveats are shown with the result', out.caveats, String(out.caveats));
+  check(r, 'the user’s scenario is put back', JSON.stringify(out.after) === JSON.stringify(before), `${JSON.stringify(before)} → ${JSON.stringify(out.after)}`);
+  await D(() => document.querySelector('[data-site="verdict"]')?.scrollIntoView({ block: 'start' }));
+  await sleep(400);
+  const panelShot = path.join(OUT, `${tag}-surge-sweep.png`);
+  await page.locator('.dl-panel').screenshot({ path: panelShot });
+  const [dl] = await Promise.all([page.waitForEvent('download', { timeout: 20_000 }), page.click('[data-site="report-html"]')]);
+  const file = path.join(OUT, `${tag}-surge-assessment.html`);
+  await dl.saveAs(file);
+  const html = fs.readFileSync(file, 'utf8');
+  const has = ['NOAA CO-OPS Extreme Water Levels', 'Surge ladder caveats', 'Expected annual loss', 'tidesandcurrents.noaa.gov'];
+  const missing = has.filter((x) => !html.includes(x));
+  check(r, 'the site assessment cites NOAA’s extreme water levels and carries the caveats', missing.length === 0 && !/<script/i.test(html), missing.length ? `missing: ${missing.join(', ')}` : `${(html.length / 1024).toFixed(0)} KB`);
+  // Today vs 2050 SSP5-8.5: the same ladder with NOAA's Intermediate sea-level rise at the gauge on top.
+  await D(() => window.__deluge.store.set({ climate: { horizon: '2050', pathway: 'ssp585', scaling: 'cc' } }));
+  await sleep(300);
+  const enabled = await D(() => document.querySelector('[data-site="run-climate-sweep"]')?.disabled === false);
+  check(r, '“Today vs future” is offered on the surge ladder under 2050 SSP5-8.5', enabled, String(enabled));
+  if (enabled) {
+    await page.click('[data-site="run-climate-sweep"]');
+    const cdone = await page
+      .waitForFunction(() => /^(Done: .* under|Sweep stopped|Cancelled)/.test(document.querySelector('[data-site="sweep-status"]')?.textContent ?? ''), null, { timeout: 1_800_000 })
+      .then(() => true, () => false);
+    const cmp = await D(() => ({ eal: document.querySelector('[data-site="climate-eal"]')?.textContent ?? '', block: document.querySelector('[data-site="climate-compare"]')?.textContent ?? '' }));
+    r.metrics.climate = cmp.eal;
+    check(r, 'today vs 2050: the sea is raised by NOAA’s 0.32 m at the gauge and the EAL is compared', cdone && /0\.32 m/.test(cmp.block) && /EAL/.test(cmp.eal), cmp.eal.slice(0, 200));
+  }
+  await D(() => window.__deluge.store.set({ climate: { horizon: 'today', pathway: 'ssp585', scaling: 'cc' } }));
+  if (!fixtures) return;
+  await page.goto(new URL(`?usecase=surge&at=${point.lat},${point.lon}`, ctx.baseUrl).href, { waitUntil: 'domcontentloaded' });
+  await waitReady(120_000);
+  const again = await page
+    .waitForFunction(() => window.__deluge?.getScenario()?.coastal?.stationId === '8725520' && document.querySelector('[data-site="ladder"]')?.value === 'stage', null, { timeout: 180_000 })
+    .then(() => true, () => false);
+  check(r, 'link: ?usecase=surge&at= reopens the surge set-up', again, String(again));
+}
 
 // ─── "Check any US address" helpers (flows 21 and 22) ────────────────────────────────────────────
 

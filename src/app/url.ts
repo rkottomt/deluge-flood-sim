@@ -1,7 +1,7 @@
 import type { LiveAreaRequest } from '../contracts';
 import { isPresetId, linkPlaceLabel } from '../data';
 import { APP_CONFIG } from './defaults';
-import { ADDRESS_AREA_M, ADDRESS_PARAM, ADDRESS_WARNING, addressAreaRequest, parseAddressAt, parseUseCase, useCaseById, USE_CASE_PARAM } from '../ui/useCaseDefs';
+import { ADDRESS_AREA_M, ADDRESS_PARAM, ADDRESS_WARNING, addressAreaRequest, BREACH_PARAM, DAM_PARAM, METHOD_PARAM, parseAddressAt, parseUseCase, SURGE_AREA_M, surgeAreaRequest, useCaseById, USE_CASE_PARAM } from '../ui/useCaseDefs';
 import { parseStoryParam, storyById, STORY_PARAM } from '../story/registry';
 
 export type SceneRequest = { kind: 'preset'; id: string } | { kind: 'live'; req: LiveAreaRequest };
@@ -14,6 +14,9 @@ export type SceneRequest = { kind: 'preset'; id: string } | { kind: 'live'; req:
  *                                   ?live=; src/ui/useCases.ts then sets up the rest of it
  *   ?usecase=address&at=<lat>,<lon> a 5 km live area centred on the point (strict numbers only, nothing else from the
  *                                   link); a missing or bad at= is a fixed warning, and the rest of the URL applies
+ *   ?usecase=surge&at=<lat>,<lon>   the same for coastal surge, an 8 km area (src/ui/surgeView.ts sets it up)
+ *   ?usecase=dam&nid=<NID id>       no scene of its own: ?live= (written once the area below the dam has loaded) or the
+ *                                   default preset; src/ui/damView.ts finds the dam and loads the area below it
  *   ?story=<id>                     (src/story/registry.ts) opens on the story's own preset, ahead of everything else;
  *                                   src/ui/storyPlayer.ts then plays it
  * An invalid ?live=, ?usecase= (or its at=) or ?story= value is reported through `warnings` (a fixed sentence) and ignored.
@@ -27,13 +30,13 @@ export function parseStartupRequest(search: string): { request: SceneRequest; wa
   if (story) return { request: { kind: 'preset', id: story.preset }, warnings };
   const uc = parseUseCase(search);
   warnings.push(...uc.warnings);
-  if (uc.useCase === 'address') {
+  if (uc.useCase === 'address' || uc.useCase === 'surge') {
     // Only numbers from the link (parseAddressAt); no name — the loader reverse-geocodes the point itself.
     const { at, warnings: w } = parseAddressAt(search);
     warnings.push(...w);
-    if (at) return { request: { kind: 'live', req: addressAreaRequest(at) }, warnings };
+    if (at) return { request: { kind: 'live', req: uc.useCase === 'surge' ? surgeAreaRequest(at) : addressAreaRequest(at) }, warnings };
     if (!w.length) warnings.push(ADDRESS_WARNING);
-  } else if (uc.useCase) {
+  } else if (uc.useCase && useCaseById(uc.useCase).preset) {
     return { request: { kind: 'preset', id: useCaseById(uc.useCase).preset! }, warnings };
   }
   const live = params.get('live');
@@ -88,6 +91,9 @@ export function writeSceneToUrl(request: SceneRequest): void {
     if (url.searchParams.has(USE_CASE_PARAM) && !useCaseMatches(url.search, request)) {
       url.searchParams.delete(USE_CASE_PARAM);
       url.searchParams.delete(ADDRESS_PARAM);
+      url.searchParams.delete(DAM_PARAM);
+      url.searchParams.delete(BREACH_PARAM);
+      url.searchParams.delete(METHOD_PARAM);
     }
     // Likewise a story link: kept only while the story's own preset is on screen.
     if (url.searchParams.has(STORY_PARAM) && !storyMatches(url.search, request)) url.searchParams.delete(STORY_PARAM);
@@ -114,10 +120,13 @@ export function writeSceneToUrl(request: SceneRequest): void {
 export function useCaseMatches(search: string, request: SceneRequest): boolean {
   const uc = parseUseCase(search).useCase;
   if (!uc) return false;
-  if (uc === 'address') {
+  if (uc === 'address' || uc === 'surge') {
     const at = parseAddressAt(search).at;
-    return !!at && request.kind === 'live' && Math.abs(request.req.center.lat - at.lat) < 1e-5 && Math.abs(request.req.center.lon - at.lon) < 1e-5 && request.req.sizeMeters === ADDRESS_AREA_M;
+    return !!at && request.kind === 'live' && Math.abs(request.req.center.lat - at.lat) < 1e-5 && Math.abs(request.req.center.lon - at.lon) < 1e-5 && request.req.sizeMeters === (uc === 'surge' ? SURGE_AREA_M : ADDRESS_AREA_M);
   }
+  // The dam case's area is centred below the dam, not on it: any live area keeps the link (src/ui/damView.ts re-checks
+  // that the dam is on it before using it).
+  if (uc === 'dam') return request.kind === 'live';
   return request.kind === 'preset' && request.id === useCaseById(uc).preset;
 }
 

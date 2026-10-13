@@ -1,0 +1,54 @@
+/* Dam-breach and coastal-surge views of the Use cases dialog (src/ui/damView.ts, src/ui/surgeView.ts). */
+.dl-dam-search {
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.dl-dam-search .dl-uc-addr-form {
+  flex: 1 1 320px;
+}
+.dl-dam-results {
+  max-height: 260px;
+  overflow-y: auto;
+}
+.dl-dam-detail,
+.dl-dam-readout {
+  margin-top: 12px;
+  padding: 12px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+.dl-dam-name {
+  margin: 0 0 4px;
+  font-size: 15px;
+  flex: 1;
+}
+.dl-dam-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  margin: 8px 0;
+  font-size: 12.5px;
+}
+.dl-dam-choice {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+.dl-dam-table {
+  width: 100%;
+  margin: 8px 0;
+}
+.dl-dam-table th {
+  text-align: left;
+  font-weight: 500;
+  opacity: 0.8;
+}
+.dl-dam-go {
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 12px;
+  margin-top: 10px;
+}

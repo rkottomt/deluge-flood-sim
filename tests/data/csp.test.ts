@@ -154,3 +154,31 @@ test('NOAA Atlas 14 is read from this origin, never from the PFDS host', async (
   assert.equal(cspAllows('https://hdsc.nws.noaa.gov/cgi-bin/new/cgi_readH5.py?lat=29.76&lon=-95.37&type=pf&data=intensity&units=metric&series=pds', 'connect-src'), false);
   assert.doesNotMatch(contentSecurityPolicy(), /noaa\.gov/);
 });
+
+/**
+ * Dams and coastal surge (src/dams, src/surge): the National Inventory of Dams API sends no CORS headers to a page and
+ * the CO-OPS APIs, which do, are not needed at runtime — both are baked into this app's own origin by
+ * scripts/bake-nid.ts and scripts/bake-surge.ts. Neither host may appear in the policy, and neither module may hold a
+ * runtime URL to any third party.
+ */
+test('the dam index and the surge table are read from this origin; NID and CO-OPS stay out of the policy', async () => {
+  const { nidIndexUrl } = await import('../../src/dams/nidIndex');
+  const { surgeTableUrl } = await import('../../src/surge/stations');
+  for (const u of [nidIndexUrl(), surgeTableUrl()]) assert.ok(!/^https?:/i.test(u), `same-origin path, got ${u}`);
+  for (const u of [
+    'https://nid.sec.usace.army.mil/api/dams/CA00035/inventory',
+    'https://nid.sec.usace.army.mil/api/nation/gpkg',
+    'https://api.tidesandcurrents.noaa.gov/dpapi/prod/webapi/product.json?name=extremewaterlevels',
+    'https://api.tidesandcurrents.noaa.gov/mdapi/prod/webapi/stations/8725520/datums.json',
+  ]) assert.equal(cspAllows(u, 'connect-src'), false, u);
+  assert.doesNotMatch(contentSecurityPolicy(), /usace|tidesandcurrents/);
+  for (const sub of ['dams', 'surge']) {
+    const dir = new URL(`../../src/${sub}/`, import.meta.url);
+    for (const f of readdirSync(dir).filter((n) => n.endsWith('.ts'))) {
+      const src = readFileSync(new URL(f, dir), 'utf8')
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/(^|[^:])\/\/.*$/gm, '$1');
+      assert.doesNotMatch(src, /['"`]https?:\/\//, `src/${sub}/${f} holds a runtime URL`);
+    }
+  }
+});

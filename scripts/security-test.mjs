@@ -418,6 +418,10 @@ try {
     // sentence in at= must never reach the page.
     { id: 'SPOOF-ADDRESS-NAME', query: `?usecase=address&at=29.7604,-95.3698&name=${encodeURIComponent(SPOOF_NAME)}`, what: '?usecase=address takes no name from the link' },
     { id: 'SPOOF-ADDRESS-AT', query: `?usecase=address&at=${encodeURIComponent(SPOOF_LIVE)}`, what: 'invalid ?at= value is not echoed in a notice' },
+    // Dam breach and coastal surge (src/ui/damView.ts, src/ui/surgeView.ts): nid= is a strict NID id, breach= and
+    // method= fixed words, at= numbers; none of them is ever shown.
+    { id: 'SPOOF-DAM-NID', query: `?usecase=dam&nid=${encodeURIComponent(SPOOF_NAME)}&breach=${encodeURIComponent(SPOOF_PRESET)}`, what: '?usecase=dam: an invalid nid= / breach= is never echoed' },
+    { id: 'SPOOF-SURGE-AT', query: `?usecase=surge&at=${encodeURIComponent(SPOOF_LIVE)}&name=${encodeURIComponent(SPOOF_NAME)}`, what: '?usecase=surge: an invalid at= and a ?name= are never echoed' },
   ];
   for (const c of spoofCases.filter((c) => shouldRun(c.id))) {
     const page = await newPage(browser); // every external host aborted: the lead's re-confirmation scenario
@@ -902,6 +906,70 @@ try {
         ? `${(body.length / 1048576).toFixed(2)} MB on the wire${c.payloadMB ? ` (${c.payloadMB} MB payload)` : ''}; rain ladder ${rainOffered ? 'OFFERED' : 'withheld'}; “${statusText.slice(0, 60)}”; live heap ${growthMB === null ? 'n/a' : `${growthMB >= 0 ? '+' : ''}${growthMB} MB`}; app ${alive ? 'alive' : 'DEAD'}`
         : 'Site check not reachable — case not exercised',
       { statusText, rainOffered, growthMB, alive, ...t },
+    );
+    await page.close();
+  }
+
+  /**
+   * The dam index (src/dams/nidIndex.ts) and the NOAA tide-station table (src/surge/stations.ts) are same-origin files
+   * too. Each hostile variant must cost only the dam search or the surge ladder: the app stays up, nothing it sent is
+   * shown, and the heap does not keep the payload.
+   */
+  const damSurgeCases = [
+    { id: 'CAP-NID-BOMB', route: '**/dams/nid-index.bin', what: 'a gzip-bomb dam index (64 MB inflated) is refused', body: () => zlib.gzipSync(Buffer.alloc(64 * 1048576), { level: 9 }), payloadMB: 64, view: 'dam' },
+    { id: 'CAP-NID-OVERSIZE', route: '**/dams/nid-index.bin', what: 'an oversized dam index (12 MB on the wire) is refused', body: () => Buffer.alloc(12 * 1048576, 7), payloadMB: 12, view: 'dam' },
+    { id: 'CAP-NID-HOSTILE', route: '**/dams/nid-index.bin', what: 'a hostile dam index (markup, right magic, lying header) is refused and never shown', body: () => Buffer.from(`DLNID001${XSS_PAYLOADS.join('')}`, 'utf8'), payloadMB: 0, view: 'dam' },
+    { id: 'CAP-SURGE-OVERSIZE', route: '**/surge/ewl-stations.json', what: 'an oversized tide-station table (4 MB) is refused', body: () => Buffer.alloc(4 * 1048576, 0x20), payloadMB: 4, view: 'surge' },
+    {
+      id: 'CAP-SURGE-HOSTILE',
+      route: '**/surge/ewl-stations.json',
+      what: 'a hostile tide-station table (markup in names) is refused and never shown',
+      body: () => Buffer.from(JSON.stringify({ format: 'deluge-ewl-1', aeps: [0.99, 0.5, 0.1, 0.02, 0.01], stations: XSS_PAYLOADS.map((p, i) => ({ id: `87255${String(i).padStart(2, '0')}`, name: p, lat: 26.6, lon: -81.9 })) }), 'utf8'),
+      payloadMB: 0,
+      view: 'surge',
+    },
+  ];
+  for (const c of damSurgeCases.filter((c) => shouldRun(c.id))) {
+    const body = c.body();
+    const page = await newPage(browser);
+    await page.route(c.route, (route) => route.fulfill({ status: 200, headers: { 'content-type': 'application/octet-stream' }, body }));
+    await page.goto(`${baseUrl}?preset=pittsburgh`, { waitUntil: 'load', timeout: 120000 });
+    await waitForApp(page);
+    const base = await liveHeap(page);
+    let opened = await page
+      .click('.dl-uc-btn', { timeout: 8000 })
+      .then(() => page.click(`[data-usecase="${c.view}"]`, { timeout: 8000 }))
+      .then(() => true)
+      .catch(() => false);
+    let statusText = '';
+    if (opened && c.view === 'dam') {
+      await page.fill('[data-dam="input"]', 'Oroville').catch(() => (opened = false));
+      await page.click('[data-dam="search"]').catch(() => (opened = false));
+      await page.waitForFunction(() => /could not be loaded/.test(document.querySelector('[data-dam="status"]')?.textContent ?? ''), null, { timeout: 30000 }).catch(() => {});
+      statusText = await page.evaluate(() => document.querySelector('[data-dam="status"]')?.textContent ?? '');
+    } else if (opened) {
+      await page.fill('[data-surge="input"]', '26.6406, -81.8723').catch(() => (opened = false));
+      await page.click('[data-surge="search"]').catch(() => (opened = false));
+      await page.click('[data-surge="choice"]', { timeout: 8000 }).catch(() => (opened = false));
+      await page.waitForFunction(() => /could not be loaded/.test(document.body.innerText), null, { timeout: 30000 }).catch(() => {});
+      statusText = (await visibleText(page)).match(/[^\n]*could not be loaded[^\n]*/)?.[0] ?? '';
+    }
+    const after = await liveHeap(page);
+    const t = await tripwires(page);
+    const alive = await page.evaluate(() => !!document.querySelector('.dl-scene-name'));
+    const shown = (await visibleText(page)).includes('onerror');
+    const growthMB = base.bytes !== null && after.bytes !== null ? +((after.bytes - base.bytes) / 1048576).toFixed(1) : null;
+    const memoryOk = growthMB === null || !after.forced || growthMB < CAP_HEAP_SLACK_MB + 4 /* the decoded index itself, when valid */;
+    const ok = alive && !t.pwned && t.injectedImgs === 0 && t.injectedScripts === 0 && !shown && /could not be loaded/.test(statusText) && memoryOk;
+    record(
+      c.id,
+      'SEC-03',
+      c.what,
+      opened ? (ok ? 'pass' : 'fail') : 'pending',
+      opened
+        ? `${(body.length / 1048576).toFixed(2)} MB on the wire${c.payloadMB ? ` (${c.payloadMB} MB payload)` : ''}; “${statusText.slice(0, 70)}”; live heap ${growthMB === null ? 'n/a' : `${growthMB >= 0 ? '+' : ''}${growthMB} MB`}; app ${alive ? 'alive' : 'DEAD'}`
+        : `${c.view} view not reachable — case not exercised`,
+      { statusText, growthMB, alive, shown, ...t },
     );
     await page.close();
   }
