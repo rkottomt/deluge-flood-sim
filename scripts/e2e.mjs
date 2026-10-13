@@ -2144,6 +2144,19 @@ const FLOWS = [
 
       // 4. The whole story at 1/20 pace (waits capped at 30 s so a slow GPU cannot stall the flow).
       await D(() => window.__deluge.setPaused(false));
+      // The user's own state before the story: put back when it ends (a wall of theirs included).
+      const userState = () =>
+        D(() => {
+          const s = window.__deluge.getState();
+          const walls = window.__deluge.getSolver()?.getBarrierCPU().reduce((n, v) => n + (v > 0.2 ? 1 : 0), 0) ?? -1;
+          return { stage: s.stageOffset, rain: s.sim.rainRate, timeScale: s.sim.timeScale, view: s.render.waterMode, evac: !!s.evacStart, walls };
+        });
+      await D(() => {
+        const d = window.__deluge;
+        d.getSolver().applyBrush({ kind: 'wall', ax: 100, ay: 100, bx: 140, by: 100, radius: 2, height: 3 });
+        d.setStageOffset(1.5);
+      });
+      const pre = await userState();
       const ok = await D(() => document.getElementById('ui-root').__delugeUI.story.play('pittsburgh-1936', { pace: 0.05, maxWaitCapMs: 30_000 }));
       check(r, 'the story plays from the debug handle', ok === true, String(ok));
       const seen = new Map();
@@ -2175,6 +2188,9 @@ const FLOWS = [
       check(r, 'kept-dry figure is read live from the protection estimate', !!kept && /acres|nothing yet/.test(kept.caption), kept?.caption.slice(0, 120));
       await shot('20-story-end');
       await D(() => document.getElementById('ui-root').__delugeUI.story.stop());
+      await sleep(300);
+      const post = await userState();
+      check(r, 'leaving the story puts the user’s stage, rain, time scale, view, route and walls back', JSON.stringify({ ...post, walls: 0 }) === JSON.stringify({ ...pre, walls: 0 }) && pre.walls > 0 && Math.abs(post.walls - pre.walls) <= 2, `before ${JSON.stringify(pre)} · after ${JSON.stringify(post)}`);
       await page.goto(ctx.appUrl, { waitUntil: 'domcontentloaded' });
       await waitReady(120_000);
     },

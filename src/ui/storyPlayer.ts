@@ -12,11 +12,19 @@
  *
  * Reduced motion (prefers-reduced-motion): camera moves are cuts, no slow orbit, no animated progress.
  *
+ * Leaving a story puts the user's own scenario back when the scene is still the one it started on: the stage, rain,
+ * time scale, evacuation start, water view, tool and play state as they were on play(), and the walls and digging —
+ * a story clears walls and raises its demo levee, so the map's edits are stashed from the edit log on play() and, when
+ * they differ at the end, the ground is reset and the user's edits replayed (recorded as theirs again; the water
+ * restarts). Another scene on screen keeps its own defaults.
+ *
  * Offline: stories are bundled constant data; nothing is fetched beyond what the scene itself loads. Every string on
  * screen goes through textContent (h()/setText).
  */
 import './story.css';
-import type { CameraPose, WaterViewMode } from '../contracts';
+import type { AppState, CameraPose, TerrainData, WaterViewMode } from '../contracts';
+import { editLogFor, replayEdits } from '../project/edits';
+import type { ProjectEdit } from '../project/format';
 import { makeGeoToGrid } from '../data/geo';
 import type { ChainStation } from '../hazard/types';
 import { resolveCaption, captionTokens, type CaptionToken } from '../story/captions';
@@ -31,6 +39,7 @@ import { fmtNum } from './format';
 import { icon } from './icons';
 import type { Panel } from './panel';
 import { clamp, offsetForFt, stageFt } from './scales';
+import { headlessBusy } from './headless';
 import { formatStage } from './stageText';
 import { selectTool } from './toolDefs';
 import { planEvacuation } from './welcome';
@@ -48,6 +57,19 @@ const HL_CLASS = 'dl-nar-hl';
 const TICK_MS = 250;
 /** Longest the player waits for a glacier scene's chain result before it starts anyway, ms. */
 const CHAIN_WAIT_MS = 30_000;
+
+/** What the user had on screen when a story started. */
+interface UserSnapshot {
+  terrain: TerrainData | null;
+  stageOffset: number;
+  rainRate: number;
+  timeScale: number;
+  evacStart: AppState['evacStart'];
+  waterMode: WaterViewMode;
+  tool: AppState['tool'];
+  paused: boolean;
+  edits: ProjectEdit[];
+}
 
 export interface StoryPlayOptions extends RunnerOptions {
   /** Start at this beat (0-based). */
@@ -144,6 +166,8 @@ export function createStoryPlayer(
   let pausedSim = false;
   let panelWasOpen = false;
   let startToken = 0;
+  /** The user's state when the story started (header: restored on stop on the same scene). */
+  let saved: UserSnapshot | null = null;
 
   const reducedMotion = () => typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
   const terrain = () => bridge.scene?.getTerrain() ?? null;
@@ -623,6 +647,7 @@ export function createStoryPlayer(
     if (!(await ensureScene(story))) return false;
     if (token !== startToken) return false;
     current = story;
+    saved = snapshotUser();
     panelWasOpen = deps.panel.isOpen();
     deps.panel.setOpen(false);
     setText(titleEl, story.title);
@@ -639,6 +664,42 @@ export function createStoryPlayer(
     tick = window.setInterval(refresh, TICK_MS);
     runner.start(opts.startAt ?? 0);
     return true;
+  }
+
+  function snapshotUser(): UserSnapshot {
+    const s = store.get();
+    return {
+      terrain: terrain(),
+      stageOffset: s.stageOffset,
+      rainRate: s.sim.rainRate,
+      timeScale: s.sim.timeScale,
+      evacStart: s.evacStart ? { ...s.evacStart } : null,
+      waterMode: s.render.waterMode,
+      tool: s.tool,
+      paused: s.paused,
+      edits: editLogFor(store).snapshot(),
+    };
+  }
+
+  function restoreUser(u: UserSnapshot) {
+    const t = terrain();
+    if (!t || t !== u.terrain || store.get().loading) return;
+    const s = store.get();
+    store.set({
+      stageOffset: u.stageOffset,
+      evacStart: u.evacStart,
+      paused: u.paused,
+      sim: { ...s.sim, rainRate: u.rainRate, timeScale: u.timeScale },
+      render: { ...s.render, waterMode: u.waterMode },
+    });
+    if (s.tool !== u.tool) selectTool(store, u.tool);
+    // Walls and digging, through the edit log (header). Only when they changed: this restarts the water.
+    const log = editLogFor(store);
+    const solver = bridge.scene?.getSolver() ?? null;
+    if (!solver || headlessBusy(store) || JSON.stringify(log.edits) === JSON.stringify(u.edits)) return;
+    ctx.actions.resetAll();
+    replayEdits(solver, u.edits);
+    if (u.edits.some((e) => e.op === 'wall')) bridge.wallDrawn.emit();
   }
 
   function teardown(restorePanel: boolean) {
@@ -660,10 +721,14 @@ export function createStoryPlayer(
     if (current && restorePanel && panelWasOpen) deps.panel.setOpen(true);
   }
 
-  function stop() {
+  /** End the story; `restore` puts the user's state back (header) — not when the UI itself is going away. */
+  function stop(restore = true) {
     startToken++;
     const was = !!current;
     teardown(true);
+    const u = saved;
+    saved = null;
+    if (u && restore) restoreUser(u);
     current = null;
     el.hidden = true;
     el.inert = true;
@@ -680,7 +745,7 @@ export function createStoryPlayer(
       if (current && preset !== current.preset && !store.get().loading) stop();
     },
   );
-  ctx.own(() => stop());
+  ctx.own(() => stop(false));
 
   // ─── Entry points ─────────────────────────────────────────────────────────────────────────────────────────────
   const watchLabel = h('span', null, 'Watch the story');
