@@ -16,7 +16,9 @@
  * time scale, evacuation start, water view, tool and play state as they were on play(), and the walls and digging —
  * a story clears walls and raises its demo levee, so the map's edits are stashed from the edit log on play() and, when
  * they differ at the end, the ground is reset and the user's edits replayed (recorded as theirs again; the water
- * restarts). Another scene on screen keeps its own defaults.
+ * restarts). Another scene on screen keeps its own defaults. The one exception is the end card's *Explore on your
+ * own*: that is an invitation to carry on from what the story set up (its levee, its raised river), so it keeps the
+ * story's state; Esc, the close button and leaving mid-story restore.
  *
  * Offline: stories are bundled constant data; nothing is fetched beyond what the scene itself loads. Every string on
  * screen goes through textContent (h()/setText).
@@ -136,7 +138,7 @@ export function createStoryPlayer(
   const sourceEl = h('p', { class: 'dl-nar-source' });
   const progress = h('div', { class: 'dl-nar-progress', role: 'group', 'aria-label': 'Beats' });
   const againBtn = h('button', { type: 'button', class: 'dl-btn dl-btn-primary dl-btn-sm', onclick: () => current && void play(current.id, lastOpts) }, icon('reset', 14), h('span', null, 'Watch again'));
-  const exploreBtn = h('button', { type: 'button', class: 'dl-btn dl-btn-subtle dl-btn-sm', onclick: () => stop() }, h('span', null, 'Explore on your own'));
+  const exploreBtn = h('button', { type: 'button', class: 'dl-btn dl-btn-subtle dl-btn-sm', onclick: () => stop(false) }, h('span', null, 'Explore on your own'));
   const endRow = h('div', { class: 'dl-nar-end', hidden: true }, againBtn, exploreBtn);
 
   const el = h(
@@ -721,7 +723,10 @@ export function createStoryPlayer(
     if (current && restorePanel && panelWasOpen) deps.panel.setOpen(true);
   }
 
-  /** End the story; `restore` puts the user's state back (header) — not when the UI itself is going away. */
+  /**
+   * End the story; `restore` puts the user's state back (header). Not restored when the UI itself is going away, nor
+   * from *Explore on your own*, which keeps the story's state on purpose.
+   */
   function stop(restore = true) {
     startToken++;
     const was = !!current;
