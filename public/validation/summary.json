@@ -1,6 +1,6 @@
 {
  "version": 1,
- "generated": "2026-10-13T03:42:53.559Z",
+ "generated": "2026-10-13T04:06:25.428Z",
  "solver": "src/sim on nvidia turing nvidia-geforce-gtx-1660-ti D3D12 driver version 32.0.15.9595",
  "presets": {
   "pittsburgh": {
@@ -269,16 +269,16 @@
    "event": "Lhende avalanche / Trishuli debris flood, 26 Aug 2026",
    "headline": {
     "label": "Copernicus EMS damage grading (EMSR927, 1393 damaged or destroyed buildings)",
-    "value": "reaches 37 % of them · road CSI 29 %",
+    "value": "reaches 40 % of them · road CSI 32 %",
     "note": "Share of the buildings EMS graded destroyed or damaged that the modelled flood reaches, and agreement on which road stretches were destroyed."
    },
    "metrics": {
-    "ems.buildingHitRate": 0.3676,
-    "ems.buildingHitRateNear": 0.5528,
-    "ems.roads.csi": 0.2868,
-    "ems.roads.hitRate": 0.2868,
+    "ems.buildingHitRate": 0.4006,
+    "ems.buildingHitRateNear": 0.5915,
+    "ems.roads.csi": 0.3198,
+    "ems.roads.hitRate": 0.3198,
     "ems.roads.falseAlarmRatio": 0,
-    "ems.roads.frequencyBias": 0.2868
+    "ems.roads.frequencyBias": 0.3198
    },
    "runs": [
     {

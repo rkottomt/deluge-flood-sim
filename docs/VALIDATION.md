@@ -18,7 +18,7 @@ that happened. This page does, as far as public data allows — and in several p
 | **Pittsburgh** | FEMA 1 % zone and 1 % profile at FEMA's 1 % level | yes | **CSI 61 %**, hit rate 65 %, false alarms 10 %; water surface **−0.38 m** vs the profile (RMSE 0.71 m, 24 lines) — too flat |
 | **Asheville** (Helene 2024) | USGS peak stages at the 2 gauges in the domain | yes (steady peak discharge) | **−1.44 m** (French Broad) and **−1.22 m** (Swannanoa): too low |
 | **Houston** (Harvey 2017) | 13 USGS high-water marks at 9 sites | **no** — the scene is one hour of Harvey's rain, the marks record four days | bias −1.85 m, RMSE 2.56 m (7 wetted), 2 marks dry in the model |
-| **Betrawati, Nepal** (Aug 2026) | Copernicus EMS EMSR927 damage grading | partly — damage is not inundation | reaches **37 %** of the 1,393 buildings graded destroyed or damaged (55 % within 30 m); never floods a road graded undamaged |
+| **Betrawati, Nepal** (Aug 2026) | Copernicus EMS EMSR927 damage grading | partly — damage is not inundation | reaches **40 %** of the 1,393 buildings graded destroyed or damaged (59 % within 30 m); never floods a road graded undamaged |
 | Boulder, Ellicott City, Johnstown | FEMA 1 % zone only | **no** — historic events, not the 1 % flood | context only: 40 %, 60 % and 61 % of the connected 1 % zone flooded |
 | Raini–Tapovan (Chamoli), Chungthang | none in the domain | — | no observed extent or marks exist; the hazard chain is checked against published arrival times and peaks in `tests/hazard` |
 
@@ -229,14 +229,14 @@ but it grades every building and road segment: destroyed, damaged, possibly dama
 | | Value |
 | --- | --- |
 | Buildings graded destroyed / damaged / possibly damaged (in domain and analysed area) | 1,323 / 70 / 64 |
-| Destroyed or damaged reached by the modelled flood (≥ 0.15 m within one cell) | **36.8 %** (512 of 1,393) |
-| … within 30 m of the modelled flood (one 30 m DEM cell) | 55.3 % |
-| Road cells: destroyed/damaged vs no visible damage | CSI 28.7 %, hit rate 28.7 %, **false-alarm ratio 0 %** |
+| Destroyed or damaged reached by the modelled flood (≥ 0.15 m within one cell) | **40.1 %** (558 of 1,393) |
+| … within 30 m of the modelled flood (one 30 m DEM cell) | 59.2 % |
+| Road cells: destroyed/damaged vs no visible damage | CSI 32.0 %, hit rate 32.0 %, **false-alarm ratio 0 %** |
 
-**Reading it.** The model never floods a road EMS saw undamaged, but it reaches only a third of what EMS graded
+**Reading it.** The model never floods a road EMS saw undamaged, but it reaches only two fifths of what EMS graded
 destroyed: its flood is too narrow. Part of that is the comparison — damage is not inundation; buildings on the
 banks were undercut and collapsed, slopes failed (the EMS product maps landslides in the AOI), and grading from
-optical imagery days later sees debris and erosion, not water — and half the misses are within 30 m, one cell of the
+optical imagery days later sees debris and erosion, not water — and a third of the misses are within 30 m, one cell of the
 Copernicus GLO-30 DEM the terrain comes from. Part is the model: the inflow is the hazard chain's routed median member
 (`src/hazard`), not a measured hydrograph, and a 30 m radar DEM through a bare-earth filter has neither the narrow
 valley-floor detail nor the bed that this flood actually ran on.

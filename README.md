@@ -446,7 +446,7 @@ Full report, with the misses and why: [docs/VALIDATION.md](docs/VALIDATION.md).
 | Fort Myers / Nashville / Pittsburgh | FEMA 1 % zone at FEMA's 1 % level | CSI 88 % / 82 % / 61 % |
 | Asheville, Helene | USGS peak stage at 2 gauges | 1.44 m and 1.22 m too low |
 | Houston, Harvey | 9 USGS high-water-mark sites (the scene is 1 hour of a 4-day flood) | 1.85 m too low on average |
-| Betrawati, Nepal | Copernicus EMS EMSR927 damage grading | reaches 37 % of destroyed/damaged buildings, no false alarms on undamaged roads |
+| Betrawati, Nepal | Copernicus EMS EMSR927 damage grading | reaches 40 % of destroyed/damaged buildings, no false alarms on undamaged roads |
 
 ## How a frame works
 
