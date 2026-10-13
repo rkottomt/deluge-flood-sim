@@ -21,6 +21,8 @@
  *                      same-origin NOAA Atlas 14 grid behind Site check's rain ladder)
  *   DIST-*     SEC-07  no source maps, no local paths, no debug surfaces in the released bundle
  *   AUDIT-*    supply chain: `npm audit --omit=dev` is clean
+ *   *-PROJECT-*  saved projects (src/project): a ?project= link never puts its names on the page, never executes,
+ *              never pollutes Object.prototype and stops a gzip bomb; hostile .deluge.json files get fixed refusals
  *
  * A case whose fix has not landed yet is reported as PENDING rather than failing the build; DELUGE_SEC_STRICT=1
  * makes pending fatal too. Results: artifacts/security/security-results.json + a printed table; regressions exit 1.
@@ -615,6 +617,125 @@ try {
       flow.typed ? (ok ? `${choices} results rendered as text, window.__pwned unset` : JSON.stringify(t)) : 'address search not reachable — case not exercised',
       { ...flow, choices, ...t },
     );
+    await page.close();
+  }
+
+  // ── Saved projects: ?project= links and project files (src/project) ──────────────────────────
+  console.log('\nSaved projects: ?project= links and .deluge.json files (SEC-01/03/08)');
+  /** A project that passes the strict reader, with `text` in every name-ish field. */
+  const hostileProject = (text) => ({
+    format: 'deluge-project',
+    version: 1,
+    name: text,
+    scene: { kind: 'preset', id: 'pittsburgh' },
+    scenario: {
+      stageOffset: 0,
+      sim: { rainRate: 0 },
+      sources: [{ id: 'ohio-stage', type: 'stage', gx: -275.13, gy: 276, radius: 308.08, level: 216.225, offsetScale: 0.98631, label: text }],
+      storms: [],
+      shelters: [{ name: text, gx: 600, gy: 500 }],
+      evacStart: null,
+    },
+    edits: [{ op: 'wall', pts: [400, 500, 430, 488], h: 3, r: 2 }],
+    sites: [{ name: text, lon: -80.0085, lat: 40.4425, occupancy: 'office', floors: 3 }],
+    designs: [{ id: 'A', name: text, edits: [{ op: 'wall', pts: [400, 500, 430, 488], h: 3, r: 2 }], cost: { type: 'floodwall' } }],
+  });
+  const projectLink = (value) => `p1.${zlib.gzipSync(Buffer.from(typeof value === 'string' ? value : JSON.stringify(value)), { level: 9 }).toString('base64url')}`;
+  /** Open the app on a ?project= link; sample what the page shows for a few seconds (a notice is transient). */
+  async function openProjectLink(page, value) {
+    await page.goto(`${baseUrl}?preset=pittsburgh&project=${value}`, { waitUntil: 'load', timeout: 120000 });
+    await waitForApp(page);
+    let text = '';
+    for (let i = 0; i < 12; i++) {
+      text += '\n' + (await visibleText(page));
+      await page.waitForTimeout(500);
+    }
+    const applied = await page.evaluate(() => document.querySelectorAll('.dl-site-item').length);
+    return { text, applied };
+  }
+
+  if (shouldRun('SPOOF-PROJECT-LINK')) {
+    const page = await newPage(browser);
+    const p = hostileProject(SPOOF_NAME);
+    p.designs.push({ id: 'B', name: 'OFFICIAL NOTICE evacuate now', edits: [], cost: { type: 'earthen' } });
+    p.sites.push({ name: SPOOF_BIDI, lon: -80.0, lat: 40.44, occupancy: 'office', floors: 3 });
+    const { text, applied } = await openProjectLink(page, projectLink(p));
+    const found = SPOOF_MARKERS.filter((m) => text.includes(m));
+    const where = found.length ? await locateText(page, found) : [];
+    const bidi = /[‪-‮⁦-⁩]/.test(text);
+    const ok = found.length === 0 && !bidi;
+    // A link that was never applied proved nothing: then the case is pending, not a pass.
+    record('SPOOF-PROJECT-LINK', 'SEC-01', '?project= names (project, designs, sites, shelters, labels) never reach the page', !ok ? 'fail' : applied === 2 ? 'pass' : 'pending', ok ? `link applied (${applied} sites, named by the app); no attacker text` : `attacker text rendered: ${found.join(' | ')}${bidi ? ' + bidi' : ''}${where.length ? ` — in ${where.map((w) => w.where).join(', ')}` : ''}`, { found, bidi, where, applied });
+    await page.close();
+  }
+
+  if (shouldRun('XSS-PROJECT-LINK')) {
+    const page = await newPage(browser);
+    const p = hostileProject(XSS_PAYLOADS[0]);
+    p.designs.push({ id: 'B', name: XSS_PAYLOADS[1], edits: [], cost: { type: 'earthen' } });
+    p.scenario.shelters.push({ name: XSS_PAYLOADS[2], gx: 610, gy: 510 });
+    const { applied } = await openProjectLink(page, projectLink(p));
+    const t = await tripwires(page);
+    const clean = !t.pwned && t.injectedImgs === 0 && t.injectedScripts === 0 && t.iframes === 0;
+    record('XSS-PROJECT-LINK', 'SEC-08', 'hostile ?project= names do not execute', !clean ? 'fail' : applied ? 'pass' : 'pending', clean ? `link applied (${applied} site), window.__pwned unset` : JSON.stringify(t), { applied, ...t });
+    await page.close();
+  }
+
+  if (shouldRun('SPOOF-PROJECT-POLLUTE')) {
+    const page = await newPage(browser);
+    const raw = `{"format":"deluge-project","version":1,"name":${JSON.stringify(SPOOF_NAME)},"__proto__":{"polluted":"EVACUATE NOW"},"constructor":{"prototype":{"polluted":1}}}`;
+    const { text } = await openProjectLink(page, projectLink(raw));
+    const polluted = await page.evaluate(() => ({}).polluted !== undefined || Object.prototype.hasOwnProperty.call(Object.prototype, 'polluted'));
+    const found = SPOOF_MARKERS.filter((m) => text.includes(m));
+    const refused = /reserved key/.test(text);
+    record('SPOOF-PROJECT-POLLUTE', 'SEC-08', '__proto__ / constructor in a ?project= link: refused with a fixed sentence, no pollution', !polluted && !found.length && refused ? 'pass' : 'fail', `${refused ? 'fixed refusal shown' : 'no refusal notice'}; Object.prototype ${polluted ? 'POLLUTED' : 'clean'}${found.length ? `; echoed ${found.join(' | ')}` : ''}`);
+    await page.close();
+  }
+
+  if (shouldRun('CAP-PROJECT-LINK-BOMB')) {
+    // ~4 MB of zeros gzips into a link-sized value; the decoder must stop inflating at 256 KB.
+    const value = projectLink(Buffer.alloc(4 * 1048576).toString('latin1'));
+    const page = await newPage(browser);
+    const fits = value.length <= 6000;
+    const { text } = await openProjectLink(page, value);
+    const refused = /could not be unpacked/.test(text);
+    const alive = await page.evaluate(() => !!document.querySelector('.dl-scene-name')?.textContent);
+    record('CAP-PROJECT-LINK-BOMB', 'SEC-03', 'a gzip-bomb ?project= link (4 MB inflated) is refused', fits && refused && alive ? 'pass' : fits ? 'fail' : 'skip', `${value.length} characters; ${refused ? 'refused with the fixed sentence' : 'no refusal'}${alive ? ', app alive' : ', app dead'}`);
+    await page.close();
+  }
+
+  if (shouldRun('PROJECT-FILE-HOSTILE')) {
+    const page = await newPage(browser);
+    await page.goto(`${baseUrl}?preset=pittsburgh`, { waitUntil: 'load', timeout: 120000 });
+    await waitForApp(page);
+    await page.evaluate(() => {
+      const sec = document.querySelector('[data-section="project"]');
+      if (sec && !sec.classList.contains('dl-open')) sec.querySelector('.dl-sec-head')?.click();
+    });
+    const files = [
+      { name: 'xss.deluge.json', body: JSON.stringify(hostileProject(XSS_PAYLOADS[0])), expect: /^Opened/ },
+      { name: 'proto.deluge.json', body: '{"format":"deluge-project","version":1,"__proto__":{"polluted":1},"scene":{"kind":"preset","id":"pittsburgh"}}', expect: /reserved key/ },
+      { name: 'deep.deluge.json', body: `{"format":"deluge-project","version":1,"x":${'['.repeat(100000)}${']'.repeat(100000)}}`, expect: /nested too deeply/ },
+      { name: 'huge.deluge.json', body: `{"format":"deluge-project","version":1,"pad":"${'A'.repeat(3_100_000)}"}`, expect: /too large/ },
+      { name: 'inf.deluge.json', body: JSON.stringify(hostileProject('x')).replace('"stageOffset":0', '"stageOffset":1e400'), expect: /damaged or was edited/ },
+      { name: 'html.deluge.json', body: '<html><script>window.__pwned=1</script></html>', expect: /not valid JSON/ },
+      { name: 'newer.deluge.json', body: JSON.stringify({ ...hostileProject('x'), version: 99 }), expect: /newer version/ },
+    ];
+    const outcomes = [];
+    for (const f of files) {
+      await page.setInputFiles('[data-project="file"]', { name: f.name, mimeType: 'application/json', buffer: Buffer.from(f.body) });
+      await page.waitForFunction((prev) => {
+        const s = document.querySelector('[data-project="status"]')?.textContent ?? '';
+        return s && !/^Opening/.test(s) && s !== prev;
+      }, outcomes.at(-1)?.status ?? '', { timeout: 30000 }).catch(() => {});
+      const status = await page.evaluate(() => document.querySelector('[data-project="status"]')?.textContent ?? '');
+      outcomes.push({ file: f.name, status, ok: f.expect.test(status) });
+    }
+    const t = await tripwires(page);
+    const polluted = await page.evaluate(() => ({}).polluted !== undefined);
+    const clean = !t.pwned && t.injectedImgs === 0 && t.injectedScripts === 0 && t.iframes === 0 && !polluted;
+    const wrong = outcomes.filter((o) => !o.ok);
+    record('PROJECT-FILE-HOSTILE', 'SEC-08', 'hostile .deluge.json files: refused with fixed sentences, names only ever text', clean && !wrong.length ? 'pass' : 'fail', clean ? (wrong.length ? `unexpected: ${wrong.map((o) => `${o.file}: ${o.status.slice(0, 60)}`).join('; ')}` : `${outcomes.length} files handled, window.__pwned unset, no pollution`) : JSON.stringify({ ...t, polluted }), { outcomes, ...t });
     await page.close();
   }
 
