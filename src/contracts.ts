@@ -343,6 +343,32 @@ export interface SimParams {
    *   this mode (reset() fully recovers).
    */
   stabilityMode: 'robust' | 'naive';
+  /**
+   * Extension: multiplier on the storm-drain capacity of the land-surface layer (FloodSolver.setLandSurface
+   * drainCapacity; 1 = the land-cover table's design capacity). Absent = 1. No effect without a drain layer.
+   */
+  drainageScale?: number;
+}
+
+/**
+ * Land-surface layers for the solver (FloodSolver.setLandSurface, extension; ARCHITECTURE.md §3.11). Every array is
+ * nx·ny, row-major. null switches a layer off (the solver then behaves exactly as without it); a key left out keeps
+ * the layer the solver already has.
+ */
+export interface LandSurface {
+  /**
+   * Building obstacles: height above the ground, m, raised into the bed the water sees ("building block"), 0 = open.
+   * Cells already wet in the initial water (rivers, lakes) are never blocked. Not part of bedTexture (the renderer
+   * draws the buildings themselves) nor of the ground / barrier CPU mirrors.
+   */
+  obstacles?: Float32Array | null;
+  /**
+   * Manning's n per cell from land cover, s·m^-1/3, as it applies at the default global n (DEFAULT_SIM_PARAMS.manningN):
+   * the global n then scales the whole map (n_cell × manningN / 0.035). A face takes the mean n of its two cells.
+   */
+  roughness?: Float32Array | null;
+  /** Storm-drain capacity per cell, mm/hr of water depth removed while water stands there (× SimParams.drainageScale). */
+  drainCapacity?: Float32Array | null;
 }
 
 export const DEFAULT_SIM_PARAMS: SimParams = {
@@ -518,6 +544,13 @@ export interface FloodSolver {
    */
   setBedPerturbation?(delta: Float32Array | null): void;
 
+  /**
+   * Extension (GpuFloodSolver): building obstacles, a land-cover roughness map and storm drains (LandSurface). Takes
+   * effect from the next step without a reset: switching obstacles on lifts any water standing in a footprint onto
+   * the roof (it then spills off), which conserves mass. reset() keeps the layers.
+   */
+  setLandSurface?(layers: LandSurface): void;
+
   destroy(): void;
 }
 
@@ -546,6 +579,11 @@ export interface HazardFields {
   firstWet: Float32Array;
   /** Total simulated seconds the cell has been wet. */
   wetSeconds: Float32Array;
+  /**
+   * Extension: 1 where a building obstacle blocks the cell (LandSurface.obstacles), absent when none does. Water does
+   * not enter a blocked cell, so impact sampling reads the open cells around it instead (src/loss/impact.ts).
+   */
+  blocked?: Uint8Array;
 }
 
 // ────────────────────────────────────────────────────────────────────────────────────────────

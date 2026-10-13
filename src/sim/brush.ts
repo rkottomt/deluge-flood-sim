@@ -147,3 +147,21 @@ export function packBrushUniform(op: BrushOp, rect: Rect, nx: number, ny: number
   fv[14] = z0;
   return buf;
 }
+
+/** Brush kind that edits nothing and only rebuilds the state bed (building obstacles switched; shaders/brush.ts). */
+export const BRUSH_KIND_REBED = 4;
+
+/** Brush uniform for a rebed pass over the whole grid. */
+export function packRebedUniform(nx: number, ny: number, z0: number): ArrayBuffer {
+  const buf = new ArrayBuffer(64);
+  const iv = new Int32Array(buf);
+  const fv = new Float32Array(buf);
+  iv[0] = BRUSH_KIND_REBED;
+  iv[1] = nx;
+  iv[2] = ny;
+  iv[6] = nx;
+  iv[7] = ny;
+  fv[12] = 1;
+  fv[14] = z0;
+  return buf;
+}

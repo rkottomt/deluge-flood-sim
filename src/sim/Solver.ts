@@ -43,6 +43,7 @@ import {
   type BrushOp,
   type FloodSolver,
   type HazardFields,
+  type LandSurface,
   type SimParams,
   type SimSnapshot,
   type SimStats,
@@ -51,7 +52,7 @@ import {
   type StormCell,
   type WaterSource,
 } from '../contracts';
-import { applyBrushCPU, brushOpValid, brushRect, packBrushUniform } from './brush';
+import { applyBrushCPU, brushOpValid, brushRect, packBrushUniform, packRebedUniform } from './brush';
 import { GpuWorkBudget } from './budget';
 import {
   DEFAULT_SOLVER_OPTIONS,
@@ -71,7 +72,7 @@ import { HAZARD_PER_CELL, unpackHazardFields } from './hazard';
 import { RHEO_VISC_DEPTH, rheologyCoefficients } from './rheology';
 import type { Rheology } from '../hazard/types';
 import { brushWGSL, BRUSH_UNIFORM_BYTES } from './shaders/brush';
-import { ACC_PER_CELL, FORCING_UNIFORM_BYTES, SIM_UNIFORM_BYTES } from './shaders/common';
+import { ACC_PER_CELL, FORCING_UNIFORM_BYTES, SIM_UNIFORM_BYTES, SURF_DRAINS, SURF_ROUGHNESS } from './shaders/common';
 import { continuityWGSL } from './shaders/continuity';
 import { exportWGSL } from './shaders/exportState';
 import { momentumWGSL } from './shaders/momentum';
@@ -143,6 +144,19 @@ export class GpuFloodSolver implements FloodSolver {
   /** Ensemble DEM perturbation currently added to `ground` (setBedPerturbation), or null. */
   private bedPerturb: Float32Array | null = null;
   private readonly barrier: Float32Array;
+  /**
+   * Land-surface layers (setLandSurface): the building obstacles as given (null = off) and as applied — the given
+   * heights with cells wet in the initial water left open, all zero when off; the applied ones are part of the state
+   * bed (ground + barrier + obstacle) and of obstacleTex, never of bedTexture or the CPU ground/barrier mirrors.
+   */
+  private obstacleInput: Float32Array | null = null;
+  private readonly obstacle: Float32Array;
+  private obstacleCount = 0;
+  private readonly obstacleTex: GPUTexture;
+  /** rg32float: (roughness factor, drain capacity m/s) per cell — see SURFACE_WGSL in shaders/common.ts. */
+  private readonly surfaceTex: GPUTexture;
+  private roughnessOn = false;
+  private drainsOn = false;
   private readonly groundTex: GPUTexture;
   private readonly stateTex: [GPUTexture, GPUTexture];
   private readonly fluxTex: GPUTexture;
@@ -352,6 +366,7 @@ export class GpuFloodSolver implements FloodSolver {
     }
     this.ground = this.originalGround.slice();
     this.barrier = new Float32Array(this.N);
+    this.obstacle = new Float32Array(this.N);
     this.initialDepth = new Float32Array(this.N);
     this.dryAtReset = new Uint8Array(this.N).fill(1);
 
@@ -367,6 +382,15 @@ export class GpuFloodSolver implements FloodSolver {
     this.groundTex = tex('sim.ground', 'r32float', terrUsage);
     this.barrierTexture = tex('sim.barrier', 'r32float', terrUsage);
     this.bedTexture = tex('sim.bed', 'r32float', terrUsage);
+    this.obstacleTex = tex('sim.obstacle', 'r32float', U.TEXTURE_BINDING | U.COPY_DST);
+    this.surfaceTex = tex('sim.surface', 'rg32float', U.TEXTURE_BINDING | U.COPY_DST);
+    {
+      // No land-surface layers: roughness factor 1, no drains (read only once a layer switches its flag on).
+      const surf = new Float32Array(this.N * 2);
+      for (let c = 0; c < this.N; c++) surf[2 * c] = 1;
+      device.queue.writeTexture({ texture: this.surfaceTex }, surf, { bytesPerRow: nx * 8 }, { width: nx, height: ny });
+      device.queue.writeTexture({ texture: this.obstacleTex }, this.obstacle, { bytesPerRow: nx * 4 }, { width: nx, height: ny });
+    }
 
     const B = GPUBufferUsage;
     this.accBuf = device.createBuffer({
@@ -414,6 +438,7 @@ export class GpuFloodSolver implements FloodSolver {
           { binding: 0, resource: ub(this.simBuf) },
           { binding: 1, resource: this.stateTex[p].createView() },
           { binding: 2, resource: this.fluxTex.createView() },
+          { binding: 3, resource: this.surfaceTex.createView() },
         ],
       }),
     );
@@ -428,6 +453,7 @@ export class GpuFloodSolver implements FloodSolver {
           { binding: 3, resource: this.fluxTex.createView() },
           { binding: 4, resource: this.stateTex[1 - p].createView() },
           { binding: 5, resource: ub(this.accBuf) },
+          { binding: 6, resource: this.surfaceTex.createView() },
         ],
       }),
     );
@@ -539,7 +565,7 @@ export class GpuFloodSolver implements FloodSolver {
     let built: Awaited<ReturnType<typeof make>>[];
     try {
       built = await Promise.all([
-      make('sim.momentum', momentumWGSL, [uniform(0, SIM_UNIFORM_BYTES), sampled(1), storageTex(2, 'rg32float')]),
+      make('sim.momentum', momentumWGSL, [uniform(0, SIM_UNIFORM_BYTES), sampled(1), storageTex(2, 'rg32float'), sampled(3)]),
       make('sim.continuity', continuityWGSL, [
         uniform(0, SIM_UNIFORM_BYTES),
         uniform(1, FORCING_UNIFORM_BYTES),
@@ -547,6 +573,7 @@ export class GpuFloodSolver implements FloodSolver {
         sampled(3),
         storageTex(4, 'rgba32float'),
         storageBuf(5),
+        sampled(6),
       ]),
       make('sim.export', exportWGSL, [uniform(0, SIM_UNIFORM_BYTES), sampled(1), sampled(2), storageTex(3, 'rgba32float'), storageBuf(4)]),
       make('sim.brush', brushWGSL, [
@@ -559,6 +586,7 @@ export class GpuFloodSolver implements FloodSolver {
         storageTex(6, 'r32float'),
         storageTex(7, 'r32float'),
         storageBuf(8),
+        sampled(9),
       ]),
       make('sim.raise', raiseWGSL, [uniform(0, RAISE_UNIFORM_BYTES), sampled(1), sampled(2), storageTex(3, 'rgba32float'), storageBuf(4)]),
       make('sim.stats', statsWGSL, [
@@ -771,7 +799,7 @@ export class GpuFloodSolver implements FloodSolver {
       let overWater = -Infinity;
       for (let k = 0; k < res.cells.length; k++) {
         const c = res.cells[k];
-        const d = res.levels[k] - (this.ground[c] + this.barrier[c]);
+        const d = res.levels[k] - (this.ground[c] + this.barrier[c] + this.obstacle[c]);
         if (d > overBed) overBed = d;
         if (d - depth[c] > overWater) overWater = d - depth[c];
       }
@@ -900,7 +928,7 @@ export class GpuFloodSolver implements FloodSolver {
       for (let c = 0; c < N; c++) {
         const h = this.initialDepth[c];
         data[4 * c] = h;
-        data[4 * c + 3] = Math.fround(this.ground[c] + this.barrier[c]) - this.z0;
+        data[4 * c + 3] = this.stateBed(c) - this.z0;
         if (h > hMax) hMax = h;
       }
       this.resetHMax = hMax;
@@ -1002,6 +1030,8 @@ export class GpuFloodSolver implements FloodSolver {
     this.initialVolume = vol * this.cellArea;
     this.resetTexValid = false;
     this.initialVersion++;
+    // Obstacles leave cells wet in the initial water open; the reset below rebuilds the state bed with them.
+    this.applyObstacles();
     this.uploadDryMask();
     this.reset();
   }
@@ -1073,13 +1103,20 @@ export class GpuFloodSolver implements FloodSolver {
       throw new Error(this.destroyed ? 'solver destroyed' : 'readHazardFields: mapping failed (device lost?)');
     }
     try {
-      return unpackHazardFields(
+      const fields = unpackHazardFields(
         new Float32Array(set.hazard.getMappedRange()),
         new Float32Array(set.state.getMappedRange()),
         nx,
         ny,
         simTime,
       );
+      // Building obstacles: which cells water cannot enter (impact sampling then reads around them).
+      if (this.obstacleCount > 0) {
+        const blocked = new Uint8Array(N);
+        for (let c = 0; c < N; c++) if (this.obstacle[c] > 0) blocked[c] = 1;
+        fields.blocked = blocked;
+      }
+      return fields;
     } finally {
       release();
     }
@@ -1088,7 +1125,7 @@ export class GpuFloodSolver implements FloodSolver {
   destroy(): void {
     if (this.destroyed) return;
     this.destroyed = true;
-    for (const t of [...this.stateTex, ...this.exportTex, this.fluxTex, this.groundTex, this.barrierTexture, this.bedTexture]) {
+    for (const t of [...this.stateTex, ...this.exportTex, this.fluxTex, this.groundTex, this.barrierTexture, this.bedTexture, this.obstacleTex, this.surfaceTex]) {
       t.destroy();
     }
     for (const t of this.brushRes?.tex ?? []) t.destroy();
@@ -1546,6 +1583,13 @@ export class GpuFloodSolver implements FloodSolver {
     fv[33] = rc.gXi;
     fv[34] = RHEO_VISC_DEPTH;
     fv[35] = 0;
+    // Land-surface layers (setLandSurface): roughness map in the momentum pass, drains in the continuity pass. Water
+    // only for the roughness map: a debris rheology keeps its own uniform coefficients.
+    const ds = p.drainageScale;
+    iv[36] = (this.roughnessOn ? SURF_ROUGHNESS : 0) | (this.drainsOn ? SURF_DRAINS : 0);
+    fv[37] = typeof ds === 'number' && Number.isFinite(ds) ? Math.max(0, ds) : 1;
+    fv[38] = 0;
+    fv[39] = 0;
     this.device.queue.writeBuffer(this.simBuf, 0, this.simBytes);
   }
 
@@ -1578,7 +1622,7 @@ export class GpuFloodSolver implements FloodSolver {
    *    Δh from the latest snapshot's depth (the initial water right after a reset).
    */
   private forcingSpeedEstimate(): number {
-    const { ground, barrier } = this;
+    const { ground, barrier, obstacle } = this;
     const depth = this.snapshot?.depth ?? this.initialDepth;
     let u = 0;
     for (const s of this.sources.slice(0, MAX_SOURCES)) {
@@ -1592,7 +1636,7 @@ export class GpuFloodSolver implements FloodSolver {
       let dh = 0;
       for (let k = 0; k < cells.length; k++) {
         const c = cells[k];
-        dh = Math.max(dh, s.level - (ground[c] + barrier[c] + depth[c]));
+        dh = Math.max(dh, s.level - (ground[c] + barrier[c] + obstacle[c] + depth[c]));
       }
       if (dh > 0) u = Math.max(u, 2 * Math.sqrt(GRAVITY * dh));
     }
@@ -1638,7 +1682,7 @@ export class GpuFloodSolver implements FloodSolver {
   }
 
   private packForcingNow(): PackedForcing {
-    const { ground, barrier } = this;
+    const { ground, barrier, obstacle } = this;
     return packForcing(
       this.sources,
       this.storms,
@@ -1646,7 +1690,7 @@ export class GpuFloodSolver implements FloodSolver {
       this.ny,
       this.cellSize,
       this.z0,
-      (c) => ground[c] + barrier[c],
+      (c) => ground[c] + barrier[c] + obstacle[c],
       this.footprintOf,
       this.forcingWindow ?? undefined,
     );
@@ -1665,14 +1709,14 @@ export class GpuFloodSolver implements FloodSolver {
   /** Keep reset()'s GPU copy of the initial state current over a brushed rectangle (its bed changed). */
   private patchResetState(rect: { x0: number; y0: number; w: number; h: number }): void {
     if (!this.resetTexValid || !this.resetTex) return;
-    const { nx, ground, barrier, z0, initialDepth } = this;
+    const { nx, z0, initialDepth } = this;
     const data = new Float32Array(rect.w * rect.h * 4);
     for (let j = 0; j < rect.h; j++) {
       for (let i = 0; i < rect.w; i++) {
         const c = (rect.y0 + j) * nx + rect.x0 + i;
         const o = 4 * (j * rect.w + i);
         data[o] = initialDepth[c];
-        data[o + 3] = Math.fround(ground[c] + barrier[c]) - z0;
+        data[o + 3] = this.stateBed(c) - z0;
       }
     }
     this.device.queue.writeTexture(
@@ -1701,6 +1745,132 @@ export class GpuFloodSolver implements FloodSolver {
    */
   get wallBounds(): { x0: number; y0: number; x1: number; y1: number } | null {
     return this.wallRect ? { ...this.wallRect } : null;
+  }
+
+  /**
+   * Bed elevation of cell c as the state texture holds it (before the datum shift): ground + barrier + obstacle in
+   * Float32, added in the order the brush pass adds them, so a reset and a brushed rectangle agree to the bit. Without
+   * obstacles this is fround(ground + barrier), as it always was.
+   */
+  private stateBed(c: number): number {
+    return Math.fround(Math.fround(this.ground[c] + this.barrier[c]) + this.obstacle[c]);
+  }
+
+  /**
+   * Land-surface layers (FloodSolver.setLandSurface; contracts.ts LandSurface): building obstacles, the land-cover
+   * roughness map and storm drains. A key left out keeps that layer; null switches it off.
+   *  • obstacles become part of the state bed at once, without a reset: a rebed pass (shaders/brush.ts kind 4) rebuilds
+   *    z over the whole grid and keeps h, so water standing in a footprint is lifted onto the roof and spills off —
+   *    mass is untouched. Cells wet in the initial water are never blocked (a footprint mapped over a river or a dock
+   *    must not dam it); bedTexture and the CPU ground / barrier mirrors are unchanged (the renderer draws buildings).
+   *  • roughness (absolute n at the default global n) and drain capacity (mm/hr) are uploaded to the surface texture;
+   *    their Sim flag bits switch the momentum / continuity reads on.
+   */
+  setLandSurface(layers: LandSurface): void {
+    if (this.destroyed || !layers) return;
+    const { N } = this;
+    const check = (a: Float32Array | null | undefined, name: string) => {
+      if (a && a.length !== N) throw new Error(`setLandSurface: ${name} must have ${N} values, got ${a.length}`);
+    };
+    check(layers.obstacles, 'obstacles');
+    check(layers.roughness, 'roughness');
+    check(layers.drainCapacity, 'drainCapacity');
+    if (layers.roughness !== undefined || layers.drainCapacity !== undefined) {
+      if (layers.roughness !== undefined) this.roughnessOn = !!layers.roughness;
+      if (layers.drainCapacity !== undefined) this.drainsOn = !!layers.drainCapacity;
+      this.writeSurface(layers.roughness, layers.drainCapacity);
+    }
+    if (layers.obstacles !== undefined) {
+      this.obstacleInput = layers.obstacles ? layers.obstacles.slice() : null;
+      if (this.applyObstacles()) this.rebed();
+    }
+  }
+
+  /** The obstacle heights in force (0 = open), or null when no cell is blocked. Owned by the solver: do not mutate. */
+  getObstacleCPU(): Float32Array | null {
+    return this.obstacleCount > 0 ? this.obstacle : null;
+  }
+
+  /** Which land-surface layers are switched on, and how many cells the obstacles block. */
+  get landSurfaceState(): { obstacles: number; roughness: boolean; drains: boolean } {
+    return { obstacles: this.obstacleCount, roughness: this.roughnessOn, drains: this.drainsOn };
+  }
+
+  /**
+   * Re-upload the surface texture's channels that changed (undefined = keep; null = neutral: factor 1, no drain). The
+   * texture has two channels, so a change to one rewrites both from the CPU copy kept here.
+   */
+  private surfaceCPU: Float32Array | null = null;
+  private writeSurface(roughness: Float32Array | null | undefined, drain: Float32Array | null | undefined): void {
+    const { N, nx, ny } = this;
+    let s = this.surfaceCPU;
+    if (!s) {
+      s = new Float32Array(2 * N);
+      for (let c = 0; c < N; c++) s[2 * c] = 1;
+      this.surfaceCPU = s;
+    }
+    const nRef = DEFAULT_SIM_PARAMS.manningN;
+    if (roughness !== undefined) {
+      for (let c = 0; c < N; c++) {
+        const n = roughness ? roughness[c] : nRef;
+        // A cell with no valid n keeps the global value (factor 1).
+        s[2 * c] = Number.isFinite(n) && n > 0 ? n / nRef : 1;
+      }
+    }
+    if (drain !== undefined) {
+      for (let c = 0; c < N; c++) {
+        const v = drain ? drain[c] : 0;
+        s[2 * c + 1] = Number.isFinite(v) && v > 0 ? v * MMHR_TO_MS : 0;
+      }
+    }
+    this.device.queue.writeTexture({ texture: this.surfaceTex }, s, { bytesPerRow: nx * 8 }, { width: nx, height: ny });
+  }
+
+  /**
+   * Recompute the applied obstacles from the given heights and the initial water; upload them when they changed.
+   * Returns true if they changed (the state bed then needs rebuilding: rebed, or the next reset's state rebuild).
+   */
+  private applyObstacles(): boolean {
+    const { N, obstacle, obstacleInput: inp, initialDepth } = this;
+    let changed = false;
+    let count = 0;
+    for (let c = 0; c < N; c++) {
+      const v = inp ? inp[c] : 0;
+      const o = Number.isFinite(v) && v > 0 && initialDepth[c] < WET_DEPTH ? Math.fround(v) : 0;
+      if (o !== obstacle[c]) {
+        obstacle[c] = o;
+        changed = true;
+      }
+      if (o > 0) count++;
+    }
+    this.obstacleCount = count;
+    if (!changed) return false;
+    const { nx, ny } = this;
+    this.device.queue.writeTexture({ texture: this.obstacleTex }, obstacle, { bytesPerRow: nx * 4 }, { width: nx, height: ny });
+    this.resetTexValid = false;
+    // The stage discs' depth bound reads the bed (packForcing).
+    this.forcingDirty = true;
+    return true;
+  }
+
+  /** Rebuild the state bed over the whole grid in place (brush kind 4), keeping water and discharge. */
+  private rebed(): void {
+    const res = this.ensureBrushResources();
+    const { device, nx, ny } = this;
+    device.queue.writeBuffer(this.brushBuf, 0, packRebedUniform(nx, ny, this.z0));
+    const enc = device.createCommandEncoder({ label: 'sim.rebed' });
+    const pass = enc.beginComputePass({ label: 'sim.rebed' });
+    pass.setPipeline(this.brushPipe);
+    pass.setBindGroup(0, res.bg[this.cur]);
+    pass.dispatchWorkgroups(Math.ceil(nx / WG), Math.ceil(ny / WG));
+    pass.end();
+    const size = { width: nx, height: ny };
+    enc.copyTextureToTexture({ texture: res.tex[0] }, { texture: this.stateTex[this.cur] }, size);
+    this.writeSimUniform(0);
+    this.encodeExport(enc);
+    this.stateVersionN++;
+    this.editSeq++;
+    device.queue.submit([enc.finish()]);
   }
 
   private uploadTerrain(): void {
@@ -1792,6 +1962,7 @@ export class GpuFloodSolver implements FloodSolver {
           { binding: 6, resource: tex[2].createView() },
           { binding: 7, resource: tex[3].createView() },
           { binding: 8, resource: { buffer: this.accBuf } },
+          { binding: 9, resource: this.obstacleTex.createView() },
         ],
       }),
     );

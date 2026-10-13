@@ -7,6 +7,9 @@
  * kind 1 eraseWall: barrier = barrier · smoothstep(r, r+1, d)                        (capsule a→b)
  * kind 2 water    : h = max(0, h + amount · falloff(d/r))                            (disc at a)
  * kind 3 terrain  : ground = ground + delta · falloff(d/r)                           (disc at a)
+ * kind 4 rebed    : nothing edited; the state bed is rebuilt (building obstacles switched on or off)
+ * The state bed is ground + barrier + obstacle (building obstacles, FloodSolver.setLandSurface); bedOut leaves the
+ * obstacles out.
  * falloff(t) = (1 − t²)² for t < 1.
  * When the bed rises under water, h is kept (the water is lifted) — simple and mass-conserving.
  * Water edits are accounted in the mass-balance buffer.
@@ -31,6 +34,9 @@ struct Brush {
 @group(0) @binding(6) var barrierOut: texture_storage_2d<r32float, write>;
 @group(0) @binding(7) var bedOut: texture_storage_2d<r32float, write>;
 @group(0) @binding(8) var<storage, read_write> acc: array<f32>;
+// Building obstacles (land-surface layer, m above ground; 0 = open): part of the bed the water sees, not of the
+// rendered bed (bedOut = ground + barrier, the FloodSolver.bedTexture contract).
+@group(0) @binding(9) var obstacleTex: texture_2d<f32>;
 
 fn capsuleDist(p: vec2f, a: vec2f, b: vec2f) -> f32 {
   let pa = p - a;
@@ -71,12 +77,13 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     let idx = ${ACC_PER_CELL}u * (u32(q.y) * u32(br.nx) + u32(q.x));
     if (dv > 0.0) { acc[idx] = acc[idx] + dv; }
     if (dv < 0.0) { acc[idx + 1u] = acc[idx + 1u] - dv; }
-  } else {
+  } else if (br.kind == 3) {
     let d = distance(p, br.a);
     ground = ground + br.value * falloff(d, r);
   }
   let bed = ground + barrier;
-  textureStore(stateOut, q, vec4f(h, s.g, s.b, bed - br.z0));
+  let obstacle = textureLoad(obstacleTex, q, 0).r;
+  textureStore(stateOut, q, vec4f(h, s.g, s.b, (bed + obstacle) - br.z0));
   textureStore(groundOut, q, vec4f(ground, 0.0, 0.0, 0.0));
   textureStore(barrierOut, q, vec4f(barrier, 0.0, 0.0, 0.0));
   textureStore(bedOut, q, vec4f(bed, 0.0, 0.0, 0.0));

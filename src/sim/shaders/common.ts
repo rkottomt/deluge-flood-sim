@@ -23,9 +23,14 @@ export const ACC_PER_CELL = 2;
  * read by the export pass alone (its hazard accumulators, shaders/exportState.ts): the simulated time the export
  * describes and the simulated seconds since the previous export. The rheo* fields are the scenario's debris-flow
  * rheology (src/sim/rheology.ts; read by the momentum pass alone, rheoKind 0 = water); rheoPad keeps the struct a
- * multiple of 16 bytes.
+ * multiple of 16 bytes. The surf* fields switch the land-surface layers (FloodSolver.setLandSurface, the `surfTex`
+ * texture of SURFACE_WGSL): surfFlags bit 0 = per-cell Manning roughness (momentum pass), bit 1 = storm drains
+ * (continuity pass); drainScale multiplies the per-cell drain capacity. surfFlags 0 never reads the texture.
  */
-export const SIM_UNIFORM_BYTES = 144;
+export const SIM_UNIFORM_BYTES = 160;
+/** Sim.surfFlags bits. */
+export const SURF_ROUGHNESS = 1;
+export const SURF_DRAINS = 2;
 /** Byte size of the `Forcing` uniform. */
 export const FORCING_UNIFORM_BYTES = (2 * MAX_SOURCES + MAX_STORMS) * 16;
 
@@ -40,7 +45,21 @@ struct Sim {
   bFrMax: f32, wallAdv: f32, hzTime: f32, hzSpan: f32,
   rheoKind: i32, rheoTau: f32, rheoMu: f32, rheoVisc: f32,
   rheoN2: f32, rheoGXi: f32, rheoHVisc: f32, rheoPad: f32,
+  surfFlags: i32, drainScale: f32, surfPad0: f32, surfPad1: f32,
 };
+`;
+
+/**
+ * Land-surface texture (rg32float, nx×ny), bound to the momentum and continuity passes:
+ *   r = Manning roughness factor of the cell, relative to the global n (SimParams.manningN): a face's n is
+ *       manningN · (r_L + r_R)/2, so n² = sim.n2 · r_f². r = 1 everywhere reproduces the uniform-n solver bit for bit.
+ *   g = storm-drain capacity of the cell, m/s of depth (× sim.drainScale).
+ * Read only when the matching sim.surfFlags bit is set.
+ */
+export const SURFACE_WGSL = /* wgsl */ `
+fn surf(i: i32, j: i32) -> vec2f {
+  return textureLoad(surfTex, vec2i(clamp(i, 0, sim.nx - 1), clamp(j, 0, sim.ny - 1)), 0).rg;
+}
 `;
 
 export const FORCING_WGSL = /* wgsl */ `
