@@ -16,6 +16,7 @@ import {
   REACHED_DEPTH,
   USEFUL_LIFE_WALL_YEARS,
   defaultFirstFloorHeight,
+  designEventText,
   depthAboveFloor,
   egressClause,
   exceedanceCurve,
@@ -91,7 +92,10 @@ export function siteRunRows(run: SiteRun, money: (v: number) => string, alertTim
     rows.push(['Under water for', `${fmtMinutes(r.wetSeconds)} of the ${fmtMinutes(run.simTime)} run (a lower bound if the run stopped first)`]);
     rows.push(['Damage', `${pct(r.damage)} of the building · ${money(r.loss)} (±1σ ${money(r.lossLo)} – ${money(r.lossHi)})`]);
     if (r.criticalWet !== null) rows.push(['Critical equipment', r.criticalWet ? 'under water' : 'stays dry']);
-    if (r.state === 'partial' || r.state === 'collapse') rows.push(['Fast water', r.state === 'collapse' ? 'collapse criterion met' : 'partial structural damage criterion met']);
+    if (r.state === 'partial' || r.state === 'collapse' || r.collapseShare > 0) {
+      const what = r.state === 'collapse' ? 'collapse criterion met' : r.state === 'partial' ? 'partial structural damage criterion met' : 'approaching the collapse criterion';
+      rows.push(['Fast water', `${what} — depth × speed ${num(r.structuralDV, 1)} m²/s over the footprint (90th percentile; 7 m²/s collapses), ${pct(r.collapseShare)} of the way to total loss`]);
+    }
   }
   rows.push(['Egress to a shelter', capital(egressClause(run))]);
   if (r.accessKnown) rows.push(['Nearest road', `${r.accessRoad || 'unnamed'}: ${r.accessCut ? `impassable (≥ ${ROAD_FLOODED_DEPTH_M} m) from about ${formatClock(r.accessCutAt)}` : 'stays passable'}`]);
@@ -174,7 +178,7 @@ export function exceedanceChart(sum: SweepSummary, money: (v: number) => string,
 
 export function ffeRows(rec: FfeRecommendation): Array<[string, string]> {
   return [
-    ['Design event', `${rec.designLabel}${rec.designBasis === '100-yr' ? ' — the 1 %-annual-chance level' : ' — your selection (no 1 % level was run)'}`],
+    ['Design event', designEventText(rec)],
     ['Design water surface at the site', Number.isFinite(rec.designWse) ? `${num(rec.designWse, 2)} m above datum` : 'does not reach the site'],
     ['Freeboard', `${mft(rec.freeboardM)} — ${rec.freeboardBasis}`],
     ['Indicative finished floor', Number.isFinite(rec.designWse) ? `${num(rec.ffe, 2)} m above datum = ${mft(rec.ffeAboveGrade)} above the lowest grade` : `no requirement from this model; planned ${mft(rec.plannedFloorM)}`],
