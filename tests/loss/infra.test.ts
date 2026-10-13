@@ -10,7 +10,7 @@ import path from 'node:path';
 import type { HazardFields, RoadNetwork } from '../../src/contracts';
 import { classifyFacility, decodeFacilities, encodeFacilities, FACILITY_KINDS, overpassFacilitiesQuery, parseOverpassFacilities, type Facility, type OverpassElement } from '../../src/data/facilities';
 import { assessFacilities, FACILITY_THRESHOLDS, sortExposures, summarizeInfra } from '../../src/loss/infra';
-import { downtimeWithDependencies, reachLine, siteDependencies, utilityLine } from '../../src/loss/infraDeps';
+import { downtimeWithDependencies, reachLine, shelterLine, siteDependencies, utilityLine } from '../../src/loss/infraDeps';
 import { createRouter } from '../../src/routing';
 
 const NX = 100, NY = 20, CS = 10;
@@ -147,4 +147,40 @@ test('site dependencies: nearest substation floods while the site stays dry; the
   // Downtime: a dry, undamaged site is down as long as its power is.
   assert.equal(downtimeWithDependencies({ baseDays: 0, depthAboveFloor: -1, damage: 0, rebuildDays: 180, utilityDays: deps.utilityDays }), 10);
   assert.equal(downtimeWithDependencies({ baseDays: 30, depthAboveFloor: 0.5, damage: 0.05, rebuildDays: 180, utilityDays: 10 }), 21 + 9 + 10);
+});
+
+test('shelters as dependencies: one that floods itself and one that loses its substation are flagged; routing skips the flooded one', () => {
+  const f = fields();
+  wet(f, 18, 22, 0.6, 1200); // Sub West and the shelter at x 20 flood at T+20 min
+  const list = [fac('substation', 20, 12, 'Sub West'), fac('substation', 95, 12, 'Sub East')];
+  const ex = assessFacilities(list, f, toGrid, CS);
+  const shelters = [
+    { name: 'Low School', gx: 20.5, gy: 10.5 },
+    { name: 'Hill Church', gx: 30.5, gy: 2.5 },
+    { name: 'East Hall', gx: 90.5, gy: 10.5 },
+  ];
+  const router = createRouter();
+  router.setNetwork(street(), CS, { nx: NX, ny: NY });
+  const site = { ...toLonLat(40, 10), gx: 40.5, gy: 10.5, siteWet: false };
+  const deps = siteDependencies(site, { fields: f, exposures: ex, router, shelters, grid: { nx: NX, ny: NY, cellSize: CS } });
+  assert.deepEqual(deps.shelters.map((s) => s.name), ['Low School', 'Hill Church', 'East Hall']);
+  const [low, hill, east] = deps.shelters;
+  assert.equal(low.floodsAt, 1200);
+  assert.match(shelterLine(low), /floods itself \(0\.60 m\) from about T\+20 min — not a refuge from then/);
+  assert.ok(Number.isNaN(hill.floodsAt));
+  assert.equal(hill.power!.exposure.facility.name, 'Sub West');
+  assert.ok(hill.power!.distanceM > 100 && hill.power!.distanceM < 150, `${hill.power!.distanceM}`);
+  assert.match(shelterLine(hill), /its substation \(Sub West\) floods at T\+20 min — expect no grid power there/);
+  assert.equal(east.power!.exposure.facility.name, 'Sub East');
+  assert.match(shelterLine(east), /^stays dry; its substation \(Sub East\) keeps working$/);
+  assert.ok(deps.flags.some((x) => /^Shelter Low School floods itself from about T\+20 min/.test(x)));
+  assert.ok(deps.flags.some((x) => /^Shelter Hill Church stays dry but its substation \(Sub West\) floods at T\+20 min/.test(x)));
+  assert.ok(!deps.flags.some((x) => /East Hall/.test(x)));
+  // The router at the peak: the flooded shelter is no destination; East Hall is reached instead.
+  router.updateFlood(f.maxDepth, NX, NY);
+  const r = router.route({ gx: 40.5, gy: 10.5 }, [shelters[0], shelters[2]]);
+  assert.equal(r.state, 'ok');
+  assert.equal(r.shelter!.name, 'East Hall');
+  // No shelters given: none listed.
+  assert.deepEqual(siteDependencies(site, { fields: f, exposures: ex, router: null }).shelters, []);
 });
