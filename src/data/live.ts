@@ -15,6 +15,7 @@ import type { LiveWorkerRequest, LiveWorkerResponse } from './liveWorker';
 import { browserOffline, ELEVATION_UNREACHABLE_MESSAGE, probeReachable, recentlyUnreachable } from './net';
 import { cleanPlaceLabel, coordinateName, isCoordinateName, reverseGeocodeName, withCoordinates } from './placeName';
 import { fetchRoadNetwork } from './roads';
+import { fetchLiveLandCover } from './landcoverLive';
 
 export { buildLiveScenario, pickHighShelters } from './liveTerrain';
 
@@ -132,6 +133,11 @@ export async function loadLiveArea(req: LiveAreaRequest, onProgress?: ProgressFn
         report();
         return rd;
       });
+    // Land cover (NLCD 2021, lower 48 only) for the optional roughness map and storm drains: best-effort, like imagery.
+    const lcP = fetchLiveLandCover(bounds, extras.signal).catch((e) => {
+      if (!extras.signal.aborted) console.warn('[data] land cover unavailable:', e);
+      return null;
+    });
     // Names are untrusted (a shared link, a crowd-edited OSM entry): clean every one of them, and treat a name that
     // came from a link as a fallback only — the geocoder is asked anyway, so a crafted URL cannot decide what this
     // place is called. `nameFromLink` is set by src/app/url.ts; see the SEC-01 handoff for the contracts.ts field.
@@ -180,16 +186,18 @@ export async function loadLiveArea(req: LiveAreaRequest, onProgress?: ProgressFn
     let conditioned: LiveTerrainResult;
     let imagery: ImageBitmap | null;
     let roads: Awaited<typeof roadsP>;
+    let landCover: Awaited<typeof lcP> = null;
     let name: string;
     try {
-      const all = Promise.all([imgP, roadsP, nameP]);
+      const all = Promise.all([imgP, roadsP, nameP, lcP]);
       const graceOver = new Promise<'late'>((resolve) => timers.push(setTimeout(() => resolve('late'), LIVE_EXTRAS_GRACE_MS)));
       if ((await Promise.race([all, graceOver])) === 'late') {
         const late = [pending.img ? 'imagery' : '', pending.roads ? 'roads' : ''].filter(Boolean).join(' and ');
         if (late) console.warn(`[data] ${late} did not arrive within ${LIVE_EXTRAS_GRACE_MS / 1000} s of the elevation; loading without`);
         extras.abort(new Error('optional downloads took too long'));
       }
-      const [img, rd, nm] = await all;
+      const [img, rd, nm, lc] = await all;
+      landCover = lc;
       ctrl.signal.throwIfAborted();
       [imagery, roads] = [img, rd];
       // A geocoded name is the app's own answer and stands alone. Falling back to the link's name means showing a
@@ -206,6 +214,7 @@ export async function loadLiveArea(req: LiveAreaRequest, onProgress?: ProgressFn
       demAttribution(dem.source),
       imagery ? IMAGERY_ATTRIBUTION : null,
       roads?.attribution ?? null,
+      landCover?.attribution ?? null,
     ]
       .filter(Boolean)
       .join(' · ');
@@ -219,6 +228,7 @@ export async function loadLiveArea(req: LiveAreaRequest, onProgress?: ProgressFn
       bounds,
       imagery,
       roads: roads?.network ?? null,
+      landCover,
       attribution,
       scenario: conditioned.scenario,
     };

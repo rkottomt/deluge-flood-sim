@@ -32,6 +32,8 @@ export const CSP_CONNECT_SRC = [
   'https://api.openstreetmap.org/api/0.6/map',
   'https://nominatim.openstreetmap.org/search',
   'https://nominatim.openstreetmap.org/reverse',
+  // NLCD 2021 land cover for live areas in the lower 48 (src/data/landcoverLive.ts): one WCS endpoint, exact path, CORS *.
+  'https://www.mrlc.gov/geoserver/mrlc_download/wcs',
 ];
 
 /** `<img>` sources: the inline favicon and Leaflet's bundled marker images are data:/same-origin; map tiles are Esri. */
