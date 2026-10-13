@@ -15,7 +15,7 @@ import { climateForcing } from '../../src/climate/apply';
 import { TIDE_GAUGE_SLR } from '../../src/climate/scenarios';
 import { eal } from '../../src/loss/eal';
 import { ladderFor, PRESET_LADDERS } from '../../src/loss/ladders';
-import { coastalSetup, seaMask, stationSlr, surgeLadder, withoutSurgeText } from '../../src/surge/coastal';
+import { coastalSetup, gaugeNote, seaMask, stationSlr, surgeLadder, withoutSurgeText } from '../../src/surge/coastal';
 import { encodeSurgeTable, mhhwOnDem, nearestStation, parseSurgeTable, SURGE_AEPS, SURGE_LIMITS, surgeLevels, type SurgeStation } from '../../src/surge/stations';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -79,6 +79,20 @@ const LIVE: ScenarioPreset = {
   stage: { label: 'Water level', gaugeDatum: 5, normalLevel: 5, maxOffset: 10 },
   initialFill: [],
 };
+
+test('the gauge line: its distance always, and "possibly in another bay" when it stands off the map', () => {
+  const s = TABLE.stations.find((x) => x.id === '8725520')!;
+  const n = 128; // 7.68 km square: half-diagonal 5.4 km
+  const near = coastalSetup({ elevation: coast(n), nx: n, ny: n, cellSize: 60 }, LIVE, s, 3.2);
+  const far = coastalSetup({ elevation: coast(n), nx: n, ny: n, cellSize: 60 }, LIVE, s, 23.4);
+  assert.ok(!('error' in near) && !('error' in far));
+  assert.equal(near.spec.gaugeOffMap, false);
+  assert.equal(far.spec.gaugeOffMap, true);
+  assert.match(gaugeNote(near.spec), /Fort Myers \(8725520\), 3\.2 km from the map centre: on this map\./);
+  assert.match(gaugeNote(far.spec), /23 km from the map centre: off this map, so possibly in another bay or up another estuary/);
+  // A spec saved before the flag existed gives the distance and claims nothing either way.
+  assert.equal(gaugeNote({ stationName: 'X', stationId: '1', stationKm: 40 }), 'NOAA gauge X (1), 40 km from the map centre.');
+});
 
 test('coastal set-up: the sea boundary on the seaward edges, a NAVD88 stage control, and the ladder in Site check', () => {
   const s = TABLE.stations.find((x) => x.id === '8725520')!;

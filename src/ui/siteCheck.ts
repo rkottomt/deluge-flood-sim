@@ -93,6 +93,7 @@ import type { SiteCheckSettings } from '../project/format';
 import { createSiteExtras, PEOPLE_METHOD_NOTES } from './evacPeople';
 import { INFRA_METHOD_NOTES } from './infraPanel';
 import { SURGE_LADDER_CAVEATS, SURGE_SOURCE_KEY, SURGE_SWEEP_MINUTES } from '../surge/stations';
+import { gaugeNote } from '../surge/coastal';
 
 const FT = 0.3048;
 /** Simulated minutes per sweep level, default and range. */
@@ -886,7 +887,7 @@ export function createSiteSection(ctx: UIContext): SiteSection {
       ladderKind === 'rain'
         ? `NOAA Atlas 14 rain at the map centre${c ? ` (${c.lat.toFixed(3)}, ${c.lon.toFixed(3)})` : ''}: each ticked level resets the water and rains that return period’s 1-hour intensity uniformly over the whole map for one hour, then lets it run off for the rest of the simulated time. Rain only — rivers stay at their normal level, inflows and storm cells are off. Return periods are NOAA’s, converted to annual chance.`
         : ladderKind === 'stage' && st && store.get().scenario?.coastal
-          ? `${st.label}: each ticked level resets the water, raises the sea on the seaward edges of the map to NOAA’s still-water level for that annual chance and runs the chosen simulated time headless. Return periods are NOAA’s (1 / annual exceedance probability).`
+          ? `${st.label}: each ticked level resets the water, raises the sea on the seaward edges of the map to NOAA’s still-water level for that annual chance and runs the chosen simulated time headless. Return periods are NOAA’s (1 / annual exceedance probability). ${gaugeNote(store.get().scenario!.coastal!)}`
         : ladderKind === 'stage' && st
           ? `${st.label}: each ticked level resets the water, raises the river to that gauge reading and runs the chosen simulated time headless${ladder ? '' : ' (this scenario has no researched ladder: the slider’s marks)'}. Return periods marked “source” are published; type one for any other level you know — it is labelled as your input.`
           : 'The ladder scales the scenario’s rain, storm cells and inflows. No return period is known for any multiplier — type one per level, or the sweep gives levels without an EAL.',
@@ -978,7 +979,8 @@ export function createSiteSection(ctx: UIContext): SiteSection {
     if (stale) parts.push(h('p', { class: 'dl-impact-fine dl-warn' }, 'The site was edited after the sweep: these numbers are for the building as it was then. Run the sweep again.'));
     parts.push(h('div', { class: 'dl-site-verdict', 'data-site': 'verdict' }, ...d.verdict.map((v) => h('p', null, v))));
     if (sweep.ladder === 'stage' && sweep.sourceKeys.includes(SURGE_SOURCE_KEY)) {
-      parts.push(h('details', { class: 'dl-impact-methods', 'data-site': 'surge-caveats' }, h('summary', null, 'What the surge ladder leaves out'), h('ul', { class: 'dl-impact-issues' }, ...SURGE_LADDER_CAVEATS.map((c) => h('li', null, c)))));
+      const coastal = store.get().scenario?.coastal ?? null;
+      parts.push(h('details', { class: 'dl-impact-methods', 'data-site': 'surge-caveats' }, h('summary', null, 'What the surge ladder leaves out'), h('ul', { class: 'dl-impact-issues' }, ...(coastal ? [h('li', { 'data-site': 'surge-gauge' }, gaugeNote(coastal))] : []), ...SURGE_LADDER_CAVEATS.map((c) => h('li', null, c)))));
     }
     if (sweep.ladder === 'rain') {
       parts.push(h('details', { class: 'dl-impact-methods', 'data-site': 'rain-caveats' }, h('summary', null, 'What the rain ladder leaves out'), h('ul', { class: 'dl-impact-issues' }, ...RAIN_LADDER_CAVEATS.map((c) => h('li', null, c)))));
