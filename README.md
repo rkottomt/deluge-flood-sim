@@ -485,8 +485,31 @@ crest, 30 simulated minutes in 4.5 s; Houston under Harvey's rain, 60 minutes in
 48 s. Those are with the GPU to itself; with other GPU jobs on the machine the same runs took 2–4× longer.
 
 Progress and notes go to stderr, results to files or stdout (`--out -`). Exit codes: 0 done, 1 the simulation or an
-output failed, 2 bad arguments or input file (checked before the GPU starts), 3 no WebGPU adapter. Turning this into
-an HTTP service is the next step; the OpenAPI shape is sketched in [docs/api.md](docs/api.md).
+output failed, 2 bad arguments or input file (checked before the GPU starts), 3 no WebGPU adapter.
+
+**HTTP job API.** `deluge serve` puts the same commands behind HTTP ([docs/api.md](docs/api.md) has the endpoints,
+schemas, OpenAPI and security model):
+
+```bash
+npx deluge serve                                   # http://127.0.0.1:8787, this machine only
+curl -s -X POST localhost:8787/v1/runs -H 'content-type: application/json' \
+     -d '{"preset":"pittsburgh","scenario":{"stageFt":46,"minutes":10}}'      # → 202 {"id":"job_…","status":"queued",…}
+curl -s localhost:8787/v1/jobs/job_…                                         # status, progress, engine, files
+curl -s -O localhost:8787/v1/jobs/job_…/results/max_depth_m.tif
+```
+
+`POST /v1/runs`, `/v1/portfolio-assessments` and `/v1/site-checks` map a JSON body onto exactly the options of
+`deluge run`, `portfolio` and `site` and run that command's handler in-process — no new physics, so an API raster is
+the CLI's byte for byte (`tests/cli/server-gpu.test.ts`). They answer `202` with a job; one queue runs one job at a
+time on the GPU; `GET /v1/jobs/:id` polls it and `GET /v1/jobs/:id/results/<file>` downloads `summary.json`,
+`results.csv`, `report.json` or the GeoTIFFs; `DELETE` cancels or deletes. Everything the CLI checks before its GPU
+starts is checked before queueing, by the same functions, so a bad preset, level, stage, climate, site or CSV is a
+`400` at once — with a fixed sentence that never echoes the request. An `Idempotency-Key` returns the existing job;
+each job records the engine version, git commit, GPU and the equivalent command line. It binds 127.0.0.1 by default
+and refuses any other address without a bearer token (`DELUGE_API_TOKEN` or `--token-file`); it checks the `Host`
+header against DNS rebinding, takes only `application/json`, caps bodies (64 KiB; 12 MiB for a portfolio, whose CSV
+is then held to 5,000 rows and 5 M characters), serves only the seven result names of a job's own directory, makes no
+outbound requests (no webhooks yet) and deletes finished jobs after `--retention-hours` (default 30 days).
 
 ## Ten scenarios, offline
 
@@ -631,7 +654,7 @@ every ~300 ms, never blocking: stats reduction pass ─▶ mapAsync ─▶ HUD +
 
 * `src/<module>/` — the app, one folder per module, integrated through [`src/contracts.ts`](src/contracts.ts).
 * `tests/<module>/` — `node:test` suites (sim, render and the CLI smoke test on a real GPU through Dawn).
-* `src/cli/`, `bin/deluge.mjs` — the headless batch CLI ([Batch / API](#batch--api)).
+* `src/cli/`, `bin/deluge.mjs` — the headless batch CLI and its HTTP job API, `deluge serve` ([Batch / API](#batch--api)).
 * `scripts/bake-presets.ts` — bakes `public/presets/*` (raw downloads cached in `artifacts/bake-cache`);
   `scripts/e2e.mjs` — end-to-end demo flows in headless Chromium on the real GPU; `scripts/bench.mjs` — the
   performance benchmark (`npm run demo`, then `npm run bench -- --scenario=pgh`); `scripts/shot.mjs` — screenshots.
