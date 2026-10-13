@@ -44,7 +44,7 @@ import { COMMANDS, parseOptions } from '../../src/cli/args';
 import { HANDLERS, type CliEnv, type SceneLike } from '../../src/cli/commands';
 import type { ForcingPatch } from '../../src/cli/headless';
 import { createLog } from '../../src/cli/io';
-import { availablePresetIds, loadAtlas14FromDisk, loadPresetFromDisk, readPresetMeta } from '../../src/cli/presetFiles';
+import { availablePresetIds, loadAtlas14FromDisk, loadNidIndexFromDisk, loadPresetFromDisk, readPresetMeta } from '../../src/cli/presetFiles';
 import { geotiffBytes, hazardLayers } from '../../src/cli/rasters';
 import { buildLadder, parseClimate, resolveForcing, UsageError } from '../../src/cli/scenario';
 import { lookupAtlas14, type Atlas14Point } from '../../src/data/atlas14';
@@ -143,6 +143,7 @@ function env(files: Map<string, string | ArrayBuffer | Uint8Array>, out: string[
     presetIds: availablePresetIds,
     presetMeta: readPresetMeta,
     loadAtlas14: loadAtlas14FromDisk,
+    loadNidIndex: loadNidIndexFromDisk,
     async loadTerrain(id) {
       const t = terrains.get(id) ?? (await loadPresetFromDisk(id));
       terrains.set(id, t);

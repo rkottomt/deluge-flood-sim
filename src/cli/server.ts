@@ -46,7 +46,7 @@ import { createLog, type Log } from './io';
 import { UsageError } from './scenario';
 
 /** What the server needs from the machine: the CLI's environment minus its per-command I/O. */
-export interface Engine extends Pick<CliEnv, 'version' | 'presetIds' | 'presetMeta' | 'loadTerrain' | 'loadAtlas14' | 'openScene' | 'gpuName' | 'now'> {
+export interface Engine extends Pick<CliEnv, 'version' | 'presetIds' | 'presetMeta' | 'loadTerrain' | 'loadAtlas14' | 'loadNidIndex' | 'openScene' | 'gpuName' | 'now'> {
   /** Uncaptured WebGPU errors so far (a job during which this grows has failed). */
   gpuErrorCount(): number;
   /** Let queued GPU work finish (after each job). */
@@ -307,6 +307,7 @@ export async function startServer(opts: ServerOptions): Promise<ApiServer> {
       presetMeta: engine.presetMeta,
       loadTerrain: engine.loadTerrain,
       loadAtlas14: engine.loadAtlas14,
+      loadNidIndex: engine.loadNidIndex,
       openScene: engine.openScene,
       gpuName: engine.gpuName,
       now: engine.now,

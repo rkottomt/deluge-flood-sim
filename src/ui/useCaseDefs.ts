@@ -93,10 +93,14 @@ export const USE_CASES: readonly UseCaseDef[] = [
 
 // ─── The dam and surge use cases ────────────────────────────────────────────────────────────────────────────────────
 
-/** Link parameters of the dam case: `nid=<NID id>`, `breach=sunny|flood`, `method=parametric|regression`. */
+/** Link parameters of the dam case: `nid=<NID id>`, `breach=sunny|flood`, `method=central|low|high|parametric`
+ * (`regression`, from links made before the band existed, reads as central). */
 export const DAM_PARAM = 'nid';
 export const BREACH_PARAM = 'breach';
 export const METHOD_PARAM = 'method';
+/** The hydrograph words a dam link may carry (src/dams/breachModel.ts BreachMethod). */
+export const DAM_LINK_METHODS = ['central', 'low', 'high', 'parametric'] as const;
+export type DamLinkMethod = (typeof DAM_LINK_METHODS)[number];
 export const DAM_WARNING = 'Ignoring an invalid dam link value (expected nid= an NID id such as CA00035, breach=sunny or flood)';
 /** Side of the live area loaded below a dam, m (default) and the choices offered. */
 export const DAM_AREA_M = 12000;
@@ -108,7 +112,7 @@ export const SURGE_AREA_M = 8000;
  * Read the dam link strictly: an NID id (two capital letters and 3–6 capitals or digits), and optional fixed words for
  * the breach and the method. Nothing else; a bad value gives a fixed warning and no dam.
  */
-export function parseDamLink(search: string): { nid: string | null; breach: 'sunny' | 'flood'; method: 'parametric' | 'regression'; warnings: string[] } {
+export function parseDamLink(search: string): { nid: string | null; breach: 'sunny' | 'flood'; method: DamLinkMethod; warnings: string[] } {
   let p: URLSearchParams;
   try {
     p = new URLSearchParams(search);
@@ -120,8 +124,8 @@ export function parseDamLink(search: string): { nid: string | null; breach: 'sun
   const m = p.get(METHOD_PARAM);
   const warnings: string[] = [];
   const nid = raw !== null && raw.length <= 8 && /^[A-Z]{2}[A-Z0-9]{3,6}$/.test(raw) ? raw : null;
-  if ((raw !== null && raw !== '' && !nid) || (b !== null && b !== 'sunny' && b !== 'flood') || (m !== null && m !== 'parametric' && m !== 'regression')) warnings.push(DAM_WARNING);
-  return { nid, breach: b === 'flood' ? 'flood' : 'sunny', method: m === 'regression' ? 'regression' : 'parametric', warnings };
+  if ((raw !== null && raw !== '' && !nid) || (b !== null && b !== 'sunny' && b !== 'flood') || (m !== null && m !== 'regression' && !(DAM_LINK_METHODS as readonly string[]).includes(m))) warnings.push(DAM_WARNING);
+  return { nid, breach: b === 'flood' ? 'flood' : 'sunny', method: m !== null && (DAM_LINK_METHODS as readonly string[]).includes(m) ? (m as DamLinkMethod) : 'central', warnings };
 }
 
 /** The live area the surge case loads around a point. */

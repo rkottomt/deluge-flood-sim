@@ -9,7 +9,7 @@
  */
 import { cleanPlaceLabel } from '../data/placeName';
 import { isLikelyUS, makeGeoToGrid } from '../data/geo';
-import { coastalSetup, withoutSurgeText } from '../surge/coastal';
+import { coastalSetup, gaugeNote, withoutSurgeText } from '../surge/coastal';
 import { loadSurgeTable, nearestStation, SURGE_LIMITS, type SurgeTable } from '../surge/stations';
 import { bridgeFor, postNotice } from './bridge';
 import { h, setText, type UIContext } from './dom';
@@ -159,7 +159,7 @@ export function createSurgeView(ctx: UIContext, deps: { panel: Pick<Panel, 'reve
     const l100 = res.spec.levels[res.spec.levels.length - 1];
     return {
       ok: true,
-      message: `Nearest NOAA gauge: ${near.station.name} (${near.station.id}), ${fmtNum(near.km, near.km < 10 ? 1 : 0)} km away. Its 1 %-annual-chance still-water level is ${fmtNum(l100.elevation, 2)} m ${res.spec.datum} (${fmtNum(l100.aboveMhhw, 2)} m above MHHW); the sea boundary covers ${res.spec.seaRuns} seaward edge run${res.spec.seaRuns === 1 ? '' : 's'}.`,
+      message: `Nearest ${gaugeNote(res.spec)} Its 1 %-annual-chance still-water level is ${fmtNum(l100.elevation, 2)} m ${res.spec.datum} (${fmtNum(l100.aboveMhhw, 2)} m above MHHW); the sea boundary covers ${res.spec.seaRuns} seaward edge run${res.spec.seaRuns === 1 ? '' : 's'}.`,
     };
   }
 

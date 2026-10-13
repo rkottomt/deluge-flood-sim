@@ -48,6 +48,8 @@ selection accounts for (§3.6).
 | `src/sim/` | GPU solver (`Solver.ts`, WGSL in `shaders/`), forcing packing, brush edits, work budget, and a Float64 CPU reference implementation (`cpuReference.ts`) the tests compare against. |
 | `src/render/` | WebGPU renderer: LOD terrain, water surface, hazard colour maps, road/route ribbons, walls, markers, camera, picking, adaptive quality. |
 | `src/data/` | USGS 3DEP DEM, imagery and road loaders; hydro-conditioning (channel burning, water detection, ridge opening); baked presets; the synthetic sandbox; live areas (conditioning runs in a Web Worker). |
+| `src/dams/` | Dam-breach use case: the baked NID index and its strict decoder (`nidIndex.ts`), eight published breach relations and the low / central / high band (`breachRelations.ts`), the 21 historical failures they are scored on (`historicalFailures.ts`, Wahl 1998), the breach hydrograph (`breachModel.ts`), where the wave enters the map (`placement.ts`, `scenario.ts`). |
+| `src/surge/` | Coastal-surge use case: the baked NOAA CO-OPS extreme-water-level table (`stations.ts`) and the seaward-edge boundary with its ladder and gauge line (`coastal.ts`). |
 | `src/routing/` | Road graph, flood status per edge, multi-target Dijkstra with wet-road slowdowns and bridge handling. |
 | `src/ui/` | Panels, toolbar and tools, HUD, "Try it" strip (with the one-click demo levee), How it works, location picker. Plain DOM + one CSS file. |
 | `src/app/` | Orchestration: scene loading, store → solver sync, stage ramp and crest fill, protected-land analysis, frame driver, work budget / frame pacing, debug API (`window.__deluge`). |
@@ -924,6 +926,7 @@ From `npm test` (tests run on the real GPU through Dawn); the grid-convergence r
 | --- | --- | --- |
 | Lake at rest on rough terrain, 2000 steps | max \|u\| = 9.3·10⁻⁵ m/s | `tests/sim/wellbalanced.test.ts` |
 | Dam break vs the Ritter solution at t = 20 s | profile L1 error 1.6 %, front (5 % depth) ratio 1.01 | `tests/sim/dambreak.test.ts` |
+| Dam-breach peak relations vs 21 documented failures (Wahl 1998 Table A1) | central case Froehlich 1995: RMS log₁₀ error 0.15, all 21 within ×2, bias −16 %; the eight relations’ band holds 17 of 21; Teton 1976: band 22,000–107,000 m³/s vs 65,120 observed, central 43,000 | `tests/dams/breachRelations.test.ts` |
 | Closed domain mass conservation | massError 7·10⁻⁹ (\|ΔV\|/V0 = 2.5·10⁻⁶, all of it booked Float32 rounding) | `tests/sim/conservation.test.ts` |
 | Open domain with rain, storm, inflow, stage, infiltration | worst massError 9.1·10⁻⁸ | `tests/sim/conservation.test.ts` |
 | Deep river with rain and a stage boundary, 3 sim-hours | worst massError 5.9·10⁻⁷ | `tests/sim/conservation.test.ts` |

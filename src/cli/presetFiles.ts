@@ -14,6 +14,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { TerrainData } from '../contracts';
 import { ATLAS14_MAX_DOWNLOAD, decodeAtlas14Grid, gunzipCapped, type Atlas14Grid } from '../data/atlas14';
 import { listPresets, loadPreset, setPresetBaseUrl, type PresetMeta } from '../data/presets';
+import { decodeNidIndex, NID_LIMITS, type NidIndex } from '../dams/nidIndex';
 
 /** public/presets of this checkout (overridable with DELUGE_PRESETS_DIR, e.g. for a packaged install). */
 export function presetsDir(): string {
@@ -85,6 +86,22 @@ export function loadAtlas14FromDisk(): Promise<Atlas14Grid> {
     throw e;
   });
   return atlas14;
+}
+
+let nidIndex: Promise<NidIndex> | null = null;
+
+/** The baked National Inventory of Dams index (public/dams/nid-index.bin, the app's file, decoded by the app's decoder). */
+export function loadNidIndexFromDisk(): Promise<NidIndex> {
+  nidIndex ??= (async () => {
+    const file = path.join(path.dirname(presetsDir()), 'dams', 'nid-index.bin');
+    const buf = await fs.promises.readFile(file);
+    if (buf.byteLength > NID_LIMITS.maxDownload) throw new Error('Dam index: file too large');
+    return decodeNidIndex(await gunzipCapped(new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength), NID_LIMITS.maxBytes));
+  })().catch((e) => {
+    nidIndex = null;
+    throw e;
+  });
+  return nidIndex;
 }
 
 /** Load a preset with the app's loader, from disk. */

@@ -33,6 +33,8 @@ export interface CoastalSurgeSpec {
   stationName: string;
   /** Distance from the map centre to the station, km. */
   stationKm: number;
+  /** The station stands off the loaded map (farther than its half-diagonal): possibly in another bay (gaugeNote). */
+  gaugeOffMap?: boolean;
   datum: 'NAVD88' | 'MSL';
   /** MHHW on the map's datum, m. */
   mhhw: number;
@@ -47,6 +49,21 @@ export interface CoastalSurgeSpec {
   seaRuns: number;
   /** The sentences this set-up appended to the scenario's description (withoutSurgeText takes them out again). */
   descriptionAdded?: string;
+}
+
+/**
+ * One line on where the gauge is, for every surge result: its distance from the map centre and, when it stands off
+ * the map, that it may be in another bay or up another estuary. Nothing on the map then shows how the gauge's water
+ * connects to the site's, and surge varies strongly along a coast and up estuaries — so the line says so instead of
+ * adjusting the levels (no run-up or transfer is modelled).
+ */
+export function gaugeNote(spec: Pick<CoastalSurgeSpec, 'stationName' | 'stationId' | 'stationKm' | 'gaugeOffMap'>): string {
+  const km = spec.stationKm < 10 ? spec.stationKm.toFixed(1) : String(Math.round(spec.stationKm));
+  const where = `NOAA gauge ${spec.stationName} (${spec.stationId}), ${km} km from the map centre`;
+  if (spec.gaugeOffMap === undefined) return where + ".";
+  return spec.gaugeOffMap
+    ? `${where}: off this map, so possibly in another bay or up another estuary — its still-water levels stand in for the sea here, and surge can differ a lot between the two.`
+    : `${where}: on this map.`;
 }
 
 /** A scenario's description without the sentences a coastal set-up appended to it (coastalSetup). */
@@ -218,6 +235,7 @@ export function coastalSetup(
     stationId: station.id,
     stationName: station.name,
     stationKm: Math.round(stationKm * 10) / 10,
+    gaugeOffMap: stationKm > (Math.SQRT2 / 2) * ((Math.max(nx, ny) * cellSize) / 1000),
     datum: z.datum,
     mhhw: z.m,
     levels,

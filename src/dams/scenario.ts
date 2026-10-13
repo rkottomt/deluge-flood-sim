@@ -11,6 +11,7 @@
  */
 import type { ScenarioPreset, WaterSource } from '../contracts';
 import { BREACH_MODES, type BreachMethod, type BreachMode, type DamScenario } from './breachModel';
+import { relationById, type RelationId } from './breachRelations';
 import { descentPath, injectionCell, injectionRadiusM, type GridPoint, type PathPoint } from './placement';
 
 /** What a dam-breach scenario carries (ScenarioPreset.damBreach). */
@@ -29,6 +30,8 @@ export interface DamBreachSpec {
   tPeak: number;
   /** Volume delivered to the map, m³ (breach + any base flow). */
   volume: number;
+  /** The published relations' low / central / high peaks for this dam, m³/s (src/dams/breachRelations.ts peakBand). */
+  band: { low: BandPoint; central: BandPoint; high: BandPoint };
   /** Froehlich 2008 average breach width, m, and formation time, s. */
   widthM: number;
   formationS: number;
@@ -36,6 +39,12 @@ export interface DamBreachSpec {
   path: PathPoint[];
   assumptions: string[];
   caveats: string[];
+}
+
+export interface BandPoint {
+  id: RelationId;
+  label: string;
+  peak: number;
 }
 
 export const DAM_INFLOW_ID = 'dam-breach';
@@ -86,6 +95,11 @@ export function damBreachScenario(
     peak: r.peak,
     tPeak: r.tPeak,
     volume: r.deliveredVolume,
+    band: {
+      low: { id: r.band.low.id, label: relationById(r.band.low.id).label, peak: r.band.low.peak },
+      central: { id: r.band.central.id, label: relationById(r.band.central.id).label, peak: r.band.central.peak },
+      high: { id: r.band.high.id, label: relationById(r.band.high.id).label, peak: r.band.high.peak },
+    },
     widthM: r.avgWidthM,
     formationS: r.formationTimeS,
     path,
@@ -96,7 +110,8 @@ export function damBreachScenario(
   const peakText = Math.round(r.peak).toLocaleString('en-US');
   const added =
     `${s.dam.name} (NID ${s.dam.id}, ${s.dam.heightM.toFixed(0)} m, ${Math.round(s.dam.storageAcFt).toLocaleString('en-US')} acre-ft): ${BREACH_MODES[s.mode].label.toLowerCase()}. ` +
-    `The modelled breach outflow peaks at ${peakText} m³/s ${Math.round(r.tPeak / 60)} min after the breach starts and releases ${(r.breachVolume / 1e6).toFixed(1)} million m³; ` +
+    `The modelled breach outflow peaks at ${peakText} m³/s ${Math.round(r.tPeak / 60)} min after the breach starts ` +
+    `(published relations: ${Math.round(r.band.low.peak).toLocaleString('en-US')}–${Math.round(r.band.high.peak).toLocaleString('en-US')} m³/s) and releases ${(r.breachVolume / 1e6).toFixed(1)} million m³; ` +
     `it enters the map at the toe of the dam. `;
   spec.descriptionAdded = added;
   // Built on the description without a previous breach's sentences: a re-run replaces them, never stacks them.

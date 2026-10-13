@@ -22,7 +22,7 @@ import { portfolioRequest, runRequest, siteRequest } from '../../src/cli/api';
 import { HANDLERS, type CliEnv, type SceneLike } from '../../src/cli/commands';
 import type { ForcingPatch, RunProgress } from '../../src/cli/headless';
 import { createLog } from '../../src/cli/io';
-import { availablePresetIds, loadAtlas14FromDisk, loadPresetFromDisk, readPresetMeta } from '../../src/cli/presetFiles';
+import { availablePresetIds, loadAtlas14FromDisk, loadNidIndexFromDisk, loadPresetFromDisk, readPresetMeta } from '../../src/cli/presetFiles';
 import { startServer, type ApiServer, type Engine } from '../../src/cli/server';
 
 const DEMO_CSV = path.resolve(import.meta.dirname, '../../public/demo/houston-portfolio.csv');
@@ -110,6 +110,7 @@ const engine: Engine = {
     return t;
   },
   openScene: async (terrain, presetId) => new FakeScene(terrain, presetId),
+  loadNidIndex: loadNidIndexFromDisk,
   gpuName: async () => 'fake GPU',
   gpuErrorCount: () => 0,
   settle: async () => {},
