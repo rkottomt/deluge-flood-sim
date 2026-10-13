@@ -13,9 +13,10 @@ import type { HazardFields, TerrainData, Store } from '../contracts';
 import { OCCUPANCY_PROFILES, type SiteRun, type SiteSpec } from '../loss';
 import type { EgressRouter } from '../loss/egress';
 import { downtimeWithDependencies, reachLine, siteDependencies, utilityLine, type SiteDependencies } from '../loss/infraDeps';
-import { unsafeForWalking, WalkNetwork } from '../routing/pedestrian';
+import { WalkNetwork } from '../routing/pedestrian';
 import {
   analyzePeopleEvac,
+  siteExitUnsafeAt,
   defaultExitWidth,
   defaultMix,
   defaultOccupants,
@@ -80,6 +81,24 @@ export const PEOPLE_METHOD_NOTES: ReadonlyArray<{ title: string; text: string }>
   },
 ];
 
+/**
+ * The cache key of a site's extras for one flood: everything the answer depends on. The shelters are in it — they are
+ * refuges for the walk, so adding, moving or removing one changes the answer.
+ */
+export function extrasKey(
+  spec: SiteSpec,
+  simTime: number,
+  alertTime: number,
+  params: PeopleParams,
+  infraStatus: string,
+  shelters: ReadonlyArray<{ gx: number; gy: number; name?: string }>,
+): string {
+  return JSON.stringify([
+    spec.id, spec.lon, spec.lat, spec.ring, spec.occupancy, spec.floors, spec.footprintM2, spec.firstFloorHeight,
+    simTime, alertTime, params, infraStatus, shelters.map((s) => [s.gx, s.gy, s.name ?? '']),
+  ]);
+}
+
 function num(v: number, d = 0): string {
   return Number.isFinite(v) ? fmtNum(v, d) : '—';
 }
@@ -101,21 +120,6 @@ export function createSiteExtras(deps: SiteExtrasDeps) {
     return walk.net;
   }
 
-  /** When the site's own surroundings turn unsafe for walking: the median over its cells (half the exits gone). */
-  function exitUnsafeAt(run: SiteRun, f: HazardFields): number {
-    const cells = run.result?.m.cells ?? [];
-    if (!cells.length) return Infinity;
-    const ts: number[] = [];
-    for (const c of cells) {
-      if (f.firstWet[c] === 0) continue;
-      if (unsafeForWalking(f.maxDepth[c], f.maxSpeed[c], f.maxDV[c])) ts.push(f.firstWet[c] > 0 ? f.firstWet[c] : 0);
-    }
-    const half = Math.ceil(cells.length / 2);
-    if (ts.length < half) return Infinity;
-    ts.sort((a, b) => a - b);
-    return ts[half - 1];
-  }
-
   function computeEvac(spec: SiteSpec, run: SiteRun, f: HazardFields, alertTime: number): { evac: PeopleEvacResult | null; basis: string } {
     const t = deps.getTerrain();
     const r = run.result;
@@ -135,13 +139,16 @@ export function createSiteExtras(deps: SiteExtrasDeps) {
     if (p.olderPct != null) mix.older = p.olderPct / 100;
     if (p.impairedPct != null) mix.impaired = p.impairedPct / 100;
     mix.able = Math.max(0, 1 - mix.older - mix.impaired);
+    // When the site's own surroundings turn unsafe: the cells against its walls when buildings are obstacles.
+    const exit = siteExitUnsafeAt(run.result?.m.cells ?? [], f);
     const evac = analyzePeopleEvac(net, { gx: run.geometry.gx, gy: run.geometry.gy }, {
       occupants: N,
       mix: (Object.keys(mix) as WalkGroupId[]).map((id) => ({ id, share: mix[id] })),
       exitWidthM: p.exitWidthM ?? defaultExitWidth(N),
       preMovementS: p.preMovementMin * 60,
       alertTime: p.alertMin != null ? p.alertMin * 60 : alertTime,
-      exitUnsafeAt: exitUnsafeAt(run, f),
+      exitUnsafeAt: exit.t,
+      exitUntimed: exit.untimed,
       building: run.assetSpec
         ? { floors: r.floors, firstFloorHeight: run.firstFloorHeight, storeyHeight: run.assetSpec.storeyHeight, maxDepth: r.reached ? r.depth : 0, collapseShare: r.collapseShare, state: r.state }
         : null,
@@ -162,7 +169,7 @@ export function createSiteExtras(deps: SiteExtrasDeps) {
   }
 
   function keyOf(spec: SiteSpec, run: SiteRun, alertTime: number): string {
-    return JSON.stringify([spec.id, spec.lon, spec.lat, spec.ring, spec.occupancy, spec.floors, spec.footprintM2, spec.firstFloorHeight, run.simTime, alertTime, paramsFor(spec.id), infraFor(deps.store).load.status]);
+    return extrasKey(spec, run.simTime, alertTime, paramsFor(spec.id), infraFor(deps.store).load.status, deps.store.get().shelters);
   }
 
   /** Compute now (sync; cached). */
