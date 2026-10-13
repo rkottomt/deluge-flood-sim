@@ -219,6 +219,32 @@ test('the benefit–cost rows never show a BCR without its range, and say which 
   assert.match(bcaUncertaintyNote(withEns), /At 3\.1 % real.*the ensemble’s loss p10–p90.*×0\.60, ×1\.50/s);
 });
 
+test('the facts a narrated story quotes are the benefit–cost block’s own figures, for the first design', async () => {
+  const { bcaFact, bcaRows } = await import('../../src/ui/compareReport');
+  const levels: CompareLevel[] = [
+    { id: 'rp100', label: 'FEMA 1 %', returnPeriod: 100, rpFrom: 'source' },
+    { id: 'record1936', label: '1936 crest', returnPeriod: 500, rpFrom: 'user' },
+  ];
+  const cost = { type: 'floodwall' as const, capex: 2e6, low: 1e6, high: 3e6, om: 0, lengthM: 200, meanHeightM: 3, basis: 'segments' as const, terrainNotCosted: false };
+  const c = compareDesigns(levels, [run(10e6), run(100e6)], [{ id: 'A', name: 'Wall', cost, levels: [run(0), run(30e6)] }]);
+  const rows = bcaRows(c);
+  const row = (label: string) => rows.find((r) => r[0].startsWith(label))![1];
+  assert.equal(bcaFact(c, 'design'), 'Wall');
+  assert.equal(bcaFact(c, 'bcr'), row('BCR (central)'));
+  assert.equal(bcaFact(c, 'range'), row('BCR range'));
+  assert.equal(bcaFact(c, 'verdict'), row('Verdict'));
+  assert.equal(`${bcaFact(c, 'breakeven')} `, row('Break-even construction cost').split('(')[0]);
+  assert.equal(bcaFact(c, 'rate'), '7 %');
+  assert.equal(bcaFact(c, 'life'), '50 yr (FEMA standard)');
+  assert.match(bcaFact(c, 'deltaeal')!, /^\$[\d.]+\s?[kMB]? a year \(\$.+\)$/);
+  assert.match(bcaFact(c, 'cost')!, /^\$2\.0\sM \(unit-cost estimate, \$1\.0\sM\s–\s\$3\.0\sM\)$/);
+  assert.equal(bcaFact(c, 'levels'), 'FEMA 1 % (100 yr) and 1936 crest (500 yr, your input)');
+  // No return period: no benefit–cost facts, and nothing invented.
+  const none = compareDesigns([{ id: 'x', label: 'X', returnPeriod: null, rpFrom: null }], [run(5e6)], [{ id: 'A', name: 'A', cost, levels: [run(1e6)] }]);
+  assert.equal(bcaFact(none, 'bcr'), null);
+  assert.equal(bcaFact(none, 'design'), 'A');
+});
+
 test('resolveCost: the useful life is the user’s, else FEMA’s standard value for the type', () => {
   const edits = [{ op: 'wall' as const, pts: [0, 0, 100, 0], h: 2, r: 1 }];
   const fema = resolveCost({ type: 'earthen', capexUsd: null, omUsdPerYear: null, lengthM: null, heightM: null }, edits, 8, 'US');

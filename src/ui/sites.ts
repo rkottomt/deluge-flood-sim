@@ -106,6 +106,20 @@ export class SiteRegistry {
     this.emit();
   }
 
+  /** The list exactly as it is (ids and selection included), for putting back later with restoreState. */
+  saveState(): { list: SiteSpec[]; selectedId: string | null; seq: number } {
+    return { list: this.list.map((s) => ({ ...s, ring: s.ring ? s.ring.slice() : null })), selectedId: this.selectedId, seq: this.seq };
+  }
+
+  /** Put a saveState() back, ids included (so results keyed by site id still match). */
+  restoreState(st: { list: SiteSpec[]; selectedId: string | null; seq: number }): void {
+    this.list = st.list.map((s) => ({ ...s }));
+    this.selectedId = st.selectedId;
+    this.seq = st.seq;
+    this.draft = null;
+    this.emit();
+  }
+
   /** Replace everything (a ?sites= link). */
   replace(sites: SiteSpec[]): void {
     this.seq = 0;

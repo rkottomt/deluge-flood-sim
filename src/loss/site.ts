@@ -8,7 +8,8 @@
  *   summarizeSweep    the site across the ladder: first level that reaches it / enters the floor / cuts egress, EAL
  *   recommendFfe      design water surface + freeboard (ASCE 24-14 Table 2-1 by Flood Design Class)
  *   mitigationOptions elevate / perimeter wall / levee / dry floodproofing: avoided EAL, cost (walls only), BCR
- *   siteVerdict       the sentences, each one with the number it rests on
+ *   siteVerdict       the sentences, each one with the number it rests on (siteVerdictParts: the same, by part)
+ *   siteFact          one of those facts as caption text for a narrated story (src/story/captions.ts {site:…})
  *   encodeSites / decodeSites   the ?sites= link parameter (strict parser: link text is attacker-controlled)
  *
  * Everything is INDICATIVE. The flood is a bare-earth 2-D simulation of a level held at a boundary, the return periods
@@ -657,62 +658,137 @@ export function egressClause(run: SiteRun): string {
   return s;
 }
 
+/** The verdict's sentences by what they say (siteVerdict puts them in this order). */
+export interface SiteVerdictParts {
+  /** Where water first reaches the site, or that it stays dry. */
+  reach: string;
+  /** Whether the planned floor floods, and from which level (null when the site stays dry). */
+  floor: string | null;
+  /** When the way out closes against when the water arrives, or that it stays open. */
+  egress: string;
+  /** Who gets out before the route closes, with the departure curve and the queue (null without egress timing). */
+  timing: string | null;
+  /** The EAL and what it rests on (one or two sentences). */
+  eal: string[];
+}
+
 /**
  * The verdict, as sentences that each carry their number. No score: what reaches the site, from which level; whether
  * the planned floor stays dry; when the way out closes against when the water arrives; and the EAL with what it rests on.
  */
 export function siteVerdict(siteName: string, sum: SweepSummary, money: (v: number) => string, timingOf?: (run: SiteRun) => EgressTiming | null): string[] {
-  const out: string[] = [];
+  const p = siteVerdictParts(siteName, sum, money, timingOf);
+  if (!p) return ['No levels have been run yet.'];
+  return [p.reach, ...(p.floor ? [p.floor] : []), p.egress, ...(p.timing ? [p.timing] : []), ...p.eal];
+}
+
+/** The verdict's sentences by part; null before any level has run. */
+export function siteVerdictParts(siteName: string, sum: SweepSummary, money: (v: number) => string, timingOf?: (run: SiteRun) => EgressTiming | null): SiteVerdictParts | null {
   const rows = sum.rows;
-  if (!rows.length) return ['No levels have been run yet.'];
+  if (!rows.length) return null;
   const name = siteName || 'The site';
   const top = rows[rows.length - 1];
+  let reach: string;
+  let floor: string | null = null;
   if (!sum.firstReached) {
-    out.push(`${name} stays dry at every level run, up to the ${levelName(top)}.`);
+    reach = `${name} stays dry at every level run, up to the ${levelName(top)}.`;
   } else {
     const r = sum.firstReached;
     const i = rows.indexOf(r);
     const res = r.run.result!;
-    let s = `Water reaches ${name === 'The site' ? 'the site' : name} at the ${levelName(r)}: ${fmt(res.depth, 2)} m at the lowest grade.`;
-    if (i > 0) s += ` Dry at the ${levelName(rows[i - 1])} and below.`;
-    out.push(s);
+    reach = `Water reaches ${name === 'The site' ? 'the site' : name} at the ${levelName(r)}: ${fmt(res.depth, 2)} m at the lowest grade.`;
+    if (i > 0) reach += ` Dry at the ${levelName(rows[i - 1])} and below.`;
     if (sum.firstInside) {
       const f = sum.firstInside;
-      out.push(`It floods the planned floor (${fmt(f.run.firstFloorHeight, 2)} m above grade) from the ${levelName(f)}, with ${fmt(depthAboveFloor(f.run), 2)} m inside; damage ${fmt((f.run.result?.damage ?? 0) * 100, 0)} %, about ${money(f.run.result?.loss ?? NaN)}.`);
+      floor = `It floods the planned floor (${fmt(f.run.firstFloorHeight, 2)} m above grade) from the ${levelName(f)}, with ${fmt(depthAboveFloor(f.run), 2)} m inside; damage ${fmt((f.run.result?.damage ?? 0) * 100, 0)} %, about ${money(f.run.result?.loss ?? NaN)}.`;
     } else {
-      out.push(`The planned floor (${fmt(top.run.firstFloorHeight, 2)} m above grade) stays above the water at every level run.`);
+      floor = `The planned floor (${fmt(top.run.firstFloorHeight, 2)} m above grade) stays above the water at every level run.`;
     }
   }
+  let egress: string;
   if (sum.firstCutOff) {
-    out.push(`Dry access is lost from the ${levelName(sum.firstCutOff)}: ${egressClause(sum.firstCutOff.run)}.`);
+    egress = `Dry access is lost from the ${levelName(sum.firstCutOff)}: ${egressClause(sum.firstCutOff.run)}.`;
   } else {
     const anyKnown = rows.some((r) => r.run.egress?.known);
-    out.push(anyKnown ? `A dry road route to a shelter stays open at every level run (up to the ${levelName(top)}).` : `Egress was not assessed: ${egressClause(top.run)}.`);
+    egress = anyKnown ? `A dry road route to a shelter stays open at every level run (up to the ${levelName(top)}).` : `Egress was not assessed: ${egressClause(top.run)}.`;
   }
   // Who actually gets out: the departure curve and the queue at the exit, at the first level that cuts the route
   // (or the highest level when none does).
   const timed = sum.firstCutOff ?? top;
   const t = timingOf?.(timed.run);
-  if (t?.known) {
-    out.push(`At the ${levelName(timed)}: ${shareOutSentence(t).replace(/^No /, 'no ')} ${clearanceSentence(t)}`);
-  }
+  const timing = t?.known ? `At the ${levelName(timed)}: ${shareOutSentence(t).replace(/^No /, 'no ')} ${clearanceSentence(t)}` : null;
+  const eal: string[] = [];
   const lossNoRp = rows.filter((r) => r.level.returnPeriod == null && (r.run.result?.loss ?? 0) > 0);
   if (sum.eal && sum.eal.high === 0) {
-    out.push(
+    eal.push(
       (sum.points.length === 1
         ? 'Expected annual loss $0: the one level with a return period does not damage the planned building.'
         : `Expected annual loss $0: none of the ${sum.points.length} levels with a return period damages the planned building.`) +
         (lossNoRp.length ? ` The level${lossNoRp.length === 1 ? '' : 's'} that do${lossNoRp.length === 1 ? 'es' : ''} (${lossNoRp.map((r) => r.level.label).join(', ')}) ha${lossNoRp.length === 1 ? 's' : 've'} no published return period — enter one to count ${lossNoRp.length === 1 ? 'it' : 'them'}.` : ''),
     );
   } else if (sum.eal) {
-    out.push(
+    eal.push(
       `Expected annual loss ${money(sum.eal.low)} – ${money(sum.eal.high)} (without / with the tail beyond the rarest level), from ${sum.points.length} level${sum.points.length === 1 ? '' : 's'} with a return period${sum.userReturnPeriods ? ', some of them your input' : ''}.`,
     );
-    if (sum.points.length === 1) out.push('With a single return period the EAL rests on one point: the lower bound is 0 and the upper bound books that loss every year at 1/T. Add return periods for a usable figure.');
+    if (sum.points.length === 1) eal.push('With a single return period the EAL rests on one point: the lower bound is 0 and the upper bound books that loss every year at 1/T. Add return periods for a usable figure.');
   } else {
-    out.push('No expected annual loss: none of the levels run has a return period. Enter one for each level you know (a gauge frequency analysis, FEMA FIS, NOAA Atlas 14).');
+    eal.push('No expected annual loss: none of the levels run has a return period. Enter one for each level you know (a gauge frequency analysis, FEMA FIS, NOAA Atlas 14).');
   }
-  return out;
+  return { reach, floor, egress, timing, eal };
+}
+
+/** What a narrated story may quote about a swept site (src/story/captions.ts SITE_FACTS). */
+export type SiteFactKey = 'name' | 'reach' | 'floor' | 'egress' | 'eal' | 'worst' | 'cutoff' | 'ffe' | 'ffe100';
+
+/** An indicative floor, in one phrase: "4.32 m above the lowest grade (…), 4.02 m higher than planned". */
+function ffePhrase(rec: FfeRecommendation, levelLabel: string): string {
+  if (!Number.isFinite(rec.designWse)) return `the planned ${fmt(rec.plannedFloorM, 2)} m above grade — the ${levelLabel} does not reach the site`;
+  const vs = rec.raiseBy > 0.01 ? `${fmt(rec.raiseBy, 2)} m higher than the planned ${fmt(rec.plannedFloorM, 2)} m` : `the planned ${fmt(rec.plannedFloorM, 2)} m already clears it`;
+  return `${fmt(rec.ffeAboveGrade, 2)} m above the lowest grade — water at ${fmt(rec.designWse, 2)} m in the ${levelLabel}, plus ${fmt(rec.freeboardM, 2)} m of freeboard — ${vs}`;
+}
+
+/**
+ * One fact about a swept site, as text for a story caption — the same sentences and numbers the panel shows, by part,
+ * plus the worst level's depth and two indicative floors: `ffe` designed to the rarest level that reaches the site (the
+ * flood of record on a historic ladder), `ffe100` to the 1 % level. Null when there is nothing to say (no sweep, no
+ * 1 % level run, a site that stays dry has no `floor` sentence, no level cuts the way out).
+ */
+export function siteFact(siteName: string, sum: SweepSummary | null, occ: Occupancy, key: SiteFactKey, money: (v: number) => string): string | null {
+  if (key === 'name') return siteName || null;
+  if (!sum || !sum.rows.length) return null;
+  const parts = siteVerdictParts(siteName, sum, money);
+  if (!parts) return null;
+  const rows = sum.rows;
+  const top = rows[rows.length - 1];
+  switch (key) {
+    case 'reach':
+      return parts.reach;
+    case 'floor':
+      return parts.floor;
+    case 'egress':
+      return parts.egress;
+    case 'eal':
+      return parts.eal[0] ?? null;
+    case 'cutoff':
+      return sum.firstCutOff ? `from the ${levelName(sum.firstCutOff)}, ${egressClause(sum.firstCutOff.run)}` : null;
+    case 'worst': {
+      const res = top.run.result;
+      if (!res?.reached) return `dry at the ${levelName(top)}`;
+      const inside = depthAboveFloor(top.run);
+      return `${fmt(res.depth, 1)} m at the lowest grade${inside >= DAMAGE_MIN_DEPTH ? ` and ${fmt(inside, 1)} m above the planned floor` : ''} at the ${levelName(top)}, a loss of about ${money(res.loss)}`;
+    }
+    case 'ffe': {
+      const wet = [...rows].reverse().find((r) => r.run.result?.reached) ?? top;
+      const rec = recommendFfe(wet, 'selected', occ);
+      return rec ? ffePhrase(rec, levelName(wet)) : null;
+    }
+    case 'ffe100': {
+      const d = pickDesign(rows, null);
+      if (!d || d.basis !== '100-yr') return null;
+      const rec = recommendFfe(d.row, d.basis, occ);
+      return rec ? ffePhrase(rec, levelName(d.row)) : null;
+    }
+  }
 }
 
 // ─── The ?sites= link parameter ──────────────────────────────────────────────────────────────────────────────────────

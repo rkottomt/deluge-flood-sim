@@ -19,6 +19,7 @@ import {
   type BcaUncertainty,
 } from '../loss/bca';
 import type { ComparisonResult, DesignResult } from '../project/compare';
+import type { BcaFact } from '../story/captions';
 import { DEEPER_M, WET_M } from '../project/compare';
 import type { BcaSettings, DesignSpec, ProjectEdit } from '../project/format';
 import { describeEdits } from '../project/edits';
@@ -172,6 +173,37 @@ export function bcaRows(c: ComparisonResult): string[][] {
     ['Verdict', ...col((d) => BCA_VERDICT_TEXT[d.bca!.verdict])],
   );
   return rows;
+}
+
+/**
+ * One fact about the comparison's first design as caption text for a narrated story (src/story/captions.ts {bca:…}),
+ * worded as the benefit–cost block words it. Null when there is nothing to say (no design, no return period).
+ */
+export function bcaFact(c: ComparisonResult, f: BcaFact): string | null {
+  const d = c.designs[0];
+  if (!d) return null;
+  if (f === 'design') return d.name;
+  if (f === 'rate') return pct(c.rate);
+  if (f === 'life') return usefulLifeText(d);
+  if (f === 'levels') return c.levels.map((l) => (l.returnPeriod != null ? `${l.label} (${fmtNum(l.returnPeriod)} yr${l.rpFrom === 'user' ? ', your input' : ''})` : l.label)).join(' and ');
+  if (f === 'cost') return d.cost.basis === 'override' ? `${formatMoney(d.cost.capex)} (your figure)` : `${formatMoney(d.cost.capex)} (unit-cost estimate, ${moneyRange(d.cost.low, d.cost.high)})`;
+  const b = d.bca;
+  if (!b) return null;
+  switch (f) {
+    case 'deltaeal':
+      return `${formatMoney(b.central.deltaEal)} a year (${moneyRange(b.range.deltaEal[0], b.range.deltaEal[1])})`;
+    case 'bcr':
+      return bcrText(b.central.bcr);
+    case 'range':
+      return bcrRangeText(b.range.bcr[0], b.range.bcr[1]);
+    case 'breakeven':
+      return b.central.breakEvenCapex > 0 ? formatMoney(b.central.breakEvenCapex) : 'none: the benefit does not cover its upkeep';
+    case 'verdict':
+      return BCA_VERDICT_TEXT[b.verdict];
+    case 'net':
+      return `${formatMoney(b.central.netBenefit)} (${moneyRange(b.range.netBenefit[0], b.range.netBenefit[1])})`;
+  }
+  return null;
 }
 
 /** Which uncertainties the ranges include (over every design), and what they never include. */

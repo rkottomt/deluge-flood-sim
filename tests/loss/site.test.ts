@@ -26,7 +26,9 @@ import {
   recommendFfe,
   ringAreaM2,
   ringPerimeterM,
+  siteFact,
   siteVerdict,
+  siteVerdictParts,
   SITE_LIMITS,
   summarizeSweep,
   type SiteSpec,
@@ -324,6 +326,38 @@ test('verdict: plain sentences with their numbers; no score; EAL caveats', () =>
   // No return periods → no EAL, and the user is told what to enter.
   const noRp = rows.map((r) => ({ ...r, level: { ...r.level, returnPeriod: null, rpFrom: null } }));
   assert.match(siteVerdict('X', summarizeSweep(noRp), money).join(' '), /No expected annual loss/);
+});
+
+test('verdict by part, and the facts a narrated story quotes: the same sentences, the worst level, two floor levels', () => {
+  const rows = sweepRows();
+  const sum = summarizeSweep(rows);
+  const parts = siteVerdictParts('Lot 4', sum, money)!;
+  // siteVerdict is exactly the parts in order.
+  assert.deepEqual(siteVerdict('Lot 4', sum, money), [parts.reach, parts.floor!, parts.egress, ...parts.eal]);
+  assert.equal(siteVerdictParts('Lot 4', summarizeSweep([]), money), null);
+  const fact = (k: Parameters<typeof siteFact>[3], s = sum) => siteFact('Lot 4', s, 'office', k, money);
+  assert.equal(fact('name'), 'Lot 4');
+  assert.equal(fact('reach'), parts.reach);
+  assert.equal(fact('floor'), parts.floor);
+  assert.equal(fact('egress'), parts.egress);
+  assert.equal(fact('eal'), parts.eal[0]);
+  // The worst level: depth at grade, above the floor, and the loss, at the rarest level run.
+  assert.match(fact('worst')!, /^2\.5 m at the lowest grade and 2\.2 m above the planned floor at the record \(46\.0 ft\), a loss of about \$\d+$/);
+  // Designed to the rarest level that reaches the site: its water + 1 ft of freeboard (ASCE 24-14 Class 2).
+  assert.match(fact('ffe')!, /^2\.80 m above the lowest grade — water at 102\.50 m in the record \(46\.0 ft\), plus 0\.30 m of freeboard — 2\.50 m higher than the planned 0\.30 m$/);
+  assert.match(fact('ffe100')!, /^1\.30 m above the lowest grade — water at 101\.00 m in the rp100 \(35\.0 ft\)/);
+  // No level cuts the way out here: no cut-off fact.
+  assert.equal(fact('cutoff'), null);
+  // A site the 1 % level does not reach: the planned floor stands, and says why.
+  const dry1 = summarizeSweep(rows.map((r) => (r.level.id === 'rp100' ? { ...r, run: rows[0].run } : r)));
+  assert.match(fact('ffe100', dry1)!, /^the planned 0\.30 m above grade — the rp100 \(35\.0 ft\) does not reach the site$/);
+  // A site that stays dry everywhere: no floor sentence, and the worst level says dry.
+  const dry = summarizeSweep(rows.slice(0, 1));
+  assert.equal(fact('floor', dry), null);
+  assert.equal(fact('worst', dry), 'dry at the minor (22.0 ft)');
+  // No sweep, no facts (except the name).
+  assert.equal(fact('reach', null as never), null);
+  assert.equal(siteFact('Lot 4', null, 'office', 'name', money), 'Lot 4');
 });
 
 // ─── Ladders ─────────────────────────────────────────────────────────────────────────────────────────────────────
