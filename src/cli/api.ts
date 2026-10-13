@@ -19,6 +19,7 @@ import { ENSEMBLE_LIMITS, parsePortfolio, SITE_LIMITS, SITE_OCCUPANCIES } from '
 import type { Atlas14Point } from '../data/atlas14';
 import type { ParsedOptions } from './args';
 import { minutesOf, parseRp, planSite, rainAt, requirePreset, scenarioFlags, siteFromOptions, sweepLevels, type CliEnv } from './commands';
+import { DEPARTURE_CURVES, type DepartureCurveId } from '../routing/departure';
 import { buildLadder, parseClimate, resolveForcing, type LadderKind } from './scenario';
 
 export type JobKind = 'run' | 'portfolio' | 'site';
@@ -201,7 +202,7 @@ export function portfolioRequest(body: unknown): JobSpec {
 
 /** `POST /v1/site-checks` → `deluge site`. Result: report.json. */
 export function siteRequest(body: unknown): JobSpec {
-  const { b, o, argv, request } = start(body, 'site', ['preset', 'scenario', 'site', 'sweep']);
+  const { b, o, argv, request } = start(body, 'site', ['preset', 'scenario', 'site', 'sweep', 'egress']);
   o.out = 'report.json';
   if (!has(b, 'site')) throw invalid('site is required ({ "lat": …, "lon": … }).');
   const s = object(b.site, 'site');
@@ -246,6 +247,31 @@ export function siteRequest(body: unknown): JobSpec {
   }
   if (use) argv.push('--use', use);
   request.site = site;
+  if (has(b, 'egress')) {
+    // Leaving by road: the same options and limits as `deluge site` (commands.ts egressOptions).
+    const e = object(b.egress, 'egress');
+    onlyKeys(e, ['occupants', 'alertMin', 'departure', 'personsPerCar', 'exitLanes'], 'egress');
+    const egress: Obj = {};
+    const enums: Array<[string, string, number, number, boolean]> = [
+      ['occupants', 'occupants', 1, 100000, true],
+      ['alertMin', 'alert-min', -1440, 1440, false],
+      ['personsPerCar', 'persons-per-car', 1, 10, false],
+      ['exitLanes', 'exit-lanes', 1, 12, true],
+    ];
+    for (const [key, cli, lo, hi, int] of enums) {
+      const v = number(e, key, `egress.${key}`, lo, hi, int);
+      if (v === undefined) continue;
+      o[cli] = v;
+      argv.push(`--${cli}`, String(v));
+      egress[key] = v;
+    }
+    const dep = oneOf(e, 'departure', 'egress.departure', Object.keys(DEPARTURE_CURVES) as DepartureCurveId[]);
+    if (dep) {
+      o.departure = egress.departure = dep;
+      argv.push('--departure', dep);
+    }
+    request.egress = egress;
+  }
   if (has(b, 'sweep')) {
     const w = object(b.sweep, 'sweep');
     onlyKeys(w, ['ladder', 'levels', 'returnPeriods', 'design', 'freeboardFt'], 'sweep');

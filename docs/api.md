@@ -93,7 +93,7 @@ the CLI). The shared `scenario` object is the CLI's scenario options:
   The CSV is the app's portfolio format (`asset_id`, `lat`/`lon` or `wkt`, values, floors, revenue, policy terms …).
   More than 5,000 rows, more than 5 M characters, no `asset_id` / location columns or no usable row is a `400`; rows
   the CLI would skip are skipped and counted (`request.assets.skippedRows`).
-* **Site check:** `{ "preset", "scenario"?, "site": { "lat", "lon", "name"?, "ring"?: [[lat, lon], …] (3–64), "use"?, "floors"?, "valueUsd"?, "footprintM2"?, "firstFloorHeightM"?, "criticalElevM"? }, "sweep"?: { "ladder"?: "stage"|"rain"|"scale", "levels"?: [ids] | "all", "returnPeriods"?: { "x0.5": 10 }, "design"?, "freeboardFt"? } }`.
+* **Site check:** `{ "preset", "scenario"?, "site": { "lat", "lon", "name"?, "ring"?: [[lat, lon], …] (3–64), "use"?, "floors"?, "valueUsd"?, "footprintM2"?, "firstFloorHeightM"?, "criticalElevM"? }, "sweep"?: { "ladder"?: "stage"|"rain"|"scale", "levels"?: [ids] | "all", "returnPeriods"?: { "x0.5": 10 }, "design"?, "freeboardFt"? }, "egress"?: { "occupants"?, "alertMin"?, "departure"?, "personsPerCar"?, "exitLanes"? } }`.
   `sweep` present (even `{}`) = `--sweep`; a sweep with `scenario.level` or `scenario.stageFt` is a `400`, as in the CLI.
 
 ### The job
@@ -303,6 +303,16 @@ components:
             returnPeriods: { type: object, additionalProperties: { type: number, minimum: 1, maximum: 100000 }, description: '{ "x0.5": 10, "x1": 100 }' }
             design: { type: string }
             freeboardFt: { type: number, minimum: 0, maximum: 10 }
+        egress:
+          type: object
+          additionalProperties: false
+          description: Leaving by road (CLI --occupants, --alert-min, --departure, --persons-per-car, --exit-lanes); absent = the defaults.
+          properties:
+            occupants: { type: integer, minimum: 1, maximum: 100000 }
+            alertMin: { type: number, minimum: -1440, maximum: 1440, description: Minutes after the run starts; negative = warned before it }
+            departure: { enum: [good-likely, poor-likely, poor-unlikely, fast] }
+            personsPerCar: { type: number, minimum: 1, maximum: 10 }
+            exitLanes: { type: integer, minimum: 1, maximum: 12 }
     Job:
       type: object
       properties:

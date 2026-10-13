@@ -575,7 +575,7 @@ then run-off — 120 simulated minutes unless `--minutes` says otherwise.
   sentences. Every run carries `egressTiming` — leaving by road: share of occupants out before the last route closes,
   clearance vs route window, the departure curve and the bottleneck — set with `--occupants`, `--alert-min` (negative:
   warned before the run), `--departure good-likely|poor-likely|poor-unlikely|fast`, `--persons-per-car` and
-  `--exit-lanes`. The HTTP API runs them at their defaults.
+  `--exit-lanes`. The HTTP API takes them as `egress` on a site check.
 * **`dam`** is the dam-breach card without the map (no GPU): for an NID dam (`--nid`, from the app's baked index) or a
   dam you describe (`--volume-m3 --head-m [--height-m] [--overtopping]`), sunny-day or flood-induced, the eight
   relations' peaks with citations, the low / central / high band, the hydrograph the map would receive

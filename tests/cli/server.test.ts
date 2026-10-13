@@ -206,6 +206,7 @@ test('requests map to the CLI command line: its parser gives exactly the options
     runRequest({ preset: 'houston', scenario: { level: 'a14-100', rainMmHr: 80, scale: 1.5 } }),
     portfolioRequest({ preset: 'houston', assetsCsv: 'asset_id,lat,lon\nA,29.77,-95.38\n', ensemble: { members: 4, seed: 9, demNoise: false } }),
     siteRequest({ preset: 'pittsburgh', site: { name: 'North Shore lot', lat: 40.4425, lon: -80.0085, use: 'office', floors: 3, ring: [[40.44, -80.01], [40.45, -80.01], [40.45, -80.0]], valueUsd: 2e6, firstFloorHeightM: 0.5 }, sweep: { levels: ['ivan2004', 'rp100'], returnPeriods: { ivan2004: 30 }, design: 'rp100', freeboardFt: 2 } }),
+    siteRequest({ preset: 'pittsburgh', site: { lat: 40.4425, lon: -80.0085 }, egress: { occupants: 400, alertMin: -180, departure: 'good-likely', personsPerCar: 1.5, exitLanes: 2 } }),
   ];
   for (const s of specs) {
     const parsed = parseOptions(COMMANDS[s.command], s.argv.slice(1));
@@ -213,6 +214,8 @@ test('requests map to the CLI command line: its parser gives exactly the options
   }
   assert.equal(specs[0].options.climate, '2050:ssp245:cc');
   assert.equal(specs[3].options.at, '40.4425,-80.0085');
+  assert.equal(specs[4].options['alert-min'], -180);
+  assert.equal(specs[4].options.departure, 'good-likely');
 });
 
 // ─── Jobs end to end ────────────────────────────────────────────────────────────────────────────────────────────────
@@ -296,6 +299,9 @@ test('bad requests are 400 at once, with fixed sentences that never echo the inp
     ['/v1/portfolio-assessments', { preset: 'houston', assetsCsv: 'asset_id,lat,lon\nA,29.77,-95.38\n', ensemble: { members: 99 } }, /ensemble\.members/],
     ['/v1/site-checks', { preset: 'pittsburgh', site: { lat: 29.77, lon: -95.38 } }, /outside this preset/],
     ['/v1/site-checks', { preset: 'pittsburgh', site: { lat: 40.44, lon: -80.0, use: MARKER } }, /site\.use must be one of/],
+    ['/v1/site-checks', { preset: 'pittsburgh', site: { lat: 40.44, lon: -80.0 }, egress: { departure: MARKER } }, /egress\.departure must be one of/],
+    ['/v1/site-checks', { preset: 'pittsburgh', site: { lat: 40.44, lon: -80.0 }, egress: { exitLanes: 99 } }, /egress\.exitLanes/],
+    ['/v1/site-checks', { preset: 'pittsburgh', site: { lat: 40.44, lon: -80.0 }, egress: { [MARKER]: 1 } }, /does not accept/],
     ['/v1/site-checks', { preset: 'pittsburgh', site: { lat: 40.44, lon: -80.0, name: `${MARKER}‮` } }, /site\.name/],
     ['/v1/site-checks', { preset: 'pittsburgh', site: { lat: 40.44, lon: -80.0 }, sweep: { levels: ['rp100', 'nope'] } }, /sweep\.levels/],
     ['/v1/site-checks', { preset: 'houston', site: { lat: 29.7725, lon: -95.3837 }, sweep: { ladder: 'stage' } }, /sweep\.ladder/],
