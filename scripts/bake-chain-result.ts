@@ -178,7 +178,7 @@ const DESCRIPTIONS: Record<string, (r: BakedChainResult) => string> = {
       `edge. The model puts the front at Betrawati at ${clockAt(cz, bet.tFront ?? 0)} (its runs span ` +
       `${clockAt(cz, b.tFront[0] ?? 0)}–${b.tFront[2] === null ? 'later' : clockAt(cz, b.tFront[2])}) — later than ` +
       'reported, and that gap is the model’s error, not the river’s: its valley comes from a 30 m elevation model ' +
-      'and its channel roughness is a textbook value. Inside the map the run carries no sediment: it moves the water ' +
+      'and its channel roughness is a published boulder-bed law (Ferguson 2007) on an assumed, not surveyed, boulder size. Inside the map the run carries no sediment: it moves the water ' +
       'under one uniform debris-flood friction law with a 25 m/s speed cap. ' +
       'The terrain is Copernicus 30 m radar data, a surface model with canopy and buildings in it. The bare-earth ' +
       'filter only runs on ground flatter than 20°, and 77 % of this domain is steeper: the valley floor is filtered ' +
@@ -250,7 +250,7 @@ const DESCRIPTIONS: Record<string, (r: BakedChainResult) => string> = {
       `the Tapovan barrage at ${clockAt(cz, tap.tFront ?? 0)} (its runs span ${clockAt(cz, b.tFront[0] ?? 0)}–` +
       `${b.tFront[2] === null ? 'later' : clockAt(cz, b.tFront[2])}) against about 10:36 observed — later than the ` +
       'real flow, and that gap is the model’s error: its valley comes from a 30 m elevation model and its channel ' +
-      'roughness is a textbook value. Inside the map the flow moves as one fluid under a uniform debris-flow friction ' +
+      'roughness is a published boulder-bed law (Ferguson 2007) on an assumed, not surveyed, boulder size. Inside the map the flow moves as one fluid under a uniform debris-flow friction ' +
       'law (O’Brien–Julien, 45 % solids by volume) with a 25 m/s speed cap; it neither picks up nor drops sediment, so ' +
       'the 8 million m³ the real flow left near the Ronti Gad and the mud it laid down at Tapovan are not here. The ' +
       'terrain is Copernicus 30 m radar data, a surface model with canopy and buildings in it, acquired in 2011–2015, ' +

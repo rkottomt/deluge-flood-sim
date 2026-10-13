@@ -180,6 +180,15 @@ export const MANNING_N = 0.05;
  */
 export const VPE_A1 = 6.5;
 export const VPE_A2 = 2.5;
+/**
+ * Bed D84 of a Himalayan boulder-bed main stem for the VPE, m. ASSUMPTION [H]: no surveyed D84 for the Bhote Koshi /
+ * Trishuli, Lachen Chu or Rishiganga / Dhauliganga was found; 0.5 m is the middle of the 0.3–1 m range taken for
+ * boulder-bed mountain rivers, a bed coarser than gravel but finer than the 4.5–30 m flood boulders that sit in the
+ * Trishuli and Sunkoshi channels (Huber et al. 2020, ESurf 8:769, "visibly larger than the surrounding bed load").
+ * Chosen before, and not adjusted after, comparing with the observed arrival times; the sensitivity to 0.3 and 1 m is
+ * in research spec §G.9. At flood depths (R ≈ 5–15 m) it is equivalent to n ≈ 0.044–0.047.
+ */
+export const VPE_D84_HIMALAYA = 0.5;
 /** Baseflow when a scenario gives none, m³/s: keeps the routed river wet so the front does not run on a dry bed. [H] */
 export const BASEFLOW_DEFAULT = 20;
 /** Spin-up of the routing on baseflow alone before t = 0, s: lets the river settle from the normal-depth guess. [H] */
