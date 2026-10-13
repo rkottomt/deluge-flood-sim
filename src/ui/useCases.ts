@@ -182,6 +182,12 @@ export function createUseCases(ctx: UIContext, deps: { panel: Pick<Panel, 'revea
   );
 
   // ─── Applying a use case ──────────────────────────────────────────────────────────────────────────────────
+  /** The scene on screen; a set-up that waits (a download, the chain's worker) checks it is still the same one. */
+  const sceneKey = () => {
+    const s = store.get();
+    return `${s.presetId}|${s.terrainName}`;
+  };
+
   async function ensureScene(preset: string): Promise<boolean> {
     const s = store.get();
     if (s.presetId === preset && s.terrainName && !s.loading) return true;
@@ -242,32 +248,45 @@ export function createUseCases(ctx: UIContext, deps: { panel: Pick<Panel, 'revea
       return true;
     };
     if (bridge.chain?.result && scrollToWarning()) return;
-    // The chain runs in a worker after the scene loads: wait for its result, then show the designer.
-    let off = () => {};
-    const timer = setTimeout(() => off(), CHAIN_WAIT_MS);
-    off = bridge.chainChanged.on((c) => {
+    // The chain runs in a worker after the scene loads: wait for its result, then show the designer — on THIS scene
+    // only: leaving it (another preset, a live area) ends the wait, so a later chain elsewhere does not scroll the panel.
+    const key0 = sceneKey();
+    let done = false;
+    const stop = () => {
+      done = true;
+      clearTimeout(timer);
+      offChain();
+      offScene();
+    };
+    const timer = setTimeout(stop, CHAIN_WAIT_MS);
+    const offScene = store.subscribe(() => {
+      if (sceneKey() !== key0) stop();
+    });
+    const offChain = bridge.chainChanged.on((c) => {
       if (!c?.result) return;
       // The block renders from the same event; look for it once it has.
       requestAnimationFrame(() => {
-        if (scrollToWarning()) {
-          clearTimeout(timer);
-          off();
-        }
+        if (!done && sceneKey() === key0 && scrollToWarning()) stop();
       });
     });
   }
 
   async function setUpPortfolio(): Promise<void> {
+    // The demo's assets are on the Houston map and its fast-forward is for Houston's rain: if the user leaves the
+    // scene while the CSV downloads, neither may land in the next one.
+    const key0 = sceneKey();
     let text: string;
     try {
       const res = await fetch(`${baseUrl()}${DEMO_PORTFOLIO_PATH}`, { credentials: 'same-origin' });
       if (!res.ok) throw new Error(String(res.status));
       text = await res.text();
     } catch {
+      if (sceneKey() !== key0) return;
       postNotice(store, { kind: 'info', key: 'usecase-csv', title: 'Demo portfolio not found', message: 'The bundled demo CSV could not be read. Load your own under Impact & loss.' });
       deps.panel.reveal('impact');
       return;
     }
+    if (sceneKey() !== key0 || store.get().loading) return;
     deps.panel.reveal('impact');
     deps.panel.loadPortfolio(DEMO_PORTFOLIO_NAME, text, { auto: true });
     const s = store.get();
