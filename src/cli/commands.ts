@@ -105,20 +105,21 @@ interface Prepared {
   rain: Atlas14Point | null;
 }
 
-function requirePreset(env: CliEnv, o: ParsedOptions): string {
+/** --preset, checked against the presets on disk (also the API’s first check, src/cli/api.ts). */
+export function requirePreset(env: Pick<CliEnv, 'presetIds'>, o: ParsedOptions): string {
   const id = str(o, 'preset');
   if (!id) throw new UsageError('--preset is required (see `deluge presets`)');
   if (!isPresetId(id) || !env.presetIds().includes(id)) throw new UsageError(`unknown preset "${id}" (one of ${env.presetIds().join(', ')})`);
   return id;
 }
 
-function minutesOf(o: ParsedOptions): number {
+export function minutesOf(o: ParsedOptions): number {
   const m = num(o, 'minutes') ?? ENSEMBLE_LIMITS.defaultMinutes;
   if (!(m >= ENSEMBLE_LIMITS.minMinutes && m <= ENSEMBLE_LIMITS.maxMinutes)) throw new UsageError(`--minutes must be between ${ENSEMBLE_LIMITS.minMinutes} and ${ENSEMBLE_LIMITS.maxMinutes}`);
   return m;
 }
 
-function scenarioFlags(o: ParsedOptions) {
+export function scenarioFlags(o: ParsedOptions) {
   return { level: str(o, 'scenario'), stageFt: num(o, 'stage-ft'), rain: num(o, 'rain'), scale: num(o, 'scale'), manning: num(o, 'manning') };
 }
 
@@ -126,7 +127,7 @@ function scenarioFlags(o: ParsedOptions) {
  * NOAA Atlas 14 at the centre of a map (where the app's rain ladder reads it, siteCheck.ts mapCentre), from the same
  * baked grid; null outside coverage or when the grid cannot be read (then there is no rain ladder, as in the app).
  */
-async function rainAt(env: CliEnv, b: { north: number; south: number; east: number; west: number }): Promise<Atlas14Point | null> {
+export async function rainAt(env: Pick<CliEnv, 'loadAtlas14' | 'log'>, b: { north: number; south: number; east: number; west: number }): Promise<Atlas14Point | null> {
   const lat = (b.north + b.south) / 2;
   const lon = (b.east + b.west) / 2;
   if (!atlas14MayCover(lat, lon)) return null;
@@ -640,7 +641,7 @@ export function siteFromOptions(o: ParsedOptions): SiteSpec {
 }
 
 /** --rp x0.5=10,x1=100 */
-function parseRp(text: string | undefined): Map<string, number> {
+export function parseRp(text: string | undefined): Map<string, number> {
   const out = new Map<string, number>();
   if (!text) return out;
   for (const part of text.split(',')) {
@@ -665,6 +666,24 @@ export function sweepLevels(ladder: readonly LadderRung[], levels: string | unde
   });
 }
 
+/**
+ * The ladder a site check builds and, with --sweep, the levels it runs and the simulated minutes per level (the app's
+ * siteCheck.ts defaultDuration; undefined = the usual default). Throws a UsageError for a ladder, level, return period
+ * or design level the preset does not have. Also the API’s check before it queues a job (src/cli/api.ts).
+ */
+export function planSite(o: ParsedOptions, presetId: string, scenario: TerrainData['scenario'], rain: Atlas14Point | null, rp: Map<string, number>): { ladder: Ladder; todo: LadderRung[]; minutes: number | undefined } {
+  const ladder = buildLadder(presetId, scenario, { rain, kind: str(o, 'ladder') as LadderKind | undefined });
+  if (!flag(o, 'sweep')) return { ladder, todo: [], minutes: undefined };
+  const todo = sweepLevels(ladder.rungs, str(o, 'levels'));
+  if (!todo.length) throw new UsageError('no levels to sweep');
+  for (const id of rp.keys()) if (!ladder.rungs.some((l) => l.id === id)) throw new UsageError(`--rp: no level "${id}"`);
+  const design = str(o, 'design');
+  if (design && !todo.some((l) => l.id === design)) throw new UsageError(`--design ${design} is not among the levels swept`);
+  // The app's simulated time per level for this ladder (siteCheck.ts defaultDuration).
+  const minutes = ladder.kind === 'rain' ? RAIN_SWEEP_MINUTES : ladder.kind === 'stage' && scenario?.coastal ? SURGE_SWEEP_MINUTES : undefined;
+  return { ladder, todo, minutes };
+}
+
 export async function siteCommand(env: CliEnv, o: ParsedOptions): Promise<number> {
   const spec = siteFromOptions(o);
   const sweep = flag(o, 'sweep');
@@ -678,15 +697,10 @@ export async function siteCommand(env: CliEnv, o: ParsedOptions): Promise<number
   let ladder: Ladder = { kind: 'scale', kinds: ['scale'], rungs: [] };
   let todo: LadderRung[] = [];
   const p = await prepare(env, o, (presetId, scenario, rain) => {
-    ladder = buildLadder(presetId, scenario, { rain, kind: kindAsked as LadderKind | undefined });
-    if (!sweep) return undefined;
-    todo = sweepLevels(ladder.rungs, str(o, 'levels'));
-    if (!todo.length) throw new UsageError('no levels to sweep');
-    for (const id of rp.keys()) if (!ladder.rungs.some((l) => l.id === id)) throw new UsageError(`--rp: no level "${id}"`);
-    const design = str(o, 'design');
-    if (design && !todo.some((l) => l.id === design)) throw new UsageError(`--design ${design} is not among the levels swept`);
-    // The app's simulated time per level for this ladder (siteCheck.ts defaultDuration).
-    return ladder.kind === 'rain' ? RAIN_SWEEP_MINUTES : ladder.kind === 'stage' && scenario?.coastal ? SURGE_SWEEP_MINUTES : undefined;
+    const plan = planSite(o, presetId, scenario, rain, rp);
+    ladder = plan.ladder;
+    todo = plan.todo;
+    return plan.minutes;
   });
   try {
     const t = p.terrain;

@@ -22,3 +22,6 @@ submission/video/poster-4k.jpg
 
 # Claude Code local worktrees
 .claude/
+
+# CLI and `deluge serve` output (default --out / --data-dir)
+/results/
