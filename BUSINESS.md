@@ -52,7 +52,7 @@ Ranked by fit with what the product does today, and by how directly the question
 | 1 | **Developers, site-selection and corporate real estate** (and the lenders who finance them) | Acquisition due diligence: depth at the planned floor, egress, a defensible floor level, what protection costs | **Site check**: a parcel swept through NWS / FEMA / historic levels — or, at any US address, NOAA Atlas 14 rain return periods — → depth, arrival, egress closure, loss, EAL, indicative finished floor, mitigation BCR, printable assessment | **5** |
 | 2 | **Lenders, insurers, MGAs, asset managers** | Portfolio exposure, accumulation, event response; the lender's or insurer's question about one asset | **Impact & loss** with a portfolio CSV: per-asset depth, speed, hazard class, loss range, business interruption, insured loss after deductible and limit | 3–4 (they own cat models; they buy event views, new regions and explainability) |
 | 3 | **Hydropower and mountain infrastructure** (owners, IFC PS4 lenders, insurers with GLOF sub-limits) | How much warning each plant gets; where a sensor pays; what the headworks see | **Hazard chain + Early warning**: a lake outburst or avalanche routed down the valley, front times at each plant, lead time per sensor design, best sensor site, ensemble p10 | **5 — the wedge**: no mainstream vendor offers interactive GLOF routing |
-| 4 | **Municipalities, counties and their engineers** | A benefit–cost analysis for a FEMA HMA / BRIC / FMA application; visuals for a public meeting | Before/after loss with a drawn wall, wall cost, BCR at 7 % and 3.1 %, who gets wetter | 4–5 (BRIC was court-restored; a $1 B NOFO closed July 2026 [S]) |
+| 4 | **Municipalities, counties and their engineers** | A benefit–cost analysis for a FEMA HMA / BRIC / FMA application; visuals for a public meeting | Before/after loss with a drawn wall, wall cost, BCR with its uncertainty range at 7 % (FEMA's default) and 3.1 %, a break-even cost and a FEMA BCA Toolkit appendix, who gets wetter | 4–5 (BRIC was court-restored; a $1 B NOFO closed July 2026 [S]) |
 | 5 | **Dam owners and their dam-safety engineers; emergency managers below them** | Breach inundation maps for an Emergency Action Plan (FEMA P-946; state dam-safety rules, which require EAPs for high-hazard dams), the first screen before a consultant's study, and the tabletop exercise | **Dam-breach inundation**: any of ~55,000 NID dams, sunny-day or flood-induced, eight published breach relations as a low / central / high band, the wave on the real valley, arrival times and depths downstream, then Site check / Impact & loss on what it reaches | 4 (a screen, not the stamped EAP map; the owner of a high-hazard dam still needs the engineer — Deluge makes that study's scope and the tabletop exercise cheaper) |
 | 6 | **Coastal developers, lenders and insurers** | How often the sea reaches this parcel, today and in 2050 | **Coastal surge exposure**: the nearest NOAA tide gauge's 1- to 100-year still-water levels on the site, egress, EAL, and the same ladder with NOAA 2022 sea-level rise | 4 (still water at one gauge, no waves: a screen next to the FIRM's VE/AE zones, not instead of them) |
 
@@ -76,7 +76,9 @@ model. It sits at the moment *before* the decision, when someone needs to try op
 2. **Mitigation design with a benefit–cost ratio in the browser.** Draw a wall or levee; Impact & loss books the
    avoided loss, the buildings the wall makes *wetter*, the wall's planning cost and the BCR at 7 % (the FEMA default
    again since June 2025) and 3.1 %. Site check sizes floor elevation, a perimeter wall, a levee and dry
-   floodproofing for one parcel, with FEMA TB-3 and ASCE 24-14 rules applied.
+   floodproofing for one parcel, with FEMA TB-3 and ASCE 24-14 rules applied. *Compare designs* puts designs side by
+   side as an investment: avoided EAL, present values over each design's FEMA useful life, a BCR with its range, the
+   break-even cost, and an appendix of the inputs an engineer transcribes into FEMA's BCA Toolkit.
 3. **Egress and evacuation.** Each site gets the time its *last* dry road route to a shelter closes, against the time
    the water arrives, from the road network and the simulated flood. A live evacuation route re-plans as streets go
    under. Scores and rasters do not say when you can still leave.
@@ -134,6 +136,13 @@ assumption, labelled "your input" in the app and in the report) and the 1936 cre
 * a 361 m perimeter **floodwall**, 4.3 m high: $14.6 M ($7.3–21.9 M), **BCR 0.0–0.1**; an earthen **levee**: $6.1 M,
   BCR 0.1–0.2 (and it needs a 29 m strip all round);
 * **dry floodproofing**: not applicable (3.7 m of design water; FEMA TB-3 stops at 0.9 m, and at 5 ft/s).
+
+At the scale of the neighbourhood, *Compare designs* asks the same question as an investment. The one-click North
+Shore levee avoids **$11.7 M a year**; at FEMA's 7 % over its 50-year useful life its **BCR is 0.85, with a range of
+0.38–1.72** over the damage curves, the cost band and the EAL tail, so the panel's verdict is "uncertain", not "no".
+Its break-even cost is $161 M against a $190 M estimate. Every BCR comes with its range and the list of uncertainties
+it includes; once an ensemble has run, the p10 / p50 / p90 BCR is shown too (30 simulated minutes per level; shorter
+runs are not settled).
 
 Parcel B stays dry at every level up to the 1936 record with its route open: EAL $0, no floor requirement. The
 comparison a developer takes away: **B needs nothing; A is fine for the 1 % event, takes 4 m and loses its egress in
@@ -352,8 +361,11 @@ metering for the *API / ensemble compute* tier in §5 are next.
   rain ladder (§4.4); next, FEMA FIS profiles and USGS StreamStats peak flows for river ladders on live areas (which
   today hold their rivers at a fixed level), longer design storms for larger catchments, and Atlas 15 once NOAA
   publishes it.
-* **A FEMA-BCA appendix** that lists the BCA Toolkit inputs (useful life, discount rate, damages before / after per
-  return period) for an engineer to transcribe.
+* **Benefit–cost from hazard runs per design:** the FEMA BCA Toolkit appendix is in (damages before and after per
+  recurrence interval, useful life, 7 %, cost, maintenance, analysis year; stated as not a FEMA-accepted BCA). Next:
+  run the ensemble per design and level so the BCR band comes from hazard runs rather than a ratio, a
+  `deluge compare` command on the same `src/loss/bca.ts`, and Site check's floor-raising costed over FEMA's 30-year
+  residential life instead of 50.
 * **Headless batch / API:** the batch CLI and its HTTP job API (`deluge serve`) are in ([§6.1](#61-how-a-customer-integrates-the-cli-and-an-http-api));
   next, webhooks, per-key metering and GPU workers behind a shared queue for portfolios of thousands, and parametric
   trigger design on top (what fraction of insured sites is wet when the gauge reads X; basis risk).
@@ -385,7 +397,8 @@ Say these before a customer finds them; the app says them in its panels and repo
   be in another bay); no waves or run-up, no sea-floor bathymetry (§4.6).
 * **The ensemble is sensitivity, not probability.** Its members perturb inputs over stated bands with equal weights;
   "floods in 7 of 12 members" is not a calibrated chance of the real event. Without it, a Site check is one run, and
-  §4.1 shows a result tipping on the fast-water threshold between runs. The ±1σ ranges are the damage-curve spread only.
+  §4.1 shows a result tipping on the fast-water threshold between runs. Benefit–cost ranges name what they include (damage curves,
+  cost band, EAL tail and, when run, the ensemble); return periods and model structure are never in them.
 * **Screening-grade losses.** Global JRC depth–damage curves, values from footprint area × storeys × a national unit
   cost where the user gives none, and a documented heuristic for downtime. Not an insurance valuation, an engineering
   design or a catastrophe model.
