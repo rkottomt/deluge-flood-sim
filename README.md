@@ -335,6 +335,19 @@ The water surface at the Point stays within 3 cm of the gauge reading at every s
 impacts match within a few feet; the misses flood through what bare-earth elevation doesn't contain (storm drains,
 underpasses, depressed roadways, underground stations). Full table: [ARCHITECTURE.md §4](ARCHITECTURE.md#4-rivers-stages-and-crests).
 
+**Checked against real floods.** Every scene is re-run on the GPU and scored against what was observed — USGS
+high-water marks and gauge peaks, the FEMA 1 % flood zone at FEMA's own 1 % river level, Copernicus EMS damage
+grading — by `npx tsx scripts/validate.ts`, pinned by a regression test, and shown in the app's Scenario section.
+Full report, with the misses and why: [docs/VALIDATION.md](docs/VALIDATION.md).
+
+| Scene | Observed | Deluge |
+| --- | --- | --- |
+| Fort Myers, Hurricane Ian | 25 USGS high-water-mark sites (tide set to the gauged peak) | bias +0.07 m, RMSE 0.14 m, all within ±0.3 m |
+| Fort Myers / Nashville / Pittsburgh | FEMA 1 % zone at FEMA's 1 % level | CSI 88 % / 82 % / 61 % |
+| Asheville, Helene | USGS peak stage at 2 gauges | 1.44 m and 1.22 m too low |
+| Houston, Harvey | 9 USGS high-water-mark sites (the scene is 1 hour of a 4-day flood) | 1.85 m too low on average |
+| Betrawati, Nepal | Copernicus EMS EMSR927 damage grading | reaches 37 % of destroyed/damaged buildings, no false alarms on undamaged roads |
+
 ## How a frame works
 
 ```
@@ -557,6 +570,9 @@ that forbids redistribution (details, per city, in [public/presets/SOURCES.txt](
 * Flood stages and historic crests: NOAA National Weather Service (gauges PTTP1, Nashville) and USGS annual peak-flow
   records (French Broad at Asheville 03451500, Swannanoa at Biltmore 03451000, Cumberland at Nashville 03431500,
   Buffalo Bayou at Houston 08074000, Boulder Creek 06730200, Stonycreek 03040000, Patapsco 01589000)
+* Validation data (`public/validation`, [docs/VALIDATION.md](docs/VALIDATION.md)): **USGS** STN high-water marks and
+  NWIS peaks, **FEMA** National Flood Hazard Layer (public domain); damage grading © European Union, 2026,
+  **Copernicus Emergency Management Service** (EMSR927)
 
 Live areas and the location picker's basemap fetch **Esri World Imagery** at runtime (© Esri, Vantor, Earthstar
 Geographics, and the GIS User Community; Esri's terms apply). Fallbacks: **Mapzen Terrarium** elevation tiles (AWS Open
