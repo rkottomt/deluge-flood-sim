@@ -3,7 +3,7 @@
  "preset": "nepal",
  "profile": "chain.json",
  "clockZero": "2026-08-26T08:37:00+05:45",
- "generated": "2026-10-12",
+ "generated": "2026-10-13",
  "generator": "scripts/bake-chain-result.ts",
  "provenance": "modelled",
  "label": "Hazard chain, modelled: the ensemble's median member (volume ×1, source Cv 0.2) routed down Lhende Khola → Bhote Koshi → Trishuli",
@@ -11,12 +11,12 @@
   "routeDx": 100,
   "memberDx": 100,
   "members": 9,
-  "ms": 1891,
+  "ms": 1918,
   "member": {
    "volumeFactor": 1,
    "cv": 0.2
   },
-  "note": "9 members (1662 ms), median member re-run to the end of its recession; the mass reaches the river 4.3 min after the collapse (13.0 km at 50 m/s); direct flow: 20.7 Mm³ of melt water, 25.9 Mm³ at Cv 0.20, peak 43261 m³/s"
+  "note": "9 members (1684 ms), median member re-run to the end of its recession; the mass reaches the river 4.3 min after the collapse (13.0 km at 50 m/s); direct flow: 20.7 Mm³ of melt water, 25.9 Mm³ at Cv 0.20, peak 43261 m³/s"
  },
  "source": {
   "trigger": "massIntoRiver",
@@ -361,7 +361,7 @@
  "domain": {
   "offset": 3595,
   "sourceId": "trishuli-inflow",
-  "inflowVolume": 21356739,
+  "inflowVolume": 21781698,
   "inflowPeak": 11444
  }
 }

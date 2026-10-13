@@ -6,7 +6,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { ChainFile, GlacialLake, HazardChainSpec } from '../../src/hazard/types';
-import { domainClockOffset, massTravelTime, quantile, runChain, runEnsemble, toWaterSource } from '../../src/hazard/chain';
+import { domainClockOffset, massTravelTime, quantile, RAMP_MAX_S, RAMP_MIN_S, recessionRamp, runChain, runEnsemble, toWaterSource } from '../../src/hazard/chain';
 import { meanInflow } from '../../src/sim/forcing';
 import { syntheticValley } from '../helpers/valley';
 
@@ -76,20 +76,40 @@ test('toWaterSource: exactly the routed volume after the offset, on the 2-D cloc
     assert.equal(ws.type, 'inflow');
     assert.equal(ws.gx, file.domainEntry.gx);
     assert.equal(ws.hydrograph![0].t, 0);
-    const end = ws.hydrograph![ws.hydrograph!.length - 1].t;
-    // What the 2-D forcing delivers over the series (plus the last half bin it holds flat)…
-    const dt = r.entry[1].t - r.entry[0].t;
-    const delivered = meanInflow(ws, 0, end + dt / 2) * (end + dt / 2);
-    // … equals the routed volume through the entry face after the offset.
+    // The routed series' bins tile [0, seriesEnd] from t = 0 (the last one short when the run stopped mid-bin).
     let routed = 0;
+    let edge = 0;
     for (const p of r.entry) {
-      const a = p.t - dt / 2;
-      const b = p.t + dt / 2;
+      const a = edge;
+      const b = (edge = 2 * p.t - a);
       if (b > off) routed += p.q * (b - Math.max(a, off));
     }
+    const seriesEnd = edge - off;
+    // What the 2-D forcing delivers through the end of the routed series is exactly the routed volume after the offset…
+    const delivered = meanInflow(ws, 0, seriesEnd) * seriesEnd;
     close(delivered, routed, 1e-6 * routed, `volume with ${JSON.stringify(opts)}`);
+    // … then a finite ramp down to the entry baseflow, which is all the forcing holds after it.
+    const h = ws.hydrograph!;
+    const end = h[h.length - 1].t;
+    const qEnd = meanInflow(ws, seriesEnd, seriesEnd);
+    const ramp = recessionRamp(r.entry, r.entryBase, qEnd);
+    if (ramp) {
+      close(end - seriesEnd, ramp.seconds, 1e-6, 'the ramp lasts its stated duration');
+      assert.ok(ramp.seconds >= RAMP_MIN_S && ramp.seconds <= RAMP_MAX_S);
+      close(h[h.length - 1].q, r.entryBase, 1e-9, 'it ends on the entry baseflow');
+      close(meanInflow(ws, seriesEnd, end) * (end - seriesEnd), r.entryBase * ramp.seconds + ramp.excessVolume, 1e-6 * routed, 'ramp volume = baseflow + (q_end − q_base)·T/2');
+    }
+    // Afterwards the forcing holds the last point: the baseflow (or a series that already ended on it), nothing more.
+    close(meanInflow(ws, end, end + 86400), ramp ? r.entryBase : qEnd, 1e-6, 'afterwards: baseflow only');
     close(ws.discharge, Math.max(...ws.hydrograph!.map((p) => p.q)), 1e-9, 'discharge is the peak');
   }
+  // A series cut off while still well above baseflow (an early stop) ramps down instead of holding its last value.
+  const early = runChain(breachSpec(), file, { baseflow: 15, routing: { stopFraction: 0.5 } });
+  const qLast = early.entry[early.entry.length - 1].q;
+  assert.ok(qLast > 2 * early.entryBase, `the early stop ends above baseflow (${qLast.toFixed(0)} vs ${early.entryBase})`);
+  const we = toWaterSource(early, file).hydrograph!;
+  close(we[we.length - 1].q, early.entryBase, 1e-9, 'back to baseflow');
+  assert.ok(we[we.length - 1].t - we[we.length - 2].t >= RAMP_MIN_S);
   // Default: 300 s of baseflow before the front reaches the domain.
   close(domainClockOffset(r), r.entryFront - 300, 1e-9, 'preroll');
   const ws = toWaterSource(r, file);

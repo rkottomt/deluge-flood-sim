@@ -248,6 +248,8 @@ export interface HazardChainSpec {
  * `domain.offset` is the chain time that is the 2-D solver's t = 0: the preset's inflow (meta.json scenario.sources,
  * id `domain.sourceId`) is this run's routed entry hydrograph shifted by it (chain.ts toWaterSource), so
  * 2-D time t corresponds to chain time t + offset, and a station's chain time minus `offset` is its 2-D time.
+ * `domain.inflowVolume` is the area under that whole hydrograph, m³: the routed volume after the offset, exact, plus
+ * the finite ramp to baseflow after it (chain.ts recessionRamp); past its last point the forcing holds only baseflow.
  */
 export interface BakedChainResult {
   version: 1;

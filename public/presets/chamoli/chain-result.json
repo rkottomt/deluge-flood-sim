@@ -3,7 +3,7 @@
  "preset": "chamoli",
  "profile": "chain.json",
  "clockZero": "2021-02-07T10:21:00+05:30",
- "generated": "2026-10-12",
+ "generated": "2026-10-13",
  "generator": "scripts/bake-chain-result.ts",
  "provenance": "modelled",
  "label": "Hazard chain, modelled: the ensemble's median member (volume ×1, source Cv 0.2) routed down Ronti Gad → Rishiganga → Dhauliganga",
@@ -11,12 +11,12 @@
   "routeDx": 100,
   "memberDx": 100,
   "members": 9,
-  "ms": 628,
+  "ms": 547,
   "member": {
    "volumeFactor": 1,
    "cv": 0.2
   },
-  "note": "9 members (569 ms), median member re-run to the end of its recession; the mass reaches the river 1.2 min after the collapse (3.7 km at 50 m/s); direct flow: 4.9 Mm³ of melt water, 6.2 Mm³ at Cv 0.20, peak 13921 m³/s"
+  "note": "9 members (483 ms), median member re-run to the end of its recession; the mass reaches the river 1.2 min after the collapse (3.7 km at 50 m/s); direct flow: 4.9 Mm³ of melt water, 6.2 Mm³ at Cv 0.20, peak 13921 m³/s"
  },
  "source": {
   "trigger": "massIntoRiver",

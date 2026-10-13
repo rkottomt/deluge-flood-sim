@@ -742,7 +742,7 @@ test('nepal: the routed chain hydrograph, sourced numbers, and the caveats on sc
   /*
    * The inflow is the hazard chain's routed hydrograph (scripts/bake-chain-result.ts): the ensemble's median member at
    * the domain entry, not the old 20 million m³ spread evenly over 30 minutes. It rises from baseflow, peaks and
-   * recedes; with no stop the forcing holds its last value — the river's baseflow — afterwards.
+   * recedes, then ramps down to the entry baseflow (chain.ts recessionRamp), which the forcing holds afterwards.
    */
   const surge = s.sources.find((x) => x.type === 'inflow')!;
   assert.equal(s.sources.length, 1, 'one forcing: the wave from upstream');
@@ -1367,11 +1367,13 @@ for (const id of BAKED.filter(hasChain)) {
     // Same water: the shipped hydrograph (times to 0.1 s, discharges to 0.01 m³/s) carries the routed volume after the
     // offset — what the chain hands the 2-D solver — to 0.1 %.
     const ws = toWaterSource(run, c);
-    const half = run.entry.length > 1 ? (run.entry[1].t - run.entry[0].t) / 2 : 0;
-    const want = hydrographArea(ws.hydrograph!, half);
-    const got = hydrographArea(src.hydrograph, half);
+    const want = hydrographArea(ws.hydrograph!);
+    const got = hydrographArea(src.hydrograph);
     assert.ok(Math.abs(got - want) / want < 1e-3, `inflow ${(got / 1e6).toFixed(3)} Mm³ vs the chain's ${(want / 1e6).toFixed(3)} Mm³`);
     assert.ok(Math.abs(cr.domain.inflowVolume - got) / got < 1e-3, 'chain-result.json states the inflow volume');
+    // The shipped curve ends on the entry baseflow (the forcing holds its last point for ever): no unbounded volume.
+    const qLast = src.hydrograph[src.hydrograph.length - 1].q;
+    assert.ok(qLast <= run.entryBase + 0.01, `${id}: the inflow ends at ${qLast} m³/s, the entry baseflow is ${run.entryBase.toFixed(2)}`);
     // And it is the routed flood, not a trickle: the entry peak, at the chain's peak.
     assert.ok(Math.abs(src.discharge - run.entryPeak) / run.entryPeak < 0.02, `inflow peak ${src.discharge} vs routed ${run.entryPeak.toFixed(0)}`);
     // The stations' numbers are this run's.

@@ -931,6 +931,14 @@
      {
       "t": 6770.3,
       "q": 370.66
+     },
+     {
+      "t": 6785.3,
+      "q": 370.66
+     },
+     {
+      "t": 8591.1,
+      "q": 100
      }
     ],
     "label": "Trishuli — routed debris flood from the Lhende avalanche (modelled: hazard-chain median member, not a measured hydrograph)"

@@ -3,7 +3,7 @@
  "preset": "chungthang",
  "profile": "chain.json",
  "clockZero": "2023-10-03T22:13:20+05:30",
- "generated": "2026-10-12",
+ "generated": "2026-10-13",
  "generator": "scripts/bake-chain-result.ts",
  "provenance": "modelled",
  "label": "Hazard chain, modelled: the ensemble's median member (volume ×1, breach 100 m/h, source Cv 0.4) routed down South Lhonak → Lhonak Chu → Lachen Chu → Teesta",
@@ -11,13 +11,13 @@
   "routeDx": 100,
   "memberDx": 100,
   "members": 27,
-  "ms": 14244,
+  "ms": 14302,
   "member": {
    "volumeFactor": 1,
    "erosionRate": 100,
    "cv": 0.4
   },
-  "note": "27 members (13689 ms), median member re-run to the end of its recession; the mass reaches the lake 0.2 min after the collapse (0.5 km at 50 m/s); impulse wave solitary: H 14.9 m, crest 8.3 m at the dam 1.33 km away (flume value 45.9 m; spreading β 90°, γ′ 77°); M = 14.30 outside the tested 0.11–10.02; P = 2.79: overtops by 7.3 m, 3.68 Mm³ pulse, breach at 100 m/h"
+  "note": "27 members (13695 ms), median member re-run to the end of its recession; the mass reaches the lake 0.2 min after the collapse (0.5 km at 50 m/s); impulse wave solitary: H 14.9 m, crest 8.3 m at the dam 1.33 km away (flume value 45.9 m; spreading β 90°, γ′ 77°); M = 14.30 outside the tested 0.11–10.02; P = 2.79: overtops by 7.3 m, 3.68 Mm³ pulse, breach at 100 m/h"
  },
  "source": {
   "trigger": "massIntoLake",
@@ -206,7 +206,7 @@
  "domain": {
   "offset": 5735,
   "sourceId": "lachen-chu-inflow",
-  "inflowVolume": 35341875,
+  "inflowVolume": 36065740,
   "inflowPeak": 9578
  }
 }

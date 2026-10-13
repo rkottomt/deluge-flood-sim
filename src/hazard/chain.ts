@@ -467,27 +467,58 @@ export function domainClockOffset(result: ChainRunResult, opts: WaterSourceOptio
   return Number.isFinite(result.entryFront) ? Math.max(0, result.entryFront - pre) : 0;
 }
 
+/** Bins at the end of the routed entry series whose mean slope is the recession rate the tail ramp continues. */
+export const RECESSION_FIT_BINS = 10;
+/** Bounds on the tail ramp to baseflow, s: at least one 10-minute step, at most 6 h. */
+export const RAMP_MIN_S = 600;
+export const RAMP_MAX_S = 6 * 3600;
+
+/**
+ * The tail after the routed entry series: where it ends (2-D clock), its discharge there, and the linear ramp from that
+ * down to the entry baseflow. The routing stops once the flood has passed (stopFraction), so its last bin can still be
+ * well above baseflow (Nepal's ends at ~370 against 100 m³/s); held flat, as the forcing holds a hydrograph's last
+ * value, that excess would flow FOREVER. The ramp continues the series' own recession — the mean slope over its last
+ * RECESSION_FIT_BINS bins — until it reaches the baseflow: duration (q_end − q_base) / slope, clamped to
+ * [RAMP_MIN_S, RAMP_MAX_S] (RAMP_MAX_S when the series is not receding). A linear ramp at the current slope carries
+ * half the excess an exponential recession at the same rate would (q_excess² / slope), so it is the conservative tail,
+ * and it is finite: (q_end − q_base)·T/2 above baseflow. null when the series already ends at (or under) baseflow.
+ */
+export function recessionRamp(entry: ReadonlyArray<{ t: number; q: number }>, base: number, qEnd: number): { seconds: number; excessVolume: number } | null {
+  if (!(qEnd > base * (1 + 1e-3) + 1e-6) || entry.length < 2) return null;
+  const n = entry.length;
+  const k = Math.max(0, n - 1 - RECESSION_FIT_BINS);
+  const slope = (entry[k].q - entry[n - 1].q) / Math.max(1e-9, entry[n - 1].t - entry[k].t);
+  const seconds = slope > 0 ? Math.min(RAMP_MAX_S, Math.max(RAMP_MIN_S, (qEnd - base) / slope)) : RAMP_MAX_S;
+  return { seconds, excessVolume: 0.5 * (qEnd - base) * seconds };
+}
+
 /**
  * The routed hydrograph at the domain entry as the 2-D solver's inflow WaterSource, times shifted to the 2-D clock
- * (domainClockOffset). The routed entry series is one mean discharge per sampling bin, exact in volume; as a
- * piecewise-linear curve through the bin centres (what src/sim/forcing.ts integrates) its area differs by the
- * curvature within bins, so the points are rescaled — by a factor within ~1e-3 of 1 — to deliver exactly the routed
- * volume after the offset. `discharge` is the peak (the label and the CFL estimate's fallback read it). After its last
- * point the forcing holds the last value: the river keeps its baseflow.
+ * (domainClockOffset). `discharge` is the peak (the label and the CFL estimate's fallback read it).
+ *
+ * VOLUME. The routed entry series is one mean discharge per sampling bin, exact in volume. As a piecewise-linear curve
+ * through the bin centres (what src/sim/forcing.ts integrates), plus a point holding the last bin's value to the end
+ * of that bin, its area differs by the curvature within bins, so these points are rescaled — by a factor within ~1e-3
+ * of 1 — to deliver EXACTLY the routed volume after the offset, through the end of the routed series. After that the
+ * curve ramps linearly down to the entry baseflow (recessionRamp: the series' own recession rate, ≤ 6 h, a finite and
+ * stated extra volume), and the forcing then holds that last point: the river keeps its baseflow, and nothing more.
  */
 export function toWaterSource(result: ChainRunResult, file: ChainFile, opts: WaterSourceOptions = {}): Extract<WaterSource, { type: 'inflow' }> {
   const off = domainClockOffset(result, opts);
   const e = result.entry;
   const pts: Array<{ t: number; q: number }> = [];
-  // Exact routed volume after the offset: whole bins after it plus the part of the straddling bin.
+  // Exact routed volume after the offset: whole bins after it plus the part of the straddling bin. The bins tile the
+  // run from t = 0 and each point sits at its bin's centre, so every edge follows from the one before — including the
+  // last bin's, which is short when the run stopped mid-bin (routing.ts).
   let exact = 0;
-  const dtBin = e.length > 1 ? e[1].t - e[0].t : 2 * (e[0]?.t ?? 1);
+  let edge = 0;
   for (const p of e) {
-    const a = p.t - dtBin / 2;
-    const b = p.t + dtBin / 2;
+    const a = edge;
+    const b = (edge = Math.max(a, 2 * p.t - a));
     if (b <= off) continue;
     exact += p.q * (b - Math.max(a, off));
   }
+  const seriesEnd = edge;
   // Q at the offset, interpolated, then every bin centre after it.
   const at = (t: number): number => {
     if (e.length === 0) return 0;
@@ -497,12 +528,19 @@ export function toWaterSource(result: ChainRunResult, file: ChainFile, opts: Wat
   };
   pts.push({ t: 0, q: at(off) });
   for (const p of e) if (p.t > off) pts.push({ t: p.t - off, q: p.q });
-  // Area of the piecewise-linear curve over the same span (the last half bin held flat).
+  // The last bin's value held to the end of that bin: the routed series' own span, explicit.
+  const last = pts[pts.length - 1];
+  const tSeriesEnd = Math.max(last.t, seriesEnd - off);
+  if (tSeriesEnd > last.t + 1e-9) pts.push({ t: tSeriesEnd, q: last.q });
+  // Area of the piecewise-linear curve over the same span.
   let area = 0;
   for (let i = 1; i < pts.length; i++) area += 0.5 * (pts[i].q + pts[i - 1].q) * (pts[i].t - pts[i - 1].t);
-  area += pts[pts.length - 1].q * (dtBin / 2);
   const f = area > 0 && exact > 0 ? exact / area : 1;
   const hydrograph = pts.map((p) => ({ t: p.t, q: p.q * f }));
+  // Then down to baseflow, which the forcing holds from there on (see recessionRamp).
+  const qEnd = hydrograph[hydrograph.length - 1].q;
+  const ramp = recessionRamp(e, result.entryBase, qEnd);
+  if (ramp) hydrograph.push({ t: hydrograph[hydrograph.length - 1].t + ramp.seconds, q: result.entryBase });
   const peak = hydrograph.reduce((m, p) => Math.max(m, p.q), 0);
   const d = file.domainEntry;
   return {

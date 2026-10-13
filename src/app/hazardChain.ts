@@ -1,8 +1,9 @@
 /**
  * The glacier hazard chain behind a chain preset's flood (ScenarioPreset.hazardChain, src/hazard/): on a scene that has
  * one, fetch its valley profile (chain.json), run the chain off the main thread (src/hazard/workerClient.ts), drive
- * the map's inflow with the routed hydrograph at the domain edge (toWaterSource: exact volume, 2-D t = 0 a few minutes
- * before the front reaches the edge), then run the §I.5 ensemble for the p10–p90 bands. The result is published on
+ * the map's inflow with the routed hydrograph at the domain edge (toWaterSource: the routed volume exactly, then a
+ * ramp down to baseflow; 2-D t = 0 a few minutes before the front reaches the edge), then run the §I.5 ensemble for
+ * the p10–p90 bands. The result is published on
  * the UI bridge (ChainView) for the chain panel, the valley timeline and the event clock, which re-run it through
  * ChainControl.
  *

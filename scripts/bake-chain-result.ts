@@ -13,7 +13,8 @@
  *      (the member counts are odd, so it is one of them) — and re-runs it to the end of its recession;
  *   3. writes that run's routed entry hydrograph into meta.json as the preset's inflow (toWaterSource: the chain's
  *      clock shifted so the 2-D run starts five minutes before the front reaches the map, the volume after that
- *      instant exact), replacing the placeholder that stood there, with a provenance label — so the standalone 2-D
+ *      instant exact, then a finite ramp down to the entry baseflow), replacing the placeholder that stood there, with
+ *      a provenance label — so the standalone 2-D
  *      scenario is that member, not a separate guess;
  *   4. writes public/presets/<id>/chain-result.json (src/hazard/types.ts BakedChainResult): station fronts, peaks,
  *      stages and lead times of that run, the ensemble's p10/p50/p90 per station, and the observations beside them,
@@ -74,7 +75,8 @@ export function bakeChainResult(id: string, spec: HazardChainSpec, file: ChainFi
   inflow.discharge = Math.round(inflow.discharge);
   const offset = domainClockOffset(run);
   const obs = spec.observations ?? [];
-  const inflowVolume = hydrographArea(inflow.hydrograph!, ENTRY_HOLD(run));
+  // The whole curve: the routed volume after the offset plus the ramp to baseflow (toWaterSource ends on it).
+  const inflowVolume = hydrographArea(inflow.hydrograph!);
   const result: BakedChainResult = {
     version: 1,
     preset: id,
@@ -131,12 +133,6 @@ export function bakeChainResult(id: string, spec: HazardChainSpec, file: ChainFi
     domain: { offset: Math.round(offset), sourceId, inflowVolume: Math.round(inflowVolume), inflowPeak: inflow.discharge },
   };
   return { result, inflow, run };
-}
-
-/** The last half bin the forcing holds flat after the hydrograph's last point (toWaterSource's volume accounting). */
-function ENTRY_HOLD(run: ChainRunResult): number {
-  const e = run.entry;
-  return e.length > 1 ? (e[1].t - e[0].t) / 2 : 0;
 }
 
 /** Area under a piecewise-linear hydrograph plus `hold` seconds of its last value, m³. */
