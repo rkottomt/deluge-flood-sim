@@ -2269,6 +2269,67 @@ const FLOWS = [
       await addressSweep(r, '22');
     },
   },
+  {
+    id: 23,
+    name: 'Land surface: buildings block flow, land-cover roughness and storm drains',
+    timeoutMs: 300_000,
+    async run(r) {
+      // src/app/landSurface.ts → FloodSolver.setLandSurface (ARCHITECTURE.md §3.11). The Advanced panel's switches, what
+      // the solver ends up with, and that rain on a blocked city stays out of the footprints with mass intact.
+      const setSim = (patch) => D((p) => window.__deluge.store.set({ sim: { ...window.__deluge.getState().sim, ...p } }), patch);
+      const land = () =>
+        D(() => ({
+          solver: window.__deluge.getSolver()?.landSurfaceState ?? null,
+          status: window.__deluge.getState().landSurface ?? null,
+          switches: Object.fromEntries(
+            [...document.querySelectorAll('[data-section="advanced"] .dl-switch')].map((b) => [b.textContent?.trim() ?? '', b.getAttribute('aria-checked')]),
+          ),
+          note: [...document.querySelectorAll('[data-section="advanced"] .dl-impact-fine')].map((e) => e.textContent ?? '').join(' '),
+        }));
+      await calm();
+      const off = await land();
+      r.metrics.off = off;
+      check(r, 'Pittsburgh has footprints and NLCD 2021 land cover; every layer starts off', !!off.status && off.status.obstacleCells > 20_000 && off.status.landCover === 'NLCD 2021' && off.solver?.obstacles === 0 && !off.solver.roughness && !off.solver.drains, JSON.stringify(off.status));
+      check(r, 'the Advanced panel shows the switches and the honest fine print', 'Buildings block flow' in off.switches && 'Storm drains' in off.switches && /not a pipe network/.test(off.note), Object.keys(off.switches).join(', '));
+      await setSim({ buildingObstacles: true, roughnessMap: true, drainage: true });
+      const on = await land();
+      r.metrics.on = on;
+      check(r, 'switching on reaches the solver and the panel', on.solver?.obstacles === off.status.obstacleCells && on.solver.roughness && on.solver.drains && on.switches['Buildings block flow'] === 'true', JSON.stringify(on.solver));
+      const before = await stats();
+      await D(() => window.__deluge.setRain(100));
+      await runFor(600);
+      const after = await stats();
+      // Every blocked cell stays dry under the rain apart from the film running off its roof.
+      const roof = await D(() => {
+        const d = window.__deluge;
+        const s = d.getSolver();
+        const obst = s?.getObstacleCPU?.();
+        if (!obst) return null;
+        const depth = s.getSnapshot()?.depth;
+        let blocked = 0;
+        let maxRoof = 0;
+        for (let c = 0; c < obst.length; c++) {
+          if (obst[c] > 0) {
+            blocked++;
+            if (depth && depth[c] > maxRoof) maxRoof = depth[c];
+          }
+        }
+        return { blocked, maxRoof };
+      });
+      r.metrics.roof = roof;
+      check(r, 'no water stands in a footprint (roof films only)', !!roof && roof.blocked > 20_000 && roof.maxRoof < 0.05, JSON.stringify(roof));
+      check(r, 'drains take water out and it is booked (volumeOut grows; mass balance < 0.1 %)', (after?.volumeOut ?? 0) > (before?.volumeOut ?? 0) && (after?.massError ?? 1) < 1e-3, `out ${m3(before?.volumeOut)} → ${m3(after?.volumeOut)}, massError ${num((after?.massError ?? NaN) * 100, 5)} %`);
+      await D(() => window.__deluge.setWaterMode('depth'));
+      await shot('20-land-surface');
+      await setSim({ buildingObstacles: false, roughnessMap: false, drainage: false });
+      const back = await land();
+      check(r, 'switching off restores the bare-earth solver', back.solver?.obstacles === 0 && !back.solver.roughness && !back.solver.drains, JSON.stringify(back.solver));
+      await D(() => {
+        window.__deluge.setRain(0);
+        window.__deluge.setWaterMode('realistic');
+      });
+    },
+  },
 ];
 
 // ─── "Check any US address" helpers (flows 20 and 21) ────────────────────────────────────────────

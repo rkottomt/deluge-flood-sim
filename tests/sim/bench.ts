@@ -4,6 +4,7 @@
  *   node --import tsx tests/sim/bench.ts            # 512², 1024², 2048² synthetic + Pittsburgh preset if baked
  *   node --import tsx tests/sim/bench.ts 1024       # one size
  *   node --import tsx tests/sim/bench.ts 1024 voellmy   # one size, a debris rheology (voellmy / quadratic / bingham)
+ *   node --import tsx tests/sim/bench.ts 1024 land      # one size, land-surface layers (roughness / drains / obstacles / land)
  *
  * Reports substeps/second of the full per-substep pipeline (momentum + continuity passes), the cost of the
  * per-frame export pass, the readback (map + CPU stats) cost, and what that means against the performance target on an
@@ -115,6 +116,9 @@ async function main() {
     bingham: { kind: 'bingham', tauY: 500, muB: 20, rho: 2000 },
   };
   const rheology = rheo[process.argv[3] ?? ''];
+  // …or land-surface layers (ARCHITECTURE.md §3.11): roughness | drains | obstacles | land (all three).
+  const landArg = process.argv[3] ?? '';
+  const land = ['roughness', 'drains', 'obstacles', 'land'].includes(landArg) ? landArg : null;
   const sizes = arg ? [Number(arg)] : [512, 1024, 2048];
   const params: Partial<SimParams> = { rainRate: 50, manningN: 0.035, boundary: 'open' };
 
@@ -124,7 +128,29 @@ async function main() {
     solver.setInitialWater(v.depth);
     solver.setSources([{ id: 'in', type: 'inflow', gx: n / 2, gy: 4, radius: 6, discharge: 400 }]);
     if (rheology) solver.setRheology(rheology, { uMax: 25 });
-    await measure(`valley ${n}²${rheology ? ` ${rheology.kind}` : ''}`, solver, device);
+    if (land) {
+      // A city-like mix: n 0.02–0.15 in 8-cell patches, drains on two thirds of the cells, 3×3-cell blocks on a 6-cell
+      // street grid over the dry land.
+      const N = n * n;
+      const roughness = new Float32Array(N);
+      const drain = new Float32Array(N);
+      const obstacles = new Float32Array(N);
+      for (let j = 0; j < n; j++) {
+        for (let i = 0; i < n; i++) {
+          const c = j * n + i;
+          const patch = ((i >> 3) * 7 + (j >> 3) * 13) % 10;
+          roughness[c] = 0.02 + 0.013 * patch;
+          drain[c] = patch < 7 ? 30 : 0;
+          if (i % 6 < 3 && j % 6 < 3 && v.depth[c] === 0) obstacles[c] = 10;
+        }
+      }
+      solver.setLandSurface({
+        roughness: land === 'roughness' || land === 'land' ? roughness : null,
+        drainCapacity: land === 'drains' || land === 'land' ? drain : null,
+        obstacles: land === 'obstacles' || land === 'land' ? obstacles : null,
+      });
+    }
+    await measure(`valley ${n}²${rheology ? ` ${rheology.kind}` : ''}${land ? ` ${land}` : ''}`, solver, device);
     solver.destroy();
   }
 
