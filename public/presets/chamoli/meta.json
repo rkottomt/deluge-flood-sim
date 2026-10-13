@@ -14,7 +14,7 @@
  },
  "attribution": "Elevation: Copernicus DEM GLO-30 (© DLR e.V. 2010–2014 / © Airbus Defence and Space GmbH, ESA), bare-earth filtered · Terrain shading: no aerial imagery (hypsometric tint) · Roads © OpenStreetMap contributors (ODbL) · Buildings © OpenStreetMap contributors & Microsoft ML Building Footprints (ODbL)",
  "scenario": {
-  "description": "Raini stands where the Rishiganga meets the Dhauliganga, and the 13.2 MW Rishiganga hydropower plant stood beside it; 6 km downstream, at Tapovan, the barrage of the 520 MW Tapovan-Vishnugad project was being built. At 10:21 on the morning of 7 February 2021 about 27 million m³ of rock and glacier ice broke from the north face of Ronti Peak, 5,500 m up and some 15 km away. Its ice melted on the way down, and the avalanche became a debris flow that ran down the Ronti Gad and the Rishiganga at about 25 m/s, destroyed the Rishiganga plant, reached the Tapovan barrage about a quarter of an hour after the collapse and destroyed it too. Most of the people it took were workers at the two projects (Shugar et al., Science, 2021). Nothing gauged the flow; the published reconstruction gives a mean discharge of 8,200 to 14,200 m³/s at the Rishiganga plant over 10–20 minutes, and 2,900 to 4,900 m³/s below Tapovan. The flood entering this map is modelled, not measured: a 1-D hazard-chain model turns the avalanche's melted ice into a debris flow — about 6 million m³ of it, 5 million m³ of that water — and routes it 12 km down the Ronti Gad and the Rishiganga; this is the median of its 9 runs, peaking at about 12,680 m³/s at the east edge, 10,882 m³/s at Raini and 5,917 m³/s below Tapovan. The clock is the event's: the run starts at 10:26, five minutes before the modelled front reaches the east edge. The model puts the front at the Tapovan barrage at 10:41 (its runs span 10:39–10:46) against about 10:36 observed — later than the real flow, and that gap is the model’s error: its valley comes from a 30 m elevation model and its channel roughness is a published boulder-bed law (Ferguson 2007) on an assumed, not surveyed, boulder size. Inside the map the flow moves as one fluid under a uniform debris-flow friction law (O’Brien–Julien, 45 % solids by volume) with a 25 m/s speed cap; it neither picks up nor drops sediment, so the 8 million m³ the real flow left near the Ronti Gad and the mud it laid down at Tapovan are not here. The terrain is Copernicus 30 m radar data, a surface model with canopy and buildings in it, acquired in 2011–2015, before the Tapovan barrage was finished. The radar cannot see the floor of the Rishiganga gorge and puts false dams across it, so a 60 m wide floor has been cut along the river for the flow to run on. The bare-earth filter only runs on ground flatter than 20°, and 90 % of this domain is steeper: the valley floor is filtered and still a metre or two high, the walls above it are the raw surface model. No photograph is baked in, so the ground is shaded by height instead. OpenStreetMap maps the Joshimath–Malari road and a few village lanes here. The rivers start dry and get five minutes of the modelled baseflow before the front, so almost every drop you see is the modelled flow. Watch where it goes and in what order, and do not read street-level depths.",
+  "description": "Raini stands where the Rishiganga meets the Dhauliganga, and the 13.2 MW Rishiganga hydropower plant stood beside it; 6 km downstream, at Tapovan, the barrage of the 520 MW Tapovan-Vishnugad project was being built. At 10:21 on the morning of 7 February 2021 about 27 million m³ of rock and glacier ice broke from the north face of Ronti Peak, 5,500 m up and some 15 km away. Its ice melted on the way down, and the avalanche became a debris flow that ran down the Ronti Gad and the Rishiganga at about 25 m/s, destroyed the Rishiganga plant, reached the Tapovan barrage about a quarter of an hour after the collapse and destroyed it too. Most of the people it took were workers at the two projects (Shugar et al., Science, 2021). Nothing gauged the flow; the published reconstruction gives a mean discharge of 8,200 to 14,200 m³/s at the Rishiganga plant over 10–20 minutes, and 2,900 to 4,900 m³/s below Tapovan. The flood entering this map is modelled, not measured: a 1-D hazard-chain model runs the avalanche down its path and the upper Ronti Gad as a sliding mass, then turns its melted ice into a debris flow — about 6 million m³ of it, 5 million m³ of that water — and routes it 12 km down the Ronti Gad and the Rishiganga; this is the median of its 9 runs, peaking at about 11,841 m³/s at the east edge, 9,412 m³/s at Raini and 5,568 m³/s below Tapovan. The clock is the event's: the run starts at 10:24, five minutes before the modelled front reaches the east edge. The model puts the front at the Tapovan barrage at 10:39 (its runs span 10:36–10:44) against about 10:36–10:37 in the seismic records — later than the real flow, and that gap is the model’s error: its valley comes from a 30 m elevation model and its channel roughness is a published boulder-bed law (Ferguson 2007) on an assumed, not surveyed, boulder size. Inside the map the flow moves as one fluid under a uniform debris-flow friction law (O’Brien–Julien, 45 % solids by volume) with a 25 m/s speed cap; it neither picks up nor drops sediment, so the 8 million m³ the real flow left near the Ronti Gad and the mud it laid down at Tapovan are not here. The terrain is Copernicus 30 m radar data, a surface model with canopy and buildings in it, acquired in 2011–2015, before the Tapovan barrage was finished. The radar cannot see the floor of the Rishiganga gorge and puts false dams across it, so a 60 m wide floor has been cut along the river for the flow to run on. The bare-earth filter only runs on ground flatter than 20°, and 90 % of this domain is steeper: the valley floor is filtered and still a metre or two high, the walls above it are the raw surface model. No photograph is baked in, so the ground is shaded by height instead. OpenStreetMap maps the Joshimath–Malari road and a few village lanes here. The rivers start dry and get five minutes of the modelled baseflow before the front, so almost every drop you see is the modelled flow. Watch where it goes and in what order, and do not read street-level depths.",
   "sources": [
    {
     "id": "rishiganga-inflow",
@@ -22,746 +22,710 @@
     "gx": 1018.5,
     "gy": 704.5,
     "radius": 4,
-    "discharge": 12680,
+    "discharge": 11841,
     "hydrograph": [
      {
       "t": 0,
-      "q": 20.32
+      "q": 20.01
      },
      {
-      "t": 28.1,
-      "q": 21.05
+      "t": 24.4,
+      "q": 20.88
      },
      {
-      "t": 58.1,
-      "q": 20.94
+      "t": 54.4,
+      "q": 21.44
      },
      {
-      "t": 88.1,
-      "q": 19.95
+      "t": 84.4,
+      "q": 20.07
      },
      {
-      "t": 118.1,
-      "q": 19.8
+      "t": 114.4,
+      "q": 19.79
      },
      {
-      "t": 148.1,
+      "t": 144.4,
       "q": 19.7
      },
      {
-      "t": 178.1,
-      "q": 18.23
+      "t": 174.4,
+      "q": 19.54
      },
      {
-      "t": 208.1,
-      "q": 17.89
+      "t": 204.4,
+      "q": 19.25
      },
      {
-      "t": 238.1,
-      "q": 17.78
+      "t": 234.4,
+      "q": 17.9
      },
      {
-      "t": 268.1,
-      "q": 17.92
+      "t": 264.4,
+      "q": 17.87
      },
      {
-      "t": 298.1,
-      "q": 1790.39
+      "t": 294.4,
+      "q": 1037.28
      },
      {
-      "t": 328.1,
-      "q": 10893.24
+      "t": 324.4,
+      "q": 10314.58
      },
      {
-      "t": 358.1,
-      "q": 12680.34
+      "t": 354.4,
+      "q": 11841.14
      },
      {
-      "t": 388.1,
-      "q": 12541.5
+      "t": 384.4,
+      "q": 11009.52
      },
      {
-      "t": 418.1,
-      "q": 12038.12
+      "t": 414.4,
+      "q": 10357.81
      },
      {
-      "t": 448.1,
-      "q": 11369.92
+      "t": 444.4,
+      "q": 9898.7
      },
      {
-      "t": 478.1,
-      "q": 10618.68
+      "t": 474.4,
+      "q": 9495.92
      },
      {
-      "t": 508.1,
-      "q": 9869.51
+      "t": 504.4,
+      "q": 9099.95
      },
      {
-      "t": 538.1,
-      "q": 9139.8
+      "t": 534.4,
+      "q": 8699.26
      },
      {
-      "t": 568.1,
-      "q": 8398.8
+      "t": 564.4,
+      "q": 8284.17
      },
      {
-      "t": 598.1,
-      "q": 7663.44
+      "t": 594.4,
+      "q": 7851.73
      },
      {
-      "t": 628.1,
-      "q": 6990.7
+      "t": 624.4,
+      "q": 7438.92
      },
      {
-      "t": 658.1,
-      "q": 6378.14
+      "t": 654.4,
+      "q": 7037.53
      },
      {
-      "t": 688.1,
-      "q": 5831.62
+      "t": 684.4,
+      "q": 6641.57
      },
      {
-      "t": 718.1,
-      "q": 5331.45
+      "t": 714.4,
+      "q": 6256.89
      },
      {
-      "t": 748.1,
-      "q": 4866.76
+      "t": 744.4,
+      "q": 5889.24
      },
      {
-      "t": 778.1,
-      "q": 4433.29
+      "t": 774.4,
+      "q": 5524.95
      },
      {
-      "t": 808.1,
-      "q": 4032.01
+      "t": 804.4,
+      "q": 5168.11
      },
      {
-      "t": 838.1,
-      "q": 3670.94
+      "t": 834.4,
+      "q": 4816.21
      },
      {
-      "t": 868.1,
-      "q": 3347.31
+      "t": 864.4,
+      "q": 4469.41
      },
      {
-      "t": 898.1,
-      "q": 3049.9
+      "t": 894.4,
+      "q": 4125.23
      },
      {
-      "t": 928.1,
-      "q": 2783.51
+      "t": 924.4,
+      "q": 3791.43
      },
      {
-      "t": 958.1,
-      "q": 2538.1
+      "t": 954.4,
+      "q": 3475.19
      },
      {
-      "t": 988.1,
-      "q": 2317.26
+      "t": 984.4,
+      "q": 3164.46
      },
      {
-      "t": 1018.1,
-      "q": 2125.17
+      "t": 1014.4,
+      "q": 2869.08
      },
      {
-      "t": 1048.1,
-      "q": 1945.19
+      "t": 1044.4,
+      "q": 2587.55
      },
      {
-      "t": 1078.1,
-      "q": 1778.82
+      "t": 1074.4,
+      "q": 2324.65
      },
      {
-      "t": 1108.1,
-      "q": 1625.47
+      "t": 1104.4,
+      "q": 2082.37
      },
      {
-      "t": 1138.1,
-      "q": 1485.56
+      "t": 1134.4,
+      "q": 1848.89
      },
      {
-      "t": 1168.1,
-      "q": 1360.11
+      "t": 1164.4,
+      "q": 1631.5
      },
      {
-      "t": 1198.1,
-      "q": 1249.62
+      "t": 1194.4,
+      "q": 1431.93
      },
      {
-      "t": 1228.1,
-      "q": 1151.87
+      "t": 1224.4,
+      "q": 1256.17
      },
      {
-      "t": 1258.1,
-      "q": 1063.87
+      "t": 1254.4,
+      "q": 1104.66
      },
      {
-      "t": 1288.1,
-      "q": 983.12
+      "t": 1284.4,
+      "q": 971.58
      },
      {
-      "t": 1318.1,
-      "q": 910.59
+      "t": 1314.4,
+      "q": 855.91
      },
      {
-      "t": 1348.1,
-      "q": 845.4
+      "t": 1344.4,
+      "q": 756.37
      },
      {
-      "t": 1378.1,
-      "q": 785.2
+      "t": 1374.4,
+      "q": 671.25
      },
      {
-      "t": 1408.1,
-      "q": 731.1
+      "t": 1404.4,
+      "q": 598.82
      },
      {
-      "t": 1438.1,
-      "q": 681.47
+      "t": 1434.4,
+      "q": 535.51
      },
      {
-      "t": 1468.1,
-      "q": 636.65
+      "t": 1464.4,
+      "q": 481.41
      },
      {
-      "t": 1498.1,
-      "q": 595.04
+      "t": 1494.4,
+      "q": 433.54
      },
      {
-      "t": 1528.1,
-      "q": 557.04
+      "t": 1524.4,
+      "q": 391.2
      },
      {
-      "t": 1558.1,
-      "q": 522.92
+      "t": 1554.4,
+      "q": 354.33
      },
      {
-      "t": 1588.1,
-      "q": 492.16
+      "t": 1584.4,
+      "q": 322.28
      },
      {
-      "t": 1618.1,
-      "q": 463.42
+      "t": 1614.4,
+      "q": 294.48
      },
      {
-      "t": 1648.1,
-      "q": 436.21
+      "t": 1644.4,
+      "q": 269.85
      },
      {
-      "t": 1678.1,
-      "q": 410.89
+      "t": 1674.4,
+      "q": 248
      },
      {
-      "t": 1708.1,
-      "q": 387.59
+      "t": 1704.4,
+      "q": 228.51
      },
      {
-      "t": 1738.1,
-      "q": 366.17
+      "t": 1734.4,
+      "q": 211.14
      },
      {
-      "t": 1768.1,
-      "q": 346.22
+      "t": 1764.4,
+      "q": 195.57
      },
      {
-      "t": 1798.1,
-      "q": 327.56
+      "t": 1794.4,
+      "q": 181.63
      },
      {
-      "t": 1828.1,
-      "q": 310.29
+      "t": 1824.4,
+      "q": 169.14
      },
      {
-      "t": 1858.1,
-      "q": 294.32
+      "t": 1854.4,
+      "q": 157.93
      },
      {
-      "t": 1888.1,
-      "q": 279.36
+      "t": 1884.4,
+      "q": 147.88
      },
      {
-      "t": 1918.1,
-      "q": 265.4
+      "t": 1914.4,
+      "q": 138.82
      },
      {
-      "t": 1948.1,
-      "q": 252.38
+      "t": 1944.4,
+      "q": 131.05
      },
      {
-      "t": 1978.1,
-      "q": 240.15
+      "t": 1974.4,
+      "q": 124.36
      },
      {
-      "t": 2008.1,
-      "q": 228.65
+      "t": 2004.4,
+      "q": 118.69
      },
      {
-      "t": 2038.1,
-      "q": 217.88
+      "t": 2034.4,
+      "q": 113.86
      },
      {
-      "t": 2068.1,
-      "q": 207.76
+      "t": 2064.4,
+      "q": 109.55
      },
      {
-      "t": 2098.1,
-      "q": 198.27
+      "t": 2094.4,
+      "q": 105.51
      },
      {
-      "t": 2128.1,
-      "q": 189.37
+      "t": 2124.4,
+      "q": 101.61
      },
      {
-      "t": 2158.1,
-      "q": 181.06
+      "t": 2154.4,
+      "q": 97.8
      },
      {
-      "t": 2188.1,
-      "q": 173.26
+      "t": 2184.4,
+      "q": 94.14
      },
      {
-      "t": 2218.1,
-      "q": 165.92
+      "t": 2214.4,
+      "q": 90.66
      },
      {
-      "t": 2248.1,
-      "q": 159.04
+      "t": 2244.4,
+      "q": 87.38
      },
      {
-      "t": 2278.1,
-      "q": 152.59
+      "t": 2274.4,
+      "q": 84.3
      },
      {
-      "t": 2308.1,
-      "q": 146.56
+      "t": 2304.4,
+      "q": 81.39
      },
      {
-      "t": 2338.1,
-      "q": 140.86
+      "t": 2334.4,
+      "q": 78.63
      },
      {
-      "t": 2368.1,
-      "q": 135.53
+      "t": 2364.4,
+      "q": 76.01
      },
      {
-      "t": 2398.1,
-      "q": 130.7
+      "t": 2394.4,
+      "q": 73.53
      },
      {
-      "t": 2428.1,
-      "q": 126.06
+      "t": 2424.4,
+      "q": 71.17
      },
      {
-      "t": 2458.1,
-      "q": 121.87
+      "t": 2454.4,
+      "q": 68.94
      },
      {
-      "t": 2488.1,
-      "q": 118.27
+      "t": 2484.4,
+      "q": 66.91
      },
      {
-      "t": 2518.1,
-      "q": 115.16
+      "t": 2514.4,
+      "q": 65.01
      },
      {
-      "t": 2548.1,
-      "q": 112.34
+      "t": 2544.4,
+      "q": 63.24
      },
      {
-      "t": 2578.1,
-      "q": 109.62
+      "t": 2574.4,
+      "q": 61.61
      },
      {
-      "t": 2608.1,
-      "q": 106.9
+      "t": 2604.4,
+      "q": 60.07
      },
      {
-      "t": 2638.1,
-      "q": 104.15
+      "t": 2634.4,
+      "q": 58.57
      },
      {
-      "t": 2668.1,
-      "q": 101.37
+      "t": 2664.4,
+      "q": 57.12
      },
      {
-      "t": 2698.1,
-      "q": 98.57
+      "t": 2694.4,
+      "q": 55.73
      },
      {
-      "t": 2728.1,
-      "q": 95.81
+      "t": 2724.4,
+      "q": 54.4
      },
      {
-      "t": 2758.1,
-      "q": 93.14
+      "t": 2754.4,
+      "q": 53.12
      },
      {
-      "t": 2788.1,
-      "q": 90.6
+      "t": 2784.4,
+      "q": 51.9
      },
      {
-      "t": 2818.1,
-      "q": 88.2
+      "t": 2814.4,
+      "q": 50.75
      },
      {
-      "t": 2848.1,
-      "q": 85.93
+      "t": 2844.4,
+      "q": 49.65
      },
      {
-      "t": 2878.1,
-      "q": 83.78
+      "t": 2874.4,
+      "q": 48.62
      },
      {
-      "t": 2908.1,
-      "q": 81.72
+      "t": 2904.4,
+      "q": 47.64
      },
      {
-      "t": 2938.1,
-      "q": 79.75
+      "t": 2934.4,
+      "q": 46.71
      },
      {
-      "t": 2968.1,
-      "q": 77.87
+      "t": 2964.4,
+      "q": 45.84
      },
      {
-      "t": 2998.1,
-      "q": 76.06
+      "t": 2994.4,
+      "q": 45.01
      },
      {
-      "t": 3028.1,
-      "q": 74.33
+      "t": 3024.4,
+      "q": 44.23
      },
      {
-      "t": 3058.1,
-      "q": 72.66
+      "t": 3054.4,
+      "q": 43.49
      },
      {
-      "t": 3088.1,
-      "q": 71.01
+      "t": 3084.4,
+      "q": 42.78
      },
      {
-      "t": 3118.1,
-      "q": 69.43
+      "t": 3114.4,
+      "q": 42.1
      },
      {
-      "t": 3148.1,
-      "q": 67.94
+      "t": 3144.4,
+      "q": 41.45
      },
      {
-      "t": 3178.1,
-      "q": 66.53
+      "t": 3174.4,
+      "q": 40.82
      },
      {
-      "t": 3208.1,
-      "q": 65.2
+      "t": 3204.4,
+      "q": 40.21
      },
      {
-      "t": 3238.1,
-      "q": 63.94
+      "t": 3234.4,
+      "q": 39.62
      },
      {
-      "t": 3268.1,
-      "q": 62.74
+      "t": 3264.4,
+      "q": 39.04
      },
      {
-      "t": 3298.1,
-      "q": 61.62
+      "t": 3294.4,
+      "q": 38.48
      },
      {
-      "t": 3328.1,
-      "q": 60.56
+      "t": 3324.4,
+      "q": 37.92
      },
      {
-      "t": 3358.1,
-      "q": 59.51
+      "t": 3354.4,
+      "q": 37.37
      },
      {
-      "t": 3388.1,
-      "q": 58.48
+      "t": 3384.4,
+      "q": 36.83
      },
      {
-      "t": 3418.1,
-      "q": 57.46
+      "t": 3414.4,
+      "q": 36.29
      },
      {
-      "t": 3448.1,
-      "q": 56.48
+      "t": 3444.4,
+      "q": 35.78
      },
      {
-      "t": 3478.1,
-      "q": 55.51
+      "t": 3474.4,
+      "q": 35.29
      },
      {
-      "t": 3508.1,
-      "q": 54.58
+      "t": 3504.4,
+      "q": 34.83
      },
      {
-      "t": 3538.1,
-      "q": 53.67
+      "t": 3534.4,
+      "q": 34.41
      },
      {
-      "t": 3568.1,
-      "q": 52.78
+      "t": 3564.4,
+      "q": 34.01
      },
      {
-      "t": 3598.1,
-      "q": 51.92
+      "t": 3594.4,
+      "q": 33.64
      },
      {
-      "t": 3628.1,
-      "q": 51.09
+      "t": 3624.4,
+      "q": 33.27
      },
      {
-      "t": 3658.1,
-      "q": 50.28
+      "t": 3654.4,
+      "q": 32.9
      },
      {
-      "t": 3688.1,
-      "q": 49.5
+      "t": 3684.4,
+      "q": 32.53
      },
      {
-      "t": 3718.1,
-      "q": 48.75
+      "t": 3714.4,
+      "q": 32.15
      },
      {
-      "t": 3748.1,
-      "q": 48.02
+      "t": 3744.4,
+      "q": 31.78
      },
      {
-      "t": 3778.1,
-      "q": 47.33
+      "t": 3774.4,
+      "q": 31.43
      },
      {
-      "t": 3808.1,
-      "q": 46.67
+      "t": 3804.4,
+      "q": 31.13
      },
      {
-      "t": 3838.1,
-      "q": 46.05
+      "t": 3834.4,
+      "q": 30.82
      },
      {
-      "t": 3868.1,
-      "q": 45.45
+      "t": 3864.4,
+      "q": 30.5
      },
      {
-      "t": 3898.1,
-      "q": 44.88
+      "t": 3894.4,
+      "q": 30.17
      },
      {
-      "t": 3928.1,
-      "q": 44.34
+      "t": 3924.4,
+      "q": 29.84
      },
      {
-      "t": 3958.1,
-      "q": 43.83
+      "t": 3954.4,
+      "q": 29.51
      },
      {
-      "t": 3988.1,
-      "q": 43.33
+      "t": 3984.4,
+      "q": 29.19
      },
      {
-      "t": 4018.1,
-      "q": 42.85
+      "t": 4014.4,
+      "q": 28.88
      },
      {
-      "t": 4048.1,
-      "q": 42.38
+      "t": 4044.4,
+      "q": 28.58
      },
      {
-      "t": 4078.1,
-      "q": 41.93
+      "t": 4074.4,
+      "q": 28.29
      },
      {
-      "t": 4108.1,
-      "q": 41.48
+      "t": 4104.4,
+      "q": 28.01
      },
      {
-      "t": 4138.1,
-      "q": 41.04
+      "t": 4134.4,
+      "q": 27.74
      },
      {
-      "t": 4168.1,
-      "q": 40.61
+      "t": 4164.4,
+      "q": 27.47
      },
      {
-      "t": 4198.1,
-      "q": 40.19
+      "t": 4194.4,
+      "q": 27.22
      },
      {
-      "t": 4228.1,
-      "q": 39.79
+      "t": 4224.4,
+      "q": 26.99
      },
      {
-      "t": 4258.1,
-      "q": 39.39
+      "t": 4254.4,
+      "q": 26.87
      },
      {
-      "t": 4288.1,
-      "q": 39
+      "t": 4284.4,
+      "q": 26.74
      },
      {
-      "t": 4318.1,
-      "q": 38.62
+      "t": 4314.4,
+      "q": 26.58
      },
      {
-      "t": 4348.1,
-      "q": 38.23
+      "t": 4344.4,
+      "q": 26.42
      },
      {
-      "t": 4378.1,
-      "q": 37.85
+      "t": 4374.4,
+      "q": 26.25
      },
      {
-      "t": 4408.1,
-      "q": 37.47
+      "t": 4404.4,
+      "q": 26.08
      },
      {
-      "t": 4438.1,
-      "q": 37.09
+      "t": 4434.4,
+      "q": 25.91
      },
      {
-      "t": 4468.1,
-      "q": 36.71
+      "t": 4464.4,
+      "q": 25.74
      },
      {
-      "t": 4498.1,
-      "q": 36.33
+      "t": 4494.4,
+      "q": 25.58
      },
      {
-      "t": 4528.1,
-      "q": 35.96
+      "t": 4524.4,
+      "q": 25.43
      },
      {
-      "t": 4558.1,
-      "q": 35.59
+      "t": 4554.4,
+      "q": 25.28
      },
      {
-      "t": 4588.1,
-      "q": 35.24
+      "t": 4584.4,
+      "q": 25.15
      },
      {
-      "t": 4618.1,
-      "q": 34.9
+      "t": 4614.4,
+      "q": 25.02
      },
      {
-      "t": 4648.1,
-      "q": 34.59
+      "t": 4644.4,
+      "q": 24.91
      },
      {
-      "t": 4678.1,
-      "q": 34.3
+      "t": 4674.4,
+      "q": 24.81
      },
      {
-      "t": 4708.1,
-      "q": 34.02
+      "t": 4704.4,
+      "q": 24.72
      },
      {
-      "t": 4738.1,
-      "q": 33.75
+      "t": 4734.4,
+      "q": 24.64
      },
      {
-      "t": 4768.1,
-      "q": 33.49
+      "t": 4764.4,
+      "q": 24.56
      },
      {
-      "t": 4798.1,
-      "q": 33.22
+      "t": 4794.4,
+      "q": 24.5
      },
      {
-      "t": 4828.1,
-      "q": 32.95
+      "t": 4824.4,
+      "q": 24.44
      },
      {
-      "t": 4858.1,
-      "q": 32.68
+      "t": 4854.4,
+      "q": 24.39
      },
      {
-      "t": 4888.1,
-      "q": 32.4
+      "t": 4884.4,
+      "q": 24.34
      },
      {
-      "t": 4918.1,
-      "q": 32.13
+      "t": 4914.4,
+      "q": 24.3
      },
      {
-      "t": 4948.1,
-      "q": 31.85
+      "t": 4944.4,
+      "q": 24.26
      },
      {
-      "t": 4978.1,
-      "q": 31.58
+      "t": 4974.4,
+      "q": 24.22
      },
      {
-      "t": 5008.1,
-      "q": 31.34
+      "t": 5004.4,
+      "q": 24.18
      },
      {
-      "t": 5038.1,
-      "q": 31.12
+      "t": 5034.4,
+      "q": 24.15
      },
      {
-      "t": 5068.1,
-      "q": 30.89
+      "t": 5064.4,
+      "q": 24.11
      },
      {
-      "t": 5098.1,
-      "q": 30.65
+      "t": 5094.4,
+      "q": 24.07
      },
      {
-      "t": 5128.1,
-      "q": 30.4
+      "t": 5124.4,
+      "q": 24.03
      },
      {
-      "t": 5158.1,
-      "q": 30.15
+      "t": 5154.4,
+      "q": 23.99
      },
      {
-      "t": 5188.1,
-      "q": 29.89
+      "t": 5184.4,
+      "q": 23.95
      },
      {
-      "t": 5218.1,
-      "q": 29.64
+      "t": 5199.4,
+      "q": 23.95
      },
      {
-      "t": 5248.1,
-      "q": 29.4
-     },
-     {
-      "t": 5278.1,
-      "q": 29.15
-     },
-     {
-      "t": 5308.1,
-      "q": 28.92
-     },
-     {
-      "t": 5338.1,
-      "q": 28.69
-     },
-     {
-      "t": 5368.1,
-      "q": 28.47
-     },
-     {
-      "t": 5398.1,
-      "q": 28.25
-     },
-     {
-      "t": 5428.1,
-      "q": 28.04
-     },
-     {
-      "t": 5458.1,
-      "q": 27.83
-     },
-     {
-      "t": 5473.1,
-      "q": 27.83
-     },
-     {
-      "t": 6487.6,
+      "t": 8210.4,
       "q": 20
      }
     ],
@@ -810,7 +774,13 @@
      "pathLength": 3700
     },
     "mode": "directFlow",
-    "baseflow": 20
+    "baseflow": 20,
+    "shape": "surge",
+    "slide": {
+     "mu": 0.12,
+     "xi": 2500,
+     "source": "Zhang et al. 2022, RAMMS back-analysis of this event"
+    }
    },
    "profile": "chain.json",
    "result": "chain-result.json",
@@ -848,6 +818,18 @@
      "source": "Shugar et al. 2021, Science (research spec §G.4)"
     },
     {
+     "station": "Rishiganga HEP, Raini (position approximate)",
+     "tFront": 360,
+     "note": "Seismic timeline: release 04:51:10 UTC, debris at the Ronti Gad–Rishiganga confluence 04:54 (\"~55 m/s from the source\"), Rishiganga HEP damaged 04:57 (~27 m/s, \"verified with available videos\").",
+     "source": "Tiwari et al. 2022, Sci. Rep. 12:3733, doi:10.1038/s41598-022-07491-y"
+    },
+    {
+     "station": "Tapovan-Vishnugad HEP barrage (under construction)",
+     "tFront": 960,
+     "note": "Seismic timeline: first wave at the Tapovan HEP 05:07 UTC (~13 m/s from Raini), a second, damaging wave at 05:12 (21 min).",
+     "source": "Tiwari et al. 2022, Sci. Rep. 12:3733"
+    },
+    {
      "station": "Tapovan-Vishnugad HEP barrage (under construction)",
      "tFront": 900,
      "note": "Seismic records put the debris flow at the Tapovan project ~15 min after the failure (Shugar et al.: ~16 m/s just upstream of Tapovan). Most of those lost that morning were workers at the two hydropower projects, many of them in the Tapovan tunnels (casualty figures are kept off screen, as in every preset).",
@@ -861,8 +843,9 @@
     },
     {
      "station": "Joshimath (Vishnuprayag confluence)",
-     "note": "Mean front speed ~10 m/s over the 16 km from Raini to Joshimath — about 27 min, a derived figure, not a timed arrival.",
-     "source": "Shugar et al. 2021, Science (research spec §G.4)"
+     "tFront": 2250,
+     "note": "Seismic detection of the flood at the road bridge near Joshimath at 10:58:33 IST, 34.6 km downstream, where the water rose 16 m (the earlier \"~27 min from 10 m/s\" was a derived figure, not a timed arrival).",
+     "source": "Cook et al. 2021, Science 374:87–92, doi:10.1126/science.abj1227, via the GFZ press release (secondary source)"
     }
    ]
   }

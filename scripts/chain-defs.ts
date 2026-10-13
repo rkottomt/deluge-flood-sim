@@ -119,6 +119,8 @@ export const CHAIN_DEFS: ChainDef[] = [
     domainEntry: { sourceId: 'trishuli-inflow', name: 'Betrawati 2-D domain (north edge)' },
     attribution:
       'Event times: NDRRMA Rasuwa Flood Situation Report #01 (1 Sep 2026), DHM Flood Forecasting Division technical report (27 Aug 2026, via Kathmandu Post and Onlinekhabar), Chand, Kayastha et al., YAE/HiCCDRC/KU rapid situation report (31 Aug 2026). ' +
+      'Secondary timeline: S. Rauniyar, "The Langtang Collapse", SPF Ocean Policy Research Institute (3 Sep 2026). ' +
+      'River flow: mean August discharge of the Trishuli from DHM station 447 (1967–2010), ESSA Technologies (2014), Environmental Flows Assessment, Supplemental ESIA Upper Trishuli-1 HEP, Appendix E. ' +
       'Hydropower capacities: IPPAN via Spotlight Nepal (26 Aug and 1 Sep 2026), Ekantipur (26 Aug 2026), ShareSansar (1 Sep 2026), OSM node 982602383. ' +
       'Station positions: OpenStreetMap elements listed in scripts/chain-defs.ts.',
     hazardChain: {
@@ -147,12 +149,23 @@ export const CHAIN_DEFS: ChainDef[] = [
        *   damLength   1,500 m — spec default (1–2 km), used only if the mode is switched back to transientDam.
        *   baseflow    100 m³/s — ASSUMPTION, the low end of the spec's monsoon 100–300 m³/s for the Lhende.
        */
+      /*
+       *   shape       'surge' (third pass, research spec §G.9): the debris flow leaves the impact with its peak at the
+       *               front (src/hazard/mass.ts surgeHydrograph) instead of the breach-like gamma rise that put the peak
+       *               11 min after the mass reached the river. Same peak (43,000 m³/s, Jitousono) and volume.
+       *   slide       NOT set: a Voellmy–Salm runout (src/hazard/runout.ts) needs a back-analysed friction pair, and none
+       *               exists for this event. With Chamoli's (μ 0.12, ξ 2,500 m/s²) the block reaches the river at a mean
+       *               40 m/s — slower than OPRI's ~50 m/s — and stops within 1.5 km, as the reports' brief blockage of
+       *               the Lhende suggests; it moves Rasuwagadhi 1 min LATER and Betrawati 0.5 min earlier, so it is not
+       *               adopted (sensitivity in §G.9).
+       */
       trigger: {
         kind: 'massIntoRiver',
         mass: { volume: 113e6, iceFraction: 0.2, fallHeight: 2300, pathLength: 13000, travelSpeed: 50 },
         mode: 'directFlow',
         damLength: 1500,
         baseflow: 100,
+        shape: 'surge',
       },
       profile: 'chain.json',
       result: 'chain-result.json',
@@ -171,30 +184,48 @@ export const CHAIN_DEFS: ChainDef[] = [
        * 1-D bed resistance: Ferguson's (2007) variable-power equation on D84 = 0.5 m (src/hazard/defaults.ts
        * VPE_D84_HIMALAYA — a literature-range assumption, not fitted to the arrival times), instead of a constant
        * n = 0.05. At this flood's depths it is equivalent to n ≈ 0.044–0.047 (Manning–Strickler over a boulder bed), so
-       * it speeds the front only modestly: the median member's Betrawati front 75 → 70 min against 43 min reported.
+       * it speeds the front only modestly: the median member's Betrawati front 75 → 70 min against 43 min reported (second pass).
        * Adopted because it moves every Nepal station toward its observation (research spec §G.9).
        */
-      routing: { resistance: { law: 'ferguson2007', d84: VPE_D84_HIMALAYA } },
+      /*
+       * Tributaries (third pass): the Lhende's assumed 100 m³/s was the whole river all the way to Betrawati, i.e. the
+       * flood ran down a nearly empty Trishuli in late August. The mean August flow of the Trishuli is 557.8 m³/s at the
+       * Upper Trishuli-1 intake and 557.8 / 0.8971 = 621.8 m³/s at Betrawati — 44 years (1967–2010) of DHM station 447
+       * at Betrawati, scaled by catchment area to the intake (ESSA Technologies 2014, Environmental Flows Assessment,
+       * Supplemental ESIA Upper Trishuli-1 HEP, Appendix E, Table 5-2 and §2) [V]. The Betrawati gauge read 3.55 m
+       * against its 4.1 m warning level before it was lost: a high monsoon river that morning, not a low one. HOW the
+       * flow joins is this bake's ASSUMPTION [H]: everything above the intake that is not the Lhende's 100 m³/s
+       * (458 m³/s) enters with the Kerung (Gyirong Zangbo) at the Rasuwagadhi confluence, ~400 m above the HEP
+       * headworks; the 64 m³/s between the intake and Betrawati enters at the Upper Trishuli-1 site. Putting the 458 at
+       * Syafrubesi instead (the Langtang Khola's confluence) moves Betrawati by +0.8 min (§G.9).
+       */
+      routing: {
+        resistance: { law: 'ferguson2007', d84: VPE_D84_HIMALAYA },
+        tributaries: [
+          { s: 15100, q: 458, name: 'Kerung / Gyirong Zangbo and the rest of the Bhote Koshi above the Upper Trishuli-1 intake (mean August flow, DHM 447 via ESSA 2014)' },
+          { s: 47233, q: 64, name: 'Trishuli between the Upper Trishuli-1 intake and Betrawati (mean August flow, DHM 447 via ESSA 2014)' },
+        ],
+      },
       // The first DHM SMS alerts went out at about 09:15 NPT (DHM issued warnings 09:00–09:16; 632,295–679,295 SMS).
       alertTime: 38 * 60,
       observations: [
         {
           station: 'Rasuwagadhi',
           tFront: 3 * 60,
-          note: 'Flood at Rasuwagadhi ~08:40, about three minutes after the 08:37 seismic signal.',
-          source: 'NDRRMA Situation Report #01 (1 Sep 2026); YAE/KU rapid report (31 Aug 2026)',
+          note: 'Flood at Rasuwagadhi ~08:40, about three minutes after the 08:37 seismic signal. 08:40 is also the time of the last NORMAL reading of the Bhote Koshi gauge (1.62 m against a 6 m warning level; DHM technical report) — 28 km of path and river in 3 min would be ~150 m/s, so this time is probably that gauge timestamp, not the flood.',
+          source: 'NDRRMA Situation Report #01 (1 Sep 2026); YAE/KU rapid report (31 Aug 2026); DHM FFD technical report via Onlinekhabar (27 Aug 2026)',
         },
         {
           station: 'Syafrubesi gauge (DHM, position approximate)',
           tFront: 13 * 60,
-          note: 'The hydrometric station stopped transmitting at 08:50 (last reading 1.62 m) and was washed away — an upper bound on the arrival time, not a measurement of it.',
-          source: 'DHM Flood Forecasting Division technical report (27 Aug 2026), via Onlinekhabar and Kathmandu Post; NDRRMA SitRep #01',
+          note: 'The Bhotekoshi–Syafrubesi gauge read 1.62 m (normal; warning level 6 m) at 08:40 and its data stopped at 08:50. If the flood destroyed it, the front arrived between 08:40 and 08:50 and 08:50 is an upper bound; if its telemetry failed first (a link through the flooded valley above), 08:50 bounds nothing. Shown as 08:50.',
+          source: 'DHM Flood Forecasting Division technical report (27 Aug 2026), via Onlinekhabar; NDRRMA SitRep #01',
         },
         {
           station: 'Betrawati',
           tFront: 43 * 60,
-          note: 'Flood at Betrawati ~09:20; DHM station 447 (warning 4.1 m, danger 5.0 m) last read 3.55 m before it was destroyed.',
-          source: 'NDRRMA SitRep #01 (1 Sep 2026); DHM station 447 page (dhm.gov.np/hydrology/hms-Single/52)',
+          note: 'Flood at Betrawati ~09:20 — the time DHM station 447 (warning 4.1 m, danger 5.0 m) stopped transmitting; its last reading was 3.55 m, below warning. So 09:20 is when the gauge was lost, an upper bound on the front if the flood destroyed it.',
+          source: 'NDRRMA SitRep #01 (1 Sep 2026); DHM FFD technical report via Onlinekhabar (27 Aug 2026); DHM station 447 page (dhm.gov.np/hydrology/hms-Single/52)',
         },
         /*
          * A second, secondary reconstruction (think-tank synthesis of seismic, CCTV and official sources) puts both
@@ -212,6 +243,18 @@ export const CHAIN_DEFS: ChainDef[] = [
           tFront: 23 * 60,
           note: 'The surge reaches Betrawati ~09:00 in this reconstruction, against ~09:20 in NDRRMA SitRep #01 (secondary source).',
           source: 'OPRI, "The Langtang Collapse" (Sep 2026), citing ICIMOD/DHM',
+        },
+        {
+          station: 'Timure',
+          tFront: 13 * 60,
+          note: 'The same reconstruction: "~08:50, surge crosses at Rasuwagadhi-Timure and reaches Syabrubesi … in roughly ten minutes" (secondary source).',
+          source: 'S. Rauniyar, OPRI, "The Langtang Collapse" (3 Sep 2026)',
+        },
+        {
+          station: 'Syafrubesi',
+          tFront: 23 * 60,
+          note: 'Syafrubesi ~09:00 in the same reconstruction (~10 min after Rasuwagadhi–Timure); secondary source.',
+          source: 'S. Rauniyar, OPRI, "The Langtang Collapse" (3 Sep 2026)',
         },
         {
           station: 'Galchhi',
@@ -280,7 +323,7 @@ export const CHAIN_DEFS: ChainDef[] = [
     ],
     domainEntry: { sourceId: 'lachen-chu-inflow', name: 'Chungthang 2-D domain (north edge)' },
     attribution:
-      'Event: Sattar et al. 2025, Science, doi:10.1126/science.ads2659 (via Eos / The Landslide Blog and Newcastle University). ' +
+      'Event: Sattar et al. 2025, Science, doi:10.1126/science.ads2659 (accepted manuscript, eprints.whiterose.ac.uk/224098; also via Eos / The Landslide Blog and Newcastle University). ' +
       'Lake area: NRSC/ISRO pre/post-outburst map (167.4 ha on 28 Sep 2023); lake volume: EGU24-18788 (102.4 Mm³, 2015–2023 mean). ' +
       'Peak reconstruction: Natural Hazards 121 (2025), doi:10.1007/s11069-025-07350-9. ' +
       'Station positions: OpenStreetMap elements listed in scripts/chain-defs.ts.',
@@ -294,8 +337,9 @@ export const CHAIN_DEFS: ChainDef[] = [
        *               ~38 Mm³ (Mohanty et al. 2026, Science Advances) — the published disagreement is real.
        *               iceFraction 0.2, fallHeight 150 m, pathLength 500 m are ASSUMPTIONS (order of magnitude for a
        *               lateral-moraine slope into the lake); none was published in the sources read.
-       *   breach      weir + linear erosion (§B.3) with the spec's trigger-driven k = 100 m/h; finalDepth 40 m is the
-       *               spec's ASSUMED value for this lake (§B.3 table), with r = 2, side slope 1, p = 1.5 defaults.
+       *   breach      weir + linear erosion (§B.3) with the spec's trigger-driven k = 100 m/h; finalDepth 28 m, the
+       *               lake-level drop Sattar et al. 2025 measured (it was the spec's ASSUMED 40 m until Oct 2026's
+       *               third pass), with r = 2, side slope 1, p = 1.5 defaults.
        *   wave        where the outlet lies relative to the slide, for the impulse wave's spreading (mass.ts
        *               impulseWave; Evers et al. 2019 manual §4.2.1). A LATERAL moraine runs along the lake's side, so
        *               the slide enters across the lake and the outlet, at the lake's end, is off to its side. From the
@@ -319,7 +363,15 @@ export const CHAIN_DEFS: ChainDef[] = [
           damType: 'moraine',
         },
         mass: { volume: 14.7e6, iceFraction: 0.2, fallHeight: 150, pathLength: 500 },
-        breach: { model: 'weirErosion', erosionRate: 100, finalDepth: 40, widthRatio: 2, sideSlope: 1, hypsometry: 1.5 },
+        /*
+         * finalDepth 28 m (third pass, Oct 2026): the lake LEVEL fell 28 m — Sattar et al. 2025 (accepted manuscript,
+         * eprints.whiterose.ac.uk/224098) [V]; the breach itself was cut 55 m into the moraine crest, which stood above
+         * the lake. The 40 m before was the spec's assumption. With the default hypsometry it drains 43 Mm³ (Sattar:
+         * 50 ± 1.8 Mm³, which includes water displaced by the 14.7 Mm³ slide — not modelled). k = 100 m/h agrees with
+         * their timeline: the full breach depth was reached at ~22:24, ~11 min after the collapse, and the outflow was
+         * steady after ~18 min.
+         */
+        breach: { model: 'weirErosion', erosionRate: 100, finalDepth: 28, widthRatio: 2, sideSlope: 1, hypsometry: 1.5 },
         wave: { distance: 1330, angleDeg: 77 },
       },
       profile: 'chain.json',
@@ -333,7 +385,7 @@ export const CHAIN_DEFS: ChainDef[] = [
       solver: { uMax: 25 },
       /*
        * 1-D bed resistance stays Manning n = 0.05 here (no `routing`), deliberately. Ferguson's VPE on the same
-       * D84 = 0.5 m as Nepal and Chamoli moves the median member's Chungthang front 109 → 103 min, further EARLY of the
+       * D84 = 0.5 m as Nepal and Chamoli moved the median member's Chungthang front (second pass) 109 → 103 min, further EARLY of the
        * ~137 min observed (−24 % against −21 %); D84 = 1 m would give 120 min, but picking the bed size that fits the
        * clock is the tuning this calibration refuses. The early bias here has other suspects (the breach hydrograph,
        * the 30 m DEM's sections, how much of the ~270 Mm³ of mobilised sediment loaded the front) — research spec §G.9.
@@ -347,9 +399,15 @@ export const CHAIN_DEFS: ChainDef[] = [
         },
         {
           station: 'Chungthang',
-          tFront: 8200,
-          note: 'The flood reached Chungthang and the Teesta-III dam about 00:30 on 4 Oct (≈ 2 h 15 min after the failure) and destroyed the 60 m dam.',
-          source: 'Sattar et al. 2025, Science (via Eos / The Landslide Blog)',
+          tFront: 8500,
+          note: 'The flood reached Chungthang about 00:35 on 4 Oct (≈ 2 h 22 min after the failure) — the "reported arrival time" Sattar et al. compare their model with; how it was recorded is not stated. The often-quoted 00:30 is THEIR HEC-RAS result (water only, n = 0.05), not an observation. The 60 m Teesta-III dam was destroyed.',
+          source: 'Sattar et al. 2025, Science, doi:10.1126/science.ads2659 (accepted manuscript, eprints.whiterose.ac.uk/224098)',
+        },
+        {
+          station: 'Chungthang',
+          qPeak: 5340,
+          note: 'MODELLED peak in Sattar et al. 2025 (HEC-RAS, water phase): 5,340 m³/s within ~6 min of the first arrival, 9 m deep, 9 m/s — a fourth reconstruction beside 7,355 and 10,282–14,673.',
+          source: 'Sattar et al. 2025, Science (accepted manuscript)',
         },
         {
           station: 'Chungthang',
@@ -417,7 +475,9 @@ export const CHAIN_DEFS: ChainDef[] = [
     domainEntry: { sourceId: 'rishiganga-inflow', name: 'Raini–Tapovan 2-D domain (east edge)' },
     attribution:
       'Event: Shugar et al. 2021, Science 373:300–306, doi:10.1126/science.abh4455 (volumes, ice fraction, front speeds, discharges, losses). ' +
-      'Tapovan arrival: Cook et al. 2021, Science 374:87–92, doi:10.1126/science.abj1227 (seismic), via The Landslide Blog. ' +
+      'Tapovan arrival: Cook et al. 2021, Science 374:87–92, doi:10.1126/science.abj1227 (seismic), via The Landslide Blog; Joshimath arrival: the same, via the GFZ press release. ' +
+      'Seismic timeline (confluence, Rishiganga HEP, Tapovan): Tiwari et al. 2022, Sci. Rep. 12:3733, doi:10.1038/s41598-022-07491-y. ' +
+      'Avalanche friction (Voellmy μ 0.12, ξ 2,500 m/s²): Zhang, Yin, Li et al. 2022, J. Rock Mech. Geotech. Eng. 15:296–308, doi:10.1016/j.jrmge.2022.04.003. ' +
       'Station positions: OpenStreetMap elements listed in scripts/chain-defs.ts.',
     hazardChain: {
       /*
@@ -434,11 +494,28 @@ export const CHAIN_DEFS: ChainDef[] = [
        *   baseflow    20 m³/s — ASSUMPTION: a winter low flow (February) of the right order for the Rishiganga; no
        *               gauge record for that morning was read.
        */
+      /*
+       *   shape       'surge': the debris flow leaves the impact with its peak at its front (src/hazard/mass.ts
+       *               surgeHydrograph; rise ≈ 12 s = the ~600 m slab length over 50 m/s, then a linear fall over ~15
+       *               min — Shugar's "10–20 min" at Raini), not the gamma curve's 6.6 min rise (§G.9 third pass).
+       *   slide       a Voellmy–Salm sliding block from the detachment (src/hazard/runout.ts) with μ 0.12, ξ 2,500 m/s²,
+       *               the RAMMS back-analysis of THIS avalanche by Zhang, Yin, Li et al. 2022 (J. Rock Mech. Geotech.
+       *               Eng. 15:296–308, doi:10.1016/j.jrmge.2022.04.003) [S — read through a secondary source; the
+       *               primary text was not retrievable], inside Allen et al. 2009's compilation of rock–ice avalanche
+       *               back-analyses (μ 0.05–0.2, ξ 1,500–4,500; NHESS 9:481) [V]. Checks that are NOT the arrival times
+       *               it is judged on: on the avalanche path it averages 52 m/s (the chain's default 50 m/s; seismic
+       *               analyses give ~55 m/s source → confluence, Tiwari et al. 2022), and run on to rest it stops at
+       *               ~8.8 km on the 6 % stretch 1.6 km above the Ronti Gad–Rishiganga confluence (≈ 10.4 km, where the
+       *               profile turns west), near which Shugar et al. mapped the ~8 Mm³ deposit. It hands over to the routed
+       *               flood at 3.4 km, where the flood is the faster.
+       */
       trigger: {
         kind: 'massIntoRiver',
         mass: { volume: 26.9e6, iceFraction: 0.2, fallHeight: 1400, pathLength: 3700 },
         mode: 'directFlow',
         baseflow: 20,
+        shape: 'surge',
+        slide: { mu: 0.12, xi: 2500, source: 'Zhang et al. 2022, RAMMS back-analysis of this event' },
       },
       profile: 'chain.json',
       result: 'chain-result.json',
@@ -459,7 +536,7 @@ export const CHAIN_DEFS: ChainDef[] = [
       solver: { uMax: 25 },
       /*
        * 1-D bed resistance: Ferguson's (2007) VPE on D84 = 0.5 m, as for Nepal (research spec §G.9). Median member:
-       * Tapovan barrage front 22.3 → 20.9 min against ~15 min (seismic), Raini peak 10,435 → 10,882 m³/s (inside the
+       * (second pass) Tapovan barrage front 22.3 → 20.9 min against ~15 min (seismic), Raini peak 10,435 → 10,882 m³/s (inside the
        * reconstructed 8,200–14,200) — but the peak below Tapovan rises 5,365 → 5,917 m³/s, further above the
        * reconstructed 2,900–4,900. Adopted on the timing (the one timed observation) with that cost stated: the
        * attenuation miss below Tapovan is the barrage and the debris the real flow dropped there, neither of which the
@@ -480,6 +557,18 @@ export const CHAIN_DEFS: ChainDef[] = [
           source: 'Shugar et al. 2021, Science (research spec §G.4)',
         },
         {
+          station: 'Rishiganga HEP, Raini (position approximate)',
+          tFront: 6 * 60,
+          note: 'Seismic timeline: release 04:51:10 UTC, debris at the Ronti Gad–Rishiganga confluence 04:54 ("~55 m/s from the source"), Rishiganga HEP damaged 04:57 (~27 m/s, "verified with available videos").',
+          source: 'Tiwari et al. 2022, Sci. Rep. 12:3733, doi:10.1038/s41598-022-07491-y',
+        },
+        {
+          station: 'Tapovan-Vishnugad HEP barrage (under construction)',
+          tFront: 16 * 60,
+          note: 'Seismic timeline: first wave at the Tapovan HEP 05:07 UTC (~13 m/s from Raini), a second, damaging wave at 05:12 (21 min).',
+          source: 'Tiwari et al. 2022, Sci. Rep. 12:3733',
+        },
+        {
           station: 'Tapovan-Vishnugad HEP barrage (under construction)',
           tFront: 15 * 60,
           note: 'Seismic records put the debris flow at the Tapovan project ~15 min after the failure (Shugar et al.: ~16 m/s just upstream of Tapovan). Most of those lost that morning were workers at the two hydropower projects, many of them in the Tapovan tunnels (casualty figures are kept off screen, as in every preset).',
@@ -493,8 +582,9 @@ export const CHAIN_DEFS: ChainDef[] = [
         },
         {
           station: 'Joshimath (Vishnuprayag confluence)',
-          note: 'Mean front speed ~10 m/s over the 16 km from Raini to Joshimath — about 27 min, a derived figure, not a timed arrival.',
-          source: 'Shugar et al. 2021, Science (research spec §G.4)',
+          tFront: 37.5 * 60,
+          note: 'Seismic detection of the flood at the road bridge near Joshimath at 10:58:33 IST, 34.6 km downstream, where the water rose 16 m (the earlier "~27 min from 10 m/s" was a derived figure, not a timed arrival).',
+          source: 'Cook et al. 2021, Science 374:87–92, doi:10.1126/science.abj1227, via the GFZ press release (secondary source)',
         },
       ],
     },

@@ -171,7 +171,8 @@ const DESCRIPTIONS: Record<string, (r: BakedChainResult) => string> = {
       `avalanche's melted ice into a debris flood — about ${fmt(r.source.volume / 1e6)} million m³ of debris-laden flow ` +
       `leaving the Lhende, ${fmt((r.source.volume * (1 - r.source.cv)) / 1e6)} million m³ of it water ` +
       '(Nepal’s Flood Forecasting Division measured about 20 million m³ of excess water far downstream) — and routes ' +
-      `it ${Math.round(r.entry.s / 1000)} km down the valley; this is the median of its ${r.run.members} runs, peaking at ` +
+      `it ${Math.round(r.entry.s / 1000)} km down the valley on top of the river’s mean August flow (about ` +
+      `${fmt(r.entry.baseflow)} m³/s here, from 44 years of the Betrawati gauge); this is the median of its ${r.run.members} runs, peaking at ` +
       `about ${fmt(r.domain.inflowPeak)} m³/s at the north edge. No gauge measured the peak: the one here ` +
       '(warning level 4.1 m, danger level 5 m) last read 3.55 m and was swept away before the crest arrived. ' +
       `The clock is the event's: the run starts at ${start}, five minutes before the modelled front reaches the north ` +
@@ -200,17 +201,17 @@ const DESCRIPTIONS: Record<string, (r: BakedChainResult) => string> = {
       '1,200 MW Teesta-III hydropower project stood just below it. At 10:13 pm on 3 October 2023 about 14.7 million m³ ' +
       'of frozen moraine collapsed into South Lhonak Lake, 5,200 m up and some 68 km upstream; the wave it raised, ' +
       'about 20 m high, breached the moraine dam, and about 50 million m³ of water — half the lake — came down the ' +
-      'valley. It reached Chungthang around 00:30, about two and a quarter hours later, and destroyed the dam ' +
+      'valley. It reached Chungthang around 00:35, about two hours and twenty minutes later, and destroyed the dam ' +
       '(Sattar et al., Science, 2025). The flood entering this map is modelled, not measured: a 1-D hazard-chain model ' +
       `raises the wave, breaches the dam (${fmt(r.source.volume / 1e6)} million m³ released, against about 50 reported) ` +
       'and routes the outburst ' +
       `${Math.round(r.entry.s / 1000)} km down the valley; this is the median of its ${r.run.members} runs, peaking at ` +
       `about ${fmt(r.domain.inflowPeak)} m³/s at the north edge. No gauge survived here, and the published peaks at ` +
-      'Chungthang are reconstructions that disagree by a factor of two (7,355 to 14,673 m³/s); the model’s runs span ' +
+      'Chungthang are reconstructions that disagree by almost a factor of three (5,340 to 14,673 m³/s); the model’s runs span ' +
       `${fmt(b.qPeak[0])}–${fmt(b.qPeak[2])} m³/s at Chungthang. The clock is the event's: the run starts at ${start}, ` +
       `five minutes before the modelled front reaches the north edge, and the model has the front at Chungthang at ` +
       `${clockAt(cz, ch.tFront ?? 0)} (its runs span ${clockAt(cz, b.tFront[0] ?? 0)}–` +
-      `${b.tFront[2] === null ? 'later' : clockAt(cz, b.tFront[2])}) against about 00:30 observed — earlier than the ` +
+      `${b.tFront[2] === null ? 'later' : clockAt(cz, b.tFront[2])}) against about 00:35 reported — earlier than the ` +
       'real flood, and that gap is the model’s error. The real flood was a debris flood that moved hundreds of ' +
       'millions of cubic metres of sediment; inside the map this run carries no sediment — it moves the water under ' +
       'one uniform debris-flood friction law with a 25 m/s speed cap. The terrain is Copernicus 30 m radar data, a surface model with ' +
@@ -241,14 +242,15 @@ const DESCRIPTIONS: Record<string, (r: BakedChainResult) => string> = {
       'people it took were workers at the two projects (Shugar et al., Science, 2021). Nothing gauged the flow; the ' +
       'published reconstruction gives a mean discharge of 8,200 to 14,200 m³/s at the Rishiganga plant over 10–20 ' +
       'minutes, and 2,900 to 4,900 m³/s below Tapovan. The flood entering this map is modelled, not measured: a 1-D ' +
-      `hazard-chain model turns the avalanche's melted ice into a debris flow — about ${fmt(r.source.volume / 1e6)} ` +
+      'hazard-chain model runs the avalanche down its path and the upper Ronti Gad as a sliding mass, then turns its ' +
+      `melted ice into a debris flow — about ${fmt(r.source.volume / 1e6)} ` +
       `million m³ of it, ${fmt((r.source.volume * (1 - r.source.cv)) / 1e6)} million m³ of that water — and routes it ` +
       `${Math.round(r.entry.s / 1000)} km down the Ronti Gad and the Rishiganga; this is the median of its ` +
       `${r.run.members} runs, peaking at about ${fmt(r.domain.inflowPeak)} m³/s at the east edge, ` +
       `${fmt(raini.qPeak)} m³/s at Raini and ${fmt(below.qPeak)} m³/s below Tapovan. The clock is the event's: the run ` +
       `starts at ${start}, five minutes before the modelled front reaches the east edge. The model puts the front at ` +
       `the Tapovan barrage at ${clockAt(cz, tap.tFront ?? 0)} (its runs span ${clockAt(cz, b.tFront[0] ?? 0)}–` +
-      `${b.tFront[2] === null ? 'later' : clockAt(cz, b.tFront[2])}) against about 10:36 observed — later than the ` +
+      `${b.tFront[2] === null ? 'later' : clockAt(cz, b.tFront[2])}) against about 10:36–10:37 in the seismic records — later than the ` +
       'real flow, and that gap is the model’s error: its valley comes from a 30 m elevation model and its channel ' +
       'roughness is a published boulder-bed law (Ferguson 2007) on an assumed, not surveyed, boulder size. Inside the map the flow moves as one fluid under a uniform debris-flow friction ' +
       'law (O’Brien–Julien, 45 % solids by volume) with a 25 m/s speed cap; it neither picks up nor drops sediment, so ' +

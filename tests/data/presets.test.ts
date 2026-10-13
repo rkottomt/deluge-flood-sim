@@ -966,10 +966,10 @@ test('chungthang: the routed chain hydrograph, the South Lhonak chain, and the c
   assert.equal(s.hazardChain?.result, 'chain-result.json');
   const cr = loadChainResult('chungthang');
   const ch = cr.stations.find((x) => x.name === 'Chungthang')!;
-  assert.match(s.description, /7,355 to 14,673 m³\/s/, 'the published range, not just the number used');
+  assert.match(s.description, /5,340 to 14,673 m³\/s/, 'the published range (Sattar et al. 2025 … the 2024 dam-break study), not just the number used');
   assert.ok(s.description.includes(`the run starts at ${clockAt(cr.clockZero!, cr.domain.offset)}`), 'the 2-D clock is stated');
   assert.ok(s.description.includes(`front at Chungthang at ${clockAt(cr.clockZero!, ch.tFront!)}`), 'the model front, from chain-result.json');
-  assert.match(s.description, /about 00:30 observed/);
+  assert.match(s.description, /about 00:35 reported/);
   assert.match(s.description, /surface model with canopy and buildings/);
   assert.match(s.description, /flatter than 20°/);
   assert.match(s.description, /do not read street-level depths/);
@@ -996,7 +996,8 @@ test('chungthang: the routed chain hydrograph, the South Lhonak chain, and the c
   assert.equal(hc.rheology.kind, 'quadratic', 'mud flood, not the Voellmy law that stalled the 2-D front');
   const c = loadChain('chungthang');
   assert.equal(c.clockZero, '2023-10-03T22:13:20+05:30');
-  assert.equal(hc.observations!.find((o) => o.station === 'Chungthang' && o.tFront !== undefined)!.tFront, 8200);
+  // ~00:35, the "reported arrival" Sattar et al. 2025 compare their model with (00:30 is that model's own result).
+  assert.equal(hc.observations!.find((o) => o.station === 'Chungthang' && o.tFront !== undefined)!.tFront, 8500);
   const at = (name: string) => c.stations.find((st) => st.name === name)!;
   assert.equal(at('South Lhonak Lake').s, 0);
   assert.equal(at('South Lhonak Lake').kind, 'lake');
@@ -1045,7 +1046,7 @@ test('chamoli: the routed debris flow, the Ronti Gad chain, a rheology that move
   assert.ok(s.description.includes(`the run starts at ${clockAt(cr.clockZero!, cr.domain.offset)}`), 'the 2-D clock is stated');
   assert.ok(s.description.includes(`the Tapovan barrage at ${clockAt(cr.clockZero!, tap.tFront!)}`), 'the model front, from chain-result.json');
   assert.ok(s.description.includes(`${Math.round(peak).toLocaleString('en-US')} m³/s`), 'the inflow peak, as shipped');
-  assert.match(s.description, /about 10:36 observed/);
+  assert.match(s.description, /about 10:36–10:37 in the seismic records/);
   assert.match(s.description, /the model’s error/);
   assert.match(s.description, /floor has been cut along the river/, 'the terrain edit is on screen, not only in SOURCES.txt');
   assert.match(s.description, /surface model with canopy and buildings/);
@@ -1100,7 +1101,9 @@ test('chamoli: the routed debris flow, the Ronti Gad chain, a rheology that move
   const jm = at('Joshimath (Vishnuprayag confluence)').s - rainiS;
   assert.ok(jm > 14_000 && jm < 18_000, `Raini → Joshimath ${jm} m`);
   assert.ok(c.domainEntry.s < rainiS, 'the chain enters the map above the Rishiganga plant');
-  assert.equal(hc.observations!.find((o) => o.tFront !== undefined && o.station.startsWith('Tapovan-Vishnugad'))!.tFront, 900);
+  // Tapovan: ~15 min (Cook et al. 2021, via The Landslide Blog) and 16 min, first wave (Tiwari et al. 2022's seismic timeline).
+  const tapObs = hc.observations!.filter((o) => o.tFront !== undefined && o.station.startsWith('Tapovan-Vishnugad')).map((o) => o.tFront);
+  assert.deepEqual([...tapObs].sort(), [900, 960]);
   // No barrage crest invented where no height was published.
   assert.equal(c.structures.length, 0);
 });
@@ -1375,7 +1378,9 @@ for (const id of BAKED.filter(hasChain)) {
     const qLast = src.hydrograph[src.hydrograph.length - 1].q;
     assert.ok(qLast <= run.entryBase + 0.01, `${id}: the inflow ends at ${qLast} m³/s, the entry baseflow is ${run.entryBase.toFixed(2)}`);
     // And it is the routed flood, not a trickle: the entry peak, at the chain's peak.
-    assert.ok(Math.abs(src.discharge - run.entryPeak) / run.entryPeak < 0.02, `inflow peak ${src.discharge} vs routed ${run.entryPeak.toFixed(0)}`);
+    // (3 %: the shipped curve is 30 s bin means, the routed peak an instantaneous face value — and a debris-flow surge
+    // whose peak rides its front, as Chamoli's does, is sharper than one 30 s bin.)
+    assert.ok(Math.abs(src.discharge - run.entryPeak) / run.entryPeak < 0.03, `inflow peak ${src.discharge} vs routed ${run.entryPeak.toFixed(0)}`);
     // The stations' numbers are this run's.
     for (const st of run.stations) {
       const b = cr.stations.find((x) => x.name === st.name)!;

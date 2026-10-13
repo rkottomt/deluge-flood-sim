@@ -10,7 +10,7 @@
  * Times are seconds after the chain's clock zero (the trigger; ChainFile.clockZero where the event is real).
  */
 import type { WaterSource } from '../contracts';
-import type { ChainFile, ChainResult, ChainStation, HazardChainSpec, HazardTrigger, MassMovement } from './types';
+import type { ChainFile, ChainResult, ChainStation, HazardChainSpec, HazardTrigger, MassMovement, ResistanceLaw } from './types';
 import { breachHydrograph, type Hydrograph } from './breach';
 import {
   AVALANCHE_SPEED,
@@ -27,6 +27,7 @@ import {
 } from './defaults';
 import { damHeight, directFlow, impulseWave, overtopping, runout, type ImpulseWave, type Runout } from './mass';
 import { meltFromTrigger } from './melt';
+import { slideRunout, slideTimeAt, type SlideRunout } from './runout';
 import { nodeAt, readProbe, resampleProfile, route, sectionArea, valleyStorage, type MassBalance, type RoutingOptions } from './routing';
 import { Series, sumSeries, zeroSeries } from './series';
 import { drainableVolume } from './volume';
@@ -40,7 +41,8 @@ export interface ChainOverrides {
   erosionRate?: number;
   /** Sediment concentration of the outflow as it leaves the source. */
   cv?: number;
-  /** River baseflow at the profile's upstream end, m³/s, and tributaries joining downstream. */
+  /** River baseflow at the profile's upstream end, m³/s, and tributaries joining downstream (replace the spec's
+   * routing.tributaries for this run). */
   baseflow?: number;
   tributaries?: Array<{ s: number; q: number }>;
   /** "Bulking ×" knob (spec §C.5): multiplies the source outflow for the material and river water the flood picks up
@@ -71,6 +73,8 @@ export interface SourceInfo {
   meltQ?: number;
   /** Mass movements: seconds from the collapse (clock zero) to the mass reaching the lake or river. */
   travelTime?: number;
+  /** Direct flow with a sliding-block runout (HazardTrigger.slide): the block's track and where the flood starts. */
+  slide?: SlideRunout;
 }
 
 /**
@@ -135,7 +139,7 @@ function scaledMass(m: MassMovement, f: number): MassMovement {
   return { ...m, volume: m.volume * f };
 }
 
-function sourceOf(trigger: HazardTrigger, file: ChainFile, ov: ChainOverrides, baseflow: number): Source {
+function sourceOf(trigger: HazardTrigger, file: ChainFile, ov: ChainOverrides, baseflow: number, law?: ResistanceLaw): Source {
   const vf = ov.volumeFactor ?? 1;
   const s = sourceChainage(file);
   const notes: string[] = [];
@@ -189,13 +193,34 @@ function sourceOf(trigger: HazardTrigger, file: ChainFile, ov: ChainOverrides, b
         notes.push(`the mass stops short of the river (path H/L ${ro.pathRatio.toFixed(2)} < mobility ${ro.mobility.toFixed(2)})`);
         return { series: zeroSeries(), info: info(0, false, { runout: ro }), extraBase: 0 };
       }
-      const travel = massTravelTime(mass);
-      notes.push(`the mass reaches the river ${(travel / 60).toFixed(1)} min after the collapse (${(mass.pathLength / 1000).toFixed(1)} km at ${(mass.travelSpeed ?? AVALANCHE_SPEED).toFixed(0)} m/s)`);
       if (trigger.mode === 'directFlow') {
-        const df = directFlow(mass, { cv: ov.cv });
-        notes.push(`direct flow: ${(df.water / 1e6).toFixed(1)} Mm³ of melt water, ${(df.mixture / 1e6).toFixed(1)} Mm³ at Cv ${df.cv.toFixed(2)}, peak ${df.peak.toFixed(0)} m³/s`);
+        const shape = trigger.shape ?? 'gamma';
+        const df = directFlow(mass, { cv: ov.cv, shape });
+        const flowNote = () =>
+          `direct flow: ${(df.water / 1e6).toFixed(1)} Mm³ of melt water, ${(df.mixture / 1e6).toFixed(1)} Mm³ at Cv ${df.cv.toFixed(2)}, peak ${df.peak.toFixed(0)} m³/s` +
+          (shape === 'surge' ? ` as a debris-flow surge (peak ${df.tPeak.toFixed(0)} s after its front, over by ${(df.series.end / 60).toFixed(0)} min)` : '');
+        if (trigger.slide && df.peak > 0) {
+          // The avalanche runs as a sliding block until the routed flood would be the faster (src/hazard/runout.ts).
+          const sl = slideRunout(mass, file, trigger.slide, df.peak, s, file.domainEntry.s - ROUTING_DX, law);
+          const src = trigger.slide.source ? `, ${trigger.slide.source}` : '';
+          notes.push(`the mass reaches the river ${(sl.tPath / 60).toFixed(1)} min after the collapse at ${sl.vPath.toFixed(0)} m/s (Voellmy block, μ ${trigger.slide.mu}, ξ ${trigger.slide.xi} m/s²${src})`);
+          notes.push(
+            `it runs on down the valley as a debris flow and hands over to the routed flood at ${(sl.sHand / 1000).toFixed(1)} km, ${(sl.tHand / 60).toFixed(1)} min after the collapse, at ${sl.vHand.toFixed(0)} m/s${sl.stopped ? ' (where it stopped)' : ' (no faster than the flood there)'}`,
+          );
+          notes.push(flowNote());
+          return {
+            series: df.series.shifted(sl.tHand),
+            info: { ...info(df.cv, df.volume > 0, { runout: ro, travelTime: sl.tPath, slide: sl }), s: sl.sHand },
+            extraBase: 0,
+          };
+        }
+        const travel = massTravelTime(mass);
+        notes.push(`the mass reaches the river ${(travel / 60).toFixed(1)} min after the collapse (${(mass.pathLength / 1000).toFixed(1)} km at ${(mass.travelSpeed ?? AVALANCHE_SPEED).toFixed(0)} m/s)`);
+        notes.push(flowNote());
         return { series: df.series.shifted(travel), info: info(df.cv, df.volume > 0, { runout: ro, travelTime: travel }), extraBase: 0 };
       }
+      const travel = massTravelTime(mass);
+      notes.push(`the mass reaches the river ${(travel / 60).toFixed(1)} min after the collapse (${(mass.pathLength / 1000).toFixed(1)} km at ${(mass.travelSpeed ?? AVALANCHE_SPEED).toFixed(0)} m/s)`);
       // Transient dam: the deposit blocks the valley at the impact, the river fills the impoundment, then it breaches
       // like an ice-rich, uncompacted dam (spec §C.3 branch 1).
       const node = nodeAt(file, s);
@@ -256,7 +281,8 @@ function baseflowOf(spec: HazardChainSpec, ov: ChainOverrides): number {
 export function runChain(spec: HazardChainSpec, file: ChainFile, overrides: ChainOverrides = {}): ChainRunResult {
   const ov = overrides;
   const base = baseflowOf(spec, ov);
-  const src = sourceOf(spec.trigger, file, ov, base);
+  const law = ov.routing?.resistance ?? spec.routing?.resistance;
+  const src = sourceOf(spec.trigger, file, ov, base, law);
   const bulking = Math.max(0, ov.bulking ?? 1);
   const series = bulking !== 1 ? src.series.scaled(bulking) : src.series;
   const sourcePeak = series.peak();
@@ -268,7 +294,7 @@ export function runChain(spec: HazardChainSpec, file: ChainFile, overrides: Chai
   const r = route(routeFile, {
     inflows: src.info.flood ? [{ s: src.info.s, series, cv: src.info.cv }] : [],
     baseflow: base + src.extraBase,
-    tributaries: ov.tributaries,
+    tributaries: ov.tributaries ?? spec.routing?.tributaries?.map((t) => ({ s: t.s, q: t.q })),
     probes,
     entryS: file.domainEntry.s,
     // A run without a flood still routes an hour so the entry shows the (raised) baseflow.
@@ -292,6 +318,21 @@ export function runChain(spec: HazardChainSpec, file: ChainFile, overrides: Chai
     const st = file.stations[k];
     stations.push({ name: st.name, s: st.s, kind: st.kind, tFront: o.tFront, tPeak: o.tPeak, qPeak: o.qPeak, stageMax: o.stageMax, cv: o.cv, rise: o.rise, qBase: p.qBase });
   });
+
+  // Above a sliding block's handover the routed river carries no flood: what passes there is the mass itself. Those
+  // stations read the block's passage as their front and the debris flow's peak (the surge's Qp) as their peak.
+  const sl = src.info.slide;
+  if (sl) {
+    for (const st of stations) {
+      if (!(st.s < sl.sHand)) continue;
+      const tf = slideTimeAt(sl, st.s);
+      if (!Number.isFinite(tf)) continue;
+      st.tFront = tf;
+      st.tPeak = tf + (sourcePeak.t - sl.tHand);
+      st.qPeak = sourcePeak.q;
+      st.cv = src.info.cv;
+    }
+  }
 
   // Say why a flood has no front at the map edge rather than leave a bare NaN: the routing's time limit (it counts
   // from the first outflow, so a slow-filling dam is routed in full) or a flood that dies out before the edge.

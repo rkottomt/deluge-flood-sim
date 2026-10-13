@@ -223,23 +223,27 @@ Voellmy or Bingham, ARCHITECTURE.md §3.9) and a 25 m/s speed cap. The chain run
 plus a 27-member ensemble for p10–p90 bands; each preset also ships the calibrated run it was baked with.
 
 The **valley timeline** under the map shows the profile, the front moving down it in step with the simulation clock,
-each station lighting up as it passes with its modelled and observed arrival in the event's own clock ("09:46 NPT"),
+each station lighting up as it passes with its modelled and observed arrival in the event's own clock ("09:41 NPT"),
 and the hydrograph at the source and at the map edge. The **Early warning** designer places sensors on that profile
 (gauge, trip-wire, camera, seismic; detection and alert latencies) and gives each town and plant its lead time, the
 best single sensor site, and the lead time against sensor position. `?usecase=glacier` opens it on Nepal.
 
 | Scenario | Event | Model vs observed (median run) |
 | --- | --- | --- |
-| **Betrawati — Trishuli** (`nepal`) | 26 Aug 2026: Langtang Lirung rock-ice avalanche → Bhote Koshi → Trishuli; ~20 Mm³ of excess water, the Betrawati bridge lost | front at Betrawati **70 min** after the avalanche vs **43 min** reported — the model is late |
-| **Chungthang — Teesta** (`chungthang`) | 3–4 Oct 2023: South Lhonak lake outburst, 68 km upstream; the 1,200 MW Teesta-III dam destroyed | front at Chungthang **109 min** vs **~137 min**; peak **~9,600–9,800 m³/s** vs 7,355–14,673 reconstructed |
-| **Raini–Tapovan** (`chamoli`) | 7 Feb 2021: Ronti peak collapse → debris flow; Rishiganga (13.2 MW) and Tapovan-Vishnugad (520 MW) plants hit | peak at Raini **~10,900 m³/s** vs 8,200–14,200; front at the Tapovan barrage **21 min** vs **~15 min** |
+| **Betrawati — Trishuli** (`nepal`) | 26 Aug 2026: Langtang Lirung rock-ice avalanche → Bhote Koshi → Trishuli; ~20 Mm³ of excess water, the Betrawati bridge lost | front at Betrawati **65 min** after the avalanche vs **43 min** reported (when its gauge went silent) — the model is late; Syafrubesi 29 vs 13–23 min |
+| **Chungthang — Teesta** (`chungthang`) | 3–4 Oct 2023: South Lhonak lake outburst, 68 km upstream; the 1,200 MW Teesta-III dam destroyed | front at Chungthang **121 min** vs **~142 min** reported (00:35); peak **~5,700 m³/s** vs 5,340–14,673 reconstructed |
+| **Raini–Tapovan** (`chamoli`) | 7 Feb 2021: Ronti peak collapse → debris flow; Rishiganga (13.2 MW) and Tapovan-Vishnugad (520 MW) plants hit | front at Raini **11 min** vs **6**, at the Tapovan barrage **19 min** vs **15–16**, at Joshimath **34 min** vs **37.5** (seismic); peak at Raini **~9,400 m³/s** vs 8,200–14,200 |
 
 These are honest residuals, not fits: the calibration changed physics (trigger mechanism, a smoothed bed, a minimum
-channel width, the avalanche's own travel time, Ferguson's boulder-bed resistance law with a literature grain size)
-and refused to tune Manning n to the clock. The model is late in Nepal and Chamoli and early at Chungthang, so no
-single resistance setting explains both; the likelier causes are the sources and the 30 m radar DEM's gorge sections.
-Every scenario's on-screen text gives its own error. Lead times from the designer are therefore best read as
-differences between sensor designs, not absolute minutes.
+channel width, the avalanche's own travel time, Ferguson's boulder-bed resistance law with a literature grain size;
+then a debris-flow surge whose peak rides its front, the river's own monsoon flow, a sliding-block runout with a
+published friction pair for Chamoli, the measured lake drawdown for South Lhonak) and refused to tune Manning n, a
+grain size, a breach rate or a friction pair to the clock. Some of the gap was the observations: Nepal's "08:40 at
+Rasuwagadhi", "08:50 at Syafrubesi" and "09:20 at Betrawati" are gauge timestamps (a last normal reading, data lost),
+and Chungthang's "00:30" was a published model's answer, not a sighting. What is left — Nepal still ~50 % late,
+Chamoli late above Tapovan and early below it, Chungthang ~14 % early — is listed with its suspects in
+[§G.9](docs/research/glacier-hazard-chain.md). Every scenario's on-screen text gives its own error. Lead times from the
+designer are therefore best read as differences between sensor designs, not absolute minutes.
 
 ## Future climate
 

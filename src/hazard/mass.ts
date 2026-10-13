@@ -8,6 +8,7 @@
  */
 import type { GlacialLake, ImpulseGeometry, MassMovement } from './types';
 import {
+  AVALANCHE_SPEED,
   DEBRIS_FLOW_STOP_RATIO,
   DIRECT_FLOW_CV,
   FREEBOARD_DEFAULT,
@@ -332,13 +333,62 @@ export interface DirectFlow extends Hydrograph {
  * Chamoli check [C]: 26.9 Mm³, 20 % ice → 4.9 Mm³ water, 8.2 Mm³ of mixture at Cv 0.4, Qp ≈ 13,900 m³/s, tp ≈ 6.6 min,
  * most of it through in 15–20 min — Shugar's "10–20 min" at Raini.
  */
-export function directFlow(mass: MassMovement, opts: { cv?: number; relation?: DebrisPeakRelation; meltFraction?: number } = {}): DirectFlow {
+export function directFlow(
+  mass: MassMovement,
+  opts: { cv?: number; relation?: DebrisPeakRelation; meltFraction?: number; shape?: DirectFlowShape } = {},
+): DirectFlow {
   const cv = Math.min(0.6, Math.max(0, opts.cv ?? DIRECT_FLOW_CV));
   const water = mass.volume * Math.min(1, Math.max(0, mass.iceFraction)) * (opts.meltFraction ?? ICE_MELT_FRACTION) * (RHO_ICE / RHO_WATER);
   const mixture = water / (1 - cv);
   const qp = DEBRIS_PEAK_RELATIONS[opts.relation ?? DIRECT_FLOW_PEAK](mass.volume);
-  const h = gammaHydrograph(qp, mixture);
+  const h = (opts.shape ?? 'gamma') === 'surge' ? surgeHydrograph(qp, mixture, surgeRiseTime(mass)) : gammaHydrograph(qp, mixture);
   return { ...h, water, cv, mixture };
+}
+
+/**
+ * Shape of the direct-flow hydrograph where the mass enters the river:
+ *   'gamma' (the default, and the first calibration's): the §B.4 gamma curve, a = 3 — a breach's shape, whose peak
+ *           comes tp = V/(1.488·Qp) after the start (6.6 min for Chamoli, 11 min for Nepal 2026): the water "waits" for
+ *           a lake that is not there;
+ *   'surge': a debris-flow SURGE — the peak arrives with the mass, then a linear recession (surgeHydrograph).
+ */
+export type DirectFlowShape = 'gamma' | 'surge';
+
+/**
+ * Rise time of a direct-flow surge, s: the time the avalanche body takes to pass into the river, its length over its
+ * speed, ℓ / v. ℓ = V / (b·s) with the slide width b = 2·V^(1/3) and thickness s = 0.25·V^(1/3) this module already
+ * assumes for slides with no measured geometry (SLIDE_WIDTH_FACTOR, SLIDE_THICKNESS_FACTOR) — ℓ = 2·V^(1/3); for
+ * Chamoli ≈ 600 m, the length Shugar et al.'s slab (26.9 Mm³, ~550 m wide, ~80 m thick) implies (≈ 610 m) [C]. v is
+ * the mass's travel speed (MassMovement.travelSpeed, default AVALANCHE_SPEED). Tens of seconds: at the routing's scale
+ * the surge front is a step. [H]
+ */
+export function surgeRiseTime(mass: MassMovement): number {
+  const L13 = Math.cbrt(Math.max(mass.volume, 0));
+  const b = mass.width ?? SLIDE_WIDTH_FACTOR * L13;
+  const s = mass.thickness ?? SLIDE_THICKNESS_FACTOR * L13;
+  const len = b > 0 && s > 0 ? mass.volume / (b * s) : 0;
+  const v = mass.travelSpeed ?? AVALANCHE_SPEED;
+  return v > 0 ? len / v : 0;
+}
+
+/**
+ * A debris-flow surge (spec §C.3 branch 2): linear rise to Qp over `rise` seconds, then a linear recession to zero at
+ * T = 2V/Qp, so the volume is exactly V (a triangle; needs T > rise, else the rise is shortened to T/2).
+ *
+ * Why this shape for an avalanche that becomes the flood. A debris flow's discharge is highest at its FRONT — the
+ * coarse, deep surge head — and decays behind it (Iverson 1997, Rev. Geophys. 35:245–296, the surge-front structure of
+ * debris flows [M]; Rickenmann 1999 §2, the bouldery front [M]); a mass that hits the river at tens of m/s is already
+ * moving and does not need a breach to grow before it flows. The gamma curve used before put Chamoli's peak 6.6 min and
+ * Nepal's 11 min after the mass reached the river, and the 5 %-of-peak front waited for its slow rising limb. Same peak
+ * relation and same volume as the gamma: only the timing within the surge changes. Duration check [C]: Chamoli,
+ * T = 2 × 6.2 Mm³ / 13,900 m³/s ≈ 15 min against Shugar et al.'s "10–20 min" at Raini [V].
+ */
+export function surgeHydrograph(qPeak: number, volume: number, rise: number): Hydrograph {
+  if (!(qPeak > 0) || !(volume > 0)) return { series: new Series([0, 1], [0, 0]), volume: 0, peak: 0, tPeak: 0 };
+  const T = (2 * volume) / qPeak;
+  const tr = Math.min(Math.max(rise, 1), 0.5 * T);
+  const series = new Series([0, tr, T], [0, qPeak, 0]);
+  return { series, volume: series.total, peak: qPeak, tPeak: tr };
 }
 
 /**
