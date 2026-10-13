@@ -49,13 +49,14 @@ import { BuildingLayer, DEFAULT_BUILDING_STYLE, effectiveBuildingStyle, type Bui
 import { BASE_EXPOSURE, hazardInput } from './tonemap';
 import { BLOOM_MIPS, BLOOM_PARAMS, BLOOM_UPSAMPLE_RADIUS } from './shaders/post';
 import { footprintRadius, stormWeight } from '../sim/forcing';
+import type { EnsembleLayer } from '../sim/ensemble';
 
 export { DEPTH_BANDS, MAX_DEPTH_BANDS, NORMAL_WATER_LEGEND, VELOCITY_BANDS, bandsForMode } from './legend';
 export { OrbitController } from './camera';
 export { LIGHTING_PRESETS, type LightingPreset, type LightingSettings } from './atmosphere';
 export type { RendererQuality, SimPressure } from './quality';
 
-const WATER_MODE_INDEX = { realistic: 0, depth: 1, maxDepth: 2, velocity: 3, arrival: 4, hazard: 5 } as const;
+const WATER_MODE_INDEX = { realistic: 0, depth: 1, maxDepth: 2, velocity: 3, arrival: 4, hazard: 5, probability: 6 } as const;
 /** Cells over which the detail-imagery inset fades into the base photo, so its rectangle never reads as an edge. */
 const DETAIL_FEATHER_CELLS = 8;
 /**
@@ -170,6 +171,12 @@ export interface DelugeRendererAPI extends FloodRenderer {
    */
   setProtectedMask(mask: Uint8Array | null): void;
   /**
+   * The ensemble the 'probability' view draws (src/sim/ensemble.ts EnsembleLayer: per-cell member counts over 0.15 and
+   * 0.5 m and the deepest water any member reached), or null. The buffer must match the scene's grid (else ignored)
+   * and stay alive until it is replaced or cleared here.
+   */
+  setEnsembleLayer(layer: EnsembleLayer | null): void;
+  /**
    * The extruded city: `enabled` hides it outright (e2e flows that only care about the water), and the style
    * fields override the look on top of whatever the quality tier chose. Everything is optional; omitted fields
    * keep their current value.
@@ -274,7 +281,7 @@ interface SceneGPU {
   waterBG: GPUBindGroup;
   overlayBG: GPUBindGroup;
   prepParams: GPUBuffer;
-  prepCache: Map<GPUTexture, { bed: GPUTexture; barrier: GPUTexture; hazard: GPUBuffer; cells: GPUBindGroup }>;
+  prepCache: Map<GPUTexture, { bed: GPUTexture; barrier: GPUTexture; hazard: GPUBuffer; ens: GPUBuffer; cells: GPUBindGroup }>;
   /** Per-cell (depth, water surface) written by the cells pass for the verts pass. */
   cellTex: GPUTexture;
   /** Per-vertex bed, rebuilt only when the terrain changes (see terrainKey). */
@@ -354,6 +361,9 @@ class DelugeRenderer implements DelugeRendererAPI {
   private lastPrepKey = -1;
   private lastPrepUseMax = -1;
   private lastPrepField = -1;
+  /** Ensemble the probability view draws (setEnsembleLayer) and the prep inputs it was last built with. */
+  private ensemble: EnsembleLayer | null = null;
+  private lastPrepEns = '';
   private lastPrepUseMaxBuilt = -1;
   private framesSincePrep = 1e9;
   private ctx: GPUCanvasContext;
@@ -747,7 +757,7 @@ class DelugeRenderer implements DelugeRendererAPI {
       ],
     });
 
-    const prepParams = device.createBuffer({ label: 'prep', size: 48, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    const prepParams = device.createBuffer({ label: 'prep', size: 64, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     const vertsBG = device.createBindGroup({
       label: 'prep-verts',
       layout: this.P.prepVerts.getBindGroupLayout(0),
@@ -1139,6 +1149,11 @@ class DelugeRenderer implements DelugeRendererAPI {
     this.adaptive.simPressure = pressure;
   }
 
+  setEnsembleLayer(layer: EnsembleLayer | null): void {
+    this.ensemble = layer && layer.buffer && layer.members > 0 ? { ...layer } : null;
+    this.forcePrep = true;
+  }
+
   setProtectedMask(mask: Uint8Array | null): void {
     const s = this.scene;
     if (!s || this.destroyed) return;
@@ -1403,8 +1418,9 @@ class DelugeRenderer implements DelugeRendererAPI {
     const bed = solver.bedTexture;
     const barrier = solver.barrierTexture;
     const hazard = solver.hazardBuffer ?? this.dummyHazard;
+    const ens = this.ensembleFor(s)?.buffer ?? this.dummyHazard;
     const cached = s.prepCache.get(state);
-    if (cached && cached.bed === bed && cached.barrier === barrier && cached.hazard === hazard) return cached;
+    if (cached && cached.bed === bed && cached.barrier === barrier && cached.hazard === hazard && cached.ens === ens) return cached;
     if (s.prepCache.size >= 4) s.prepCache.clear();
     const d = this.device;
     const common = [
@@ -1423,11 +1439,18 @@ class DelugeRenderer implements DelugeRendererAPI {
         { binding: 6, resource: s.miscTex.createView() },
         { binding: 7, resource: s.cellTex.createView() },
         { binding: 8, resource: { buffer: hazard } },
+        { binding: 9, resource: { buffer: ens } },
       ],
     });
-    const entry = { bed, barrier, hazard, cells };
+    const entry = { bed, barrier, hazard, ens, cells };
     s.prepCache.set(state, entry);
     return entry;
+  }
+
+  /** The ensemble layer, if it was made for this scene's grid. */
+  private ensembleFor(s: SceneGPU): EnsembleLayer | null {
+    const e = this.ensemble;
+    return e && e.nx === s.nx && e.ny === s.ny && e.buffer.size >= s.nx * s.ny * 16 ? e : null;
   }
 
   /** Bind group of the per-vertex bed pass for the solver's current bed / barrier textures. */
@@ -1582,15 +1605,18 @@ class DelugeRenderer implements DelugeRendererAPI {
     if (s) {
       const mode = WATER_MODE_INDEX[settings.waterMode] ?? 0;
       // Max depth, arrival and hazard class are all maps of the flood since reset: drawn on the max-depth surface.
-      const useMax = mode === 2 || mode === 4 || mode === 5 ? 1 : 0;
-      // What misc.b/.a carry (shaders/prep.ts): 1 arrival, 2 hazard class, 0 speed + whitewater.
-      const field = mode === 4 ? 1 : mode === 5 ? 2 : 0;
+      const useMax = mode === 2 || mode === 4 || mode === 5 || mode === 6 ? 1 : 0;
+      // What misc.b/.a carry (shaders/prep.ts): 1 arrival, 2 hazard class, 3 ensemble probability, 0 speed + whitewater.
+      const field = mode === 4 ? 1 : mode === 5 ? 2 : mode === 6 ? 3 : 0;
+      const ens = field === 3 ? this.ensembleFor(s) : null;
+      const ensSlot = (settings.probabilityThreshold ?? 0.15) >= 0.5 ? 1 : 0;
+      const ensKey = ens ? `${ens.members}|${ensSlot}` : '';
       const key = this.stateKey(s.solver);
       this.framesSincePrep++;
       // Derived textures only change when the solver state (or the displayed field) changes. The real solver
       // bumps its state version after every step and brush edit; a periodic refresh covers solvers that edit bed
       // textures in place. stateTexture is only read when a rebuild is due (reading it makes the solver export).
-      const fieldChanged = useMax !== this.lastPrepUseMax || field !== this.lastPrepField;
+      const fieldChanged = useMax !== this.lastPrepUseMax || field !== this.lastPrepField || ensKey !== this.lastPrepEns;
       const changed = key !== this.lastPrepKey || fieldChanged;
       const due =
         this.forcePrep ||
@@ -1602,7 +1628,8 @@ class DelugeRenderer implements DelugeRendererAPI {
         this.lastPrepKey = key;
         this.lastPrepUseMax = useMax;
         this.lastPrepField = field;
-        const prep = new ArrayBuffer(48);
+        this.lastPrepEns = ensKey;
+        const prep = new ArrayBuffer(64);
         const pi = new Int32Array(prep);
         const pf = new Float32Array(prep);
         pi[0] = s.nx;
@@ -1618,6 +1645,9 @@ class DelugeRenderer implements DelugeRendererAPI {
         pf[9] = s.wetValid && this.lastPrepUseMaxBuilt === useMax ? 1 : 0;
         pi[10] = field;
         pi[11] = s.solver.hazardBuffer ? 1 : 0;
+        pf[12] = ens?.members ?? 0;
+        pi[13] = ensSlot;
+        pi[14] = ens ? 1 : 0;
         s.wetValid = true;
         this.lastPrepUseMaxBuilt = useMax;
         d.queue.writeBuffer(s.prepParams, 0, prep);

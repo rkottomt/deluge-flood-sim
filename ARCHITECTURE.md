@@ -329,6 +329,90 @@ and the stiff end of the O'Brien–Julien table (Aspen Pit 1, τ_y ≈ 1.9 kPa, 
 barrage: after 25 minutes its fastest cell moves at 2.6 m/s, 600 m short of it. The same runs found that the radar DSM's false sills in the Rishiganga slot gorge pond even clear water 48 m deep; the bake's gorge floor
 (`RiverDef.carve`, public/presets/SOURCES.txt) is what lets any rheology through.
 
+### 3.10 Ensembles: flood probability under stated input uncertainty
+
+A single run answers "does this street flood?". A lender, insurer or developer asks "in how many plausible versions of
+this event does it flood?". At 100–500× real time on a mid-range GPU, a dozen members of a 30-minute scenario take
+about a minute, in the tab, so Deluge runs the ensemble rather than selling one precomputed map.
+
+**What is perturbed** (`src/loss/ensemble.ts`; every default is editable in the Uncertainty section and stated in
+`PERTURBATION_NOTES`, which the panel shows):
+
+| Input | Default band | Where it comes from |
+| --- | --- | --- |
+| Inflow (discharge and hydrograph of every inflow) | × (1 ± 20 %) | assumption inside the ±10–25 % usually quoted for peak discharges from rating extrapolation or indirect measurement |
+| Glacier-chain inflow (Nepal, Chungthang) | one chain member per 2-D member | the routed hydrograph's excess over baseflow scaled by the member's entry peak / the deterministic one, shifted by its front-time difference (`shiftScaleHydrograph`); the band's p10/p50/p90 (comonotonic) when members are missing |
+| Rain (global rate and storm cells) | × (1 ± 25 %) | assumption: radar–gauge rainfall at hour / block scale |
+| River stage target | ± 0.3 m, clamped to the slider | assumption: about a one-day stage-forecast miss on a large river |
+| Manning n | 0.025–0.05, log-uniform | Chow (1959) ranges for grass, pavement, light brush; replaces the scenario's single n (inert under a debris-flow rheology) |
+| Terrain | smooth random bed error, σ 0.2 m (3DEP), 2.5 m (Copernicus), 3 m (Terrarium), correlation length 200 m | 3DEP lidar RMSEz ≤ 0.1 m in the open, more under canopy and after resampling; Copernicus measured against lidar in `public/presets/SOURCES.txt`; the correlation length is an assumption |
+
+**Sampling.** A Latin hypercube over (inflow, rain, stage, Manning) from the user's seed: in every dimension each
+member falls in its own 1/N stratum (a seeded permutation, jittered within the stratum), so even 12 members span every
+band and the same seed reproduces the same members (`tests/loss/ensemble.test.ts`). Each member also gets its own seed
+for the terrain field. Members are equally weighted.
+
+**The terrain perturbation** (`src/sim/demNoise.ts`, `GpuFloodSolver.setBedPerturbation`) is white Gaussian noise
+smoothed by three separable box passes (≈ a Gaussian kernel at the correlation length), rescaled to exactly σ, then
+masked: zero on water present at the start and fading in over 4 cells away from it, and a bank that stood above the
+nearby water is never lowered below that water's surface. Without the mask every river would start sloshing — the
+initial water is a lake at rest on the unperturbed bed — and a bank nudged under the river's level would spill it at
+t = 0. With it the initial water stays at rest (max speed < 1 mm/s after 800 steps on a bowl lake with σ 0.3 m on its
+banks) and the mass ledger is untouched: the initial volume is the initial depth, which a bed change does not move.
+`setBedPerturbation` adds δ to the ground (subtracting the previous δ first, so the user's own dig/raise edits
+survive), re-uploads bed and ground, invalidates the cached reset state and re-packs the forcing; walls stay a
+separate barrier layer on top of whatever ground there is; `reset({ resetTerrain })` drops it, and the runner removes
+it before putting the user's scenario back. Known bias: the bank clamp lifts some low bank cells, so near the initial
+water the field is slightly positive on average; elsewhere it is unbiased, so a DEM's *systematic* error (Copernicus
+reads valley floors 2–4 m high) is not represented.
+
+**Running.** `src/ui/headless.ts` is the runner Site check's sweep and the ensemble share: pause, render hold (the 3-D
+view drops to a heartbeat so the GPU goes to the solver), per case apply the forcing, reset the water, `runFor` the
+duration in 300-s chunks (Cancel answers within one), collect, and finally put back forcing, stage, Manning n, the
+water and the play state. Per member (`src/ui/ensemble.ts`):
+
+* **Map: a GPU accumulate pass, no readback.** `src/sim/ensemble.ts` folds the exported max depth (`stateTexture.a`)
+  into a storage buffer of one vec4f per cell — members over 0.15 m, members over 0.5 m, Σ max depth, the largest
+  max depth any member reached — one compute pass over the grid per member (not separately timed; it is lighter than
+  the export pass). The alternative, reading every member's field back and
+  re-uploading the tally, costs a full-grid map per member and holds N × 4 MB on the CPU for a map that lives on the
+  GPU anyway. The app owns the buffer (`src/app/ensembleMap.ts`) and hands it to the renderer after every member, so
+  the map fills in while the ensemble runs. Non-finite depths are detected from the bit pattern, never by comparison.
+* **Loss and assets: one `readHazardFields()`** (~32 B/cell; 40–390 ms per member at 1024² on the GTX 1660 Ti,
+  including the GPU work still queued) feeds `analyze()` — the same loss model as the Impact panel, 40–190 ms — the
+  flooded area (land dry at the start whose max depth exceeded 0.15 / 0.5 m), every Site check site (`assessSiteRun`
+  without egress routing) and every portfolio asset. Only the per-member summaries and per-asset depths are kept, not
+  the fields. The terrain field costs ~330 ms of CPU per member (1024²), the run itself the rest.
+
+**Results.** p10 / p50 / p90 across members (R type 7, the chain ensemble's `quantile`) of flooded area at both
+thresholds, buildings reached and loss, plus the loss band widened by the damage curves' ±1σ (p10 of the members' low
+ends to p90 of their high ends); per asset "floods (≥ 15 cm) in k of N members" with the p10/p50/p90 depth, also
+shown on the Site check card (flagged if the site was edited since). **Probability view** (`WaterViewMode`
+'probability'): the prep pass's field 3 reads the tally, colours the share of members over the chosen threshold
+(`PROBABILITY_BANDS`, < 10 / 10–30 / 30–50 / 50–70 / 70–90 / > 90 %; pale green → indigo, the only
+lightness-sequential run left ≥ 45 sRGB units from every other mode's swatches, outside the NaN-magenta detector and
+inside the tone mapper's gamut — `tests/render/picking.test.ts`, `tonemap.test.ts`) and draws it on the envelope — the
+deepest water any member reached — rather than the user's own run, which the runner has reset by then. Normal water
+stays muted as in the other hazard views; with no ensemble nothing is coloured and the View section hides the button.
+
+**Measured** (GTX 1660 Ti, Chromium/Dawn D3D12, 12 members × 30 simulated minutes, render hold): Pittsburgh at the
+1936 crest 48 s (15 members/min; flooded area p10/p50/p90 6.47 / 6.53 / 6.56 km², loss $10.1 / 11.7 / 13.6 B);
+Houston under Harvey's hour 58 s (12.4 members/min; 10.0 / 12.4 / 14.2 km², $2.1 / 2.6 / 2.9 B). A cold first run
+measured 8.4 and 9.7 members/min (6 members). The crest's spread is narrow because the stage boundaries pin the
+river; Houston's rain-driven flood spreads more.
+
+**What it is not.** The members are one model with nudged inputs. The share is the *sensitivity of the map to the
+stated bands*, not a calibrated probability of the real event: the bands are screening assumptions, there is no
+weighting by likelihood, inputs are sampled independently (except the chain's peak and front), and the structural
+error — bare-earth terrain, no drains, nominal bathymetry, the scheme — is identical in every member, so the real
+uncertainty is wider than the spread. The panel says so next to every result (`ENSEMBLE_CAVEAT`).
+
+Tests: sampling and aggregation (`tests/loss/ensemble.test.ts`), the GPU tally against its CPU mirror with identical
+members (probability exactly 0 or 1 everywhere) and a known perturbation on a synthetic valley (intermediate
+probabilities at the flood's edges), and the bed perturbation's lake-at-rest / restore behaviour
+(`tests/sim/ensemble.test.ts`), the prep pass's field 3 (`tests/render/prep.test.ts`), and e2e flow 17 (a 3-member
+ensemble on Pittsburgh: completes, scenario restored, legend and site card, legend-vs-pixels agreement).
+
 ## 4. Rivers, stages and crests
 
 The Pittsburgh preset's river stage slider is in feet on the Point gauge (NWS PTTP1 / USGS 03085152): normal pool
@@ -488,7 +572,7 @@ AIDR 2017 hazard class) colour only land that was dry at reset (speed excepted);
 tone mapper so the screen matches the legend. Arrival and hazard class are read from the solver's hazard accumulators
 (§3.7) by the prep pass, drawn on the max-depth surface: minutes since reset (premultiplied by "the water got here",
 so filtering toward land it never reached keeps the right time and fades the colour out), and H1–H6 from the maxima of
-depth, speed and depth × speed, classified with WGSL generated from the legend's own threshold table. An
+depth, speed and depth × speed, classified with WGSL generated from the legend's own threshold table. The ensemble's flood-probability view (§3.10) is a fourth field of the same prep pass: the share of members over the threshold, read from the ensemble tally, drawn on the deepest water any member reached. An
 adaptive resolution controller keeps frame time on target; the app also tells it how hard the solver is pushing for GPU
 time (§8), so it does not spend on pixels what the flood needs in substeps. Terrain and water are CDLOD meshes of
 32×32-quad patches sized to ~4 px per quad by default: vertex work was half of the renderer's GPU time.

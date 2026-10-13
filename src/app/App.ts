@@ -8,6 +8,7 @@ import { CrestFill } from './crest';
 import { APP_CONFIG, createInitialState } from './defaults';
 import { FrameDriver } from './driver';
 import { errorMessage, ErrorReporter } from './errors';
+import { EnsembleMapHost } from './ensembleMap';
 import { EvacController, snapshotIsPhysical } from './evac';
 import { HazardChainController } from './hazardChain';
 import { WorkBudget, type BudgetMode } from './governor';
@@ -89,6 +90,12 @@ export class App {
   probe: ProbeSampler | null = null;
   /** A long automated run (the Site check sweep) holds rendering to a slow heartbeat (FrameDriver). */
   renderHold = false;
+  /** The flood-probability ensemble's GPU accumulator, lent to the UI through SimControl.ensembleMap. */
+  readonly ensembleMap = new EnsembleMapHost({
+    getSolver: () => this.scenes?.scene?.solver ?? null,
+    getRenderer: () => this.renderer as Partial<DelugeRendererAPI> | null,
+    requestRender: () => this.requestRender(),
+  });
 
 
   /** Resolves when the first scene is on screen; rejects if startup fails (main.ts hands it to the debug API). */
@@ -209,6 +216,7 @@ export class App {
         this.renderHold = on;
         this.requestRender();
       },
+      ensembleMap: () => this.ensembleMap.control(),
     };
 
     const format = navigator.gpu.getPreferredCanvasFormat();
@@ -222,6 +230,7 @@ export class App {
       router: this.router,
       stage: this.stage,
       onSceneCleared: () => {
+        this.ensembleMap.drop();
         this.crest.onSceneChanged();
         this.setStageNow(0);
         this.evac.reset();

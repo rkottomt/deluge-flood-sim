@@ -102,8 +102,8 @@ test('prep: water surface, shoreline extension, walls and wet pyramid', async ()
   const wetMips = Math.log2(N) + 1;
   const wet = out('r32float', N, N, wetMips);
 
-  const params = device.createBuffer({ size: 48, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-  const pb = new ArrayBuffer(48);
+  const params = device.createBuffer({ size: 64, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+  const pb = new ArrayBuffer(64);
   const pi = new Int32Array(pb);
   const pf = new Float32Array(pb);
   pi[0] = N;
@@ -136,6 +136,7 @@ test('prep: water surface, shoreline extension, walls and wet pyramid', async ()
         { binding: 6, resource: misc.createView() },
         { binding: 7, resource: cells.createView() },
         { binding: 8, resource: { buffer: noHazard(device) } },
+        { binding: 9, resource: { buffer: noHazard(device) } },
       ],
     }),
   );
@@ -297,6 +298,7 @@ test('prep: water surface, shoreline extension, walls and wet pyramid', async ()
         { binding: 6, resource: miscMax.createView() },
         { binding: 7, resource: out('rg32float', N, N).createView() },
         { binding: 8, resource: { buffer: noHazard(device) } },
+        { binding: 9, resource: { buffer: noHazard(device) } },
       ],
     }),
   );
@@ -421,8 +423,8 @@ test('prep: blown-up cells never reach the geometry and are flagged for the glit
   const vtxBed = out('r32float', V, V);
   const wet = out('r32float', N, N);
 
-  const params = device.createBuffer({ size: 48, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-  const pb = new ArrayBuffer(48);
+  const params = device.createBuffer({ size: 64, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+  const pb = new ArrayBuffer(64);
   const pi = new Int32Array(pb);
   const pf = new Float32Array(pb);
   pi[0] = N;
@@ -455,6 +457,7 @@ test('prep: blown-up cells never reach the geometry and are flagged for the glit
         { binding: 6, resource: misc.createView() },
         { binding: 7, resource: cells.createView() },
         { binding: 8, resource: { buffer: noHazard(device) } },
+        { binding: 9, resource: { buffer: noHazard(device) } },
       ],
     }),
   );
@@ -545,10 +548,21 @@ test('prep: arrival and hazard views map the solver hazard accumulators into mis
   const norm = out('rgba16float');
   const misc = out('rgba16float');
   const cells = out('rg32float');
-  const params = device.createBuffer({ size: 48, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+  const params = device.createBuffer({ size: 64, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
 
-  const run = async (field: number, hasHazard: boolean) => {
-    const pb = new ArrayBuffer(48);
+  // An ensemble of 10 members: cell c went over 0.15 m in (c mod 11) of them (capped at 10), over 0.5 m in half as many;
+  // the envelope (w) is 2 m everywhere, so the probability view draws every cell at 2 m whatever the solver's max depth.
+  const MEMBERS = 10;
+  const ens = new Float32Array(N * N * 4);
+  for (let c = 0; c < N * N; c++) {
+    const k = Math.min(MEMBERS, c % 11);
+    ens.set([k, Math.floor(k / 2), k * 0.3, 2], c * 4);
+  }
+  const ensBuf = device.createBuffer({ size: ens.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+  device.queue.writeBuffer(ensBuf, 0, ens);
+
+  const run = async (field: number, hasHazard: boolean, ensemble: { slot: 0 | 1 } | null = null) => {
+    const pb = new ArrayBuffer(64);
     const pi = new Int32Array(pb);
     const pf = new Float32Array(pb);
     pi.set([N, N, N + 1, N + 1, 1, field === 0 ? 0 : 1]);
@@ -557,6 +571,9 @@ test('prep: arrival and hazard views map the solver hazard accumulators into mis
     pf[8] = 0.05;
     pi[10] = field;
     pi[11] = hasHazard ? 1 : 0;
+    pf[12] = MEMBERS;
+    pi[13] = ensemble?.slot ?? 0;
+    pi[14] = ensemble ? 1 : 0;
     device.queue.writeBuffer(params, 0, pb);
     const enc = device.createCommandEncoder();
     const cp = enc.beginComputePass();
@@ -575,6 +592,7 @@ test('prep: arrival and hazard views map the solver hazard accumulators into mis
           { binding: 6, resource: misc.createView() },
           { binding: 7, resource: cells.createView() },
           { binding: 8, resource: { buffer: hasHazard ? hazardBuf : noHazard(device) } },
+          { binding: 9, resource: { buffer: ensemble ? ensBuf : noHazard(device) } },
         ],
       }),
     );
@@ -619,5 +637,23 @@ test('prep: arrival and hazard views map the solver hazard accumulators into mis
   assert.ok(none.every((x, k) => k % 4 < 2 || x === 0), 'arrival without a hazard buffer');
   const plain = await run(0, true);
   assert.ok(Math.abs(plain[2] - 0.3) < 1e-3, `speed ${plain[2]}`);
+  // Ensemble probability (field 3): % of members over the threshold in misc.b, full coverage, drawn on the envelope
+  // (misc.g = 2 m, not the solver's own max depth).
+  for (const slot of [0, 1] as const) {
+    const pr = await run(3, true, { slot });
+    for (let c = 0; c < N * N; c++) {
+      const k = Math.min(MEMBERS, c % 11);
+      const want = (100 * (slot === 0 ? k : Math.floor(k / 2))) / MEMBERS;
+      assert.ok(Math.abs(pr[c * 4 + 2] - want) < 0.05, `slot ${slot} cell ${c}: ${pr[c * 4 + 2]} %, want ${want}`);
+      assert.equal(pr[c * 4 + 3], 1);
+      assert.equal(pr[c * 4 + 1], 2, 'drawn on the ensemble envelope');
+    }
+  }
+  // Without an ensemble nothing is coloured, and the surface stays the solver's own max depth.
+  const noEns = await run(3, true, null);
+  for (let c = 0; c < N * N; c++) {
+    assert.equal(noEns[c * 4 + 3], 0);
+    assert.ok(Math.abs(noEns[c * 4 + 1] - state[c * 4 + 3]) < 2e-3 * Math.max(1, state[c * 4 + 3]));
+  }
   assert.deepEqual(errors, []);
 });

@@ -17,6 +17,7 @@ import {
   cssToLinear,
   DEPTH_BANDS,
   HAZARD_BANDS,
+  PROBABILITY_BANDS,
   MAX_DEPTH_BANDS,
   showsNormalWater,
   VELOCITY_BANDS,
@@ -345,7 +346,7 @@ test('CDLOD selection covers the domain once, with ≤ 1 level between neighbour
 });
 
 test('legend bands are ordered, contiguous and valid colors', () => {
-  for (const bands of [DEPTH_BANDS, MAX_DEPTH_BANDS, VELOCITY_BANDS, ARRIVAL_BANDS, HAZARD_BANDS]) {
+  for (const bands of [DEPTH_BANDS, MAX_DEPTH_BANDS, VELOCITY_BANDS, ARRIVAL_BANDS, HAZARD_BANDS, PROBABILITY_BANDS]) {
     assert.ok(bands.length >= 4 && bands.length <= 8);
     for (let i = 0; i < bands.length; i++) {
       assert.match(bands[i].color, /^#[0-9a-f]{6}$/i);
@@ -365,6 +366,12 @@ test('legend bands are ordered, contiguous and valid colors', () => {
 test('arrival and hazard legends: AIDR 2017 classes, keyed bands, WGSL from the same limits, distinct palettes', () => {
   assert.equal(bandsForMode('arrival'), ARRIVAL_BANDS);
   assert.equal(bandsForMode('hazard'), HAZARD_BANDS);
+  assert.equal(bandsForMode('probability'), PROBABILITY_BANDS);
+  assert.ok(showsNormalWater('probability'));
+  assert.deepEqual(PROBABILITY_BANDS.map((b) => b.max), [10, 30, 50, 70, 90, Infinity], 'the <10, 10–30, 30–50, 50–70, 70–90, >90 % bands');
+  // Monotonic in lightness: darker = flooded in more members.
+  const lum = (hx: string) => [1, 3, 5].map((k) => parseInt(hx.slice(k, k + 2), 16)).reduce((a, v, k) => a + v * [0.2126, 0.7152, 0.0722][k], 0);
+  for (let k = 1; k < PROBABILITY_BANDS.length; k++) assert.ok(lum(PROBABILITY_BANDS[k].color) < lum(PROBABILITY_BANDS[k - 1].color), PROBABILITY_BANDS[k].color);
   assert.ok(showsNormalWater('arrival') && showsNormalWater('hazard') && !showsNormalWater('velocity'));
   assert.deepEqual(ARRIVAL_BANDS.map((b) => b.max), [5, 15, 30, 60, 120, Infinity]);
   // AIDR 2017 (Handbook 7, guideline 7-3): H1 d·v ≤ 0.3, d ≤ 0.3, v ≤ 2; H2 0.6/0.5/2; H3 0.6/1.2/2; H4 1/2/2; H5 4/4/4.
@@ -391,14 +398,15 @@ test('arrival and hazard legends: AIDR 2017 classes, keyed bands, WGSL from the 
   // Every swatch must be told apart from every other mode's by the visual suite's nearest-swatch check, and none may
   // look like the blown-up-cell sentinel to its NaN-magenta detector (scripts/visual.mjs frameStats).
   const rgb = (h: string) => [1, 3, 5].map((k) => parseInt(h.slice(k, k + 2), 16));
-  for (const b of [...ARRIVAL_BANDS, ...HAZARD_BANDS]) {
+  for (const b of [...ARRIVAL_BANDS, ...HAZARD_BANDS, ...PROBABILITY_BANDS]) {
     const [r, g, bl] = rgb(b.color);
     assert.ok(!(r > 150 && bl > 110 && g < 0.6 * Math.min(r, bl)), `${b.color} reads as NaN magenta`);
   }
-  const modes = { depth: DEPTH_BANDS, maxDepth: MAX_DEPTH_BANDS, velocity: VELOCITY_BANDS.slice(1), arrival: ARRIVAL_BANDS, hazard: HAZARD_BANDS };
+  const modes = { depth: DEPTH_BANDS, maxDepth: MAX_DEPTH_BANDS, velocity: VELOCITY_BANDS.slice(1), arrival: ARRIVAL_BANDS, hazard: HAZARD_BANDS, probability: PROBABILITY_BANDS };
   for (const [ma, ba] of Object.entries(modes)) {
     for (const [mb, bb] of Object.entries(modes)) {
-      if (ma >= mb || (ma !== 'arrival' && ma !== 'hazard' && mb !== 'arrival' && mb !== 'hazard')) continue;
+      const fresh = (m: string) => m === 'arrival' || m === 'hazard' || m === 'probability';
+      if (ma >= mb || (!fresh(ma) && !fresh(mb))) continue;
       for (const x of ba) {
         for (const y of bb) {
           const d = Math.hypot(...rgb(x.color).map((v, k) => v - rgb(y.color)[k]));

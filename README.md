@@ -116,6 +116,24 @@ periods are only filled in where published; the rest are the user's input and la
 1 % level (35.4 ft) and 4.5 m at the 1936 crest, and loses its last dry route to a shelter as the water arrives; the
 indicative floor is 1.28 m above grade. Indicative screening, not engineering advice.
 
+**Uncertainty** (its own panel section) turns "this street floods" into "this street floods in 9 of 12 plausible
+versions of this event". It re-runs the scenario on screen N times (12 by default, 3–32) headless at full speed — the
+Site check machinery: render hold, progress with an ETA, Cancel, your scenario put back afterwards — with its
+uncertain inputs nudged within stated bands, drawn by Latin hypercube from a seed (the same seed gives the same
+members): inflow ± 20 % (on a glacier-chain preset, the chain's own ensemble members instead), rain ± 25 %, river
+stage ± 0.3 m, Manning n 0.025–0.05 log-uniform, and the terrain itself — a smooth random bed error of σ 0.2 m on
+USGS 3DEP, 2.5 m on Copernicus GLO-30, zero under the water that was there at the start so the rivers stay at rest.
+Each member's max depth is folded into a per-cell tally on the GPU (no full-grid readback for the map), and one
+hazard readback per member feeds the loss model. Out come a **Flood probability** water view (share of members
+deeper than 15 cm, or 50 cm: < 10 / 10–30 / 30–50 / 50–70 / 70–90 / > 90 %, drawn on the deepest water any member
+reached), flooded area, buildings reached and loss as p10 / p50 / p90, and per Site check site and portfolio asset
+"floods in k of N members" (also on the Site check card). On the GTX 1660 Ti here, 12 members × 30 simulated minutes
+took 48 s at the 1936 Pittsburgh crest and 58 s for Houston under Harvey's rain — **12–15 members a minute** (8–10 on a
+cold first run). Read it for what it is: **sensitivity to the stated input bands, not a calibrated probability of the
+real event** — every band is a labelled assumption, members are equally weighted, and everything the model leaves out
+(drains, buildings, bathymetry) is the same in every member, so the real uncertainty is wider. Details:
+[ARCHITECTURE.md §3.10](ARCHITECTURE.md#310-ensembles-flood-probability-under-stated-input-uncertainty).
+
 On the 1936 crest (30 simulated minutes, depth-only fallback) the panel books about 1,330 of Pittsburgh's 45,000
 buildings reached and **$5.5 B** (±1σ curve range $3.8–7.0 B); the one-click levee avoids about $1.0 B of it. These
 are screening numbers for one simulated event on bare-earth terrain: not a flood study, not an insurance valuation,
@@ -235,7 +253,7 @@ every ~300 ms, never blocking: stats reduction pass ─▶ mapAsync ─▶ HUD +
 | [`src/render`](src/render) | terrain LOD, water, hazard maps, walls, roads/route ribbons, camera, picking |
 | [`src/data`](src/data) | USGS 3DEP / imagery / roads loaders, hydro-conditioning, presets, live areas |
 | [`src/routing`](src/routing) | road graph, flood status per edge, travel-time Dijkstra |
-| [`src/loss`](src/loss) | impact & loss: damage curves, values, hazard classes, access loss, sites/portfolio CSV, EAL/BCR, site check (egress timing, event ladders, FFE, verdict) (pure, no DOM) |
+| [`src/loss`](src/loss) | impact & loss: damage curves, values, hazard classes, access loss, sites/portfolio CSV, EAL/BCR, site check (egress timing, event ladders, FFE, verdict), ensemble sampling and aggregation (pure, no DOM) |
 | [`src/ui`](src/ui) | panels, tools, HUD, How it works, location picker |
 | [`src/app`](src/app) | scene loading, store → solver sync, stage ramp, protected-land analysis, frame pacing, screen wake lock, debug API (`window.__deluge`, dev and flagged builds only) |
 

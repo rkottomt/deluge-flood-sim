@@ -33,7 +33,7 @@ import {
   VIGNETTE_OUTER,
   type RGB,
 } from '../../src/render/tonemap';
-import { ARRIVAL_BANDS, cssToLinear, DEPTH_BANDS, HAZARD_BANDS, MAX_DEPTH_BANDS, NORMAL_WATER_LEGEND, VELOCITY_BANDS } from '../../src/render/legend';
+import { ARRIVAL_BANDS, cssToLinear, DEPTH_BANDS, HAZARD_BANDS, MAX_DEPTH_BANDS, NORMAL_WATER_LEGEND, PROBABILITY_BANDS, VELOCITY_BANDS } from '../../src/render/legend';
 import { BLOOM_PARAMS, TONEMAP_WGSL } from '../../src/render/shaders/post';
 
 const srgbErr = (a: RGB, b: RGB) => Math.max(...[0, 1, 2].map((k) => Math.abs(linearToSrgb(a[k]) - linearToSrgb(b[k])) * 255));
@@ -43,7 +43,7 @@ const EXPOSURES = [0.7, 0.8, 0.875, 0.945, 1.0, 1.23];
 test('every hazard legend colour tone-maps back to itself under the bloom threshold', () => {
   assert.ok(HAZARD_MAX_PEAK < BLOOM_THRESHOLD);
   // The slowest speed band is drawn as plain water, not in its swatch colour.
-  const bands = [...DEPTH_BANDS, ...MAX_DEPTH_BANDS, ...VELOCITY_BANDS.slice(1), ...ARRIVAL_BANDS, ...HAZARD_BANDS];
+  const bands = [...DEPTH_BANDS, ...MAX_DEPTH_BANDS, ...VELOCITY_BANDS.slice(1), ...ARRIVAL_BANDS, ...HAZARD_BANDS, ...PROBABILITY_BANDS];
   for (const exposure of EXPOSURES) {
     for (const b of bands) {
       const target = cssToLinear(b.color);

@@ -339,10 +339,10 @@ fn fsWater(in: WOut) -> @location(0) vec4f {
   let uvDy = dpdy(uv);
   // The value the hazard bands are keyed on: depth (1), max depth (2), or what the prep pass put in misc.b — speed (3),
   // arrival minutes premultiplied by their coverage misc.a (4: divided back out, so filtering toward land the water
-  // never reached keeps the reached cell's time), AIDR hazard class 1…6 (5).
+  // never reached keeps the reached cell's time), AIDR hazard class 1…6 (5), ensemble flood probability in % (6).
   let valueDepth = select(s.r, misc.g, mode == 2);
   let arrivalMin = misc.b / max(misc.a, 1e-3);
-  let hazardValue = select(select(valueDepth, misc.b, mode == 3 || mode == 5), arrivalMin, mode == 4);
+  let hazardValue = select(select(valueDepth, misc.b, mode == 3 || mode == 5 || mode == 6), arrivalMin, mode == 4);
   let hazardFw = fwidth(hazardValue);
   let pixelFoot = dist * F.elev.w;
 
@@ -617,7 +617,7 @@ fn fsWater(in: WOut) -> @location(0) vec4f {
     } else {
       weight *= smoothstep(0.35, 0.65, floodLand);
     }
-    if (mode == 4) {
+    if (mode == 4 || mode == 6) {
       weight *= smoothstep(0.3, 0.7, misc.a);
     }
     let band = hazardColor(hazardValue, hazardFw);

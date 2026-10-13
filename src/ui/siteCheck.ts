@@ -20,6 +20,7 @@ import { makeGeoToGrid } from '../data/geo';
 import { cleanPlaceLabel } from '../data/placeName';
 import {
   assessSiteRun,
+  band,
   buildAccessIndex,
   DEBRIS_FLOW_PRESETS,
   decodeSites,
@@ -40,6 +41,7 @@ import {
   siteVerdict,
   SnapshotHazardAccumulator,
   summarizeSweep,
+  tallySentence,
   TYPICAL_FOOTPRINT_M2,
   type FfeRecommendation,
   type SiteMitigation,
@@ -76,6 +78,7 @@ import {
 } from './siteReport';
 import { sitesFor } from './sites';
 import { selectTool } from './toolDefs';
+import { headlessBusy, runHeadless, saveScenario } from './headless';
 
 const FT = 0.3048;
 /** Simulated minutes per sweep level, default and range. */
@@ -123,10 +126,11 @@ export interface SiteSection {
   activate(): void;
 }
 
-const specKey = (s: SiteSpec) => JSON.stringify([s.lon, s.lat, s.ring, s.occupancy, s.floors, s.value, s.footprintM2, s.firstFloorHeight, s.criticalElev]);
+export const specKey = (s: SiteSpec) => JSON.stringify([s.lon, s.lat, s.ring, s.occupancy, s.floors, s.value, s.footprintM2, s.firstFloorHeight, s.criticalElev]);
 
-function numField(opts: { label: string; unit: string; min: number; max: number; step: number; placeholder?: string; name: string; onChange(v: number | null): void }) {
-  const input = h('input', { type: 'number', class: 'dl-num-input', min: opts.min, max: opts.max, step: opts.step, inputmode: 'decimal', placeholder: opts.placeholder ?? null, 'aria-label': opts.label, 'data-site-field': opts.name });
+/** A labelled number input (clamped to [min, max]); `attr` names the data attribute carrying `name` (default data-site-field). */
+export function numField(opts: { label: string; unit: string; min: number; max: number; step: number; placeholder?: string; name: string; attr?: string; onChange(v: number | null): void }) {
+  const input = h('input', { type: 'number', class: 'dl-num-input', min: opts.min, max: opts.max, step: opts.step, inputmode: 'decimal', placeholder: opts.placeholder ?? null, 'aria-label': opts.label, [opts.attr ?? 'data-site-field']: opts.name });
   const read = (): number | null => {
     if (input.value.trim() === '') return null;
     const v = Number(input.value);
@@ -400,9 +404,10 @@ export function createSiteSection(ctx: UIContext): SiteSection {
     const todo = levels.filter((l) => l.on && !l.outOfRange);
     if (!specs.length) return setSweepStatus('Place a site first (Site tool, S).', 'warn');
     if (!todo.length) return setSweepStatus('Tick at least one level.', 'warn');
+    if (headlessBusy(store)) return setSweepStatus('An ensemble is running (Uncertainty): wait for it, or cancel it.', 'warn');
     const st = stageCtl();
     const s0 = store.get();
-    const saved = { stageOffset: s0.stageOffset, sources: s0.sources, storms: s0.storms, rainRate: s0.sim.rainRate, paused: s0.paused };
+    const saved = saveScenario(s0);
     const gpu = hasGpuFields(solver);
     const chunk = gpu ? CHUNK_GPU_S : CHUNK_SNAPSHOT_S;
     const dur = Math.round(durationMin * 60);
@@ -426,39 +431,40 @@ export function createSiteSection(ctx: UIContext): SiteSection {
     cancelBtn.hidden = false;
     progress.hidden = false;
     progress.value = 0;
-    const t0 = performance.now();
-    store.set({ paused: true });
-    sim.setRenderHold(true);
-    let failed: string | null = null;
-    try {
-      for (let li = 0; li < todo.length; li++) {
-        if (cancelRequested) break;
-        const L = todo[li];
-        setSweepStatus(`Level ${li + 1} of ${todo.length}: ${L.label} — running ${fmtNum(durationMin)} simulated min…`);
-        if (st) {
-          store.set({ stageOffset: L.ft * FT + st.gaugeDatum - st.normalLevel });
-        } else {
-          const f = scaledForcing(L.scale, saved);
-          store.set({ sources: f.sources, storms: f.storms, sim: { ...store.get().sim, rainRate: f.rainRate } });
-        }
-        actions.resetWater();
+    const out = await runHeadless({
+      store,
+      actions,
+      sim,
+      terrain,
+      getTerrain,
+      cases: todo.map((L, li) => ({
+        L,
+        apply: () => {
+          setSweepStatus(`Level ${li + 1} of ${todo.length}: ${L.label} — running ${fmtNum(durationMin)} simulated min…`);
+          if (st) {
+            store.set({ stageOffset: L.ft * FT + st.gaugeDatum - st.normalLevel });
+          } else {
+            const f = scaledForcing(L.scale, saved);
+            store.set({ sources: f.sources, storms: f.storms, sim: { ...store.get().sim, rainRate: f.rainRate } });
+          }
+        },
+      })),
+      durationS: dur,
+      chunkS: chunk,
+      cancelled: () => cancelRequested,
+      afterReset: () => {
         acc.reset();
         try {
           acc.setBaseline(computeInitialWater(terrain, store.get().scenario));
         } catch {
           acc.setBaseline(null);
         }
-        // Progress is read off the simulation clock, not summed from the requests: runFor keeps the solver going until
-        // a readback includes its target, so every chunk overshoots a little (more at high speed-ups).
-        let t = sim.simClock();
-        while (t < dur - 1 && !cancelRequested) {
-          await sim.runFor(Math.max(1, Math.min(chunk, dur - t)));
-          if (getTerrain() !== terrain) throw new Error('the scene changed during the sweep');
-          t = sim.simClock();
-          if (!gpu) feed(acc);
-          progress.value = (li + Math.min(1, t / dur)) / todo.length;
-        }
-        if (cancelRequested) break;
+      },
+      afterChunk: () => {
+        if (!gpu) feed(acc);
+      },
+      onProgress: (fr) => (progress.value = fr),
+      collect: async (_li, { L }) => {
         const r = await readFields(acc);
         if (!r) throw new Error('no flood readback');
         const endDepth = solver.getSnapshot()?.depth.slice() ?? null;
@@ -479,31 +485,22 @@ export function createSiteSection(ctx: UIContext): SiteSection {
         }
         sweep = { ...state };
         renderSweep();
-      }
-    } catch (err) {
-      failed = err instanceof Error ? err.message : String(err);
-    } finally {
-      state.cancelled = cancelRequested;
-      // Put the user's scenario back: forcing, stage, then the water from its start, then play/pause as it was.
-      if (getTerrain() === terrain) {
-        store.set({ stageOffset: saved.stageOffset, sources: saved.sources, storms: saved.storms, sim: { ...store.get().sim, rainRate: saved.rainRate } });
-        actions.resetWater();
-      }
-      store.set({ paused: saved.paused });
-      sim.setRenderHold(false);
-      sweeping = false;
-      runBtn.disabled = false;
-      assessBtn.disabled = false;
-      cancelBtn.hidden = true;
-      progress.hidden = true;
-      if (state.levels.length) sweep = state;
-      const secs = (performance.now() - t0) / 1000;
-      if (failed) setSweepStatus(`Sweep stopped: ${failed}. Your scenario was restored (the water restarts from its beginning).`, 'warn');
-      else if (state.cancelled) setSweepStatus(`Cancelled after ${state.levels.length} of ${todo.length} levels (${fmtNum(secs, 0)} s). Your scenario was restored; the water restarts from its beginning.`, 'warn');
-      else setSweepStatus(`Done: ${todo.length} level${todo.length === 1 ? '' : 's'} in ${fmtNum(secs, 0)} s. Your scenario was restored; the water restarts from its beginning.`);
-      current = null;
-      render();
-    }
+      },
+    });
+    const failed = out.error;
+    state.cancelled = out.cancelled;
+    sweeping = false;
+    runBtn.disabled = false;
+    assessBtn.disabled = false;
+    cancelBtn.hidden = true;
+    progress.hidden = true;
+    if (state.levels.length) sweep = state;
+    const secs = out.seconds;
+    if (failed) setSweepStatus(`Sweep stopped: ${failed}. Your scenario was restored (the water restarts from its beginning).`, 'warn');
+    else if (state.cancelled) setSweepStatus(`Cancelled after ${state.levels.length} of ${todo.length} levels (${fmtNum(secs, 0)} s). Your scenario was restored; the water restarts from its beginning.`, 'warn');
+    else setSweepStatus(`Done: ${todo.length} level${todo.length === 1 ? '' : 's'} in ${fmtNum(secs, 0)} s. Your scenario was restored; the water restarts from its beginning.`);
+    current = null;
+    render();
   }
 
   // ─── Derived results ────────────────────────────────────────────────────────────────────────────────────────
@@ -616,18 +613,40 @@ export function createSiteSection(ctx: UIContext): SiteSection {
   function renderCard() {
     const s = registry.selected;
     const run = s ? current?.runs.get(s.id) : undefined;
+    const ens = s ? ensembleLine(s) : null;
     if (!s || !run) {
-      cardEl.replaceChildren(current ? h('p', { class: 'dl-impact-fine' }, 'Select a site.') : h('p', { class: 'dl-impact-fine' }, 'Press “Assess this run” to check the sites against the flood on screen.'));
+      cardEl.replaceChildren(current ? h('p', { class: 'dl-impact-fine' }, 'Select a site.') : h('p', { class: 'dl-impact-fine' }, 'Press “Assess this run” to check the sites against the flood on screen.'), ...(ens ? [ens] : []));
       overlay.setRoute(null, true);
       return;
     }
     const money = (v: number) => formatMoney(v);
     cardEl.replaceChildren(
+      ...(ens ? [ens] : []),
       kvList(siteRunRows(run, money, current!.alertTime), 'dl-site-kv'),
       h('details', { class: 'dl-impact-methods' }, h('summary', null, 'Planned building, as assessed'), kvList(siteSpecRows(s, run, money), 'dl-site-kv')),
     );
     const e = run.egress;
     overlay.setRoute(e?.routeAtPeak ?? e?.routeBefore ?? null, !!e?.openAtPeak);
+  }
+
+  /** "Ensemble: floods (≥ 15 cm) in 7 of 12 members · depth p10/p50/p90 …" for a site, from the latest ensemble. */
+  function ensembleLine(s: SiteSpec): HTMLElement | null {
+    const e = bridge.ensemble;
+    const st = store.get();
+    if (!e || e.sceneKey !== `${st.presetId}|${st.terrainName}`) return null;
+    const t = e.sites.get(s.id);
+    if (!t || !t.members) return null;
+    const depths = t.depths.filter((d) => Number.isFinite(d));
+    const [p10, p50, p90] = depths.length ? band(depths) : [NaN, NaN, NaN];
+    const stale = e.siteKeys.get(s.id) !== specKey(s);
+    return h(
+      'p',
+      { class: `dl-site-ens${stale ? ' dl-warn' : ''}`, 'data-site': 'ensemble' },
+      h('b', null, 'Ensemble: '),
+      `${tallySentence(t)}`,
+      depths.length ? ` · max depth p10 ${fmtNum(p10, 2)} / p50 ${fmtNum(p50, 2)} / p90 ${fmtNum(p90, 2)} m` : '',
+      stale ? ' · the site was edited after the ensemble ran' : '',
+    );
   }
 
   function renderLadder() {
@@ -793,6 +812,7 @@ export function createSiteSection(ctx: UIContext): SiteSection {
   }
 
   // ─── Wiring ─────────────────────────────────────────────────────────────────────────────────────────────────
+  ctx.own(bridge.ensembleChanged.on(() => renderCard()));
   ctx.own(
     registry.on(() => {
       reassessCurrent();

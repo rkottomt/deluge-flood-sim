@@ -5945,3 +5945,28 @@ select.dl-num-input {
 .dl-ew-chip-own {
   color: #d9b8ff;
 }
+
+/* ── Uncertainty (flood-probability ensemble, src/ui/ensemble.ts) ─────────────────────────────────────────── */
+/* The seventh water view sits on its own row of the 3-wide grid, and only once an ensemble exists. */
+.dl-seg-grid3 .dl-seg-btn[data-mode='probability'] {
+  grid-column: 1 / -1;
+}
+.dl-seg-grid3 .dl-seg-btn[hidden] {
+  display: none;
+}
+.dl-site-ens {
+  border-left: 3px solid #5478c8;
+  background: var(--dl-accent-bg);
+  border-radius: 0 8px 8px 0;
+  padding: 6px 10px;
+  margin: 6px 0 8px;
+  font-size: 12.5px;
+}
+.dl-ens-caveat {
+  font-style: italic;
+}
+.dl-ens-assets td:nth-child(n + 2),
+.dl-ens-assets th:nth-child(n + 2) {
+  text-align: right;
+  white-space: nowrap;
+}

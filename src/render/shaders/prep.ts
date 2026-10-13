@@ -5,7 +5,9 @@
  *                    normTex rgba16float: ∂bed/∂x, ∂bed/∂z, ∂η/∂x, ∂η/∂z (filterable, wet-only η differences)
  *                    miscTex rgba16float: barrier, max depth, speed, collected whitewater (filterable); in the arrival
  *                                         and hazard views b, a = the mapped value and its coverage instead (from
- *                                         the solver's hazard accumulators)
+ *                                         the solver's hazard accumulators); in the probability view b = % of
+ *                                         ensemble members over the threshold, g = the members' deepest water
+ *                                         (src/sim/ensemble.ts), which is also the surface drawn
  *                    cellTex rg32float:   displayed depth d, water surface bed + d (full precision, for verts)
  *  vtxBed (vx×vy)  → vtxBedTex r32float: vertex bed (mean ground of its 4 cells + max barrier); only rebuilt when
  *                    the terrain changes (walls, digging), not every frame
@@ -31,8 +33,13 @@ struct Prep {
   cellSize: f32,
   collapse: f32,   // how far dry vertices sink below the bed (m)
   wetHint: f32,    // 1 → the previous frame's wet pyramid is valid for this field (lets dry areas skip work)
-  field: i32,      // what misc.b/.a carry: 0 speed + collected whitewater, 1 arrival, 2 AIDR hazard class (cells pass)
+  field: i32,      // what misc.b/.a carry: 0 speed + collected whitewater, 1 arrival, 2 AIDR hazard class,
+                   // 3 ensemble flood probability (cells pass)
   hasHazard: i32,  // 1 → hazardBuf holds the solver's hazard accumulators (else a stand-in: nothing recorded)
+  members: f32,    // ensemble members accumulated in ensBuf (field 3)
+  ensSlot: i32,    // which count is the probability: 0 → members over 0.15 m, 1 → over 0.5 m
+  hasEns: i32,     // 1 → ensBuf holds an ensemble (src/sim/ensemble.ts; else a stand-in and nothing is coloured)
+  pad0: i32,
 }
 
 @group(0) @binding(0) var<uniform> P: Prep;
@@ -97,7 +104,24 @@ export const PREP_CELLS_WGSL = /* wgsl */ `
 // The solver's hazard accumulators (FloodSolver.hazardBuffer): nx·ny vec4f (max speed while wet, max depth × speed,
 // first-wet time s or −1, wet seconds). Read only by the arrival and hazard views (P.field), and only if P.hasHazard.
 @group(0) @binding(8) var<storage, read> hazardBuf: array<vec4f>;
+// An ensemble's per-cell tallies (src/sim/ensemble.ts): nx·ny vec4f (members > 0.15 m, members > 0.5 m, Σ max depth,
+// the deepest any member got). Read only by the probability view (P.field 3), and only if P.hasEns.
+@group(0) @binding(9) var<storage, read> ensBuf: array<vec4f>;
 ${AIDR_CLASS_WGSL}
+
+/**
+ * The cell state as the cells pass shows it. In the probability view the max-depth channel is the ensemble's envelope
+ * — the deepest water any member reached — so the map is drawn on every cell some member flooded, not only on the
+ * last run's extent (the solver has been reset to the user's own scenario by then).
+ */
+fn cstate(p: vec2i) -> vec4f {
+  var s = state(p);
+  if (P.field == 3 && P.hasEns != 0) {
+    let c = cl(p);
+    s.a = ensBuf[u32(c.y) * u32(P.nx) + u32(c.x)].w;
+  }
+  return s;
+}
 
 /**
  * One 4-neighbour of a cell, loaded once. The bed slope, the water-surface slope and the whitewater term below
@@ -116,7 +140,7 @@ struct Nb {
 fn neighbour(p: vec2i) -> Nb {
   var o: Nb;
   o.inside = all(p == cl(p));
-  let s = state(p);
+  let s = cstate(p);
   o.d = depthOf(s);
   o.vel = s.gb;
   o.bedY = bed(p);
@@ -138,7 +162,7 @@ fn etaSlopeNb(a: Nb, b: Nb, ec: f32) -> f32 {
 fn cells(@builtin(global_invocation_id) gid: vec3u) {
   let c = vec2i(gid.xy);
   if (c.x >= P.nx || c.y >= P.ny) { return; }
-  let s = state(c);
+  let s = cstate(c);
   let h = depthOf(s);
   let b = bed(c);
   let dx = P.cellSize;
@@ -201,7 +225,16 @@ fn cells(@builtin(global_invocation_id) gid: vec3u) {
   // (those views show the max-depth surface, where collect is 0 anyway: see live above).
   var mapped = speed;
   var cover = collect;
-  if (P.field != 0) {
+  if (P.field == 3) {
+    // Ensemble probability, % of members over the threshold; coverage 0 without an ensemble (nothing coloured).
+    mapped = 0.0;
+    cover = 0.0;
+    if (P.hasEns != 0) {
+      let e = ensBuf[u32(c.y) * u32(P.nx) + u32(c.x)];
+      mapped = 100.0 * select(e.x, e.y, P.ensSlot == 1) / max(P.members, 1.0);
+      cover = 1.0;
+    }
+  } else if (P.field != 0) {
     var hz = vec4f(0.0, 0.0, -1.0, 0.0);
     if (P.hasHazard != 0) { hz = hazardBuf[u32(c.y) * u32(P.nx) + u32(c.x)]; }
     if (P.field == 1) {

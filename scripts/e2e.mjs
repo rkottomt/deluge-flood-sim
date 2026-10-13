@@ -1559,6 +1559,167 @@ const FLOWS = [
       }
     },
   },
+  {
+    id: 17,
+    name: 'Flood-probability ensemble: 3 members, the probability view and its legend, scenario restored',
+    timeoutMs: 600_000,
+    async run(r) {
+      // src/ui/ensemble.ts: the Uncertainty section runs N perturbed members of the scenario on screen headless (the
+      // Site check machinery), folds each member's max depth into a GPU tally (src/sim/ensemble.ts) and switches the
+      // map to the 'probability' water view. 3 members × 5 simulated minutes keeps the flow short.
+      await calm();
+      const crest = await crestOffset();
+      const ft = PRESET === 'pittsburgh' ? 40 : null;
+      const offset = crest ? (ft !== null ? await D((f) => window.__deluge.stageOffsetForFeet(f), ft) : crest.offset * 0.8) : 0;
+      if (crest) await D((o) => window.__deluge.setStage(o, { instant: true }), offset);
+      // A Site check site at the Point (Pittsburgh's riverfront), for the "floods in k of N members" line.
+      let siteName = null;
+      if (PRESET === 'pittsburgh') {
+        const have = await D(() => document.querySelectorAll('.dl-site-item').length);
+        const g = await D((p) => window.__deluge.geoToGrid(p.lon, p.lat), { lat: 40.4425, lon: -80.0085 });
+        if (!have) {
+          await D((p) => {
+            const d = window.__deluge;
+            d.setCamera({ target: { gx: p.gx, gy: p.gy, elevation: d.sampleAt(p.gx, p.gy).ground }, distance: 900, yaw: 0, pitch: Math.PI / 2 - 0.01 });
+          }, g);
+          await D(() => window.__deluge.waitFrames(4));
+          await D(() => window.__deluge.selectTool('site'));
+          const box = await page.locator('#deluge-canvas').boundingBox();
+          await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+          await page.waitForFunction(() => document.querySelectorAll('.dl-site-item').length >= 1, null, { timeout: 5000 }).catch(() => {});
+          await D(() => window.__deluge.selectTool('orbit'));
+        }
+        siteName = await D(() => document.querySelector('.dl-site-item .dl-impact-name')?.textContent ?? null);
+      }
+      // Frame the flood from above, then freeze the user's scenario (paused) so the restore can be checked exactly.
+      await D(() => {
+        const d = window.__deluge;
+        const cam = d.getScenario()?.camera;
+        if (cam) d.setCamera({ ...cam, distance: cam.distance * 1.1, pitch: Math.PI / 2 - 0.05 });
+        d.setPaused(true);
+      });
+      const before = await D(() => {
+        const s = window.__deluge.getState();
+        return { stageOffset: s.stageOffset, paused: s.paused, sources: JSON.stringify(s.sources), rain: s.sim.rainRate, manning: s.sim.manningN };
+      });
+      const probHiddenBefore = await D(() => document.querySelector('.dl-seg-btn[data-mode="probability"]')?.hidden ?? null);
+      check(r, 'no probability view before an ensemble exists', probHiddenBefore === true, `button hidden: ${probHiddenBefore}`);
+
+      await D(() => {
+        const sec = document.querySelector('[data-section="ensemble"]');
+        if (sec && !sec.classList.contains('dl-open')) sec.querySelector('.dl-sec-head').click();
+        sec?.scrollIntoView();
+      });
+      for (const [name, v] of [['members', '3'], ['minutes', '5']]) {
+        await page.fill(`[data-ens-field="${name}"]`, v);
+        await page.dispatchEvent(`[data-ens-field="${name}"]`, 'change');
+      }
+      const t0 = Date.now();
+      await page.click('[data-ens="run"]');
+      const done = await page
+        .waitForFunction(() => /^(Done|Stopped|Cancelled)/.test(document.querySelector('[data-ens="status"]')?.textContent ?? ''), null, { timeout: 480_000 })
+        .then(() => true, () => false);
+      const wall = (Date.now() - t0) / 1000;
+      await D(() => window.__deluge.waitFrames(8));
+      const out = await D(() => {
+        const s = window.__deluge.getState();
+        return {
+          status: document.querySelector('[data-ens="status"]')?.textContent ?? '',
+          results: !!document.querySelector('[data-ens="results"]')?.textContent,
+          kv: document.querySelector('[data-ens="results"] .dl-site-kv')?.textContent ?? '',
+          mode: s.render.waterMode,
+          legendTitle: document.querySelector('.dl-legend-title')?.textContent ?? '',
+          legendRows: document.querySelectorAll('.dl-legend-rows .dl-legend-row').length,
+          probButton: !(document.querySelector('.dl-seg-btn[data-mode="probability"]')?.hidden ?? true),
+          siteLine: document.querySelector('[data-site="ensemble"]')?.textContent ?? '',
+          after: { stageOffset: s.stageOffset, paused: s.paused, sources: JSON.stringify(s.sources), rain: s.sim.rainRate, manning: s.sim.manningN },
+        };
+      });
+      const ens = await D(() => window.__deluge.getEnsemble());
+      r.metrics.ensemble = { wallSeconds: wall, status: out.status, members: ens?.members, floodedM2: ens?.floodedM2, loss: ens?.loss, map: ens?.map, rows: ens?.rows };
+      check(r, '3-member ensemble completes', done && /^Done: 3 members/.test(out.status), `${out.status.slice(0, 160)} (${num(wall, 1)} s wall)`);
+      check(r, 'results: flooded area and loss p10/p50/p90', out.results && /p10 · p50 · p90/.test(out.kv) && ens?.members === 3, out.kv.slice(0, 160));
+      const distinct = new Set((ens?.rows ?? []).map((m) => `${m.inflowFactor}|${m.rainFactor}|${m.stageDelta}|${m.manningN}`)).size;
+      check(r, 'members are perturbed (Latin hypercube: every member differs)', distinct === 3, `${distinct} distinct members: n ${(ens?.rows ?? []).map((m) => num(m.manningN, 3)).join(', ')}`);
+      check(r, 'the GPU tally holds every member, with intermediate probabilities somewhere', !!ens?.map && ens.map.members === 3 && ens.map.any > 0 && ens.map.partial > 0, JSON.stringify(ens?.map));
+      check(r, 'the map switches to the probability view with its legend (6 bands + normal river)', out.mode === 'probability' && /Share of ensemble members deeper than 15 cm/.test(out.legendTitle) && out.legendRows === 7 && out.probButton, `${out.mode} · “${out.legendTitle}” · ${out.legendRows} rows`);
+      check(r, 'the user’s scenario is put back (stage, play state, sources, rain, Manning n)', JSON.stringify(out.after) === JSON.stringify(before), JSON.stringify(out.after).slice(0, 160));
+      if (siteName !== null) check(r, 'the Site check card says in how many members the site floods', /^Ensemble: (floods|stays).* of 3 members|in all 3 members/.test(out.siteLine), out.siteLine.slice(0, 140));
+
+      // Legend vs pixels (as scripts/visual.mjs does for the other hazard views): the probability map against the same
+      // frozen frame in the max-depth view; among the pixels that changed and look like ANY legend swatch, the nearest
+      // swatch must be a probability one. The bar is lower than the visual suite's 0.9: there the reference is another
+      // hazard view on the SAME surface, here the user's own (reset) max depth, so the mask also takes in the river and
+      // the band edges blended over it. Measured 82 % on Pittsburgh; a view wired to the wrong ramp scores near 0.
+      const palettes = {};
+      for (const m of ['depth', 'maxDepth', 'velocity', 'arrival', 'hazard', 'probability']) {
+        palettes[m] = await D((mode) => {
+          window.__deluge.setWaterMode(mode);
+          return [...document.querySelectorAll('.dl-legend-bar span')].map((e) => getComputedStyle(e).backgroundColor.match(/\d+/g).slice(0, 3).map(Number));
+        }, m);
+      }
+      palettes.velocity = palettes.velocity.slice(1); // its slowest band is drawn as plain water
+      r.metrics.palettes = palettes;
+      const grab = async (mode) => {
+        await D((m) => window.__deluge.setWaterMode(m), mode);
+        await D(() => window.__deluge.waitFrames(12));
+        return (await page.locator('#deluge-canvas').screenshot({ type: 'png' })).toString('base64');
+      };
+      const refPng = await grab('maxDepth');
+      const probPng = await grab('probability');
+      const agree = await D(
+        async ({ a, b, palettes }) => {
+          const load = async (b64) => {
+            const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+            const bmp = await createImageBitmap(new Blob([bytes], { type: 'image/png' }));
+            const cv = new OffscreenCanvas(bmp.width, bmp.height);
+            const cx = cv.getContext('2d');
+            cx.drawImage(bmp, 0, 0);
+            return cx.getImageData(0, 0, bmp.width, bmp.height).data;
+          };
+          const [p, q] = [await load(a), await load(b)];
+          const names = Object.keys(palettes);
+          let changed = 0;
+          let classified = 0;
+          let own = 0;
+          const byMode = {};
+          for (let o = 0; o < p.length; o += 4) {
+            if (Math.max(Math.abs(p[o] - q[o]), Math.abs(p[o + 1] - q[o + 1]), Math.abs(p[o + 2] - q[o + 2])) <= 18) continue;
+            changed++;
+            // Plain (muted) water carries no band colour: the normal river is grey in both views, but sits on a
+            // different surface in each (the envelope vs the user's own max depth), so it changes. Every probability
+            // swatch is strongly coloured (chroma ≥ 90); greys and near-blacks are not judged.
+            if (Math.max(p[o], p[o + 1], p[o + 2]) - Math.min(p[o], p[o + 1], p[o + 2]) < 40) continue;
+            let best = 60 * 60;
+            let who = null;
+            for (const n of names) for (const c of palettes[n]) {
+              const d = (p[o] - c[0]) ** 2 + (p[o + 1] - c[1]) ** 2 + (p[o + 2] - c[2]) ** 2;
+              if (d < best) ((best = d), (who = n));
+            }
+            if (who) ((classified += 1), (own += who === 'probability' ? 1 : 0), (byMode[who] = (byMode[who] ?? 0) + 1));
+          }
+          return { changedFrac: changed / (p.length / 4), classified, agreement: classified ? own / classified : null, byMode };
+        },
+        { a: probPng, b: refPng, palettes },
+      );
+      r.metrics.legendAgreement = agree;
+      check(r, 'legend matches the pixels: mapped water reads as the probability palette', agree.classified > 500 && agree.agreement >= 0.75, `${num(agree.agreement * 100, 1)} % of ${agree.classified} legend-coloured pixels (${num(agree.changedFrac * 100, 1)} % of the frame mapped; nearest: ${JSON.stringify(agree.byMode)})`);
+      await shot('17-ensemble-map');
+      // The 0.5 m threshold.
+      await page.click('[data-section="ensemble"] .dl-seg-btn:has-text("> 50 cm")');
+      await D(() => window.__deluge.waitFrames(6));
+      const t50 = await D(() => ({ title: document.querySelector('.dl-legend-title')?.textContent ?? '', thr: window.__deluge.getState().render.probabilityThreshold }));
+      check(r, 'the 0.5 m threshold toggle', t50.thr === 0.5 && /deeper than 50 cm/.test(t50.title), `${t50.thr} · “${t50.title.slice(0, 60)}”`);
+      await shot('17-ensemble-map-50cm');
+      await D(() => document.querySelector('[data-ens="results"]')?.scrollIntoView({ block: 'start' }));
+      await sleep(400);
+      const panelShot = path.join(OUT, '17-ensemble-panel.png');
+      await page.locator('.dl-panel').screenshot({ path: panelShot });
+      console.log(`  [shot] ${path.relative(ROOT, panelShot)}`);
+      await D(() => window.__deluge.store.set({ render: { ...window.__deluge.getState().render, probabilityThreshold: 0.15 } }));
+      await calm();
+    },
+  },
 ];
 
 // ─── report ────────────────────────────────────────────────────────────────────────────────────

@@ -15,6 +15,7 @@
  *  • hazard    — sand → umber (lightness-sequential browns) for the AIDR H1–H6 classes: darker = more dangerous.
  *                Browns because every other hue is taken: pinks trip the visual suite's NaN-magenta detector and
  *                dark crimsons, once lit and shaded, read as the max-depth and arrival purples.
+ *  • probability — pale green → blue → indigo for an ensemble's exceedance share (PROBABILITY_BANDS).
  * Every swatch is ≥ 45 sRGB units from every swatch of the other modes, so the legend-vs-pixels check of
  * scripts/visual.mjs can tell the modes apart.
  *
@@ -110,6 +111,22 @@ export const HAZARD_BANDS: HazardBand[] = [
 ];
 
 /**
+ * Ensemble flood probability (the 'probability' view): the share of an ensemble's members, in %, whose max depth
+ * exceeded the view's threshold (0.15 m by default, 0.5 m on request; src/loss/ensemble.ts). Pale green → indigo:
+ * the only lightness-sequential run left once every other mode's swatches, the NaN-magenta detector and the tone
+ * mapper's reachable gamut are ruled out (each swatch ≥ 52 sRGB units from every other mode's). Darker = more of the
+ * members flooded there.
+ */
+export const PROBABILITY_BANDS: HazardBand[] = [
+  { min: 0, max: 10, color: '#9ce488', label: '< 10 %', note: 'Rarely — only the wettest members' },
+  { min: 10, max: 30, color: '#5cb84a', label: '10–30 %' },
+  { min: 30, max: 50, color: '#5478c8', label: '30–50 %' },
+  { min: 50, max: 70, color: '#3c5ce8', label: '50–70 %' },
+  { min: 70, max: 90, color: '#2028d0', label: '70–90 %' },
+  { min: 90, max: Infinity, color: '#1c06a4', label: '> 90 %', note: 'Floods in nearly every member' },
+];
+
+/**
  * Legend entry for the normal river / lake in the depth and max-depth maps: water that was there before the flood
  * is not coloured by depth (its depth is not a hazard), only shown as muted plain water.
  */
@@ -117,7 +134,7 @@ export const NORMAL_WATER_LEGEND = { color: '#3c454b', label: 'Normal river', no
 
 /** Whether a mode's map leaves the normal river uncoloured (and the legend should show NORMAL_WATER_LEGEND). */
 export function showsNormalWater(mode: string): boolean {
-  return mode === 'depth' || mode === 'maxDepth' || mode === 'arrival' || mode === 'hazard';
+  return mode === 'depth' || mode === 'maxDepth' || mode === 'arrival' || mode === 'hazard' || mode === 'probability';
 }
 
 /** Bands used by a given water view mode (null for 'realistic'). */
@@ -133,6 +150,8 @@ export function bandsForMode(mode: string): HazardBand[] | null {
       return ARRIVAL_BANDS;
     case 'hazard':
       return HAZARD_BANDS;
+    case 'probability':
+      return PROBABILITY_BANDS;
     default:
       return null;
   }
