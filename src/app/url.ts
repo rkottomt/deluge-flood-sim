@@ -2,6 +2,7 @@ import type { LiveAreaRequest } from '../contracts';
 import { isPresetId, linkPlaceLabel } from '../data';
 import { APP_CONFIG } from './defaults';
 import { parseUseCase, useCaseById, USE_CASE_PARAM } from '../ui/useCaseDefs';
+import { parseStoryParam, storyById, STORY_PARAM } from '../story/registry';
 
 export type SceneRequest = { kind: 'preset'; id: string } | { kind: 'live'; req: LiveAreaRequest };
 
@@ -11,11 +12,17 @@ export type SceneRequest = { kind: 'preset'; id: string } | { kind: 'live'; req:
  *   ?live=<lat>,<lon>,<sizeKm>[&res=512|1024|2048][&name=...]
  *   ?usecase=site|glacier|portfolio (src/ui/useCaseDefs.ts) opens on the use case's own preset, ahead of ?preset= and
  *                                   ?live=; src/ui/useCases.ts then sets up the rest of it
- * An invalid ?live= or ?usecase= value is reported through `warnings` (a fixed sentence) and ignored.
+ *   ?story=<id>                     (src/story/registry.ts) opens on the story's own preset, ahead of everything else;
+ *                                   src/ui/storyPlayer.ts then plays it
+ * An invalid ?live=, ?usecase= or ?story= value is reported through `warnings` (a fixed sentence) and ignored.
  */
 export function parseStartupRequest(search: string): { request: SceneRequest; warnings: string[] } {
   const params = new URLSearchParams(search);
   const warnings: string[] = [];
+  const st = parseStoryParam(search);
+  warnings.push(...st.warnings);
+  const story = storyById(st.story);
+  if (story) return { request: { kind: 'preset', id: story.preset }, warnings };
   const uc = parseUseCase(search);
   warnings.push(...uc.warnings);
   if (uc.useCase) return { request: { kind: 'preset', id: useCaseById(uc.useCase).preset }, warnings };
@@ -69,6 +76,8 @@ export function writeSceneToUrl(request: SceneRequest): void {
     // A use-case link stays in the address bar only while its own scene is on screen, so a reload after switching
     // scenes reopens what is shown rather than the use case.
     if (url.searchParams.has(USE_CASE_PARAM) && !useCaseMatches(url.search, request)) url.searchParams.delete(USE_CASE_PARAM);
+    // Likewise a story link: kept only while the story's own preset is on screen.
+    if (url.searchParams.has(STORY_PARAM) && !storyMatches(url.search, request)) url.searchParams.delete(STORY_PARAM);
     if (request.kind === 'preset') {
       url.searchParams.set('preset', request.id);
     } else {
@@ -89,4 +98,10 @@ export function writeSceneToUrl(request: SceneRequest): void {
 export function useCaseMatches(search: string, request: SceneRequest): boolean {
   const uc = parseUseCase(search).useCase;
   return !!uc && request.kind === 'preset' && request.id === useCaseById(uc).preset;
+}
+
+/** Whether the address bar's `?story=` names a story whose preset is the scene `request` loads. */
+export function storyMatches(search: string, request: SceneRequest): boolean {
+  const story = storyById(parseStoryParam(search).story);
+  return !!story && request.kind === 'preset' && request.id === story.preset;
 }

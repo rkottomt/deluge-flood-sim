@@ -119,6 +119,8 @@ export function shouldAutoStartTutorial(p: TutorialPrefs): boolean {
   if (p.webdriver) return false;
   // A business use-case link (?usecase=) opens on its own task; the Pittsburgh river tour would talk over it.
   if (q.has('usecase')) return false;
+  // A narrated story link (?story=) plays its own walk-through.
+  if (q.has('story')) return false;
   return !p.storedDone;
 }
 
