@@ -11,7 +11,7 @@
 import type { Analysis, BuildingImpact, PortfolioResult } from '../loss';
 import { AIDR_DESCRIPTIONS, CONTINENT_LABELS, HR_DESCRIPTIONS, OCCUPANCY_PROFILES, type AidrClass, type HrClass } from '../loss';
 import { h } from './dom';
-import { fmtNum, formatClock, formatDuration, formatMoney } from './format';
+import { fmtNum, formatClock, formatMoney, leadVsWarningText, warningIssuedText } from './format';
 import type { BcrView, Comparison, RunSignature } from './impactCompare';
 import { CITATIONS, METHOD_NOTES } from './impactMethods';
 
@@ -82,7 +82,7 @@ export function buildReport(i: ReportInput): HTMLElement {
     ['River stage offset', `${num(i.sig.stageOffset, 2)} m`],
     ['Rain', `${num(i.sig.rainRate, 0)} mm/h`],
     ['Debris-laden flow rule', i.debrisFlow ? 'on (glacial-lake outburst heuristic)' : 'off'],
-    ['Warning issued at', formatClock(i.alertTime)],
+    ['Warning issued at', warningIssuedText(i.alertTime)],
   ];
   sections.push(h('section', null, h('h2', null, 'Scenario'), kv(scen)));
 
@@ -99,7 +99,7 @@ export function buildReport(i: ReportInput): HTMLElement {
       ['Access road impassable at the peak', `${num(s.accessCut)} reached buildings`],
       [
         'Earliest arrival at a building',
-        s.earliest ? `${formatClock(s.earliest.firstWet)} — ${s.earliest.leadTime >= 0 ? `${formatDuration(s.earliest.leadTime)} after the warning` : `${formatDuration(-s.earliest.leadTime)} BEFORE the warning`}` : '—',
+        s.earliest ? `${formatClock(s.earliest.firstWet)} — ${leadVsWarningText(s.earliest.leadTime, i.alertTime)}` : '—',
       ],
       ['Storey counts from estimated heights', `${num(s.heightEstimated)} of the reached buildings`],
       ['Occupancy guessed from footprint size', `${num(s.occupancyGuessed)} of the reached buildings`],

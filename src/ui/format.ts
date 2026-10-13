@@ -291,10 +291,29 @@ export function formatMoney(v: number | null | undefined, currency = 'USD'): str
   if (v === null || v === undefined || !Number.isFinite(v)) return DASH;
   const a = Math.abs(v);
   const sign = v < 0 ? '−' : '';
+  // The unit is chosen from the value as it will be WRITTEN (rounded), so 999,600 is "$1.0 M", not "$1,000 k", and
+  // 99.96 M is "$100 M", not "$100.0 M".
+  const r1 = (x: number) => Math.round(x * 10) / 10;
+  const scaled = (x: number, unit: string) => (r1(x) >= 100 ? `${fmtNum(Math.round(x), 0)}${NBSP}${unit}` : `${fmtNum(r1(x), 1)}${NBSP}${unit}`);
   let num: string;
-  if (a >= 1e9) num = `${fmtNum(a / 1e9, a >= 1e11 ? 0 : 1)}${NBSP}B`;
-  else if (a >= 1e6) num = `${fmtNum(a / 1e6, a >= 1e8 ? 0 : 1)}${NBSP}M`;
-  else if (a >= 1e4) num = `${fmtNum(a / 1e3, 0)}${NBSP}k`;
+  if (a >= 1e9 || Math.round(a / 1e6) >= 1000) num = scaled(a / 1e9, 'B');
+  else if (a >= 1e6 || Math.round(a / 1e3) >= 1000) num = scaled(a / 1e6, 'M');
+  else if (a >= 1e4 || Math.round(a / 10) * 10 >= 1e4) num = `${fmtNum(Math.round(a / 1e3), 0)}${NBSP}k`;
   else num = fmtNum(a >= 1000 ? Math.round(a / 10) * 10 : Math.round(a), 0);
   return currency === 'USD' ? `${sign}$${num}` : `${sign}${num}${NBSP}${currency}`;
+}
+
+/**
+ * The Impact panel's warning wording, shared with the printable report. An alert time ≤ 0 means no warning was set
+ * (the input's empty state): times then count from the start of the scenario, and nothing claims a warning "at
+ * T+00:00:00".
+ */
+export function warningIssuedText(alertTime: number): string {
+  return alertTime > 0 ? formatClock(alertTime) : 'not set (times count from the start of the scenario)';
+}
+
+/** "12 min after the warning" / "3 min before the warning", or "after the scenario started" without a warning. */
+export function leadVsWarningText(leadTime: number, alertTime: number): string {
+  if (!(alertTime > 0)) return 'after the scenario started';
+  return leadTime >= 0 ? `${formatDuration(leadTime)} after the warning` : `${formatDuration(-leadTime)} before the warning`;
 }

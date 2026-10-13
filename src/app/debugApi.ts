@@ -107,6 +107,8 @@ export interface DelugeDebugExtras {
     rows: Array<{ inflowFactor: number; rainFactor: number; stageDelta: number; manningN: number; floodedM2: number; loss: number; readMs: number; lossMs: number; runMs: number }>;
     map: { members: number; any: number; all: number; partial: number } | null;
   } | null>;
+  /** Ids of the portfolio assets the ensemble would tally (the UI bridge's copy of Impact & loss's portfolio), or null. */
+  getPortfolioIds(): string[] | null;
   waitFrames(n: number): Promise<void>;
 }
 
@@ -331,6 +333,10 @@ export function createDebugApi(app: App, ready: Promise<void>): DelugeDebug {
         rows: e.rows.map((r) => ({ inflowFactor: r.params.inflowFactor, rainFactor: r.params.rainFactor, stageDelta: r.params.stageDelta, manningN: r.params.manningN, floodedM2: r.floodedM2, loss: r.loss, readMs: r.readMs, lossMs: r.lossMs, runMs: r.runMs })),
         map,
       };
+    },
+
+    getPortfolioIds() {
+      return bridgeFor(store).portfolio?.map((a) => a.id) ?? null;
     },
 
     waitFrames(n) {

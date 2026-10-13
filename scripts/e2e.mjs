@@ -1983,8 +1983,11 @@ const FLOWS = [
         info: document.querySelector('.dl-impact-portfolio')?.textContent ?? '',
         rows: document.querySelectorAll('.dl-impact-portfolio + .dl-impact-table tbody tr').length,
         simTime: window.__deluge.getStats()?.simTime ?? 0,
+        ensembleAssets: window.__deluge.getPortfolioIds()?.length ?? 0,
       }));
       r.metrics.portfolio = { ...pf, speed };
+      // The demo arrives through loadPortfolioText, not the file input: the ensemble must tally those same assets.
+      check(r, 'portfolio: the ensemble sees the demo portfolio (UI bridge), not a stale or empty one', pf.ensembleAssets === 19, `${pf.ensembleAssets} assets on the bridge`);
       check(r, 'portfolio: ?usecase=portfolio opens Houston with the demo CSV in Impact & loss, the rain fast-forwarded', read && pf.preset === 'houston' && (await sec('impact')) && speed.timeScale >= 300 && !speed.paused, `${pf.info.slice(0, 60)} · ${speed.timeScale}×`);
       check(r, 'portfolio: the assets are assessed as the rain falls (auto-recompute)', assessed && grew && pf.rows === 19, pf.info.split('.').slice(1).join('.').slice(0, 160));
       await shot('19-usecase-portfolio');

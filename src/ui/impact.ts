@@ -33,6 +33,7 @@ import {
   type Analysis,
   type BuildingImpact,
   type MitigationType,
+  type PortfolioAsset,
   type PortfolioParse,
   type ResultRowInput,
 } from '../loss';
@@ -41,7 +42,7 @@ import { bridgeFor } from './bridge';
 import { button, segmented, toggleSwitch } from './controls';
 import { h, setText, toggleClass, type UIContext } from './dom';
 import { downloadsBlocked, downloadText, safeFilename } from './download';
-import { fmtNum, formatAcres, formatClock, formatDuration, formatMoney } from './format';
+import { fmtNum, formatAcres, formatClock, formatMoney, leadVsWarningText } from './format';
 import { bcrView, compareRuns, type Comparison, type RunSignature, type RunSnapshot } from './impactCompare';
 import { METHOD_NOTES } from './impactMethods';
 import { buildingLabel, buildReport, printReport, reportHtmlDocument } from './impactReport';
@@ -75,6 +76,15 @@ export interface ImpactSection {
    * user had picked the file; `auto` also turns on the periodic recompute so the table fills as the flood runs.
    */
   loadPortfolioText(name: string, text: string, opts?: { auto?: boolean }): void;
+}
+
+/**
+ * What the UI bridge carries for the ensemble's per-asset tallies: the parsed assets, or null without any. Every way a
+ * portfolio arrives (a file, the bundled demo through loadPortfolioText) goes through this, so the ensemble never
+ * tallies a stale portfolio — or none — while the Impact section shows another.
+ */
+function portfolioAssetsForBridge(p: PortfolioParse | null): PortfolioAsset[] | null {
+  return p?.assets.length ? p.assets : null;
 }
 
 function forcingSignature(s: AppState): string {
@@ -492,7 +502,7 @@ export function createImpactSection(ctx: UIContext): ImpactSection {
       if (s.earliest) {
         setText(cArrival.value, formatClock(s.earliest.firstWet));
         const lead = s.earliest.leadTime;
-        setText(cArrival.sub, run!.alertTime > 0 ? (lead >= 0 ? `${formatDuration(lead)} after the warning` : `${formatDuration(-lead)} before the warning`) : 'after the scenario started');
+        setText(cArrival.sub, leadVsWarningText(lead, run!.alertTime));
       } else {
         setText(cArrival.value, '—');
         setText(cArrival.sub, 'no building reached yet');
@@ -696,7 +706,7 @@ export function createImpactSection(ctx: UIContext): ImpactSection {
       }
     }
     // The ensemble (src/ui/ensemble.ts) tallies the same assets member by member.
-    bridge.portfolio = portfolio?.assets.length ? portfolio.assets : null;
+    bridge.portfolio = portfolioAssetsForBridge(portfolio);
     renderPortfolioInfo();
     if (portfolio.assets.length && getTerrain()) void recompute();
   });
@@ -789,6 +799,8 @@ export function createImpactSection(ctx: UIContext): ImpactSection {
       portfolioName = cleanPlaceLabel(name, 60);
       fileInput.value = '';
       portfolio = text.length > CSV_LIMITS.maxChars ? { assets: [], errors: [], warnings: [], fatal: 'File too large.', moreIssues: 0, ignoredColumns: [] } : parsePortfolio(text);
+      // As for a file: the ensemble (src/ui/ensemble.ts) tallies these assets member by member.
+      bridge.portfolio = portfolioAssetsForBridge(portfolio);
       renderPortfolioInfo();
       if (opts?.auto && !auto) {
         auto = true;

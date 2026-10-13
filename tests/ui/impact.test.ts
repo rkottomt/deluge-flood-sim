@@ -7,7 +7,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { DAMAGE_MIN_DEPTH, DISCOUNT_RATE_FEMA, upv, type ImpactSummary } from '../../src/loss';
 import { safeFilename } from '../../src/ui/download';
-import { formatMoney } from '../../src/ui/format';
+import { formatMoney, leadVsWarningText, warningIssuedText } from '../../src/ui/format';
 import { bcrView, compareRuns, type RunSignature, type RunSnapshot } from '../../src/ui/impactCompare';
 import { CITATIONS, METHOD_NOTES } from '../../src/ui/impactMethods';
 
@@ -103,6 +103,25 @@ test('money: rounded, unknown is a dash, other currencies are named', () => {
   assert.equal(money(NaN), '—');
   assert.equal(money(null), '—');
   assert.equal(money(3e6, 'EUR'), '3.0 M EUR');
+  // Unit boundaries: a value that ROUNDS up to the next unit is written in it ("$1.0 M", never "$1,000 k").
+  assert.equal(money(999_400), '$999 k');
+  assert.equal(money(999_600), '$1.0 M');
+  assert.equal(money(9_996), '$10 k');
+  assert.equal(money(99.96e6), '$100 M');
+  assert.equal(money(999.4e6), '$999 M');
+  assert.equal(money(999.6e6), '$1.0 B');
+  assert.equal(money(99.96e9), '$100 B');
+  assert.equal(money(-999_600), '−$1.0 M');
+});
+
+test('warning wording: no alert set (≤ 0) is never "issued at T+00:00:00"; panel and report share the rule', () => {
+  assert.doesNotMatch(warningIssuedText(0), /T\+/);
+  assert.match(warningIssuedText(0), /not set/);
+  assert.doesNotMatch(warningIssuedText(-60), /T\+/);
+  assert.equal(warningIssuedText(900), 'T+00:15:00');
+  assert.equal(leadVsWarningText(600, 0), 'after the scenario started');
+  assert.match(leadVsWarningText(600, 300), /after the warning$/);
+  assert.match(leadVsWarningText(-120, 300), /before the warning$/);
 });
 
 test('export file names are tame', () => {
