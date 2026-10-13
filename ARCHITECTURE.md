@@ -726,6 +726,11 @@ still varies is the CFL readback latency under GPU contention, which changes the
 trajectory. Every other scene sits at 0.0000–0.0051. The scene is worth keeping — it is the one that would catch a
 velocity-shader regression — but its tolerance is not honest at 0.02 on a loaded machine.
 
+**Against real floods.** Everything above is about solving the equations. How the scenes compare with what was
+observed — USGS high-water marks and gauge peaks, FEMA's 1 % zone and profile at FEMA's own 1 % level, Copernicus EMS
+damage grading — is measured by `scripts/validate.ts` (same solver on Dawn, scenes set up as the app does), pinned by
+`tests/sim/validationRegression.test.ts`, and reported in [docs/VALIDATION.md](docs/VALIDATION.md).
+
 ### 9.1 Grid convergence: the demo grid against a 16× finer reference
 
 Every check above is a small analytic problem or an exact accounting identity. None of them answers the question a
@@ -813,8 +818,9 @@ holding at 10⁻⁸ over tens of thousands of substeps at three resolutions.
 **What this does not prove.**
 
 1. **Not accuracy against reality.** Grid convergence says the discretisation is near its own limit; it says nothing
-   about whether that limit is the real 1936 flood. The only reality check in this repo is the NWS impact-stage
-   comparison in §4, and that is against *statements about stages*, not a surveyed inundation map.
+   about whether that limit is the real 1936 flood. Reality checks are the NWS impact-stage comparison in §4 and the
+   observed-flood validation in [docs/VALIDATION.md](docs/VALIDATION.md) (FEMA's 1 % zone and profile for Pittsburgh;
+   surveyed marks and gauges elsewhere).
 2. **Not DEM resolution.** The finer grids resample the same 7.8 m bare-earth DEM; they add no terrain detail. Real
    1 m lidar would add flood walls, embankments, road camber, kerbs and buildings that a 7.8 m DEM smooths away, and
    those move flood paths far more than the numerics do. This measurement is a lower bound on total uncertainty, not

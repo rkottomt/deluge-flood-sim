@@ -1,0 +1,306 @@
+{
+ "version": 1,
+ "generated": "2026-10-13T03:42:53.559Z",
+ "solver": "src/sim on nvidia turing nvidia-geforce-gtx-1660-ti D3D12 driver version 32.0.15.9595",
+ "presets": {
+  "pittsburgh": {
+   "preset": "pittsburgh",
+   "event": "1936 St. Patrick’s Day flood (no surveyed marks in a public database); FEMA 1 % zone at the matching stage",
+   "headline": {
+    "label": "FEMA 1 % flood zone, at the 1 % river level (35.4 ft)",
+    "value": "CSI 61 % · hit rate 65 % · false alarms 10 % · 1 % profile −0.38 m",
+    "note": "Share of FEMA’s mapped 1 % floodplain (of the rivers this scene forces) that Deluge floods at the same river level, and how much it floods outside it."
+   },
+   "metrics": {
+    "fema.connected.csi": 0.6088,
+    "fema.connected.hitRate": 0.6508,
+    "fema.connected.falseAlarmRatio": 0.0958,
+    "fema.connected.frequencyBias": 0.7197,
+    "fema.all.csi": 0.456,
+    "fema.all.hitRate": 0.479,
+    "fema.all.falseAlarmRatio": 0.0953,
+    "fema.all.frequencyBias": 0.5295,
+    "fema.floodedIn02": 0.0428,
+    "bfe.n": 24,
+    "bfe.bias": -0.3837,
+    "bfe.rmse": 0.7095,
+    "bfe.within03": 0.2917,
+    "bfe.within1": 0.7917
+   },
+   "runs": [
+    {
+     "id": "fema-1pct",
+     "description": "stage raised to FEMA's 1 % level at USGS 03085152 (729 ft NAVD88) and held 30 min",
+     "simMinutes": 32.5
+    }
+   ]
+  },
+  "nashville": {
+   "preset": "nashville",
+   "event": "May 2010 flood (no STN marks); FEMA 1 % zone at the matching stage",
+   "headline": {
+    "label": "FEMA 1 % flood zone, at the 1 % river level (48.5 ft)",
+    "value": "CSI 82 % · hit rate 88 % · false alarms 7 % · 1 % profile +0.26 m",
+    "note": "Share of FEMA’s mapped 1 % floodplain (of the rivers this scene forces) that Deluge floods at the same river level, and how much it floods outside it."
+   },
+   "metrics": {
+    "fema.connected.csi": 0.8229,
+    "fema.connected.hitRate": 0.8754,
+    "fema.connected.falseAlarmRatio": 0.068,
+    "fema.connected.frequencyBias": 0.9393,
+    "fema.all.csi": 0.5394,
+    "fema.all.hitRate": 0.5615,
+    "fema.all.falseAlarmRatio": 0.068,
+    "fema.all.frequencyBias": 0.6024,
+    "fema.floodedIn02": 0.0244,
+    "bfe.n": 10,
+    "bfe.bias": 0.2592,
+    "bfe.rmse": 0.2726,
+    "bfe.within03": 0.7,
+    "bfe.within1": 1
+   },
+   "runs": [
+    {
+     "id": "fema-1pct",
+     "description": "stage raised to FEMA's 1 % level at USGS 03431500 (416 ft NAVD88) and held 30 min",
+     "simMinutes": 32.97
+    }
+   ]
+  },
+  "ftmyers": {
+   "preset": "ftmyers",
+   "event": "Hurricane Ian, 28 Sep 2022",
+   "headline": {
+    "label": "USGS high-water marks (25 sites)",
+    "value": "bias +0.07 m · RMSE 0.14 m · 100 % within ±0.3 m",
+    "note": "Modelled peak water level minus the surveyed high-water mark (NAVD88). The tide is set to the gauged peak, so this checks how the surge spreads over the city, not a surge forecast."
+   },
+   "metrics": {
+    "fema.connected.csi": 0.8793,
+    "fema.connected.hitRate": 0.8842,
+    "fema.connected.falseAlarmRatio": 0.0063,
+    "fema.connected.frequencyBias": 0.8898,
+    "fema.all.csi": 0.578,
+    "fema.all.hitRate": 0.5801,
+    "fema.all.falseAlarmRatio": 0.0063,
+    "fema.all.frequencyBias": 0.5837,
+    "fema.floodedIn02": 0.0131,
+    "hwm.n": 25,
+    "hwm.bias": 0.0711,
+    "hwm.rmse": 0.1393,
+    "hwm.within03": 1,
+    "hwm.within1": 1,
+    "hwm.all.n": 25,
+    "hwm.all.bias": 0.0711,
+    "hwm.all.rmse": 0.1393,
+    "hwm.all.within03": 1,
+    "hwm.all.within1": 1,
+    "hwm.dry": 0
+   },
+   "runs": [
+    {
+     "id": "ian",
+     "description": "Hurricane Ian: the tide raised to the 12.92 ft record at NOAA 8725520 and held 60 min",
+     "simMinutes": 61.37
+    },
+    {
+     "id": "fema-1pct",
+     "description": "stage raised to FEMA's 1 % level at NOAA 8725520 (8.67 ft NAVD88) and held 60 min",
+     "simMinutes": 61.5
+    }
+   ]
+  },
+  "houston": {
+   "preset": "houston",
+   "event": "Hurricane Harvey, Aug 2017",
+   "headline": {
+    "label": "USGS high-water marks (9 sites)",
+    "value": "bias −1.85 m · RMSE 2.56 m · 0 % within ±0.3 m · 2 dry in the model",
+    "note": "Modelled peak water level minus the surveyed high-water mark, NAVD88, at the marks the model wets."
+   },
+   "metrics": {
+    "fema.connected.csi": 0.0939,
+    "fema.connected.hitRate": 0.371,
+    "fema.connected.falseAlarmRatio": 0.8883,
+    "fema.connected.frequencyBias": 3.3226,
+    "fema.all.csi": 0.0939,
+    "fema.all.hitRate": 0.371,
+    "fema.all.falseAlarmRatio": 0.8883,
+    "fema.all.frequencyBias": 3.3226,
+    "fema.floodedIn02": 0.2196,
+    "hwm.n": 7,
+    "hwm.bias": -1.8524,
+    "hwm.rmse": 2.5582,
+    "hwm.within03": 0,
+    "hwm.within1": 0.4286,
+    "hwm.all.n": 9,
+    "hwm.all.bias": -1.5254,
+    "hwm.all.rmse": 2.2634,
+    "hwm.all.within03": 0,
+    "hwm.all.within1": 0.5556,
+    "hwm.dry": 2
+   },
+   "runs": [
+    {
+     "id": "harvey",
+     "description": "the shipped scenario: 173 mm/hr for 60 min with Buffalo Bayou at 923 m³/s",
+     "simMinutes": 60
+    }
+   ]
+  },
+  "asheville": {
+   "preset": "asheville",
+   "event": "Hurricane Helene, 27 Sep 2024",
+   "headline": {
+    "label": "USGS gauge peaks, Helene 2024",
+    "value": "French Broad −1.44 m · Swannanoa −1.22 m",
+    "note": "Modelled peak water level minus the gauged Helene peak (NAVD88), at the two USGS gauges in the domain."
+   },
+   "metrics": {
+    "fema.connected.csi": 0.7921,
+    "fema.connected.hitRate": 0.8579,
+    "fema.connected.falseAlarmRatio": 0.0884,
+    "fema.connected.frequencyBias": 0.9411,
+    "fema.all.csi": 0.6854,
+    "fema.all.hitRate": 0.7339,
+    "fema.all.falseAlarmRatio": 0.088,
+    "fema.all.frequencyBias": 0.8047,
+    "fema.floodedIn02": 0.2195,
+    "gauges.n": 2,
+    "gauges.bias": -1.3326,
+    "gauges.rmse": 1.3372,
+    "gauges.within03": 0,
+    "gauges.within1": 0,
+    "gauges.dry": 0,
+    "gauge.USGS03451500.residual": -1.4439,
+    "gauge.USGS03451000.residual": -1.2213
+   },
+   "runs": [
+    {
+     "id": "helene",
+     "description": "the shipped scenario: both rivers at their Helene peak discharge, held 180 min until steady",
+     "simMinutes": 180
+    }
+   ]
+  },
+  "boulder": {
+   "preset": "boulder",
+   "event": "Sep 2013 Colorado Front Range flood (no STN marks inside the domain)",
+   "headline": {
+    "label": "FEMA 1 % flood zone (context only — this scenario is not the 1 % flood)",
+    "value": "floods 30 % of it · 18 % of the flood lies outside it",
+    "note": "Not a skill score: the scenario is a historic event, not FEMA’s 1 % design flood."
+   },
+   "metrics": {
+    "fema.connected.csi": 0.3676,
+    "fema.connected.hitRate": 0.4016,
+    "fema.connected.falseAlarmRatio": 0.1871,
+    "fema.connected.frequencyBias": 0.494,
+    "fema.all.csi": 0.2841,
+    "fema.all.hitRate": 0.3028,
+    "fema.all.falseAlarmRatio": 0.1785,
+    "fema.all.frequencyBias": 0.3686,
+    "fema.floodedIn02": 0.0161
+   },
+   "runs": [
+    {
+     "id": "event",
+     "description": "the shipped scenario: 238 m³/s out of Boulder Canyon for 60 min",
+     "simMinutes": 60
+    }
+   ]
+  },
+  "ellicott": {
+   "preset": "ellicott",
+   "event": "July 30 2016 flash flood (no USGS STN marks; county survey not public as data)",
+   "headline": {
+    "label": "FEMA 1 % flood zone (context only — this scenario is not the 1 % flood)",
+    "value": "floods 47 % of it · 45 % of the flood lies outside it",
+    "note": "Not a skill score: the scenario is a historic event, not FEMA’s 1 % design flood."
+   },
+   "metrics": {
+    "fema.connected.csi": 0.3761,
+    "fema.connected.hitRate": 0.5983,
+    "fema.connected.falseAlarmRatio": 0.4969,
+    "fema.connected.frequencyBias": 1.1893,
+    "fema.all.csi": 0.3362,
+    "fema.all.hitRate": 0.4655,
+    "fema.all.falseAlarmRatio": 0.4524,
+    "fema.all.frequencyBias": 0.8499,
+    "fema.floodedIn02": 0.1889
+   },
+   "runs": [
+    {
+     "id": "event",
+     "description": "the shipped scenario: 110 mm/hr storm cell + the Patapsco 2016 peak for 60 min",
+     "simMinutes": 60
+    }
+   ]
+  },
+  "johnstown": {
+   "preset": "johnstown",
+   "event": "1889 South Fork Dam flood (no surveyed marks in a public database)",
+   "headline": {
+    "label": "FEMA 1 % flood zone (context only — this scenario is not the 1 % flood)",
+    "value": "floods 54 % of it · 37 % of the flood lies outside it",
+    "note": "Not a skill score: the scenario is a historic event, not FEMA’s 1 % design flood."
+   },
+   "metrics": {
+    "fema.connected.csi": 0.4469,
+    "fema.connected.hitRate": 0.6142,
+    "fema.connected.falseAlarmRatio": 0.3787,
+    "fema.connected.frequencyBias": 0.9885,
+    "fema.all.csi": 0.4123,
+    "fema.all.hitRate": 0.542,
+    "fema.all.falseAlarmRatio": 0.3673,
+    "fema.all.frequencyBias": 0.8567,
+    "fema.floodedIn02": 0.2316
+   },
+   "runs": [
+    {
+     "id": "event",
+     "description": "the shipped scenario: the 1889 dam-break inflow for 60 min",
+     "simMinutes": 60
+    }
+   ]
+  },
+  "nepal": {
+   "preset": "nepal",
+   "event": "Lhende avalanche / Trishuli debris flood, 26 Aug 2026",
+   "headline": {
+    "label": "Copernicus EMS damage grading (EMSR927, 1393 damaged or destroyed buildings)",
+    "value": "reaches 37 % of them · road CSI 29 %",
+    "note": "Share of the buildings EMS graded destroyed or damaged that the modelled flood reaches, and agreement on which road stretches were destroyed."
+   },
+   "metrics": {
+    "ems.buildingHitRate": 0.3676,
+    "ems.buildingHitRateNear": 0.5528,
+    "ems.roads.csi": 0.2868,
+    "ems.roads.hitRate": 0.2868,
+    "ems.roads.falseAlarmRatio": 0,
+    "ems.roads.frequencyBias": 0.2868
+   },
+   "runs": [
+    {
+     "id": "trishuli",
+     "description": "the shipped scenario: the routed debris-flood hydrograph, 140 min",
+     "simMinutes": 140
+    }
+   ]
+  },
+  "chamoli": {
+   "preset": "chamoli",
+   "event": "Chamoli, 7 Feb 2021",
+   "headline": null,
+   "metrics": {},
+   "runs": []
+  },
+  "chungthang": {
+   "preset": "chungthang",
+   "event": "South Lhonak GLOF, 4 Oct 2023",
+   "headline": null,
+   "metrics": {},
+   "runs": []
+  }
+ }
+}
