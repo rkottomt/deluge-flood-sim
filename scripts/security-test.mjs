@@ -39,6 +39,11 @@ import { promisify } from 'node:util';
 const execFileAsync = promisify(execFile);
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const OUT_DIR = path.join(ROOT, 'artifacts', 'security');
+/**
+ * Vite's CLI run with this Node directly, not through `npx`: on Windows `npx` is a .cmd shim that spawn() cannot
+ * start without a shell, and killing the shim would leave `vite preview` running.
+ */
+const VITE_BIN = path.join(ROOT, 'node_modules', 'vite', 'bin', 'vite.js');
 
 const argv = Object.fromEntries(
   process.argv.slice(2).map((a) => {
@@ -117,14 +122,14 @@ async function buildAndServe(distDir, port, logFile) {
   // Deliberately NOT setting DELUGE_DEBUG_API: this suite must test the artifact that ships.
   const env = { ...process.env };
   delete env.DELUGE_DEBUG_API;
-  const build = spawn('npx', ['vite', 'build', '--outDir', distDir], { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'], env });
+  const build = spawn(process.execPath, [VITE_BIN, 'build', '--outDir', distDir], { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'], env });
   build.stdout.pipe(log, { end: false });
   build.stderr.pipe(log, { end: false });
   const [code] = await once(build, 'exit');
   if (code !== 0) throw new Error(`vite build failed (exit ${code}); see ${logFile}`);
   console.log('ok');
   if (await portOpen(port)) throw new Error(`port ${port} is already in use — pass --port=<free port>`);
-  const server = spawn('npx', ['vite', 'preview', '--outDir', distDir, '--port', String(port), '--strictPort'], {
+  const server = spawn(process.execPath, [VITE_BIN, 'preview', '--outDir', distDir, '--port', String(port), '--strictPort'], {
     cwd: ROOT,
     stdio: ['ignore', 'pipe', 'pipe'],
     detached: true,
@@ -437,6 +442,12 @@ try {
     const page = await newPage(browser);
     await page.goto(`${baseUrl}?preset=${encodeURIComponent(SPOOF_PRESET)}`, { waitUntil: 'load', timeout: 120000 });
     await waitForApp(page);
+    // "Loading…" already counts as a title for waitForApp; the address bar is only rewritten once the scene is in
+    // (slower machines are still loading 1.2 s later), so wait for the load to finish before judging either.
+    await page
+      .waitForFunction(() => !/^Loading/.test(document.querySelector('.dl-scene-name')?.textContent?.trim() ?? 'Loading'), null, { timeout: 60000 })
+      .catch(() => {});
+    await page.waitForTimeout(300);
     const { name, search } = await page.evaluate(() => ({
       name: document.querySelector('.dl-scene-name')?.textContent?.trim() ?? '',
       search: location.search,
@@ -679,7 +690,9 @@ try {
     if (SKIP_AUDIT) record('AUDIT-PROD', 'supply-chain', 'npm audit --omit=dev is clean', 'skip', QUICK ? 'skipped in --quick' : 'DELUGE_SEC_SKIP_AUDIT=1');
     else {
       try {
-        const { stdout } = await execFileAsync('npm', ['audit', '--omit=dev', '--json'], { cwd: ROOT, timeout: 120000, maxBuffer: 32 * 1024 * 1024 }).catch((e) => ({ stdout: e.stdout ?? '' }));
+        // npm is a .cmd shim on Windows, which execFile only starts through a shell (constant arguments, so no injection);
+        // without one it fails with ENOENT and the empty output would read as a clean audit.
+        const { stdout } = await execFileAsync('npm', ['audit', '--omit=dev', '--json'], { cwd: ROOT, timeout: 120000, maxBuffer: 32 * 1024 * 1024, shell: process.platform === 'win32' }).catch((e) => ({ stdout: e.stdout ?? '' }));
         const j = JSON.parse(stdout || '{}');
         const v = j.metadata?.vulnerabilities ?? {};
         const total = Object.values(v).reduce((a, b) => a + b, 0);

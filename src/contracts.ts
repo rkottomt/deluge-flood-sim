@@ -937,7 +937,8 @@ export interface AppState {
   route: RouteResult | null;
   /** Probe readout under the cursor. */
   probe: { gx: number; gy: number; elevation: number; depth: number; speed: number; lat: number; lon: number } | null;
-  panels: { howItWorks: boolean; locationPicker: boolean; help: boolean };
+  /** Modal dialogs. `useCases` (the business use cases and brief, src/ui/useCases.ts) is optional so older state shapes stay valid. */
+  panels: { howItWorks: boolean; locationPicker: boolean; help: boolean; useCases?: boolean };
   /** GPU adapter description for the diagnostics panel. */
   gpuInfo: string;
 }

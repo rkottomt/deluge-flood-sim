@@ -1891,6 +1891,116 @@ const FLOWS = [
       await D((p) => window.__deluge.loadPreset(p), PRESET);
     },
   },
+  {
+    id: 19,
+    name: 'Business use cases: ?usecase= deep links set up site / glacier / portfolio',
+    timeoutMs: 600_000,
+    resetsPage: true,
+    async run(r, ctx) {
+      // src/ui/useCases.ts: each ?usecase= link opens its preset and sets up the demo (sites, chain + early warning,
+      // the bundled portfolio CSV); the top bar opens the cards and the business brief. A hostile value is ignored.
+      const open = (qs) => page.goto(new URL(qs, ctx.baseUrl).href, { waitUntil: 'domcontentloaded' }).then(() => waitReady(120_000));
+      const sec = (id) => D((s) => document.querySelector(`[data-section="${s}"]`)?.classList.contains('dl-open') ?? false, id);
+
+      // Site check before you build.
+      await open('?usecase=site');
+      const sites = await page
+        .waitForFunction(() => document.querySelectorAll('.dl-site-item').length === 2, null, { timeout: 30_000 })
+        .then(() => true, () => false);
+      const site = await D(() => ({
+        preset: window.__deluge.getState().presetId,
+        url: location.search,
+        names: [...document.querySelectorAll('.dl-site-item')].map((e) => e.textContent ?? ''),
+      }));
+      check(r, 'site: ?usecase=site opens Pittsburgh with the two demo parcels', sites && site.preset === 'pittsburgh' && site.names.some((n) => /Demo parcel A \(North Shore\)/.test(n)), `${site.preset}, ${site.names.length} sites`);
+      check(r, 'site: Site check section open, use case kept in the link', (await sec('site')) && /usecase=site/.test(site.url), site.url);
+      await sleep(1600); // camera flight to the parcel
+      await shot('19-usecase-site');
+
+      // The cards and the brief, from the top bar.
+      await page.click('.dl-uc-btn');
+      await page.waitForSelector('[data-modal="usecases"].dl-open .dl-uc-card');
+      const modal = await D(() => ({
+        cards: [...document.querySelectorAll('.dl-uc-card')].map((c) => c.getAttribute('data-usecase')),
+        welcomeLink: !!document.querySelector('.dl-welcome-uc'),
+      }));
+      check(r, 'top bar opens the three use-case cards (the Try-it strip links to them too)', modal.cards.join() === 'site,glacier,portfolio' && modal.welcomeLink, modal.cards.join(', '));
+      await sleep(300);
+      await shot('19-usecases-modal');
+      await page.click('[data-uc="toggle"]');
+      const brief = await D(() => ({
+        questions: [...document.querySelectorAll('.dl-uc-brief-q')].map((q) => q.textContent),
+        caveats: document.querySelectorAll('.dl-uc-brief-caveat').length,
+        print: !document.querySelector('[data-uc="print"]')?.hidden,
+      }));
+      check(r, 'business brief: every question with its limit, printable', brief.questions.length >= 6 && brief.caveats >= 5 && brief.print, `${brief.questions.length} sections, ${brief.caveats} caveats`);
+      await sleep(300);
+      await shot('19-business-brief');
+      await page.keyboard.press('Escape');
+      const closed = await D(() => !window.__deluge.getState().panels.useCases);
+      check(r, 'Esc closes the use-case dialog', closed, String(closed));
+
+      // Glacier risk for hydropower.
+      await open('?usecase=glacier');
+      const chainReady = await page
+        .waitForFunction(() => window.__deluge.getHazardChain()?.status === 'ready', null, { timeout: 180_000 })
+        .then(() => true, () => false);
+      await sleep(1200);
+      const glacier = await D(() => {
+        const blk = document.querySelector('[data-ew="block"]');
+        const panel = document.querySelector('.dl-panel-scroll')?.getBoundingClientRect();
+        const b = blk?.getBoundingClientRect();
+        return {
+          preset: window.__deluge.getState().presetId,
+          visible: !!blk && !blk.hidden && !!b && !!panel && b.top < panel.bottom && b.bottom > panel.top,
+          chips: document.querySelectorAll('.dl-ew-chip').length,
+        };
+      });
+      check(r, 'glacier: ?usecase=glacier opens Nepal with the hazard chain run', chainReady && glacier.preset === 'nepal' && (await sec('chain')), glacier.preset);
+      check(r, 'glacier: the Early warning designer is scrolled into view', glacier.visible && glacier.chips >= 5, `${glacier.chips} lead-time chips`);
+      await shot('19-usecase-glacier');
+
+      // Portfolio exposure.
+      await open('?usecase=portfolio');
+      const read = await page
+        .waitForFunction(() => /19 assets read/.test(document.querySelector('.dl-impact-portfolio')?.textContent ?? ''), null, { timeout: 60_000 })
+        .then(() => true, () => false);
+      const assessed = await page
+        .waitForFunction(() => /of 19 reached/.test(document.querySelector('.dl-impact-portfolio')?.textContent ?? ''), null, { timeout: 60_000 })
+        .then(() => true, () => false);
+      const speed = await D(() => ({ timeScale: window.__deluge.getState().sim.timeScale, paused: window.__deluge.getState().paused }));
+      // Half an hour of Harvey's worst-hour rain, then a few of the 5 s auto-recomputes.
+      await runFor(1800);
+      await D(() => window.__deluge.setPaused(false));
+      const grew = await page
+        .waitForFunction(() => /[1-9]\d* of 19 reached · loss \$[0-9.]+\s?[KMB]/.test(document.querySelector('.dl-impact-portfolio')?.textContent ?? ''), null, { timeout: 30_000 })
+        .then(() => true, () => false);
+      const pf = await D(() => ({
+        preset: window.__deluge.getState().presetId,
+        info: document.querySelector('.dl-impact-portfolio')?.textContent ?? '',
+        rows: document.querySelectorAll('.dl-impact-portfolio + .dl-impact-table tbody tr').length,
+        simTime: window.__deluge.getStats()?.simTime ?? 0,
+      }));
+      r.metrics.portfolio = { ...pf, speed };
+      check(r, 'portfolio: ?usecase=portfolio opens Houston with the demo CSV in Impact & loss, the rain fast-forwarded', read && pf.preset === 'houston' && (await sec('impact')) && speed.timeScale >= 300 && !speed.paused, `${pf.info.slice(0, 60)} · ${speed.timeScale}×`);
+      check(r, 'portfolio: the assets are assessed as the rain falls (auto-recompute)', assessed && grew && pf.rows === 19, pf.info.split('.').slice(1).join('.').slice(0, 160));
+      await shot('19-usecase-portfolio');
+
+      // A hostile ?usecase= is ignored with a fixed sentence and never reaches the page.
+      await open('?usecase=%3Cimg%20src%3Dx%20onerror%3D%22window.__pwned%3D1%22%3EEVACUATE%20NOW');
+      await sleep(500);
+      const hostile = await D(() => ({
+        preset: window.__deluge.getState().presetId,
+        pwned: window.__pwned === 1,
+        echoed: /EVACUATE NOW|onerror/.test(document.body.innerText),
+        url: location.search,
+      }));
+      check(r, 'a hostile ?usecase= falls back to the default scene, unechoed and inert', hostile.preset === 'pittsburgh' && !hostile.pwned && !hostile.echoed && !/usecase/.test(hostile.url), JSON.stringify(hostile));
+
+      await page.goto(ctx.appUrl, { waitUntil: 'domcontentloaded' });
+      await waitReady(120_000);
+    },
+  },
 ];
 
 // ─── report ────────────────────────────────────────────────────────────────────────────────────

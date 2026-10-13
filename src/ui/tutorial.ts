@@ -99,7 +99,7 @@ export const TUTORIAL_STEPS: TutorialStep[] = [
   {
     id: 'done',
     title: 'That’s the whole app',
-    body: 'The buttons up top are the easy path. Extra tools (rain storms, digging, pouring water) sit under More on the left. The side panel has weather, views and the science — only if you want it.',
+    body: 'The buttons up top are the easy path. Extra tools (rain storms, digging, pouring water) sit under More on the left. The side panel has weather, views and the science — only if you want it. Checking a site or a portfolio? Use cases in the top bar sets one up.',
     target: null,
     primary: 'Start exploring',
   },
@@ -117,6 +117,8 @@ export function shouldAutoStartTutorial(p: TutorialPrefs): boolean {
   if (q.get('tutorial') === '1') return true;
   if (q.get('tutorial') === '0') return false;
   if (p.webdriver) return false;
+  // A business use-case link (?usecase=) opens on its own task; the Pittsburgh river tour would talk over it.
+  if (q.has('usecase')) return false;
   return !p.storedDone;
 }
 
@@ -288,6 +290,7 @@ export function createTutorial(ctx: UIContext): TutorialHandle {
     ctx.setPanel('help', false);
     ctx.setPanel('howItWorks', false);
     ctx.setPanel('locationPicker', false);
+    ctx.setPanel('useCases', false);
     selectTool(store, 'orbit');
     open = true;
     step = TUTORIAL_STEPS[0];

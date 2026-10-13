@@ -23,6 +23,7 @@ import { createWelcome } from './welcome';
 import { createRouteChip } from './routeChip';
 import { createChainTimeline } from './chainTimeline';
 import { createTutorial } from './tutorial';
+import { createUseCases } from './useCases';
 import { selectTool } from './toolDefs';
 
 export { createToolController } from './tools';
@@ -84,18 +85,19 @@ export function mountUI(root: HTMLElement, store: Store, actions: AppActions): v
   const help = createHelp(ctx);
   const how = createHowItWorks(ctx);
   const picker = createLocationPicker(ctx);
+  const useCases = createUseCases(ctx, { panel });
 
   installSceneReset(ctx);
 
   const layer = h('div', { class: 'dl-layer' }, ...panel.overlays, topbar.el, toolbar, options, hud, panel.el, notices.top, notices.bottom, probe.el);
-  root.append(layer, loading, help.el, how.el, picker.el, tutorial.el);
+  root.append(layer, loading, help.el, how.el, picker.el, useCases.modal.el, tutorial.el);
 
   const removeTooltips = installTooltips(root);
   const removeKeyboard = installKeyboard(ctx);
 
   // Modal open → mark the root so HUD/panels can dim and the canvas cursor ring can be ignored.
   binder.bind(
-    (s: AppState) => s.panels.help || s.panels.howItWorks || s.panels.locationPicker,
+    (s: AppState) => s.panels.help || s.panels.howItWorks || s.panels.locationPicker || !!s.panels.useCases,
     (anyOpen) => root.classList.toggle('dl-modal-open', anyOpen),
   );
 
@@ -116,7 +118,7 @@ export function mountUI(root: HTMLElement, store: Store, actions: AppActions): v
 
   // Automation / dev hook (not part of the contract), compiled out of a released build: FINDINGS.json SEC-07.
   if (import.meta.env.DEV || __DELUGE_DEBUG_API__) {
-    (root as HTMLElement & { __delugeUI?: unknown }).__delugeUI = { picker, help, how, panel, tutorial };
+    (root as HTMLElement & { __delugeUI?: unknown }).__delugeUI = { picker, help, how, panel, tutorial, useCases };
   }
 }
 

@@ -1,6 +1,7 @@
 import type { LiveAreaRequest } from '../contracts';
 import { isPresetId, linkPlaceLabel } from '../data';
 import { APP_CONFIG } from './defaults';
+import { parseUseCase, useCaseById, USE_CASE_PARAM } from '../ui/useCaseDefs';
 
 export type SceneRequest = { kind: 'preset'; id: string } | { kind: 'live'; req: LiveAreaRequest };
 
@@ -8,11 +9,16 @@ export type SceneRequest = { kind: 'preset'; id: string } | { kind: 'live'; req:
  * Parse the startup scene from the query string:
  *   ?preset=<id>                    (default: pittsburgh)
  *   ?live=<lat>,<lon>,<sizeKm>[&res=512|1024|2048][&name=...]
- * An invalid ?live= value is reported through `warnings` and ignored.
+ *   ?usecase=site|glacier|portfolio (src/ui/useCaseDefs.ts) opens on the use case's own preset, ahead of ?preset= and
+ *                                   ?live=; src/ui/useCases.ts then sets up the rest of it
+ * An invalid ?live= or ?usecase= value is reported through `warnings` (a fixed sentence) and ignored.
  */
 export function parseStartupRequest(search: string): { request: SceneRequest; warnings: string[] } {
   const params = new URLSearchParams(search);
   const warnings: string[] = [];
+  const uc = parseUseCase(search);
+  warnings.push(...uc.warnings);
+  if (uc.useCase) return { request: { kind: 'preset', id: useCaseById(uc.useCase).preset }, warnings };
   const live = params.get('live');
   if (live) {
     const parts = live.split(',').map((p) => Number(p.trim()));
@@ -60,6 +66,9 @@ export function writeSceneToUrl(request: SceneRequest): void {
     url.searchParams.delete('live');
     url.searchParams.delete('res');
     url.searchParams.delete('name');
+    // A use-case link stays in the address bar only while its own scene is on screen, so a reload after switching
+    // scenes reopens what is shown rather than the use case.
+    if (url.searchParams.has(USE_CASE_PARAM) && !useCaseMatches(url.search, request)) url.searchParams.delete(USE_CASE_PARAM);
     if (request.kind === 'preset') {
       url.searchParams.set('preset', request.id);
     } else {
@@ -74,4 +83,10 @@ export function writeSceneToUrl(request: SceneRequest): void {
   } catch {
     // Non-essential (e.g. sandboxed iframes may forbid history access).
   }
+}
+
+/** Whether the address bar's `?usecase=` names a use case whose preset is the scene `request` loads. */
+export function useCaseMatches(search: string, request: SceneRequest): boolean {
+  const uc = parseUseCase(search).useCase;
+  return !!uc && request.kind === 'preset' && request.id === useCaseById(uc).preset;
 }
