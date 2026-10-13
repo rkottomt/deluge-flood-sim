@@ -87,6 +87,7 @@ import { selectTool } from './toolDefs';
 import { headlessBusy, runHeadless, saveScenario } from './headless';
 import { CLIMATE_TODAY, climateForcing, sweepComparable } from '../climate';
 import { climateCompareBlock, compareClimate, type ClimateSweepPair } from './siteClimate';
+import type { SiteCheckSettings } from '../project/format';
 
 const FT = 0.3048;
 /** Simulated minutes per sweep level, default and range. */
@@ -144,6 +145,10 @@ export interface SiteSection {
   useRainLadder(): Promise<boolean>;
   /** Press "Run sweep". */
   runSweep(): Promise<void>;
+  /** The sweep settings, for a saved project (src/ui/projectState.ts). */
+  getSettings(): SiteCheckSettings;
+  /** Restore sweep settings from a project (levels this scene's ladder lacks are ignored). */
+  applySettings(s: SiteCheckSettings): Promise<void>;
 }
 
 export const specKey = (s: SiteSpec) => JSON.stringify([s.lon, s.lat, s.ring, s.occupancy, s.floors, s.value, s.footprintM2, s.firstFloorHeight, s.criticalElev]);
@@ -1096,5 +1101,31 @@ export function createSiteSection(ctx: UIContext): SiteSection {
       return ladderKind === 'rain';
     },
     runSweep: () => runSweep(),
+    getSettings(): SiteCheckSettings {
+      const userRp: Record<string, number> = {};
+      for (const l of levels) if (l.userRp != null) userRp[l.id] = l.userRp;
+      const fb = freeboardFt === 1 || freeboardFt === 2 || freeboardFt === 3 ? freeboardFt : null;
+      return { ladder: ladderChoice, minutes: durationMin, levels: levels.filter((l) => l.on).map((l) => l.id), userRp, designEvent: designId, freeboardFt: fb };
+    },
+    async applySettings(set: SiteCheckSettings) {
+      if (sweeping) return;
+      ensureScene(getTerrain());
+      if (set.ladder === 'rain') {
+        ensureRain();
+        await rain.ready;
+      }
+      ladderChoice = set.ladder;
+      durationTouched = true;
+      durationMin = set.minutes;
+      durIn.set(durationMin);
+      buildLadder();
+      for (const l of levels) {
+        if (set.levels) l.on = set.levels.includes(l.id) && !l.outOfRange;
+        if (l.sourceRp == null && Object.prototype.hasOwnProperty.call(set.userRp, l.id)) l.userRp = set.userRp[l.id];
+      }
+      designId = set.designEvent;
+      freeboardFt = set.freeboardFt;
+      render();
+    },
   };
 }

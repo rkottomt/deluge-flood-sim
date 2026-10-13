@@ -51,6 +51,7 @@ import { headlessBusy, runHeadless } from './headless';
 import { numField, specKey } from './siteCheck';
 import { kvList, simpleTable } from './siteReport';
 import { sitesFor } from './sites';
+import type { EnsembleSettings } from '../project/format';
 
 /** runFor chunk, simulated s: the cancel latency (the GPU accumulators need no finer cadence). */
 const CHUNK_S = 300;
@@ -60,6 +61,9 @@ const ASSET_ROWS = 20;
 export interface EnsembleSection {
   body: HTMLElement[];
   badge: HTMLElement;
+  /** Members, minutes, seed and bands, for a saved project (src/ui/projectState.ts). */
+  getSettings(): EnsembleSettings;
+  applySettings(s: EnsembleSettings): void;
 }
 
 const sceneKeyOf = (s: { presetId: string | null; terrainName: string }) => `${s.presetId}|${s.terrainName}`;
@@ -445,7 +449,24 @@ export function createEnsembleSection(ctx: UIContext): EnsembleSection {
   );
   syncScene();
   render();
-  return { body, badge };
+  return {
+    body,
+    badge,
+    getSettings: () => ({ members, minutes, seed, ranges: { ...ranges } }),
+    applySettings(set) {
+      if (running) return;
+      syncScene();
+      members = set.members;
+      minutes = set.minutes;
+      seed = set.seed;
+      ranges = { ...ranges, ...set.ranges };
+      membersIn.set(members);
+      minutesIn.set(minutes);
+      seedIn.set(seed);
+      for (const r of allRanges) r.sync();
+      renderApplies();
+    },
+  };
 }
 
 function avg(xs: number[]): number {

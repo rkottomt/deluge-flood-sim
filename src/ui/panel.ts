@@ -44,6 +44,9 @@ import { bridgeFor } from './bridge';
 import { sitesFor } from './sites';
 import { createChainSection } from './chainPanel';
 import { createClimateBlock, createClimateNote } from './climatePanel';
+import { createCompareSection } from './compareDesigns';
+import { createProjectSection } from './projectPanel';
+import { projectHooksFor } from './projectState';
 
 export interface Panel {
   el: HTMLElement;
@@ -814,7 +817,18 @@ export function createPanel(ctx: UIContext): Panel {
   const chainSec = section('Hazard chain', 'mountain', chain.body, { id: 'chain', badge: chain.badge });
   chain.onVisible((v) => (chainSec.hidden = !v));
 
-  const scroller = h('div', { class: 'dl-panel-scroll' }, scenarioSec, chainSec, weatherSec, evacSec, impactSec, siteSec, ensembleSec, viewSec, advancedSec, attribution);
+  // ════════════════════════════════ Compare designs · Project ════════════════════════════════
+  // Mitigation designs side by side (compareDesigns.ts), and saving / opening the whole project (projectPanel.ts).
+  const compare = createCompareSection(ctx);
+  const compareSec = section('Compare designs', 'wall', compare.body, { id: 'designs', open: false, badge: compare.badge });
+  const hooks = projectHooksFor(ctx.store);
+  hooks.siteCheck = site;
+  hooks.ensemble = ensemble;
+  hooks.portfolio = { get: () => impact.getPortfolio(), load: (name, text) => impact.loadPortfolioText(name, text) };
+  const project = createProjectSection(ctx);
+  const projectSec = section('Project', 'database', project.body, { id: 'project', open: false, badge: project.badge });
+
+  const scroller = h('div', { class: 'dl-panel-scroll' }, scenarioSec, chainSec, weatherSec, evacSec, impactSec, siteSec, compareSec, ensembleSec, projectSec, viewSec, advancedSec, attribution);
   const closeBtn = h(
     'button',
     { type: 'button', class: 'dl-icon-btn dl-panel-close', 'aria-label': 'Hide panel', onclick: () => api.setOpen(false) },
