@@ -882,6 +882,12 @@ at 58–60 fps (p95 19–24 ms), sim speed falls to ~15–20× and quality steps
 Air runs the crest flood like the table (~70× at 60 fps, ~90× under Chrome's 30 fps battery cap); as it heats up sim
 speed degrades toward ~15–20× while the frame rate holds at 60 fps. Plug it in and keep it cool before judging.
 
+**Land-surface layers (§3.11).** Off — the default — they cost nothing: the passes are separate pipeline variants and
+the default ones are the old shaders (2,377–2,387 against 2,380–2,384 substeps/s at 1024², GTX 1660 Ti). On, they add
+to the solver's share of the frame: roughness +6 %, drains +6–9 %, buildings nothing per substep (one full-grid rebed
+pass when switched), all three +16 %. The governor (§8) absorbs it as a few percent less simulated speed at the same
+frame rate. Not measured on the M4.
+
 ## 9. Validation
 
 From `npm test` (tests run on the real GPU through Dawn); the grid-convergence rows from
