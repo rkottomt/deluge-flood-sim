@@ -76,6 +76,8 @@ export interface ImpactSection {
    * user had picked the file; `auto` also turns on the periodic recompute so the table fills as the flood runs.
    */
   loadPortfolioText(name: string, text: string, opts?: { auto?: boolean }): void;
+  /** The portfolio CSV as loaded (its text), for a project that opts in to carrying it (src/ui/projectState.ts). */
+  getPortfolio(): { name: string; text: string } | null;
 }
 
 /**
@@ -131,6 +133,8 @@ export function createImpactSection(ctx: UIContext): ImpactSection {
   let baseline: RunSnapshot | null = null;
   let portfolio: PortfolioParse | null = null;
   let portfolioName = '';
+  /** The CSV text behind `portfolio` (kept only in memory, for an opt-in project save). */
+  let portfolioText: string | null = null;
   const fallback = new SnapshotHazardAccumulator();
   let tracking = false;
   let busy = false;
@@ -211,6 +215,7 @@ export function createImpactSection(ctx: UIContext): ImpactSection {
   const loadBtn = button('Load sites / portfolio CSV…', () => fileInput.click(), { icon: 'database', className: 'dl-btn-sm', tip: 'asset_id, lat, lon (or wkt) and optional values — read in this tab, never uploaded', side: 'top' });
   const clearPortfolioBtn = button('Remove', () => {
     portfolio = null;
+    portfolioText = null;
     bridge.portfolio = null;
     portfolioName = '';
     fileInput.value = '';
@@ -700,7 +705,9 @@ export function createImpactSection(ctx: UIContext): ImpactSection {
       portfolio = { assets: [], errors: [], warnings: [], fatal: 'File too large.', moreIssues: 0, ignoredColumns: [] };
     } else {
       try {
-        portfolio = parsePortfolio(await file.text());
+        const text = await file.text();
+        portfolio = parsePortfolio(text);
+        portfolioText = portfolio.assets.length ? text : null;
       } catch (err) {
         portfolio = { assets: [], errors: [], warnings: [], fatal: `Could not read the file (${err instanceof Error ? err.name : 'error'}).`, moreIssues: 0, ignoredColumns: [] };
       }
@@ -795,10 +802,12 @@ export function createImpactSection(ctx: UIContext): ImpactSection {
       ensureScene(getTerrain());
       startTracking();
     },
+    getPortfolio: () => (portfolio && portfolioText !== null ? { name: portfolioName, text: portfolioText } : null),
     loadPortfolioText(name, text, opts) {
       portfolioName = cleanPlaceLabel(name, 60);
       fileInput.value = '';
       portfolio = text.length > CSV_LIMITS.maxChars ? { assets: [], errors: [], warnings: [], fatal: 'File too large.', moreIssues: 0, ignoredColumns: [] } : parsePortfolio(text);
+      portfolioText = portfolio.assets.length ? text : null;
       // As for a file: the ensemble (src/ui/ensemble.ts) tallies these assets member by member.
       bridge.portfolio = portfolioAssetsForBridge(portfolio);
       renderPortfolioInfo();

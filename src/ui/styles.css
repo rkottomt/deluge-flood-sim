@@ -6299,3 +6299,72 @@ select.dl-num-input {
   margin-top: 4px;
   color: var(--dl-accent-2);
 }
+
+/* ─── Compare designs (src/ui/compareDesigns.ts) ─────────────────────────────────────────────── */
+.dl-cmp-designs {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 8px 0;
+}
+.dl-cmp-design {
+  border: 1px solid var(--dl-line-2);
+  border-radius: 10px;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.dl-cmp-table {
+  overflow-x: auto;
+}
+.dl-cmp-table table {
+  font-size: 11px;
+}
+.dl-cmp-table th {
+  text-transform: none;
+  letter-spacing: 0;
+  white-space: normal;
+  vertical-align: bottom;
+}
+.dl-cmp-table td:first-child {
+  color: var(--dl-text-2);
+  min-width: 96px;
+}
+.dl-cmp-table tbody tr {
+  cursor: default;
+}
+.dl-cmp-maps {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 8px;
+  margin: 6px 0;
+}
+.dl-cmp-maps figure {
+  margin: 0;
+}
+.dl-cmp-canvas {
+  width: 100%;
+  height: auto;
+  image-rendering: pixelated;
+  border-radius: 6px;
+  border: 1px solid var(--dl-line-2);
+}
+.dl-cmp-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  margin: 0 3px;
+  vertical-align: middle;
+}
+.dl-cmp-ladder td:first-child {
+  width: 22px;
+}
+.dl-cmp-ladder .dl-site-off {
+  opacity: 0.5;
+}
+.dl-cmp-ladder th:nth-child(2),
+.dl-cmp-ladder td:nth-child(2) {
+  text-align: left;
+}

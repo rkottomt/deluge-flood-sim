@@ -9,6 +9,7 @@
  *   node scripts/e2e.mjs --preset=sandbox   run the preset-specific flows on another preset (default pittsburgh)
  *   node scripts/e2e.mjs --live             also run the live-area flow (needs internet: USGS, Esri, TIGERweb)
  *   node scripts/e2e.mjs --browser=brave    run the flows in installed Brave (the demo browser) → artifacts/e2e-brave
+ *   node scripts/e2e.mjs --only=23 --compare-minutes=30   flow 23 (projects + design comparison) with longer runs per level
  *
  * Offline guarantee: every request to a non-local host is blocked (the demo venue's wifi is unreliable) and
  * reported; the baked-preset flows must not need any. Only the opt-in live flow may use the network. The startup-cancel
@@ -2267,6 +2268,217 @@ const FLOWS = [
       r.metrics.atlas14 = out.levels;
       if (!out.ok) return;
       await addressSweep(r, '22');
+    },
+  },
+  {
+    id: 23,
+    name: 'Projects & design comparison: save / open a project with a wall and a site, compare two designs',
+    timeoutMs: 900_000,
+    async run(r) {
+      if (PRESET !== 'pittsburgh') {
+        r.notes.push(`${PRESET}: the flow is written for Pittsburgh's levee and ladder: skipped`);
+        check(r, 'preset without the Pittsburgh levee (nothing to check)', true, PRESET);
+        return;
+      }
+      const minutes = Number(args['compare-minutes'] ?? 6);
+      await calm();
+      const openSection = (id) =>
+        D((sid) => {
+          const sec = document.querySelector(`[data-section="${sid}"]`);
+          if (sec && !sec.classList.contains('dl-open')) sec.querySelector('.dl-sec-head')?.click();
+        }, id);
+      const barrierCells = () => D(() => window.__deluge.getSolver().getBarrierCPU().reduce((n, v) => n + (v > 0.2 ? 1 : 0), 0));
+      // Start without sites (flow 15 leaves none, but a rerun may).
+      await D(() => document.querySelectorAll('.dl-site-remove').forEach((b) => b.click()));
+
+      // Design A: the one-click levee (the real Try-it button), then the river back to normal pool.
+      await D(() => window.__deluge.store.set({ paused: false }));
+      await page.click('.dl-try-step[data-step="levee"]');
+      const built = await page
+        .waitForFunction(() => (window.__deluge.getProtection()?.wallCells ?? 0) > 500 && /remove levee/i.test(document.querySelector('.dl-try-step[data-step="levee"]')?.textContent ?? ''), null, { timeout: 30_000 })
+        .then(() => true, () => false);
+      await D(() => {
+        const d = window.__deluge;
+        d.setPaused(true);
+        d.setStageOffset(0);
+        d.actions.resetWater();
+      });
+      const leveeCells = await barrierCells();
+      check(r, 'the one-click levee is up', built && leveeCells > 500, `${leveeCells} wall cells`);
+      await openSection('designs');
+      await page.click('[data-compare="capture"]');
+      // Design B: a shorter wall — the levee's upstream half at the same crest.
+      await page.click('[data-compare="clear"]');
+      await page.waitForFunction(() => window.__deluge.getSolver().getBarrierCPU().every((v) => v <= 0.2), null, { timeout: 10_000 });
+      const short = await D(() => {
+        const d = window.__deluge;
+        const lv = d.getScenario().levee;
+        const n = Math.max(2, Math.ceil(lv.points.length / 2));
+        const pts = lv.points.slice(0, n);
+        let low = Infinity;
+        for (const p of pts) low = Math.min(low, d.sampleAt(p.gx, p.gy).ground);
+        const height = Math.min(10, Math.max(0.5, Math.ceil((lv.crest - low) * 10) / 10));
+        d.drawWall(pts, height);
+        return { n, of: lv.points.length, height };
+      });
+      await page.click('[data-compare="capture"]');
+      const designs = await D(() => [...document.querySelectorAll('[data-design-id]')].map((e) => e.getAttribute('data-design-id')));
+      check(r, 'two designs captured (the levee, and a shorter wall)', designs.join() === 'A,B', `${designs.join(', ')}; short wall: ${short.n} of ${short.of} levee points at ${short.height} m`);
+      await D(() => {
+        const name = document.querySelector('[data-compare-design="B"]');
+        name.value = 'Shorter wall';
+        name.dispatchEvent(new Event('change'));
+        const a = document.querySelector('[data-compare-design="A"]');
+        a.value = 'One-click levee';
+        a.dispatchEvent(new Event('change'));
+      });
+      const wallCells = await barrierCells();
+
+      // A site at the Point (as flow 15).
+      const g = await D((p) => window.__deluge.geoToGrid(p.lon, p.lat), { lat: 40.4425, lon: -80.0085 });
+      await D((p) => {
+        const d = window.__deluge;
+        d.setCamera({ target: { gx: p.gx, gy: p.gy, elevation: d.sampleAt(p.gx, p.gy).ground }, distance: 900, yaw: 0, pitch: Math.PI / 2 - 0.01 });
+      }, g);
+      await D(() => window.__deluge.waitFrames(4));
+      await D(() => window.__deluge.selectTool('site'));
+      const box = await page.locator('#deluge-canvas').boundingBox();
+      await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+      await page.waitForFunction(() => document.querySelectorAll('.dl-site-item').length === 1, null, { timeout: 5000 });
+      await D(() => window.__deluge.selectTool('orbit'));
+
+      // Save the project.
+      await openSection('project');
+      await page.fill('[data-project="name"]', 'North Shore levee study');
+      const [dl] = await Promise.all([page.waitForEvent('download', { timeout: 20_000 }), page.click('[data-project="save"]')]);
+      const file = path.join(OUT, '23-project.deluge.json');
+      await dl.saveAs(file);
+      const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+      const walls = saved.edits.filter((e) => e.op === 'wall');
+      check(
+        r,
+        'the saved .deluge.json holds the scene, the wall, the site and both designs',
+        dl.suggestedFilename().endsWith('.deluge.json') && saved.format === 'deluge-project' && saved.version === 1 && saved.scene.id === 'pittsburgh' && walls.length === 1 && saved.sites.length === 1 && saved.designs.length === 2 && saved.portfolio === null,
+        `${dl.suggestedFilename()}, ${(fs.statSync(file).size / 1024).toFixed(1)} KB: ${saved.edits.length} edit(s), ${saved.sites.length} site, designs ${saved.designs.map((d) => `${d.name} (${d.edits.length} edit, ${d.edits[0]?.pts?.length / 2} pts)`).join(' / ')}`,
+      );
+
+      // Wipe it, then open the file again.
+      await D(() => {
+        const d = window.__deluge;
+        d.actions.clearWalls();
+        document.querySelectorAll('.dl-site-remove').forEach((b) => b.click());
+        d.setStageOffset(2);
+      });
+      await page.setInputFiles('[data-project="file"]', file);
+      const opened = await page
+        .waitForFunction(() => /^Opened/.test(document.querySelector('[data-project="status"]')?.textContent ?? ''), null, { timeout: 30_000 })
+        .then(() => true, () => false);
+      const back = await D(() => ({
+        status: document.querySelector('[data-project="status"]')?.textContent ?? '',
+        sites: document.querySelectorAll('.dl-site-item').length,
+        designs: [...document.querySelectorAll('[data-design-id]')].length,
+        stage: window.__deluge.getState().stageOffset,
+      }));
+      const reopened = await barrierCells();
+      check(r, 'opening the file puts the wall, the site, the designs and the scenario back', opened && back.sites === 1 && back.designs === 2 && Math.abs(reopened - wallCells) <= Math.max(2, wallCells * 0.01) && back.stage === 0, `${back.status.slice(0, 100)} · ${reopened} wall cells (saved ${wallCells}), stage ${back.stage}`);
+
+      // Hostile file: refused with a fixed sentence, nothing changed.
+      const hostile = path.join(OUT, '23-hostile.deluge.json');
+      fs.writeFileSync(hostile, '{"format":"deluge-project","version":1,"name":"<img src=x onerror=window.__pwned=1>","__proto__":{"polluted":1}}');
+      await page.setInputFiles('[data-project="file"]', hostile);
+      await sleep(400);
+      const refused = await D(() => ({ status: document.querySelector('[data-project="status"]')?.textContent ?? '', pwned: !!window.__pwned, polluted: ({}).polluted !== undefined }));
+      check(r, 'a hostile project file is refused (no pollution, no markup)', /reserved key/.test(refused.status) && !refused.pwned && !refused.polluted, refused.status.slice(0, 100));
+
+      // Compare: baseline + 2 designs on the FEMA 1 % level and the 1936 crest (return period typed: 500 yr, labelled).
+      await openSection('designs');
+      await page.fill('[data-compare-field="minutes"]', String(minutes));
+      await page.dispatchEvent('[data-compare-field="minutes"]', 'change');
+      await D(() => {
+        for (const box of document.querySelectorAll('[data-compare-level]')) {
+          const want = box.dataset.compareLevel === 'rp100' || box.dataset.compareLevel === 'record1936';
+          if (box.checked !== want) box.click();
+        }
+        const rp = document.querySelector('[data-compare-rp="record1936"]');
+        rp.value = '500';
+        rp.dispatchEvent(new Event('change'));
+      });
+      const before = await D(() => {
+        const s = window.__deluge.getState();
+        return { stageOffset: s.stageOffset, paused: s.paused, sources: s.sources.length };
+      });
+      const t0 = Date.now();
+      await page.click('[data-compare="run"]');
+      const done = await page
+        .waitForFunction(() => /^(Done|Comparison stopped|Cancelled)/.test(document.querySelector('[data-compare="status"]')?.textContent ?? ''), null, { timeout: 800_000 })
+        .then(() => true, () => false);
+      const seconds = (Date.now() - t0) / 1000;
+      const out = await D(() => ({
+        status: document.querySelector('[data-compare="status"]')?.textContent ?? '',
+        head: [...document.querySelectorAll('[data-compare="table"] thead th')].map((t) => t.textContent),
+        rows: [...document.querySelectorAll('[data-compare="table"] tbody tr')].map((tr) => [...tr.children].map((td) => td.textContent)),
+        maps: document.querySelectorAll('[data-compare-map]').length,
+        transfer: document.querySelector('[data-compare="transfer"]')?.textContent ?? '',
+        state: (() => {
+          const s = window.__deluge.getState();
+          return { stageOffset: s.stageOffset, paused: s.paused, sources: s.sources.length };
+        })(),
+      }));
+      const after = await barrierCells();
+      check(r, 'the 2-design comparison completes', done && /^Done/.test(out.status), `${out.status.slice(0, 110)} (${num(seconds, 1)} s wall)`);
+      const row = (label) => out.rows.find((x) => x[0].startsWith(label)) ?? [];
+      check(r, 'the table has loss per level, EAL, ΔEAL, cost, NPV, BCR, protected and transferred risk for both designs', out.head.length === 4 && ['Loss · FEMA', 'Loss · 1936', 'Expected annual loss', 'ΔEAL', 'Cost', 'NPV at 7 %', 'NPV at 3.1 %', 'BCR at 7 %', 'BCR at 3.1 %', 'Buildings protected', 'Buildings newly reached', 'Land newly flooded'].every((l) => row(l).length === 4), out.head.join(' | '));
+      check(r, 'a depth-change map per design', out.maps === 2, `${out.maps} maps`);
+      check(r, 'your scenario and walls are put back', JSON.stringify(out.state) === JSON.stringify(before) && Math.abs(after - reopened) <= 2, `${JSON.stringify(out.state)}; ${after} wall cells (were ${reopened})`);
+      r.metrics.compare = { minutes, seconds, head: out.head, rows: out.rows, transfer: out.transfer };
+      for (const x of out.rows) console.log(`    ${x.join(' | ')}`);
+      await D(() => document.querySelector('[data-compare="results"]')?.scrollIntoView({ block: 'start' }));
+      await sleep(400);
+      const panelShot = path.join(OUT, '23-compare.png');
+      await page.locator('.dl-panel').screenshot({ path: panelShot });
+      console.log(`  [shot] ${path.relative(ROOT, panelShot)}`);
+
+      // The report.
+      const [rep] = await Promise.all([page.waitForEvent('download', { timeout: 20_000 }), page.click('[data-compare="report-html"]')]);
+      const repFile = path.join(OUT, '23-design-comparison.html');
+      await rep.saveAs(repFile);
+      const html = fs.readFileSync(repFile, 'utf8');
+      const need = ['mitigation design comparison', 'One-click levee', 'Shorter wall', 'Expected annual loss', 'BCR at 7 %', 'NPV at 3.1 %', 'Who gets wetter', 'Change in maximum depth', 'data:image/png', 'your input'];
+      const missing = need.filter((s) => !html.includes(s));
+      check(r, 'the comparison report renders every section, with the maps and no script', missing.length === 0 && !/<script/i.test(html), missing.length ? `missing: ${missing.join(', ')}` : `${(html.length / 1024).toFixed(0)} KB`);
+
+      // Save again: the comparison's numbers travel in the project.
+      const [dl2] = await Promise.all([page.waitForEvent('download', { timeout: 20_000 }), page.click('[data-project="save"]')]);
+      const file2 = path.join(OUT, '23-project-with-results.deluge.json');
+      await dl2.saveAs(file2);
+      const saved2 = JSON.parse(fs.readFileSync(file2, 'utf8'));
+      check(r, 'a saved project carries the comparison summary', saved2.comparison?.designs?.length === 2 && saved2.comparison.levels.length === 2, saved2.comparison ? `${saved2.comparison.designs.map((d) => `${d.name}: BCR7 ${d.bcr7 == null ? '—' : d.bcr7.toFixed(2)}`).join('; ')}` : 'none');
+
+      // Share link: small enough, and it opens the walls and the site in a fresh tab.
+      await page.click('[data-project="share"]');
+      await page.waitForFunction(() => new URL(location.href).searchParams.has('project'), null, { timeout: 10_000 }).catch(() => {});
+      const link = await D(() => location.href);
+      const value = new URL(link).searchParams.get('project') ?? '';
+      const tab = await page.context().newPage();
+      await tab.goto(link, { waitUntil: 'domcontentloaded' });
+      await tab.waitForFunction(() => window.__deluge, null, { timeout: 90_000 });
+      await tab.evaluate(() => window.__deluge.ready);
+      const linked = await tab
+        .waitForFunction(() => document.querySelectorAll('.dl-site-item').length === 1 && window.__deluge.getSolver()?.getBarrierCPU().some((v) => v > 0.2), null, { timeout: 60_000 })
+        .then(() => true, () => false);
+      const tabInfo = await tab.evaluate(() => ({ cells: window.__deluge.getSolver().getBarrierCPU().reduce((n, v) => n + (v > 0.2 ? 1 : 0), 0), designs: document.querySelectorAll('[data-design-id]').length, names: [...document.querySelectorAll('.dl-site-item .dl-impact-name')].map((e) => e.textContent) }));
+      await tab.close();
+      check(r, 'the ?project= link reopens the wall, the site and the designs (no names carried)', value.startsWith('p1.') && value.length <= 6000 && linked && tabInfo.designs === 2 && tabInfo.names.join() === 'Site 1', `${value.length} characters; ${tabInfo.cells} wall cells, ${tabInfo.designs} designs, sites: ${tabInfo.names.join(', ')}`);
+
+      // Leave the app as the other flows expect it.
+      await D(() => {
+        const u = new URL(location.href);
+        u.searchParams.delete('project');
+        history.replaceState(null, '', u);
+        document.querySelectorAll('.dl-site-remove').forEach((b) => b.click());
+      });
+      if (/remove levee/i.test((await page.locator('.dl-try-step[data-step="levee"]').textContent()) ?? '')) await page.click('.dl-try-step[data-step="levee"]');
+      await calm();
     },
   },
 ];
