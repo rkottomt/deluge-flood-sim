@@ -447,6 +447,10 @@ test('rain ladder sweep: EAL with sourced return periods, the 100-yr rain is the
   assert.equal(design.basis, '100-yr');
   assert.equal(design.row.level.id, 'a14-100');
   assert.ok(isOnePercent(100) && isOnePercent(100.5008) && !isOnePercent(125) && !isOnePercent(null));
+  // The 1 % level by its annual chance: 1 % itself, or the Atlas 14 100-yr ARI's 0.995 % (Langbein, 100.5 yr) —
+  // not a neighbouring 99- or 101-yr level (1.01 % / 0.990 %).
+  assert.ok(isOnePercent(L.find((l) => l.id === 'a14-100')!.returnPeriod) && isOnePercent(100.5));
+  assert.ok(!isOnePercent(99) && !isOnePercent(101) && !isOnePercent(100.6) && !isOnePercent(99.9));
   assert.deepEqual(L.map((l) => formatReturnPeriod(l.returnPeriod)), ['2.5', '10.5', '25.5', '100.5', '500.5']);
   assert.equal(formatReturnPeriod(2), '2');
   const v = siteVerdict('Lot 9', sum, money).join(' ');

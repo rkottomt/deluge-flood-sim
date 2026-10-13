@@ -329,11 +329,17 @@ export interface SweepSummary {
 const levelOrder = (r: SweepRow) => (Number.isFinite(r.level.ft) ? r.level.ft : r.level.rainMmH != null && Number.isFinite(r.level.rainMmH) ? r.level.rainMmH : r.level.scale);
 
 /**
- * Is this return period the 1 %-annual-chance level? Exactly 100 from a stage-frequency source, or 100.5 from a rain
- * ladder (a 100-yr partial-duration ARI is a 0.995 % AEP, 1 / AEP = 100.5 yr — ladders.ts annualReturnPeriod).
+ * Is this return period the 1 %-annual-chance level? Judged by its annual exceedance probability 1 / T, which must lie
+ * between the 100-yr partial-duration ARI's (Langbein: 1 − e^(−1/100) = 0.995 %, T = 100.5 yr — ladders.ts
+ * annualReturnPeriod, the Atlas 14 rain ladder's 100-yr level) and 1 % itself (T = 100, a stage-frequency source),
+ * both included, with a part-per-million allowance for rounding (100.5 as displayed counts). A 99-yr (1.01 %) or
+ * 101-yr (0.990 %) level is a different event and does not count.
  */
+const ONE_PERCENT_AEP_LOW = 1 - Math.exp(-1 / 100);
 export function isOnePercent(T: number | null | undefined): boolean {
-  return T != null && Number.isFinite(T) && Math.abs(T - 100) <= 1;
+  if (T == null || !Number.isFinite(T) || !(T > 0)) return false;
+  const aep = 1 / T;
+  return aep >= ONE_PERCENT_AEP_LOW * (1 - 1e-6) && aep <= 0.01 * (1 + 1e-6);
 }
 
 /**
