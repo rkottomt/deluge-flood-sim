@@ -1843,6 +1843,12 @@ const FLOWS = [
       await D(() => window.__deluge.selectTool('orbit'));
 
       // Ladder: forcing × 0.5 and × 1 with return periods typed in (10 and 100 years, the user's input), 10 min each.
+      // Houston is rain-led, so Site check opens on the NOAA Atlas 14 rain ladder once it has looked it up: pick the
+      // forcing multipliers instead (flow 20 covers the rain ladder).
+      await page
+        .waitForFunction(() => [...document.querySelectorAll('[data-site="ladder"] option')].some((o) => o.value === 'rain'), null, { timeout: 20_000 })
+        .catch(() => {});
+      await page.selectOption('[data-site="ladder"]', 'scale').catch(() => {});
       await page.fill('[data-site-field="duration"]', '10');
       await page.dispatchEvent('[data-site-field="duration"]', 'change');
       await D(() => {
@@ -1986,7 +1992,7 @@ const FLOWS = [
         cards: [...document.querySelectorAll('.dl-uc-card')].map((c) => c.getAttribute('data-usecase')),
         welcomeLink: !!document.querySelector('.dl-welcome-uc'),
       }));
-      check(r, 'top bar opens the three use-case cards (the Try-it strip links to them too)', modal.cards.join() === 'site,glacier,portfolio' && modal.welcomeLink, modal.cards.join(', '));
+      check(r, 'top bar opens the four use-case cards (the Try-it strip links to them too)', modal.cards.join() === 'site,glacier,portfolio,address' && modal.welcomeLink, modal.cards.join(', '));
       await sleep(300);
       await shot('19-usecases-modal');
       await page.click('[data-uc="toggle"]');
@@ -2066,7 +2072,251 @@ const FLOWS = [
       await waitReady(120_000);
     },
   },
+  {
+    id: 20,
+    name: 'Check any US address: search → live area → site → NOAA Atlas 14 rain sweep → EAL (fixtures)',
+    timeoutMs: 600_000,
+    resetsPage: true,
+    async run(r, ctx) {
+      // Hermetic: the geocoder and USGS 3DEP are answered from fixtures in this script (a synthetic 5 km bowl around
+      // the address), every other external host is refused, so nothing leaves the machine. The Atlas 14 grid is the
+      // real baked file, served by our own server. Flow 21 (--live) runs the same path against the real services.
+      const AT = { lat: 29.7604, lon: -95.3698 };
+      const intercepted = [];
+      await page.route((u) => !isLocalUrl(u.href), (route) => addressFixtures(route, intercepted));
+      try {
+        await page.goto(new URL('?preset=pittsburgh', ctx.baseUrl).href, { waitUntil: 'domcontentloaded' });
+        await waitReady(120_000);
+        await page.click('.dl-uc-btn');
+        await page.waitForSelector('[data-modal="usecases"].dl-open [data-usecase="address"]');
+        const cards = await D(() => [...document.querySelectorAll('.dl-uc-card')].map((c) => c.getAttribute('data-usecase')).join());
+        check(r, 'the use-case dialog offers the address card next to the other three', cards === 'site,glacier,portfolio,address', cards);
+        await page.click('[data-usecase="address"]');
+        await page.fill('[data-uc="address-input"]', '1600 Smith St, Houston, TX');
+        await page.click('[data-uc="address-search"]');
+        await page.waitForSelector('[data-uc="address-choice"]', { timeout: 15_000 });
+        await shot('20-address-search');
+        const t0 = Date.now();
+        await page.click('[data-uc="address-choice"]');
+        const out = await addressSetUp(r, AT, 120_000);
+        r.metrics.loadAndSetUpSeconds = (Date.now() - t0) / 1000;
+        check(r, 'the address bar carries only the coordinates (no address text, no name)', /usecase=address/.test(out.url) && /at=29\.76040,-95\.36980/.test(out.url) && !/Smith|Houston|1600/i.test(decodeURIComponent(out.url)) && !/[?&]name=/.test(out.url), out.url);
+        const siteName = await D(() => document.querySelector('.dl-site-item .dl-impact-name')?.textContent ?? '');
+        check(r, 'the site is named after the street address (kept in this tab only)', /^1600 Smith Street$/.test(siteName), siteName);
+        await addressSweep(r, '20');
+        // The same link, reloaded: a fresh page reopens the area, the site and the rain ladder, and no ?name= spoof.
+        await page.goto(new URL('?usecase=address&at=29.7604,-95.3698&name=EVACUATE%20NOW%20call%20555-0100', ctx.baseUrl).href, { waitUntil: 'domcontentloaded' });
+        await waitReady(120_000);
+        const again = await addressSetUp(r, AT, 120_000, 'link');
+        const spoof = await D(() => /EVACUATE|555-0100/.test(document.body.innerText));
+        check(r, 'link: ?usecase=address&at= reopens it; a ?name= in the link never reaches the page', again.ok && !spoof, `${again.sites} site(s), ladder ${again.ladder}, spoof ${spoof ? 'SHOWN' : 'absent'}`);
+        // A point outside the US: fixed warning, default scene, the address search open.
+        await page.goto(new URL('?usecase=address&at=51.5,-0.12', ctx.baseUrl).href, { waitUntil: 'domcontentloaded' });
+        await waitReady(120_000);
+        const asks = await page
+          .waitForFunction(() => document.querySelector('[data-modal="usecases"].dl-open [data-uc-view="address"]:not([hidden])'), null, { timeout: 30_000 })
+          .then(() => true, () => false);
+        const bad = await D(() => ({ preset: window.__deluge.getState().presetId, text: document.body.innerText }));
+        check(r, 'link: an at= outside the US loads the default scene and opens the address search', asks && bad.preset === 'pittsburgh', `preset ${bad.preset}, search ${asks ? 'open' : 'closed'}`);
+        r.metrics.intercepted = intercepted.slice(0, 12);
+      } finally {
+        await page.unroute((u) => !isLocalUrl(u.href)).catch(() => {});
+        await page.unrouteAll({ behavior: 'ignoreErrors' }).catch(() => {});
+        await page.goto(ctx.appUrl, { waitUntil: 'domcontentloaded' });
+        await waitReady(120_000);
+      }
+    },
+  },
+  {
+    id: 21,
+    name: 'Check any US address against the real services (network): Houston, Atlas 14 sweep, EAL',
+    timeoutMs: 900_000,
+    optIn: 'live',
+    network: true,
+    resetsPage: true,
+    async run(r, ctx) {
+      // Real Nominatim, USGS 3DEP, Esri and TIGERweb. The address is a public building (Houston City Hall).
+      const query = String(args.address ?? '901 Bagby St, Houston, TX');
+      await page.goto(new URL('?preset=pittsburgh', ctx.baseUrl).href, { waitUntil: 'domcontentloaded' });
+      await waitReady(120_000);
+      await page.click('.dl-uc-btn');
+      await page.click('[data-usecase="address"]');
+      await page.fill('[data-uc="address-input"]', query);
+      await page.click('[data-uc="address-search"]');
+      const found = await page.waitForSelector('[data-uc="address-choice"]', { timeout: 30_000 }).then(() => true, () => false);
+      check(r, `Nominatim finds “${query}”`, found, found ? 'found' : 'no result');
+      if (!found) return;
+      const t0 = Date.now();
+      await page.click('[data-uc="address-choice"]');
+      const at = await page
+        .waitForFunction(() => /[?&]at=/.test(location.search) && new URLSearchParams(location.search).get('at'), null, { timeout: 240_000 })
+        .then((h) => h.jsonValue(), () => null);
+      const [lat, lon] = String(at ?? 'NaN,NaN').split(',').map(Number);
+      const out = await addressSetUp(r, { lat, lon }, 240_000);
+      r.metrics.liveLoadSeconds = (Date.now() - t0) / 1000;
+      r.metrics.at = { lat, lon };
+      r.metrics.atlas14 = out.levels;
+      if (!out.ok) return;
+      await addressSweep(r, '21');
+    },
+  },
 ];
+
+// ─── "Check any US address" helpers (flows 20 and 21) ────────────────────────────────────────────
+
+/** A minimal little-endian, uncompressed, single-strip float32 TIFF — what the 3DEP exportImage call returns. */
+function float32Tiff(w, h, valueAt) {
+  const entries = [
+    [256, 4, 1, w], // ImageWidth
+    [257, 4, 1, h], // ImageLength
+    [258, 3, 1, 32], // BitsPerSample
+    [259, 3, 1, 1], // Compression: none
+    [262, 3, 1, 1], // Photometric: min-is-black
+    [273, 4, 1, 0], // StripOffsets (patched below)
+    [277, 3, 1, 1], // SamplesPerPixel
+    [278, 4, 1, h], // RowsPerStrip
+    [279, 4, 1, w * h * 4], // StripByteCounts
+    [284, 3, 1, 1], // PlanarConfiguration
+    [339, 3, 1, 3], // SampleFormat: IEEE float
+  ];
+  const ifdSize = 2 + entries.length * 12 + 4;
+  const dataOff = 8 + ifdSize + ((4 - ((8 + ifdSize) % 4)) % 4);
+  entries[5][3] = dataOff;
+  const buf = Buffer.alloc(dataOff + w * h * 4);
+  buf.write('II', 0, 'latin1');
+  buf.writeUInt16LE(42, 2);
+  buf.writeUInt32LE(8, 4);
+  buf.writeUInt16LE(entries.length, 8);
+  entries.forEach(([tag, type, count, value], i) => {
+    const o = 10 + i * 12;
+    buf.writeUInt16LE(tag, o);
+    buf.writeUInt16LE(type, o + 2);
+    buf.writeUInt32LE(count, o + 4);
+    if (type === 3) buf.writeUInt16LE(value, o + 8);
+    else buf.writeUInt32LE(value, o + 8);
+  });
+  buf.writeUInt32LE(0, 10 + entries.length * 12);
+  for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) buf.writeFloatLE(valueAt(i / (w - 1), j / (h - 1)), dataOff + (j * w + i) * 4);
+  return buf;
+}
+
+/**
+ * Fixtures for the hermetic address flow: Nominatim search → one Houston result; 3DEP exportImage → a 5 km bowl
+ * (20 m at the rim, 12 m at the centre, with a gentle west–east tilt) so rain runs to the address and ponds; the
+ * 3DEP reachability probe → 200. Everything else (imagery, roads, reverse geocoding) is refused: the loader then goes
+ * on without them, as it does on a bad connection.
+ */
+function addressFixtures(route, intercepted) {
+  const url = route.request().url();
+  intercepted.push(url.slice(0, 120));
+  const u = new URL(url);
+  if (u.hostname === 'nominatim.openstreetmap.org' && u.pathname === '/search') {
+    return route.fulfill({
+      status: 200,
+      headers: { 'content-type': 'application/json', 'access-control-allow-origin': '*' },
+      body: JSON.stringify([{ place_id: 1, display_name: '1600, Smith Street, Downtown, Houston, Harris County, Texas, 77002, United States', lat: '29.7604', lon: '-95.3698', class: 'place', type: 'house' }]),
+    });
+  }
+  if (u.hostname === 'elevation.nationalmap.gov' && u.pathname.endsWith('/exportImage')) {
+    const [w, h] = (u.searchParams.get('size') ?? '1024,1024').split(',').map(Number);
+    const tiff = float32Tiff(w, h, (x, y) => {
+      const r2 = ((x - 0.5) ** 2 + (y - 0.5) ** 2) * 4; // 0 at the centre, 1 at the edge midpoints
+      return 12 + 8 * Math.min(1.5, r2) + 0.5 * x;
+    });
+    return route.fulfill({ status: 200, headers: { 'content-type': 'image/tiff', 'access-control-allow-origin': '*' }, body: tiff });
+  }
+  if (u.hostname === 'elevation.nationalmap.gov') {
+    return route.fulfill({ status: 200, headers: { 'content-type': 'application/json', 'access-control-allow-origin': '*' }, body: '{}' });
+  }
+  return route.abort('internetdisconnected');
+}
+
+/** Wait for the address case to be set up: live area on the point, one site there, Site check on the rain ladder. */
+async function addressSetUp(r, at, timeoutMs, label = 'search') {
+  const ready = await page
+    .waitForFunction(
+      (p) => {
+        const s = window.__deluge?.getState();
+        const sel = document.querySelector('[data-site="ladder"]');
+        return !!s && s.presetId === null && !!s.terrainName && !s.loading && document.querySelectorAll('.dl-site-item').length >= 1 && sel?.value === 'rain' && document.querySelectorAll('.dl-site-ladder input[data-level^="a14-"]').length === 5;
+      },
+      at,
+      { timeout: timeoutMs },
+    )
+    .then(() => true, () => false);
+  const out = await D(() => {
+    const s = window.__deluge.getState();
+    const t = window.__deluge.getTerrain?.() ?? null;
+    return {
+      name: s.terrainName,
+      grid: s.grid,
+      bounds: t?.bounds ?? null,
+      url: location.search,
+      sites: document.querySelectorAll('.dl-site-item').length,
+      ladder: document.querySelector('[data-site="ladder"]')?.value ?? '',
+      siteOpen: document.querySelector('[data-section="site"]')?.classList.contains('dl-open') ?? false,
+      levels: [...document.querySelectorAll('.dl-site-ladder tbody tr')].map((tr) => tr.textContent ?? ''),
+      ticked: [...document.querySelectorAll('.dl-site-ladder input[data-level^="a14-"]')].filter((b) => b.checked).length,
+      intro: document.querySelector('[data-section="site"] .dl-impact-block .dl-impact-fine')?.textContent ?? '',
+      notice: document.querySelector('.dl-notice.dl-show')?.textContent ?? '',
+    };
+  });
+  out.ok = ready;
+  if (label === 'link') return out;
+  check(r, 'a 5 km live area loads on the address, with one site on the point and Site check open', ready && out.sites >= 1 && out.siteOpen && Math.abs((out.grid?.nx ?? 0) * (out.grid?.cellSize ?? 0) - 5000) < 1, `“${out.name}” ${out.grid?.nx}² @ ${num(out.grid?.cellSize)} m, ${out.sites} site(s)`);
+  const rain = out.levels.map((t) => (/(\d+(?:\.\d+)?) mm\/h/.exec(t) ?? [])[1]).map(Number);
+  const rps = out.levels.map((t) => (/([\d.]+) yr · source/.exec(t) ?? [])[1]);
+  out.levels = out.levels.map((t, i) => ({ text: t.slice(0, 80), mmPerHour: rain[i], rp: rps[i] }));
+  check(r, 'the NOAA Atlas 14 rain ladder is pre-ticked: 2 to 500-yr, rising, with sourced return periods', out.ticked === 5 && rain.every((v, i) => v > 0 && (i === 0 || v > rain[i - 1])) && rps.join() === '2.5,10.5,25.5,100.5,500.5', `${rain.join(' / ')} mm/h · ${rps.join(', ')} yr`);
+  check(r, 'a notice offers “Run the sweep”', /Run the sweep/.test(out.notice), out.notice.slice(0, 120));
+  return out;
+}
+
+/** Press "Run the sweep" in the notice and check the sweep, its EAL, the caveats, the restored scenario and the report. */
+async function addressSweep(r, tag) {
+  const before = await D(() => {
+    const s = window.__deluge.getState();
+    return { rain: s.sim.rainRate, stageOffset: s.stageOffset, storms: s.storms.length, sources: s.sources.length };
+  });
+  await shot(`${tag}-address-site`);
+  const t0 = Date.now();
+  await page.click('.dl-notice.dl-show .dl-toast-actions button');
+  const done = await page
+    .waitForFunction(() => /^(Done|Sweep stopped|Cancelled)/.test(document.querySelector('[data-site="sweep-status"]')?.textContent ?? ''), null, { timeout: 480_000 })
+    .then(() => true, () => false);
+  const sweepS = (Date.now() - t0) / 1000;
+  const out = await D(() => ({
+    status: document.querySelector('[data-site="sweep-status"]')?.textContent ?? '',
+    verdict: [...document.querySelectorAll('[data-site="verdict"] p')].map((p) => p.textContent ?? ''),
+    rows: [...document.querySelectorAll('.dl-site-sweep-out .dl-site-table tbody tr')].map((tr) => [...tr.querySelectorAll('td')].map((td) => td.textContent ?? '')),
+    caveats: !!document.querySelector('[data-site="rain-caveats"]'),
+    chart: !!document.querySelector('.dl-site-sweep-out svg'),
+    after: (() => {
+      const s = window.__deluge.getState();
+      return { rain: s.sim.rainRate, stageOffset: s.stageOffset, storms: s.storms.length, sources: s.sources.length };
+    })(),
+  }));
+  const eal = out.verdict.find((v) => /Expected annual loss/.test(v)) ?? '';
+  r.metrics.sweepSeconds = sweepS;
+  r.metrics.sweepRows = out.rows;
+  r.metrics.verdict = out.verdict;
+  check(r, 'the five-level rain sweep completes', done && /^Done: 5 levels/.test(out.status), `${out.status.slice(0, 80)} (${num(sweepS, 1)} s wall)`);
+  check(r, 'EAL comes from sourced return periods (no “needs your input”)', /Expected annual loss \$/.test(eal) && !/your input|No expected annual loss/.test(out.verdict.join(' ')), eal.slice(0, 160));
+  check(r, 'the rain ladder’s caveats are shown with the result', out.caveats, String(out.caveats));
+  check(r, 'the user’s scenario is put back (rain, stage, storms, sources)', JSON.stringify(out.after) === JSON.stringify(before), `${JSON.stringify(before)} → ${JSON.stringify(out.after)}`);
+  await D(() => document.querySelector('[data-site="verdict"]')?.scrollIntoView({ block: 'start' }));
+  await sleep(400);
+  const panelShot = path.join(OUT, `${tag}-address-sweep.png`);
+  await page.locator('.dl-panel').screenshot({ path: panelShot });
+  console.log(`  [shot] ${path.relative(ROOT, panelShot)}`);
+  const [dl] = await Promise.all([page.waitForEvent('download', { timeout: 20_000 }), page.click('[data-site="report-html"]')]);
+  const file = path.join(OUT, `${tag}-address-assessment.html`);
+  await dl.saveAs(file);
+  const html = fs.readFileSync(file, 'utf8');
+  const has = ['NOAA Atlas 14', 'Rain ladder caveats', 'stationary', 'Atlas 14 100-yr 1-hour rain', 'hdsc.nws.noaa.gov', 'Expected annual loss'];
+  const missing = has.filter((s) => !html.includes(s));
+  check(r, 'the site assessment cites NOAA Atlas 14 and carries the caveats', missing.length === 0 && !/<script/i.test(html), missing.length ? `missing: ${missing.join(', ')}` : `${(html.length / 1024).toFixed(0)} KB`);
+}
 
 // ─── report ────────────────────────────────────────────────────────────────────────────────────
 function printTable() {

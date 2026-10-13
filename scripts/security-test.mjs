@@ -17,7 +17,8 @@
  *   SPOOF-*    SEC-01  ?name= / ?preset= / invalid ?live= must never put attacker prose in the app's own chrome
  *   XSS-*      SEC-01/08/09/10  hostile Nominatim, preset meta and road data must not execute (window.__pwned unset)
  *   CSP-*      SEC-02  the policy ships in the built index.html, and the main flows raise zero violations
- *   CAP-*      SEC-03  oversized and gzip-bomb responses are refused without exhausting memory
+ *   CAP-*      SEC-03  oversized and gzip-bomb responses are refused without exhausting memory (Nominatim; the
+ *                      same-origin NOAA Atlas 14 grid behind Site check's rain ladder)
  *   DIST-*     SEC-07  no source maps, no local paths, no debug surfaces in the released bundle
  *   AUDIT-*    supply chain: `npm audit --omit=dev` is clean
  *
@@ -410,6 +411,10 @@ try {
     { id: 'SPOOF-BIDI', query: `?live=40.4406,-79.9959,2&res=512&name=${encodeURIComponent(SPOOF_BIDI)}`, what: '?name= bidi override is stripped' },
     { id: 'SPOOF-PRESET', query: `?preset=${encodeURIComponent(SPOOF_PRESET)}`, what: 'unknown ?preset= is rejected and never echoed' },
     { id: 'SPOOF-LIVE', query: `?live=${encodeURIComponent(SPOOF_LIVE)}`, what: 'invalid ?live= value is not echoed in a notice' },
+    // "Check any US address" (src/ui/useCaseDefs.ts parseAddressAt): the link carries numbers only; a ?name= or a
+    // sentence in at= must never reach the page.
+    { id: 'SPOOF-ADDRESS-NAME', query: `?usecase=address&at=29.7604,-95.3698&name=${encodeURIComponent(SPOOF_NAME)}`, what: '?usecase=address takes no name from the link' },
+    { id: 'SPOOF-ADDRESS-AT', query: `?usecase=address&at=${encodeURIComponent(SPOOF_LIVE)}`, what: 'invalid ?at= value is not echoed in a notice' },
   ];
   for (const c of spoofCases.filter((c) => shouldRun(c.id))) {
     const page = await newPage(browser); // every external host aborted: the lead's re-confirmation scenario
@@ -576,6 +581,42 @@ try {
     await page.close();
   }
 
+  /** Open "Check any US address" from the top bar and search — the second flow that renders Nominatim's answers. */
+  async function addressSearchFlow(page, query) {
+    const opened = await page
+      .click('.dl-uc-btn', { timeout: 8000 })
+      .then(() => page.click('[data-usecase="address"]', { timeout: 8000 }))
+      .then(() => true)
+      .catch(() => false);
+    if (!opened) return { opened: false };
+    const input = page.locator('[data-uc="address-input"]');
+    if (!(await input.count())) return { opened: true, typed: false };
+    await input.fill(query);
+    await page.click('[data-uc="address-search"]').catch(() => {});
+    await page.waitForTimeout(2500);
+    return { opened: true, typed: true };
+  }
+
+  if (shouldRun('XSS-ADDRESS-GEOCODER')) {
+    const hostile = XSS_PAYLOADS.map((p, i) => ({ place_id: i, display_name: `${p}, Houston, Texas`, lat: '29.7604', lon: '-95.3698', type: p }));
+    const page = await newPage(browser, { 'nominatim.openstreetmap.org': (route) => fulfilJSON(route, hostile) });
+    await page.goto(`${baseUrl}?preset=pittsburgh`, { waitUntil: 'load', timeout: 120000 });
+    await waitForApp(page);
+    const flow = await addressSearchFlow(page, '1600 Smith St, Houston');
+    const choices = await page.locator('[data-uc="address-choice"]').count();
+    const t = await tripwires(page);
+    const ok = !t.pwned && t.injectedImgs === 0 && t.injectedScripts === 0 && t.iframes === 0;
+    record(
+      'XSS-ADDRESS-GEOCODER',
+      'SEC-09',
+      'hostile geocoder results in "Check an address" do not execute',
+      flow.typed ? (ok ? 'pass' : 'fail') : ok ? 'pending' : 'fail',
+      flow.typed ? (ok ? `${choices} results rendered as text, window.__pwned unset` : JSON.stringify(t)) : 'address search not reachable — case not exercised',
+      { ...flow, choices, ...t },
+    );
+    await page.close();
+  }
+
   // ── SEC-03 response byte caps ────────────────────────────────────────────────────────────────
   console.log('\nResponse byte caps (SEC-03)');
   /**
@@ -687,6 +728,58 @@ try {
         ? `${payloadMB.toFixed(1)} MB payload (${(wire / 1024).toFixed(0)} KB on the wire), marker ${leaked ? 'RENDERED' : 'never rendered'}, ${heapText}, app ${alive ? 'alive' : 'DEAD'}`
         : 'search UI not reachable — case not exercised',
       { leaked, alive, growthMB, driftMB, limitMB, gcForced: after.forced, wireBytes: wire },
+    );
+    await page.close();
+  }
+
+  /**
+   * The NOAA Atlas 14 grid (src/data/atlas14.ts) is fetched from this app's own origin, but a mirror, a proxy or a
+   * cache can still hand back anything. Site check on Houston loads it; each variant must cost the rain ladder only:
+   * the app stays up, nothing it sent is shown, and the heap does not keep the payload.
+   */
+  const atlasCases = [
+    { id: 'CAP-ATLAS14-BOMB', what: 'a gzip-bomb Atlas 14 grid (64 MB inflated) is refused', body: () => zlib.gzipSync(Buffer.alloc(64 * 1048576), { level: 9 }), payloadMB: 64 },
+    { id: 'CAP-ATLAS14-OVERSIZE', what: 'an oversized Atlas 14 grid (12 MB on the wire) is refused', body: () => Buffer.alloc(12 * 1048576, 7), payloadMB: 12 },
+    {
+      id: 'CAP-ATLAS14-HOSTILE',
+      what: 'a hostile Atlas 14 grid (markup, wrong magic) is refused and never shown',
+      body: () => Buffer.from(`DLA14PF1${XSS_PAYLOADS.join('')}${'\u0000'.repeat(64)}`, 'utf8'),
+      payloadMB: 0,
+    },
+  ];
+  for (const c of atlasCases.filter((c) => shouldRun(c.id))) {
+    const body = c.body();
+    const page = await newPage(browser);
+    await page.route('**/atlas14/pf60m-pds.bin', (route) => route.fulfill({ status: 200, headers: { 'content-type': 'application/octet-stream' }, body }));
+    await page.goto(`${baseUrl}?preset=houston`, { waitUntil: 'load', timeout: 120000 });
+    await waitForApp(page);
+    const base = await liveHeap(page);
+    const opened = await page
+      .click('[data-section="site"] .dl-sec-head', { timeout: 8000 })
+      .then(() => true)
+      .catch(() => false);
+    if (opened) {
+      await page
+        .waitForFunction(() => /could not be loaded/.test(document.querySelector('[data-site="rain-status"]')?.textContent ?? ''), null, { timeout: 30000 })
+        .catch(() => {});
+    }
+    const statusText = opened ? await page.evaluate(() => document.querySelector('[data-site="rain-status"]')?.textContent ?? '') : '';
+    const after = await liveHeap(page);
+    const t = await tripwires(page);
+    const alive = await page.evaluate(() => !!document.querySelector('.dl-scene-name'));
+    const rainOffered = await page.evaluate(() => [...document.querySelectorAll('[data-site="ladder"] option')].some((o) => o.value === 'rain'));
+    const growthMB = base.bytes !== null && after.bytes !== null ? +((after.bytes - base.bytes) / 1048576).toFixed(1) : null;
+    const memoryOk = growthMB === null || !after.forced || growthMB < CAP_HEAP_SLACK_MB + 2.8 /* the decoded grid itself, when valid */;
+    const ok = alive && !t.pwned && t.injectedImgs === 0 && t.injectedScripts === 0 && /could not be loaded/.test(statusText) && !rainOffered && memoryOk;
+    record(
+      c.id,
+      'SEC-03',
+      c.what,
+      opened ? (ok ? 'pass' : 'fail') : 'pending',
+      opened
+        ? `${(body.length / 1048576).toFixed(2)} MB on the wire${c.payloadMB ? ` (${c.payloadMB} MB payload)` : ''}; rain ladder ${rainOffered ? 'OFFERED' : 'withheld'}; “${statusText.slice(0, 60)}”; live heap ${growthMB === null ? 'n/a' : `${growthMB >= 0 ? '+' : ''}${growthMB} MB`}; app ${alive ? 'alive' : 'DEAD'}`
+        : 'Site check not reachable — case not exercised',
+      { statusText, rainOffered, growthMB, alive, ...t },
     );
     await page.close();
   }
