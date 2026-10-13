@@ -210,8 +210,9 @@ always was. Cells dry now and at the last export with no flow skip the buffer en
 0.23 ms at 1024² on a river valley (0.30 ms with every cell wet; Dawn on D3D12), and nothing changes per substep.
 Exports otherwise follow the wall clock (a rendered frame, a readback), which under a headless sweep's render hold at
 3600× left 60–120 simulated seconds between samples: a flood front crossing a building was recorded at whatever
-moment happened to be sampled. So a `step()` frame that advances more than `hazardSampleSeconds` (5 s) splits its
-substeps into compute passes and exports between them, in the same command buffer — each sample's export time comes
+moment happened to be sampled. So once `hazardSampleSeconds` (5 s) of simulated time have passed since the latest
+export (of any kind — counted across frames, so a throttled run of many short frames is sampled as densely as one
+long frame), a `step()` frame splits its substeps into compute passes and exports between them, in the same command buffer — each sample's export time comes
 from a small uniform block copied over the Sim uniform before its export pass (`copyBufferToBuffer`), and the GPU
 timing spans all the passes. Interactive play up to ~150× never advances 5 s in a frame; at high speed-ups it is one
 export per ~10 substeps, a few %. `tests/sim/exactStop.test.ts` checks the in-frame samples equal hand-made exports

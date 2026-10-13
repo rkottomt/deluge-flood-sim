@@ -1352,8 +1352,9 @@ export class GpuFloodSolver implements FloodSolver {
       }
     }
     probe?.resolve(enc);
-    // The export follows lazily (stateTexture getter, or the readback below when one is due).
-    this.exportDirty = true;
+    // The export follows lazily (stateTexture getter, or the readback below when one is due) — unless a sample at the
+    // frame's last substep has just made it.
+    this.exportDirty = !(cuts.length && cuts[cuts.length - 1] === n);
     this.stateVersionN++;
 
     this.simTime += n * dt;
@@ -1396,17 +1397,22 @@ export class GpuFloodSolver implements FloodSolver {
   }
 
   /**
-   * Substep counts (ascending, each in 1 … n−1) after which a step() frame of n substeps of dt samples the hazard
-   * accumulators, so that no stretch of more than SolverOptions.hazardSampleSeconds goes unsampled (at most
-   * MAX_HAZARD_SAMPLES of them; spread wider beyond that). Empty when the frame is short enough or sampling is off.
+   * Substep counts (ascending, each in 1 … n) after which a step() frame of n substeps of dt samples the hazard
+   * accumulators, so that no stretch of more than SolverOptions.hazardSampleSeconds goes unsampled, counted from the
+   * latest export — whether that was a sample, a render or a readback — not from the frame start: many short frames
+   * between wall-clock exports (a throttled headless run) are sampled as densely as one long one. The first cut is
+   * the first substep at or past that export + the span, then one every span; a cut at n exports at the frame's end.
+   * At most MAX_HAZARD_SAMPLES (spread wider beyond that). Empty when sampling is off or no sample falls due.
    */
   private hazardCuts(n: number, dt: number): number[] {
     const span = this.options.hazardSampleSeconds;
-    if (!(span > 0) || !(n * dt > span) || n < 2) return [];
-    let k = Math.max(1, Math.floor(span / dt));
-    if (Math.ceil(n / k) - 1 > MAX_HAZARD_SAMPLES) k = Math.ceil(n / (MAX_HAZARD_SAMPLES + 1));
+    if (!(span > 0) || n < 1 || !(dt > 0)) return [];
+    let k = Math.max(1, Math.floor(span / dt + 1e-9));
+    const first = Math.max(1, Math.ceil((this.hazardTime + span - this.simTime) / dt - 1e-9));
+    if (first > n) return [];
+    if (Math.floor((n - first) / k) + 1 > MAX_HAZARD_SAMPLES) k = Math.max(1, Math.ceil((n - first + 1) / MAX_HAZARD_SAMPLES));
     const cuts: number[] = [];
-    for (let m = k; m < n; m += k) cuts.push(m);
+    for (let m = first; m <= n && cuts.length < MAX_HAZARD_SAMPLES; m += k) cuts.push(m);
     return cuts;
   }
 

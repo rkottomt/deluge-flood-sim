@@ -88,9 +88,10 @@ export interface SolverOptions {
    * per rendered frame or readback, i.e. on a wall-clock cadence: at 3600× under a render hold that is 60–120 simulated
    * seconds apart, so a flood front crossing a building between two exports was recorded at whatever moment happened
    * to be sampled — Site check's 1936-crest result for a North Shore parcel read d·v 6.6 one run and 8.2 the next.
-   * A frame that advances further than this splits its substeps and exports in between (in the same command buffer),
-   * which makes the sampling a function of simulated time. Interactive play at ≤ 150× (30 fps) never advances this
-   * far in a frame and is unaffected; at high speed-ups one export (~¼ of a substep) per ~10 substeps costs a few %.
+   * Once this much simulated time has passed since the latest export of any kind, a frame splits its substeps and
+   * exports in between (in the same command buffer), which makes the sampling a function of simulated time.
+   * Interactive play renders (and so exports) often enough that this rarely triggers; at high speed-ups it is one
+   * export (~¼ of a substep) per span — every ~10 substeps on Pittsburgh — a few %.
    */
   hazardSampleSeconds: number;
   /**
