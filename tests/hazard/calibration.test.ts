@@ -24,6 +24,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { runChain } from '../../src/hazard/chain';
+import { debrisFlowVelocity } from '../../src/hazard/mass';
 import type { BakedChainResult, ChainFile, HazardChainSpec } from '../../src/hazard/types';
 
 const ROOT = path.resolve(import.meta.dirname, '../../public/presets');
@@ -144,4 +145,41 @@ test('bed resistance as decided in research spec §G.9: Ferguson (2007) VPE on D
   const law = (id: string) => read<{ scenario: { hazardChain: HazardChainSpec } }>(id, 'meta.json').scenario.hazardChain.routing?.resistance;
   for (const id of ['nepal', 'chamoli']) if (have(id)) assert.deepEqual(law(id), { law: 'ferguson2007', d84: 0.5 }, id);
   if (have('chungthang')) assert.equal(law('chungthang'), undefined, 'chungthang routes with the profile’s Manning n');
+});
+
+/**
+ * Fourth pass (research spec §G.9): is the remaining Nepal gap in the ROUTING? Rickenmann's (1999) empirical debris-flow
+ * mean velocity V = 2.1·Q^0.33·S^0.33 (src/hazard/mass.ts debrisFlowVelocity) is independent of the router — no
+ * section geometry, no resistance law, no momentum scheme. Below Rasuwagadhi the routed front already moves at it, to
+ * within a few per cent, for the discharge the router carries; the observed Betrawati time would need a discharge
+ * several times the routed peak, held for 45 km. So the gap is not a celerity or a width the router gets wrong.
+ */
+test('Nepal 2026: below Rasuwagadhi the routed front moves at Rickenmann’s debris-flow velocity for its own peak', { skip: !have('nepal') }, (t) => {
+  const r = read<BakedChainResult>('nepal', 'chain-result.json');
+  const c = read<ChainFile>('nepal', 'chain.json');
+  const at = (name: string) => r.stations.find((s) => s.name === name)!;
+  const zAt = (s: number) => {
+    let k = 0;
+    while (k < c.s.length - 2 && c.s[k + 1] < s) k++;
+    return c.zBed[k] + ((s - c.s[k]) / (c.s[k + 1] - c.s[k])) * (c.zBed[k + 1] - c.zBed[k]);
+  };
+  const reach = (a: string, b: string) => {
+    const A = at(a);
+    const B = at(b);
+    const slope = (zAt(A.s) - zAt(B.s)) / (B.s - A.s);
+    const q = Math.sqrt(A.qPeak! * B.qPeak!);
+    return { km: (B.s - A.s) / 1000, slope, q, model: (B.s - A.s) / (B.tFront! - A.tFront!), rickenmann: debrisFlowVelocity(q, slope) };
+  };
+  for (const [a, b] of [['Rasuwagadhi', 'Syafrubesi'], ['Syafrubesi', 'Upper Trishuli-1 HEP (under construction)'], ['Rasuwagadhi', 'Betrawati']]) {
+    const x = reach(a, b);
+    t.diagnostic(`${a} → ${b}: ${x.km.toFixed(1)} km at ${(x.slope * 100).toFixed(2)} %, front ${x.model.toFixed(1)} m/s, Rickenmann ${x.rickenmann.toFixed(1)} m/s at ${Math.round(x.q)} m³/s (×${(x.model / x.rickenmann).toFixed(2)})`);
+    assert.ok(x.model / x.rickenmann > 0.85 && x.model / x.rickenmann < 1.15, `${a} → ${b}: ×${(x.model / x.rickenmann).toFixed(2)}`);
+  }
+  // What the observation would take: Betrawati at 43 min with the front at Rasuwagadhi at 7 min (CCTV, the earliest
+  // credible) is 45 km in 36 min. Rickenmann's relation inverted for that speed on the same slope:
+  const x = reach('Rasuwagadhi', 'Betrawati');
+  const need = (x.km * 1000) / ((43 - 7) * 60);
+  const qNeed = Math.pow(need / (2.1 * Math.pow(x.slope, 0.33)), 1 / 0.33);
+  t.diagnostic(`observed 43 min needs ${need.toFixed(1)} m/s over the reach: Q ≈ ${Math.round(qNeed)} m³/s held for 45 km; routed peak ${Math.round(at('Rasuwagadhi').qPeak!)} → ${Math.round(at('Betrawati').qPeak!)}, ensemble p90 at Betrawati ${at('Betrawati').band!.qPeak[2]}`);
+  assert.ok(qNeed > 1.4 * at('Betrawati').band!.qPeak[2], 'the observed time needs more than the ensemble’s p90 peak, by a margin');
 });

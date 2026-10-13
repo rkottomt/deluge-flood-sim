@@ -341,6 +341,21 @@ and the stiff end of the O'Brien–Julien table (Aspen Pit 1, τ_y ≈ 1.9 kPa, 
 barrage: after 25 minutes its fastest cell moves at 2.6 m/s, 600 m short of it. The same runs found that the radar DSM's false sills in the Rishiganga slot gorge pond even clear water 48 m deep; the bake's gorge floor
 (`RiverDef.carve`, public/presets/SOURCES.txt) is what lets any rheology through.
 
+**Arrival times of the 1-D chain.** The surge that enters these maps is routed down 32–73 km of valley by the chain's
+1-D local-inertial router (`src/hazard/routing.ts`), and its timing is checked against the events' published times in
+`tests/hazard/calibration.test.ts` (research spec §G.9). Nepal is the outlier: the front reaches Betrawati 65 min
+after the avalanche against ≤ 43 min reported. A fourth pass asked whether the router's celerity or channel widths
+cause it, using a check that depends on neither — Rickenmann's (1999) empirical debris-flow mean velocity
+V = 2.1·Q^0.33·S^0.33 (`debrisFlowVelocity` in `src/hazard/mass.ts`). Below Rasuwagadhi the routed front moves at
+0.96–0.98 of it for the discharge the router carries (14.8 m/s over 45 km against 15.5), and the test pins that within
+±15 %. A local-inertial front into a low baseflow is a shock whose speed continuity fixes, (Q₂ − Q₁)/(A₂ − A₁) ≈ 1.1×
+the flow behind it, so neither the full dynamic wave (the advection term vanishes in the near-uniform flow behind the
+front) nor a kinematic celerity of 5/3·u for the peak can move the front materially faster; narrower sections would
+push the speed above an empirical relation that is width-free. The reported time would need ~40,000 m³/s held over
+the whole 45 km, 1.6× the ensemble's p90 peak. The routing was left unchanged; the residual is attributed to the
+source (the avalanche mass itself running far down the Bhote Koshi, which no back-analysis yet supports) or to the
+observations (gauge-loss times, not sightings). Chamoli and Chungthang were not touched.
+
 ### 3.10 Ensembles: flood probability under stated input uncertainty
 
 A single run answers "does this street flood?". A lender, insurer or developer asks "in how many plausible versions of
@@ -966,8 +981,13 @@ velocity-shader regression — but its tolerance is not honest at 0.02 on a load
 
 **Against real floods.** Everything above is about solving the equations. How the scenes compare with what was
 observed — USGS high-water marks and gauge peaks, FEMA's 1 % zone and profile at FEMA's own 1 % level, Copernicus EMS
-damage grading — is measured by `scripts/validate.ts` (same solver on Dawn, scenes set up as the app does), pinned by
-`tests/sim/validationRegression.test.ts`, and reported in [docs/VALIDATION.md](docs/VALIDATION.md).
+damage grading, and Metro Nashville's survey of the parcels damaged in May 2010 — is measured by `scripts/validate.ts`
+(same solver on Dawn, scenes set up as the app does), pinned by `tests/sim/validationRegression.test.ts`, and reported
+in [docs/VALIDATION.md](docs/VALIDATION.md). A damage survey that lists only damaged parcels is made two-sided by
+scoring every building footprint the scene has (`scoreDamage` in `src/validation/score.ts`: hit, miss, false alarm or
+correct dry), and a crest-reach mask — ground below the gauged crest, connected to the river — separates the damage a
+river-stage scene can explain from the damage it cannot. A scene may carry more than one comparison; the summary's
+`more` lines are shown under the headline in the Scenario section's validation block.
 
 ### 9.1 Grid convergence: the demo grid against a 16× finer reference
 

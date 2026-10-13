@@ -843,6 +843,67 @@ The baked Chungthang median member is now the high-volume one (×1.25: 121.3 min
   2-D floodplain storage in the wide upper valleys against these 1-D DEM sections, and the debris load, which this
   router relaxes to a Takahashi equilibrium of ~0.04 at 2–4 % slopes.
 
+**Fourth pass: is Nepal's remaining gap in the routing? (October 2026).** Three candidates were checked — the wave
+celerity of the 1-D scheme, the channel widths, the source timing — each against something published, never against
+the clock. Result: none closes it defensibly; **nothing was changed**, and every number in the tables above stands.
+
+*An independent speed check.* Rickenmann (1999, Nat. Hazards 19:47, [V] §C.4) fitted the mean velocity of debris
+flows to discharge and slope alone, V = 2.1·Q^0.33·S^0.33 — no section, no roughness, no momentum scheme. Applied to
+the baked median run (station chainages and fronts from chain-result.json, the bed slope between stations from
+chain.json, Q the geometric mean of the two stations' routed peaks) [C]:
+
+| Reach (median run) | km | slope | routed front | Rickenmann V at the routed Q | ratio |
+|---|---|---|---|---|---|
+| Nepal, Rasuwagadhi → Syafrubesi | 14.7 | 2.61 % | 16.1 m/s | 16.4 m/s (19,269 m³/s) | 0.98 |
+| Nepal, Syafrubesi → Upper Trishuli-1 | 17.5 | 2.87 % | 15.5 | 15.8 (15,738) | 0.98 |
+| Nepal, Rasuwagadhi → Betrawati | 45.3 | 2.65 % | 14.8 | 15.5 (16,025) | 0.96 |
+| Nepal, Lhende source → Rasuwagadhi | 15.0 | 7.2 % | 26.3 | 26.9 (31,624) | 0.98 |
+| Chamoli, Raini → Tapovan barrage | 6.3 | 2.48 % | 14.2 | 11.8 (7,592) | 1.20 |
+| Chamoli, Tapovan → Joshimath | 9.4 | 3.64 % | 10.7 | 11.6 (4,840) | 0.92 |
+| Chungthang, Lachen → Chungthang | 19.5 | 4.88 % | 10.7 | 13.8 (6,091) | 0.78 |
+
+So on the Bhote Koshi and Trishuli the router already runs at the empirical debris-flow speed for the discharge it
+carries (pinned by tests/hazard/calibration.test.ts within ±15 %). To reach Betrawati at 43 min with the front at
+Rasuwagadhi at 7 min (CCTV, the earliest credible), the 45 km would need 21 m/s, i.e. Q ≈ 40,000 m³/s held over the
+whole reach — 1.9× the routed Rasuwagadhi peak and 1.6× the ensemble's p90 at Betrawati. At OPRI's 23 min it would be
+several times more. (Chamoli: fast below Raini and Chungthang slow by this yardstick — the other signs §G.9 already
+reports; Chungthang is a water outburst, for which a debris-flow relation is only indicative.)
+
+*Celerity (a).* The router is local-inertial (no advection term). Behind a surge front in a steep channel the flow is
+close to uniform, where the advection term vanishes, and the front into a low baseflow is a shock whose speed is set
+by continuity, (Q₂ − Q₁)/(A₂ − A₁) ≈ 1.1 × the mean velocity behind it for a wide Manning section with Q₁/Q₂ ≈ 0.05
+[C]. A full dynamic-wave router would move it at the same speed; a kinematic celerity of 5/3·u is the speed of a small
+disturbance on the peak, not of the front, and only bounds how fast the peak can catch the front. Not a 22-minute
+term.
+
+*Channel geometry (b).* Narrower sections would deepen the flow and speed it — but the routed speed is already at a
+width-free empirical relation, so narrowing would put it above it, and the third pass found that wider floors move
+Nepal one way and Chamoli the other. No surveyed sections exist (§G.9 third pass). Not changed.
+
+*Source timing (c).* The clock (08:37, seismic) and the avalanche's travel (4.3 min at 50 m/s) are already in.
+Upstream of Rasuwagadhi the model is ~7 min behind the CCTV time; below it, at least ~15 min (51 model minutes for
+45 km against ≤ 36). A faster source cannot buy the lower reach, which runs on the routed discharge; only a much
+larger discharge or the avalanche mass itself travelling down the Bhote Koshi (a Kolka-type μ ≈ 0.05, §G.9 third
+pass) could — neither is supported by a back-analysis of this event.
+
+*The observation, read again.* The Flood Forecasting Division's report (via Onlinekhabar, 27 Aug 2026 [V for the
+article]) gives Syafrubesi's **last reading at 08:40 and its data stopping at 08:50**, and for Betrawati only that it
+**stopped transmitting at 09:20** with a last reading of 3.55 m (below the 4.1 m warning). If Betrawati reported on
+the same ten-minute pattern, its last good reading was ~09:10 and the front arrived between 09:10 and 09:20 — so
+the gap is 22–32 min, not "about 20"; if the telemetry failed before the water came, 09:20 bounds nothing. The same
+report has the station's staff among those reporting the flood **entering** the Bhote Koshi at 09:00 — not its
+arrival at Betrawati, which is why 09:00 is not used as a Betrawati time.
+
+Before / after the fourth pass (median member; unchanged because nothing was adopted):
+
+| Station | before | after | observed |
+|---|---|---|---|
+| Nepal, Betrawati front | 64.9 min (09:41) | 64.9 min | ≤ 43 (gauge lost 09:20) / ~23 (OPRI) |
+| Nepal, Syafrubesi front | 29.3 | 29.3 | ≤ 13 (gauge lost) / ~23 (OPRI) |
+| Chamoli, Tapovan barrage front | 18.8 | 18.8 | 15–16 (seismic) |
+| Chamoli, Joshimath front | 34.1 | 34.1 | 37.5 (seismic) |
+| Chungthang front | 121.3 | 121.3 | ~142 (reported 00:35) |
+
 ---------------------------------------------------------------------------------------------------------------------
 
 ## H. Data sources for the bake pipeline
