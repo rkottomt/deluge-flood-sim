@@ -284,18 +284,29 @@ export function storeyDamage(opts: {
   contentsValue: number;
   undamageable: number;
   state: StructuralState;
+  /**
+   * Share of total loss from fast water, 0–1 (hazard.ts collapseShare): the result is (1 − share) × the depth-curve
+   * damage + share × total loss. Omitted: 1 when the state is 'collapse', else 0 (the plain step rule).
+   */
+  collapseShare?: number;
 }): DamageResult {
   const floors = Math.max(1, Math.floor(opts.floors));
   const S = (opts.structureValue * (1 - opts.undamageable)) / floors;
   const C = opts.contentsValue / floors;
   const out: DamageResult = { groundFraction: 0, fraction: 0, structure: 0, contents: 0, lossLo: 0, lossHi: 0, wetStoreys: 0 };
-  if (opts.state === 'collapse') {
-    out.groundFraction = 1;
-    out.fraction = 1;
-    out.structure = S * floors;
-    out.contents = C * floors;
-    out.lossLo = out.lossHi = out.structure + out.contents;
-    out.wetStoreys = floors;
+  const share = Math.min(1, Math.max(0, opts.collapseShare ?? (opts.state === 'collapse' ? 1 : 0)));
+  if (share > 0) {
+    // The curve part of a collapsing building is at least partially damaged (the collapse criterion implies the partial one).
+    const curve = storeyDamage({ ...opts, state: opts.state === 'collapse' ? 'partial' : opts.state, collapseShare: 0 });
+    const total = S * floors + C * floors;
+    const mix = (a: number, b: number) => (1 - share) * a + share * b;
+    out.groundFraction = mix(curve.groundFraction, 1);
+    out.fraction = mix(curve.fraction, 1);
+    out.structure = mix(curve.structure, S * floors);
+    out.contents = mix(curve.contents, C * floors);
+    out.lossLo = mix(curve.lossLo, total);
+    out.lossHi = mix(curve.lossHi, total);
+    out.wetStoreys = share >= 1 ? floors : curve.wetStoreys;
     return out;
   }
   let fSum = 0;

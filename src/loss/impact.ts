@@ -22,6 +22,7 @@ import {
   downtimeDays,
   fd2321HR,
   hrClass,
+  collapseShare,
   structuralState,
   type AidrClass,
   type HrClass,
@@ -66,14 +67,43 @@ export interface CellSample {
   /** NaN when the fields carry no velocity. */
   maxSpeed: number;
   maxDV: number;
+  /**
+   * The footprint statistic the structural (fast-water) rule reads: the STRUCTURAL_QUANTILE of the sampled cells'
+   * maximum speed and maximum depth × speed (NaN with maxSpeed). Optional so hand-built samples keep working: when
+   * absent, the maxima are used.
+   */
+  structSpeed?: number;
+  structDV?: number;
   /** Earliest arrival over the sampled cells, s since reset; −1 if never reached. */
   firstWet: number;
   wetSeconds: number;
 }
 
+/**
+ * Quantile of the per-cell maxima that the structural rule reads over a footprint [I]: 0.9, linearly interpolated
+ * between order statistics. The worst single cell of a bare-earth 2-D grid is the noisiest number in the footprint
+ * (a jet along one edge, a cell the front crosses at a sampled moment); requiring the speed and the depth × speed to
+ * act on about a tenth of the footprint keeps one cell from writing a building off, while a building in a fast
+ * current — all of it under the same flow — reads nearly its maximum. A footprint of 1 cell reads that cell; a few
+ * cells read close to their top value.
+ */
+export const STRUCTURAL_QUANTILE = 0.9;
+
+/** Linearly interpolated quantile q of `v` (sorted in place); 0 for an empty array. */
+export function quantile(v: Float64Array, q: number): number {
+  if (v.length === 0) return 0;
+  v.sort();
+  const x = Math.min(1, Math.max(0, q)) * (v.length - 1);
+  const i = Math.floor(x);
+  const j = Math.min(v.length - 1, i + 1);
+  return v[i] + (x - i) * (v[j] - v[i]);
+}
+
 export function sampleCells(f: HazardFields, cells: ArrayLike<number>, start = 0, end = cells.length): CellSample {
-  const s: CellSample = { sampled: 0, reachedCells: 0, maxDepth: 0, maxSpeed: 0, maxDV: 0, firstWet: -1, wetSeconds: 0 };
+  const s: CellSample = { sampled: 0, reachedCells: 0, maxDepth: 0, maxSpeed: 0, maxDV: 0, structSpeed: 0, structDV: 0, firstWet: -1, wetSeconds: 0 };
   let speedNaN = false;
+  const speeds = new Float64Array(Math.max(0, end - start));
+  const dvs = new Float64Array(speeds.length);
   for (let q = start; q < end; q++) {
     const c = cells[q];
     const fw = f.firstWet[c];
@@ -87,13 +117,20 @@ export function sampleCells(f: HazardFields, cells: ArrayLike<number>, start = 0
     else if (v > s.maxSpeed) s.maxSpeed = v;
     const dv = f.maxDV[c];
     if (dv > s.maxDV) s.maxDV = dv;
+    const k = s.sampled - 1;
+    speeds[k] = Number.isFinite(v) ? v : 0;
+    dvs[k] = Number.isFinite(dv) ? dv : 0;
     if (fw > 0 && (s.firstWet < 0 || fw < s.firstWet)) s.firstWet = fw;
     const w = f.wetSeconds[c];
     if (w > s.wetSeconds) s.wetSeconds = w;
   }
+  s.structSpeed = quantile(speeds.subarray(0, s.sampled), STRUCTURAL_QUANTILE);
+  s.structDV = quantile(dvs.subarray(0, s.sampled), STRUCTURAL_QUANTILE);
   if (speedNaN) {
     s.maxSpeed = NaN;
     s.maxDV = NaN;
+    s.structSpeed = NaN;
+    s.structDV = NaN;
   }
   return s;
 }
@@ -135,8 +172,14 @@ export interface AssetResult {
   depth: number;
   /** Max depth above the ground floor, m. */
   depthAboveFloor: number;
+  /** Worst cell's maximum speed (m/s) and depth × speed (m²/s): what the hazard classes read. */
   speed: number;
   dv: number;
+  /** The footprint statistic the structural rule reads (CellSample.structSpeed / structDV). */
+  structuralSpeed: number;
+  structuralDV: number;
+  /** Share of total loss from fast water, 0–1 (hazard.ts collapseShare); 'collapse' state from 0.5. */
+  collapseShare: number;
   firstWet: number;
   /** firstWet − alert time, s; NaN if never reached. */
   leadTime: number;
@@ -181,8 +224,13 @@ export function assessAsset(
 ): AssetResult {
   const depth = s.maxDepth;
   const above = depth - Math.max(0, spec.firstFloorHeight || 0);
-  const state = structuralState(s.maxSpeed, s.maxDV, { construction: spec.construction, debrisFlow: ctx.debrisFlow });
+  // The fast-water rule reads the footprint statistic, not the worst cell (STRUCTURAL_QUANTILE), and ramps (collapseShare).
+  const sv = s.structSpeed ?? s.maxSpeed;
+  const sdv = s.structDV ?? s.maxDV;
+  const rule = { construction: spec.construction, debrisFlow: ctx.debrisFlow };
+  const state = structuralState(sv, sdv, rule);
   const effState: StructuralState = depth >= REACHED_DEPTH ? state : state === 'unknown' ? 'unknown' : 'none';
+  const share = depth >= REACHED_DEPTH ? collapseShare(sv, sdv, rule) : 0;
   const dmg = storeyDamage({
     depth: above >= DAMAGE_MIN_DEPTH ? above : 0,
     floors: spec.floors,
@@ -192,6 +240,7 @@ export function assessAsset(
     contentsValue: spec.contents,
     undamageable: undamageableShare(spec.construction),
     state: effState,
+    collapseShare: share,
   });
   const prof = OCCUPANCY_PROFILES[spec.occ];
   const accessCut = access?.status === ACCESS_CUT;
@@ -216,6 +265,9 @@ export function assessAsset(
     depthAboveFloor: above,
     speed: s.maxSpeed,
     dv: s.maxDV,
+    structuralSpeed: sv,
+    structuralDV: sdv,
+    collapseShare: share,
     firstWet: s.firstWet,
     leadTime: s.firstWet >= 0 ? s.firstWet - ctx.alertTime : NaN,
     wetSeconds: s.wetSeconds,

@@ -65,8 +65,11 @@ export const METHOD_NOTES: readonly MethodNote[] = [
       'Clausen & Clark (1990), as widely cited: with speed ≥ 2 m/s, depth × speed ≥ 3 m²/s is partial ' +
       'structural damage (damage at least 50 %) and ≥ 7 m²/s is collapse (total loss). Timber, mud and informal ' +
       'buildings use half the thresholds; a debris-laden flow (a glacial-lake outburst) multiplies depth × speed by 1.5 ' +
-      'and calls 3 m²/s collapse for anything but reinforced concrete — a labelled heuristic. Without recorded speeds ' +
-      'nothing is called collapsed.',
+      'and calls 3 m²/s collapse for anything but reinforced concrete — a labelled heuristic. Two more heuristics make ' +
+      'the rule robust to one noisy cell of a bare-earth grid: it reads the 90th percentile of the per-cell maxima over ' +
+      'the footprint, not the worst cell, and collapse is a ramp, not a step — the damage goes from the depth curve to ' +
+      'total loss across 5–9 m²/s (the cited 7 m²/s at its centre, where a building counts as destroyed). Without ' +
+      'recorded speeds nothing is called collapsed.',
   },
   {
     title: 'Value',

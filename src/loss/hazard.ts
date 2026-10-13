@@ -15,6 +15,16 @@
  *
  * The maxima come from different moments of the flood (the deepest water need not be the fastest), so dv is taken from
  * its own accumulator, not as max d × max v.
+ *
+ * Applied to a building, the structural rule reads a footprint STATISTIC, not the worst cell (impact.ts sampleCells:
+ * the STRUCTURAL_QUANTILE of the per-cell maxima), and collapse is not a step: the damage ramps from the depth curve's
+ * value to total loss across a band of dv around the collapse threshold (collapseShare; 5–9 m²/s for the 7 m²/s
+ * criterion). Both are labelled heuristics [I] — the cited criterion is a line, but the speeds it is fed are a 2-D
+ * model's open-ground speeds on a bare-earth grid, sampled at moments: Site check's North Shore demo parcel at the 1936
+ * crest read a worst-cell dv of 6.6 in one sweep and 8.2 in the next, and its damage flipped between 15 % and 100 %.
+ * (Most of that spread was the sampling, since fixed: SolverOptions.hazardSampleSeconds and runFor's RAMP_FRAME_S.)
+ * The cited threshold sits at the centre of the band, where structuralState says 'collapse', so the counts of
+ * destroyed buildings follow the cited line; only the loss is smoothed.
  */
 import type { Construction, StructuralState } from './value';
 
@@ -106,6 +116,14 @@ export function structuralState(
 ): StructuralState {
   if (!Number.isFinite(v) || !Number.isFinite(dv)) return 'unknown';
   if (v < V_STRUCTURAL) return 'none';
+  const t = structuralThresholds(dv, opts);
+  if (t.eff >= t.collapseAt) return 'collapse';
+  if (t.eff >= t.partialAt) return 'partial';
+  return 'none';
+}
+
+/** Effective dv and the partial / collapse thresholds for a construction and flow type (see the header). */
+function structuralThresholds(dv: number, opts: { construction?: Construction | null; debrisFlow?: boolean }): { eff: number; partialAt: number; collapseAt: number } {
   const c = opts.construction ?? null;
   const light = c === 'timber' || c === 'mud' || c === 'informal';
   const k = light ? LIGHT_CONSTRUCTION_FACTOR : 1;
@@ -115,9 +133,27 @@ export function structuralState(
     eff = dv * DEBRIS_DV_FACTOR;
     if (c !== 'concrete') collapseAt = Math.min(collapseAt, DEBRIS_DV_COLLAPSE);
   }
-  if (eff >= collapseAt) return 'collapse';
-  if (eff >= DV_PARTIAL * k) return 'partial';
-  return 'none';
+  return { eff, partialAt: DV_PARTIAL * k, collapseAt };
+}
+
+/**
+ * Half-width of the collapse band as a fraction of the collapse threshold [I]: 2/7 puts the 7 m²/s criterion's band
+ * at 5–9 m²/s (light construction 2.5–4.5, debris flow 2.1–3.9 of effective dv).
+ */
+export const COLLAPSE_BAND = 2 / 7;
+
+/**
+ * Share of total loss from fast water, 0–1 [I]: 0 below the collapse band, 1 above it, linear across it, and 0.5 at
+ * the cited threshold (structuralState says 'collapse' from there). Applies only where the speed criterion holds
+ * (v ≥ V_STRUCTURAL); 0 when the speed is unknown. A building's damage is (1 − share) × its depth-curve damage +
+ * share × total loss (value.ts storeyDamage), so a dv that wavers around the threshold moves the loss in proportion
+ * instead of flipping it between the curve and a write-off.
+ */
+export function collapseShare(v: number, dv: number, opts: { construction?: Construction | null; debrisFlow?: boolean } = {}): number {
+  if (!Number.isFinite(v) || !Number.isFinite(dv) || v < V_STRUCTURAL) return 0;
+  const t = structuralThresholds(dv, opts);
+  // Centred form: exactly ½ at the threshold, so the share and structuralState agree on which side of it dv is.
+  return Math.min(1, Math.max(0, 0.5 + (t.eff - t.collapseAt) / (2 * COLLAPSE_BAND * t.collapseAt)));
 }
 
 // ─── Downtime (business interruption) — a transparent heuristic, spec §C.5 [I] ─────────────────────────────────────

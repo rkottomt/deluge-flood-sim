@@ -11,6 +11,8 @@ import {
   cleanupDays,
   downtimeDays,
   fd2321HR,
+  collapseShare,
+  COLLAPSE_BAND,
   hrClass,
   structuralState,
 } from '../../src/loss/hazard';
@@ -143,6 +145,42 @@ test('fast water: Clausen & Clark thresholds, light construction and debris heur
   assert.equal(structuralState(2.5, 2.1, { debrisFlow: true }), 'collapse'); // 3.15 ≥ 3
   assert.equal(structuralState(2.5, 2.1, { debrisFlow: true, construction: 'concrete' }), 'partial');
   assert.equal(structuralState(NaN, NaN), 'unknown');
+});
+
+test('fast water: collapse ramps across 5–9 m²/s with the cited 7 m²/s at its centre, so a wavering d·v cannot flip the loss', () => {
+  assert.ok(Math.abs(7 * (1 - COLLAPSE_BAND) - 5) < 1e-12 && Math.abs(7 * (1 + COLLAPSE_BAND) - 9) < 1e-12);
+  assert.equal(collapseShare(3, 5), 0);
+  assert.equal(collapseShare(3, 7), 0.5);
+  close(collapseShare(3, 8), 0.75);
+  assert.equal(collapseShare(3, 9), 1);
+  assert.equal(collapseShare(3, 20), 1);
+  assert.equal(collapseShare(1.9, 20), 0, 'the speed criterion still holds: slow water, however deep, collapses nothing');
+  assert.equal(collapseShare(NaN, NaN), 0);
+  // Light construction: half the threshold, the same relative band (2.5–4.5); debris flow: dv × 1.5 against 3.
+  close(collapseShare(3, 3.5, { construction: 'timber' }), 0.5);
+  close(collapseShare(3, 2, { debrisFlow: true }), 0.5);
+  // The state follows the cited line: 'collapse' exactly where the share reaches ½.
+  for (const dv of [4.9, 6.99, 7, 7.01, 9.5]) assert.equal(structuralState(3, dv) === 'collapse', collapseShare(3, dv) >= 0.5, `dv ${dv}`);
+
+  // The damage is the curve's below the band, total loss above it, and a straight blend in between — continuous in d·v.
+  const curve = curveFor('residential', 'northAmerica');
+  const base = { depth: 3.7, floors: 6, storeyHeight: 3.2, curve, structureValue: 45e6, contentsValue: 22.5e6, undamageable: 0.4 };
+  const plain = storeyDamage({ ...base, state: 'partial' });
+  const total = storeyDamage({ ...base, state: 'collapse' });
+  close(total.fraction, 1);
+  let prev = -Infinity;
+  for (let dv = 4; dv <= 10; dv += 0.25) {
+    const share = collapseShare(3, dv);
+    const d = storeyDamage({ ...base, state: structuralState(3, dv), collapseShare: share });
+    close(d.structure + d.contents, (1 - share) * (plain.structure + plain.contents) + share * (total.structure + total.contents), 1e-9);
+    assert.ok(d.lossLo <= d.structure + d.contents + 1e-6 && d.structure + d.contents <= d.lossHi + 1e-6);
+    assert.ok(d.fraction >= prev - 1e-12, `damage falls at ${dv}`);
+    // A step of 0.25 m²/s moves the damage by at most 0.25/4 of the gap between the curve and total loss.
+    if (prev > -Infinity) assert.ok(d.fraction - prev <= (0.25 / 4) * (1 - plain.fraction) + 1e-9);
+    prev = d.fraction;
+  }
+  // The plain step rule is still there for callers that do not pass a share.
+  close(storeyDamage({ ...base, state: 'collapse' }).fraction, 1);
 });
 
 test('downtime heuristic', () => {

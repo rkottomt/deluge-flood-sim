@@ -105,13 +105,13 @@ test('sampling takes the worst cell and ignores water that was there at reset', 
 test('a flooded block: losses, hazard classes, collapse, earliest arrival and the top-10 order', () => {
   const set = buildings([
     [10, 10, 20, 14, 'industrial', 9], // 1 m of slow water
-    [30, 10, 34, 14, 'house', levelsToMeters('2')!], // 2.5 m of fast water: collapse
+    [30, 10, 34, 14, 'house', levelsToMeters('2')!], // 2.5 m of 4 m/s water (10 m²/s, past the 5–9 band): collapse
     [40, 40, 44, 44, 'office', levelsToMeters('20')!], // dry
     [50, 10, 54, 14, 'house', 6], // 5 cm: listed but not reached
   ]);
   const f = fields((i, j) => {
     if (j >= 10 && j < 14 && i >= 10 && i < 20) return { d: 1, v: 0.5, fw: 1200 };
-    if (j >= 10 && j < 14 && i >= 30 && i < 34) return { d: 2.5, v: 3.5, fw: 420 };
+    if (j >= 10 && j < 14 && i >= 30 && i < 34) return { d: 2.5, v: 4, fw: 420 };
     if (j >= 10 && j < 14 && i >= 50 && i < 54) return { d: 0.05 };
     return {};
   });
@@ -163,6 +163,33 @@ test('a film of water books nothing; an edge-only wetting is flagged by its wet 
   const office = impacts.find((b) => b.k === 1)!;
   assert.ok(Math.abs(office.wetFraction - 0.1) < 1e-9);
   assert.ok(office.loss > 0);
+});
+
+test('the fast-water rule reads the footprint’s 90th percentile: one fast cell does not write a building off, a building in the current does', () => {
+  // A 4 × 4 block (16 cells) under 3 m of water at 1 m/s (3 m²/s), with one cell of 4 m/s (12 m²/s): a jet along an edge.
+  const set = buildings([[30, 10, 34, 14, 'office', levelsToMeters('3')!]]);
+  const one = fields((i, j) => (j >= 10 && j < 14 && i >= 30 && i < 34 ? { d: 3, v: i === 30 && j === 10 ? 4 : 1, fw: 420 } : {}));
+  const fp = rasterizeFootprints(set, NX, NY, CELL);
+  const s = sampleCells(one, fp.cells, fp.offsets[0], fp.offsets[1]);
+  assert.equal(s.maxDV, 12, 'the worst cell is still reported (hazard classes read it)');
+  // Linear interpolation at 0.9 × 15 = 13.5 between the 14th and 15th of 16 sorted values (both 3), not the 16th (12).
+  assert.equal(s.structDV, 3);
+  assert.equal(s.structSpeed, 1);
+  const r = computeBuildingImpacts(one, set, fp, { region: US });
+  assert.equal(r.impacts[0].state, 'none'); // under the old worst-cell rule: collapse (12 m²/s at 4 m/s)
+  assert.equal(r.impacts[0].collapseShare, 0);
+  assert.equal(r.impacts[0].dv, 12);
+  assert.equal(r.summary.destroyed, 0);
+  // The whole block in a 3 m/s current (9 m²/s): written off.
+  const all = fields((i, j) => (j >= 10 && j < 14 && i >= 30 && i < 34 ? { d: 3, v: 3, fw: 420 } : {}));
+  const r2 = computeBuildingImpacts(all, set, fp, { region: US });
+  assert.equal(r2.impacts[0].state, 'collapse');
+  assert.equal(r2.impacts[0].damage, 1);
+  assert.equal(r2.summary.destroyed, 1);
+  // Three of the sixteen cells fast (over a tenth of the footprint): the statistic reads them.
+  const three = fields((i, j) => (j >= 10 && j < 14 && i >= 30 && i < 34 ? { d: 3, v: j === 10 && i < 33 ? 3 : 1, fw: 420 } : {}));
+  const s3 = sampleCells(three, fp.cells, fp.offsets[0], fp.offsets[1]);
+  assert.ok(Math.abs(s3.structDV! - 9) < 1e-9, `${s3.structDV}`);
 });
 
 test('without velocity (snapshot fallback) nothing is called collapsed and classes are depth-only', () => {
