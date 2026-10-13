@@ -53,7 +53,7 @@ Ranked by fit with what the product does today, and by how directly the question
 | 2 | **Lenders, insurers, MGAs, asset managers** | Portfolio exposure, accumulation, event response; the lender's or insurer's question about one asset | **Impact & loss** with a portfolio CSV: per-asset depth, speed, hazard class, loss range, business interruption, insured loss after deductible and limit | 3–4 (they own cat models; they buy event views, new regions and explainability) |
 | 3 | **Hydropower and mountain infrastructure** (owners, IFC PS4 lenders, insurers with GLOF sub-limits) | How much warning each plant gets; where a sensor pays; what the headworks see | **Hazard chain + Early warning**: a lake outburst or avalanche routed down the valley, front times at each plant, lead time per sensor design, best sensor site, ensemble p10 | **5 — the wedge**: no mainstream vendor offers interactive GLOF routing |
 | 4 | **Municipalities, counties and their engineers** | A benefit–cost analysis for a FEMA HMA / BRIC / FMA application; visuals for a public meeting | Before/after loss with a drawn wall, wall cost, BCR at 7 % and 3.1 %, who gets wetter | 4–5 (BRIC was court-restored; a $1 B NOFO closed July 2026 [S]) |
-| 5 | **Dam owners and their dam-safety engineers; emergency managers below them** | Breach inundation maps for an Emergency Action Plan (FEMA P-946; state dam-safety rules, which require EAPs for high-hazard dams), the first screen before a consultant's study, and the tabletop exercise | **Dam-breach inundation**: any of ~55,000 NID dams, sunny-day or flood-induced, Froehlich 2008 breach and hydrograph with the published peak band, the wave on the real valley, arrival times and depths downstream, then Site check / Impact & loss on what it reaches | 4 (a screen, not the stamped EAP map; the owner of a high-hazard dam still needs the engineer — Deluge makes that study's scope and the tabletop exercise cheaper) |
+| 5 | **Dam owners and their dam-safety engineers; emergency managers below them** | Breach inundation maps for an Emergency Action Plan (FEMA P-946; state dam-safety rules, which require EAPs for high-hazard dams), the first screen before a consultant's study, and the tabletop exercise | **Dam-breach inundation**: any of ~55,000 NID dams, sunny-day or flood-induced, eight published breach relations as a low / central / high band, the wave on the real valley, arrival times and depths downstream, then Site check / Impact & loss on what it reaches | 4 (a screen, not the stamped EAP map; the owner of a high-hazard dam still needs the engineer — Deluge makes that study's scope and the tabletop exercise cheaper) |
 | 6 | **Coastal developers, lenders and insurers** | How often the sea reaches this parcel, today and in 2050 | **Coastal surge exposure**: the nearest NOAA tide gauge's 1- to 100-year still-water levels on the site, egress, EAL, and the same ladder with NOAA 2022 sea-level rise | 4 (still water at one gauge, no waves: a screen next to the FIRM's VE/AE zones, not instead of them) |
 
 Why lead with segment 1: the decision is concrete and near-term (buy the parcel or not, set the floor height), a
@@ -246,15 +246,19 @@ managers below them need arrival times. Today that is a consultant's HEC-RAS stu
 in a minute: pick the dam, pick sunny-day or flood-induced, and the breach runs on the real valley.
 
 Edenville Dam (Michigan, NID MI00549, failed 19 May 2020 [S]), flood-induced, run on this branch against the real
-services on a GTX 1660 Ti (e2e flow 28): 81.7 million m³ behind 17.4 m; Froehlich 2008 breach 134 m wide forming over
-2.9 h; modelled peak **11,700 m³/s** at 170 min, against 4,500–6,800 m³/s from the published relations (the card shows
-all of them); the 12 km valley loaded in 11–16 s, and 90 simulated minutes took 16 s. The readout after those 90
-minutes: the wave reached 0.5, 1, 2, 3, 5 and 8 km below the dam at **3, 6, 13, 25, 56 and 76 minutes**, 9.0 to 3.9 m
-deep in the channel. A sunny-day failure of the same dam (normal pool, 44.4 million m³) peaks at 6,300 m³/s.
+services on a GTX 1660 Ti (e2e flow 28): 81.7 million m³ behind 17.4 m. Eight published breach relations give
+**4,520–12,080 m³/s** for this dam; the card shows all of them with their sources. The map runs the central case by
+default: Froehlich 1995's regression, **4,520 m³/s**, the relation that best reproduced 21 documented failures with
+measured peaks (every one within a factor of two). The low and high cases are one click away. Run with the routed
+Froehlich 2008 breach (11,700 m³/s, the earlier default), the 12 km valley loaded in 11–16 s, 90 simulated minutes
+took 16 s, and the wave reached 0.5, 1, 2, 3, 5 and 8 km below the dam at **3, 6, 13, 25, 56 and 76 minutes**, 9.0 to
+3.9 m deep in the channel. The arrivals readout gives each time's spread across the band, labelled as an estimate.
+The same relations run offline from the CLI: `deluge dam --nid MI00549 --breach flood`.
 
 *What this is not:* an EAP inundation map. The reservoir is two NID numbers, not a survey; there are no spillways,
-gates or downstream dams (Sanford Dam, below Edenville, also failed in 2020); the parametric breach overshoots Teton
-1976 by ~50 % (§8). It is the screen that tells an owner which dams in a portfolio need the study first, and gives the
+gates or downstream dams (Sanford Dam, below Edenville, also failed in 2020); published breach relations for one dam
+disagree 2–5×; the central case is the best of eight on 21 past failures but was a third low on Teton 1976, so the
+high case belongs in any plan (§8). It is the screen that tells an owner which dams in a portfolio need the study first, and gives the
 county a first arrival-time table for its tabletop exercise.
 
 ### 4.6 Coastal developer: Fort Myers Beach against NOAA's tide-gauge water levels (`?usecase=surge&at=26.4515,-81.9506`)
@@ -371,11 +375,14 @@ Say these before a customer finds them; the app says them in its panels and repo
   labelled as such (§4.1). Anywhere in the US the NOAA Atlas 14 rain ladder gives a sourced EAL — but for surface-water
   flooding only: rain on the map, rivers held level, no surge, no drains, a stationary climate (§4.4); and none in
   western Washington and Oregon, which Atlas 14 does not cover.
-* **Dam breaches are screening regressions.** Froehlich 2008 breach geometry on a reservoir described by two NID
-  numbers, no hydraulic structures, the wave entering at the toe; the default (parametric) peak is ~50 % above Teton
-  1976's observed one, and published relations for one dam spread 2× or more (§4.5). Not an EAP inundation map.
+* **Dam breaches are screening regressions.** Eight published relations on a reservoir described by two NID numbers,
+  no hydraulic structures, the wave entering at the toe. The relations disagree 2–5× for one dam, so Deluge shows the
+  band and picks the central case on evidence (Froehlich 1995: all 21 documented failures within ×2, in-sample). It
+  was a third low on Teton 1976, and the band misses 4 of the 21 observed peaks. Arrival spreads are rescaled, not
+  simulated (§4.5). Not an EAP inundation map.
 * **The surge ladder is still water at one gauge.** NOAA's extreme water levels at the nearest analysed tide station,
-  which may be tens of kilometres away and up a river; no waves or run-up, no sea-floor bathymetry (§4.6).
+  which may be tens of kilometres away and up a river (every result names the gauge, its distance, and whether it may
+  be in another bay); no waves or run-up, no sea-floor bathymetry (§4.6).
 * **The ensemble is sensitivity, not probability.** Its members perturb inputs over stated bands with equal weights;
   "floods in 7 of 12 members" is not a calibrated chance of the real event. Without it, a Site check is one run, and
   §4.1 shows a result tipping on the fast-water threshold between runs. The ±1σ ranges are the damage-curve spread only.
