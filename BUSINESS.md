@@ -305,7 +305,7 @@ value rather than by compute.
    explainability of a vendor score (show the water behind a First Street or Fathom number).
 6. **Municipal BCA packs** around FEMA grant cycles, sold through the same engineers.
 
-### 6.1 How a customer integrates: the CLI now, an HTTP API next
+### 6.1 How a customer integrates: the CLI and an HTTP API
 
 An underwriter, a lender's collateral team or a REIT does not want a browser tab per asset; they want a job that
 reads their asset file and writes numbers into their own systems. Today that is the **`deluge` CLI**
@@ -332,11 +332,13 @@ npx deluge run --preset houston --climate 2050:ssp585 --out maps/houston-2050   
   ensemble is a few minutes. A portfolio across several cities is one job per preset, scriptable from cron, Airflow or
   a CI pipeline; exit codes and machine-readable outputs make failures visible.
 
-**Next: an HTTP API** that wraps the same commands as asynchronous jobs — `POST /v1/portfolio-assessments` with the
-CSV, a webhook when the results are ready, idempotency keys, per-key metering for the *API / ensemble compute* tier
-in §5 — sketched as OpenAPI in [docs/api.md](docs/api.md). It adds queueing, auth and storage around the CLI, not new
-physics, so an API number will equal a CLI number will equal the browser's. A private deployment is the same
-container on the customer's GPU host, which answers the data-residency question before it is asked.
+**And an HTTP API:** `deluge serve` wraps the same commands as asynchronous jobs — `POST /v1/portfolio-assessments`
+with the CSV, `POST /v1/site-checks`, `POST /v1/runs`; poll the job, then download the CSV, report or GeoTIFFs
+([docs/api.md](docs/api.md)). It adds queueing, auth, idempotency keys and retention around the CLI, not new physics:
+a request runs the CLI's own command handler, so an API raster is the CLI's byte for byte. Each result records the
+engine version, commit, GPU and the scenario as run. It runs on the customer's own GPU host and only listens on that
+machine unless given a token, which answers the data-residency question before it is asked. Webhooks and per-key
+metering for the *API / ensemble compute* tier in §5 are next.
 
 ## 7. Roadmap
 
@@ -348,9 +350,9 @@ container on the customer's GPU host, which answers the data-residency question 
   publishes it.
 * **A FEMA-BCA appendix** that lists the BCA Toolkit inputs (useful life, discount rate, damages before / after per
   return period) for an engineer to transcribe.
-* **Headless batch / API:** the batch CLI is in ([§6.1](#61-how-a-customer-integrates-the-cli-now-an-http-api-next));
-  next, the HTTP job API around it ([docs/api.md](docs/api.md)) on server GPUs for portfolios of thousands, and
-  parametric trigger design on top (what fraction of insured sites is wet when the gauge reads X; basis risk).
+* **Headless batch / API:** the batch CLI and its HTTP job API (`deluge serve`) are in ([§6.1](#61-how-a-customer-integrates-the-cli-and-an-http-api));
+  next, webhooks, per-key metering and GPU workers behind a shared queue for portfolios of thousands, and parametric
+  trigger design on top (what fraction of insured sites is wet when the gauge reads X; basis risk).
 * **Watch mode:** ingest forecasts (NWS, GloFAS), re-run, and tell asset owners their lead time.
 * **Land surface that earns its place:** building footprints, a land-cover roughness map and storm drains exist as
   optional layers but stay off until they beat bare earth on the validation floods; culverts and a pipe network next.
