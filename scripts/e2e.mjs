@@ -2826,8 +2826,18 @@ async function damFlow(r, ctx, { tag, fixtures, simMinutes = 30 }) {
   if (!found) return;
   await page.click(`[data-dam="result"][data-nid="${EDENVILLE.nid}"]`);
   await page.click('[data-dam="dam-mode-flood"]');
-  const params = await D(() => document.querySelector('[data-dam="params"]')?.textContent ?? '');
-  check(r, 'the breach card shows Froehlich 2008 width and time, the modelled peak and the published band', /Froehlich 2008/.test(params) && /MacDonald/.test(params) && /Froehlich 2016/.test(params) && /River flood under it/.test(params), params.slice(0, 160));
+  const card = await D(() => ({
+    params: document.querySelector('[data-dam="params"]')?.textContent ?? '',
+    relations: [...document.querySelectorAll('[data-dam="relations"] tr[data-relation]')].map((tr) => tr.getAttribute('data-relation')),
+    methods: [...document.querySelectorAll('input[name="dam-method"]')].map((i) => `${i.value}${i.checked ? '*' : ''}`),
+  }));
+  const params = card.params;
+  check(
+    r,
+    'the breach card shows Froehlich 2008 width and time, the peak sent to the map, the low–high range of eight relations (central Froehlich 1995) and the four hydrographs',
+    /Froehlich 2008/.test(params) && /Peak range, 8 published relations/.test(params) && /central [\d,]+ m³\/s, Froehlich 1995 peak/.test(params) && /River flood under it/.test(params) && card.relations.length === 8 && card.relations.includes('macdonald1984') && card.relations.includes('xuZhang2009') && card.methods.join() === 'central*,low,high,parametric',
+    `${params.slice(0, 200)} · ${card.relations.join(',')} · ${card.methods.join(',')}`,
+  );
   await shot(`${tag}-dam-card`);
   const t0 = Date.now();
   await page.click('[data-dam="breach"]');
@@ -2842,7 +2852,7 @@ async function damFlow(r, ctx, { tag, fixtures, simMinutes = 30 }) {
     const c = g ? d.gridToGeo(g.nx / 2, g.ny / 2) : null;
     const src = sc?.sources.find((x) => x.id === 'dam-breach') ?? null;
     return {
-      spec: sc?.damBreach ? { mode: sc.damBreach.mode, peak: sc.damBreach.peak, tPeak: sc.damBreach.tPeak, volume: sc.damBreach.volume, dam: sc.damBreach.dam, inflow: sc.damBreach.inflow, pathKm: sc.damBreach.path.at(-1)?.s / 1000 } : null,
+      spec: sc?.damBreach ? { mode: sc.damBreach.mode, method: sc.damBreach.method, band: sc.damBreach.band, peak: sc.damBreach.peak, tPeak: sc.damBreach.tPeak, volume: sc.damBreach.volume, dam: sc.damBreach.dam, inflow: sc.damBreach.inflow, pathKm: sc.damBreach.path.at(-1)?.s / 1000 } : null,
       src: src ? { gx: src.gx, gy: src.gy, points: src.hydrograph?.length ?? 0, discharge: src.discharge } : null,
       centreLat: c ? c.lat : NaN,
       size: g ? g.nx * g.cellSize : 0,
@@ -2856,7 +2866,7 @@ async function damFlow(r, ctx, { tag, fixtures, simMinutes = 30 }) {
   if (fixtures) {
     check(r, 'the area is centred downstream (south) of the dam, the inflow below it', s.centreLat < EDENVILLE.lat - 0.02 && s.spec.inflow.gy > s.spec.dam.gy, `centre ${s.centreLat.toFixed(4)} vs dam ${EDENVILLE.lat}; inflow gy ${s.spec.inflow.gy.toFixed(0)} vs dam ${s.spec.dam.gy.toFixed(0)}`);
   }
-  check(r, 'the link carries the NID id and the scenario, never the dam’s name; the Arrival view is on', /usecase=dam/.test(s.url) && /nid=MI00549/.test(s.url) && /breach=flood/.test(s.url) && !/Edenville[+ ]Dam/i.test(decodeURIComponent(s.url)) && s.mode === 'arrival', `${s.url} · ${s.mode}`);
+  check(r, 'the link carries the NID id and the scenario, never the dam’s name; the Arrival view is on', s.spec.method === 'central' && !/method=/.test(s.url) && /usecase=dam/.test(s.url) && /nid=MI00549/.test(s.url) && /breach=flood/.test(s.url) && !/Edenville[+ ]Dam/i.test(decodeURIComponent(s.url)) && s.mode === 'arrival', `${s.url} · ${s.mode}`);
   const v0 = (await stats())?.volume ?? 0;
   const wall = await runFor(simMinutes * 60);
   await D(() => window.__deluge.waitFrames(30));
@@ -2875,8 +2885,10 @@ async function damFlow(r, ctx, { tag, fixtures, simMinutes = 30 }) {
   r.metrics.arrivals = rows;
   const arrived = rows.filter((row) => /min|h$/.test(row[1]));
   const mins = arrived.map((row) => (/h$/.test(row[1]) ? 60 * parseFloat(row[1]) : parseFloat(row[1])));
-  const depths = rows.map((row) => parseFloat(row[2]));
-  check(r, 'the downstream readout gives arrival times that grow with distance, and peak depths', rows.length >= 3 && arrived.length >= 2 && mins.every((m, i) => i === 0 || m >= mins[i - 1] - 1) && depths[0] > 0.3, rows.map((row) => `${row[0]}: ${row[1]}, ${row[2]}`).join(' · '));
+  const depths = rows.map((row) => parseFloat(row[3]));
+  check(r, 'the downstream readout gives arrival times that grow with distance, and peak depths', rows.length >= 3 && arrived.length >= 2 && mins.every((m, i) => i === 0 || m >= mins[i - 1] - 1) && depths[0] > 0.3, rows.map((row) => `${row[0]}: ${row[1]} (${row[2]}), ${row[3]}`).join(' · '));
+  const note = await D(() => document.querySelector('[data-dam="arrival-note"]')?.textContent ?? '');
+  check(r, 'each arrival comes with its spread at the band’s high and low peaks, labelled as not simulated', arrived.every((row) => /\d.*–.*\d/.test(row[2])) && /Not simulated/.test(note) && /peak\^−0\.4/.test(note), `${arrived.map((row) => row[2]).join(' · ')} · ${note.slice(0, 120)}`);
   await sleep(300);
   await shot(`${tag}-dam-readout`);
   await page.keyboard.press('Escape');
@@ -2954,6 +2966,7 @@ async function surgeFlow(r, ctx, { tag, fixtures, minutes, point = FTM_POINT, ff
     verdict: [...document.querySelectorAll('[data-site="verdict"] p')].map((p) => p.textContent ?? ''),
     rows: [...document.querySelectorAll('.dl-site-sweep-out .dl-site-table tbody tr')].map((tr) => [...tr.querySelectorAll('td')].map((td) => td.textContent ?? '')),
     caveats: !!document.querySelector('[data-site="surge-caveats"]'),
+    gauge: document.querySelector('[data-site="surge-gauge"]')?.textContent ?? '',
     after: (() => {
       const st = window.__deluge.getState();
       return { rain: st.sim.rainRate, stageOffset: st.stageOffset, sources: st.sources.length };
@@ -2966,6 +2979,7 @@ async function surgeFlow(r, ctx, { tag, fixtures, minutes, point = FTM_POINT, ff
   check(r, 'the five-level surge sweep completes', done && /^Done: 5 levels/.test(out.status), `${out.status.slice(0, 80)} (${num(sweepS, 1)} s wall)`);
   check(r, 'EAL comes from NOAA’s return periods (no “needs your input”), and the low site has one', /Expected annual loss \$/.test(eal) && (!fixtures || !/Expected annual loss \$0\b/.test(eal)) && !/your input|No expected annual loss/.test(out.verdict.join(' ')), eal.slice(0, 160));
   check(r, 'the surge ladder’s caveats are shown with the result', out.caveats, String(out.caveats));
+  check(r, 'the result names the gauge and its distance, flagging a gauge off the map as possibly in another bay', /NOAA gauge .* km from the map centre: (on this map|off this map, so possibly in another bay)/.test(out.gauge) && (!fixtures || /on this map/.test(out.gauge)), out.gauge);
   check(r, 'the user’s scenario is put back', JSON.stringify(out.after) === JSON.stringify(before), `${JSON.stringify(before)} → ${JSON.stringify(out.after)}`);
   await D(() => document.querySelector('[data-site="verdict"]')?.scrollIntoView({ block: 'start' }));
   await sleep(400);

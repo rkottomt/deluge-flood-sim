@@ -20,7 +20,8 @@ Beyond rising water:
 * **How sure it is.** Flood-probability maps from a GPU ensemble of perturbed runs, and **future climate** (2050 /
   2080 / 2100 rain, sea level and glacial-lake growth).
 * **Dam breaches and coastal surge, anywhere in the US.** Pick any of ~55,000 dams in the National Inventory of Dams,
-  breach it (sunny-day or flood-induced, Froehlich 2008) and watch the wave arrive down the valley; or put a coastal
+  breach it (sunny-day or flood-induced; eight published breach relations as a low / central / high band, the central
+  one chosen on 21 historical failures) and watch the wave arrive down the valley; or put a coastal
   site against NOAA's 1- to 100-year tide-gauge water levels, today and with 2022 sea-level rise.
   [Dam breaches and coastal surge](#dam-breaches-and-coastal-surge) below.
 
@@ -85,7 +86,7 @@ under *Scenario → Change*, and in [Ten scenarios, offline](#ten-scenarios-offl
 `?usecase=address&at=<lat>,<lon>` checks a site at that point (a 5 km live area, so it needs the internet; the link
 carries coordinates only — never an address or a name).
 `?usecase=dam&nid=<NID id>&breach=sunny|flood` breaches that dam on the valley below it (e.g. `nid=MI00549`, Edenville
-Dam); `?usecase=surge&at=<lat>,<lon>` sets a coastal site up against NOAA's extreme water levels (an 8 km live area).
+Dam; `&method=low|high|parametric` for a case other than the central one); `?usecase=surge&at=<lat>,<lon>` sets a coastal site up against NOAA's extreme water levels (an 8 km live area).
 Both need the internet for the terrain; the dam index and the tide-station table ship with the app.
 `?story=nepal-2026|pittsburgh-1936|houston-harvey|sikkim-2023|chamoli-2021` plays a narrated story (also *Watch the
 story* in the Scenario section, and the stories row under Use cases): the camera, the simulation and a caption card
@@ -255,14 +256,47 @@ scenario:
 
 * **Sunny-day** — the normal pool fails by piping; **flood-induced** — the maximum pool overtops, with the NID's
   maximum spillway discharge flowing underneath the wave.
-* **Breach**: Froehlich 2008 average width and formation time from the released volume and the dam height; the
-  outflow from the hazard chain's weir-flow ODE (`src/hazard/breach.ts`) with the breach growing linearly to that
-  width over that time and the reservoir drawing down by a storage curve fitted to the NID's own area and storage —
-  or, as a second method, a gamma hydrograph with Froehlich 2016's peak. MacDonald & Langridge-Monopolis 1984,
-  Froehlich 1995 and Froehlich 2016 peaks are shown beside it as the band. **Teton 1976** is the anchor test
-  (`tests/dams/breachModel.test.ts`): width 168 m vs 151 observed, formation 1.14 h vs 1.25 h, peak 79,000 m³/s
-  (regression) or 98,000–107,000 (parametric) vs **65,120** observed — the parametric breach (Fread's weir, no
-  tailwater) is conservative by about half, which is the side an inundation screen should err on, and the band says so.
+* **Breach — eight published relations, not one.** Published relations for one dam disagree by a factor of two or
+  more, so the card shows all of them ([`src/dams/breachRelations.ts`](src/dams/breachRelations.ts), each formula
+  checked against USBR's compilations — Wahl 1998, DSO-98-004, and Wahl 2004, J. Hydraul. Eng. 130(5) — and cited in
+  the code): three **breach-parameter** relations (Froehlich 2008, Froehlich 1995, Von Thun & Gillette 1990) whose
+  width and formation time are routed through the reservoir by the hazard chain's weir-flow ODE
+  (`src/hazard/breach.ts`), the breach growing linearly to that width over that time and the reservoir drawing down by
+  a storage curve fitted to the NID's own area and storage; and five **peak regressions** (MacDonald &
+  Langridge-Monopolis 1984, Froehlich 1995, Froehlich 2016, Xu & Zhang 2009, Pierce et al. 2010). Their lowest and
+  highest peaks are the **low / high** band; the **central** case is the relation that best reproduces the record
+  (below). The hydrograph sent to the map is the central case by default (a gamma shape with that peak and the exact
+  volume); *low*, *high* and the routed Froehlich 2008 breach (`parametric`, the default until this band existed) are
+  one click away, and `method=` in the link.
+* **Scored on 21 documented failures.** [`src/dams/historicalFailures.ts`](src/dams/historicalFailures.ts) holds every
+  case in Wahl 1998 Table A1 with an observed peak, a volume, a head and a failure mode, except peaks whose method is
+  "unknown", heads given only as a bound, and the two Wahl flags as unfit — 21 failures from 7,400 m³ (Ireland No. 5)
+  to 310 million m³ (Teton), including Teton 1976, Lawn Lake 1982, Kelly Barnes 1977, Buffalo Creek 1972, Baldwin
+  Hills 1963, Johnstown 1889 and Swift 1964. Errors are log₁₀(predicted / observed)
+  (`tests/dams/breachRelations.test.ts`; `npx deluge dam --history` prints it):
+
+  | Relation | n | Mean error (bias) | RMS error | Within ×2 | Teton (pred / obs) |
+  | --- | --- | --- | --- | --- | --- |
+  | **Froehlich 1995 peak** (central) | 21 | −0.07 (−16 %) | **0.15** | **100 %** | 0.66 |
+  | Froehlich 1995 breach, routed | 21 | +0.07 | 0.19 | 81 % | 1.51 |
+  | Froehlich 2008 breach, routed (earlier default) | 21 | +0.08 | 0.20 | 86 % | 1.64 |
+  | Froehlich 2016 peak | 21 | −0.09 | 0.20 | 81 % | 1.22 |
+  | Xu & Zhang 2009 peak | 20 | −0.17 | 0.26 | 75 % | 1.16 |
+  | MacDonald & Langridge-Monopolis 1984 | 21 | +0.03 | 0.29 | 71 % | 0.34 |
+  | Von Thun & Gillette 1990 breach, routed | 21 | +0.19 | 0.30 | 67 % | 1.27 |
+  | Pierce et al. 2010 peak | 21 | −0.29 | 0.38 | 48 % | 0.53 |
+
+  Froehlich 1995's regression is the central case on that evidence — Wahl 2004 found the same on 32 cases (the
+  smallest mean error and the narrowest band of every peak equation he tested). It is **not** the best on Teton: there
+  it is a third low (43,000 vs **65,120 m³/s**), while the routed Froehlich 2008 breach is 64 % high (107,000) and the
+  band (22,000–107,000) holds the observed peak. The band holds 17 of the 21 observed peaks; every relation is low on
+  Baldwin Hills (by 9 %), Buffalo Creek and Laurel Run, and high on Lower Latham (by 4 %). Caveats: the check is
+  in-sample (most relations were fitted to many of these failures), Xu & Zhang's coefficients are taken at medium
+  erodibility (the NID says nothing about it) and are not applied to concrete-faced rockfill, and Walder & O'Connor
+  1997 is left out because it needs a breach erosion rate the NID does not have.
+* **Arrival spread.** Next to each arrival time the readout gives the range it would have at the band's high and low
+  peaks — not simulated, but the arrival read off the map rescaled by the kinematic-wave rule (travel time ∝ peak^−0.4,
+  Manning flow in a wide channel) and labelled so. To see a case on the map, run it.
 * **On the map**: Deluge first reads a 64 × 64 elevation probe around the dam to see which way the valley falls, then
   loads the live area (12 km by default) with the dam near its upstream edge, and sends the hydrograph in as an
   **inflow at the toe of the dam** — the lowest ground within a few dam-heights of the NID point — delivering exactly
@@ -273,11 +307,14 @@ scenario:
   dam. Site check, Impact & loss and evacuation work on it as on any scene; the climate layer never scales the wave.
 
 Edenville Dam, Michigan (NID MI00549; it failed in May 2020), flood-induced, against the real services (e2e flow 28,
-GTX 1660 Ti): the card gives 81.7 million m³ behind 17.4 m, a breach 134 m wide forming over 2.9 h, a modelled peak of
-**11,700 m³/s** after 170 min (the relations: 4,500–6,800; the reservoir is wide and shallow, so its head holds up);
-the valley loaded in 11–16 s; in the first 90 simulated minutes (16 s of wall time) the wave reached 0.5 / 1 / 2 / 3 /
-5 / 8 km below the dam at 3 / 6 / 13 / 25 / 56 / 76 min, 9.0–3.9 m deep in the channel (river included). No measured
-outflow for Edenville is quoted here. Honest limits, in the panel: the reservoir is the NID's storage and area, not a
+GTX 1660 Ti, measured with the routed Froehlich 2008 breach, the default at the time): the card gives 81.7 million m³
+behind 17.4 m, a breach 134 m wide forming over 2.9 h, a routed peak of **11,700 m³/s** after 170 min; the valley
+loaded in 11–16 s; in the first 90 simulated minutes (16 s of wall time) the wave reached 0.5 / 1 / 2 / 3 / 5 / 8 km
+below the dam at 3 / 6 / 13 / 25 / 56 / 76 min, 9.0–3.9 m deep in the channel (river included). The band for
+Edenville is **4,520–12,080 m³/s** (`npx deluge dam --nid MI00549 --breach flood`): the three routed breaches give
+11,500–12,100 (the reservoir is wide and shallow, so its head holds up while the breach widens), the five regressions
+4,520–6,810, and the central case is the lowest, Froehlich 1995's 4,520 m³/s, which is now what the map receives by
+default (flow 28 has not been re-run on it). No measured outflow for Edenville is quoted here. Honest limits, in the panel: the reservoir is the NID's storage and area, not a
 survey; spillways, gates, outlet works and downstream dams are not modelled; the relations were fitted mostly to
 earth and rockfill dams (a concrete dam is flagged as indicative), and a dam larger than Teton is flagged as an
 extrapolation. Screening for planning, not an EAP inundation map.
@@ -306,7 +343,10 @@ year**; under 2050 SSP5-8.5 (NOAA Intermediate, +0.32 m at the gauge) the same s
 a small level change on flat ground). Hurricane Ian put 12.92 ft (station datum, 2.29 m NAVD88) on that gauge and far more on the
 beach — which is the honest caveat: one gauge, possibly in a different bay, stands for the whole map, and the levels
 are still water (tide + surge + gauge-felt setup), with no wave run-up. Stations with no NAVD88 tie (Hawaii, the
-islands, much of Alaska) fall back to MSL and say so.
+islands, much of Alaska) fall back to MSL and say so. Every surge result says which gauge stands for the sea and how
+far it is from the map centre, and when the gauge lies off the loaded map, that it is possibly in another bay or up
+another estuary (`src/surge/coastal.ts` `gaugeNote`: in the set-up notice, the Site check sweep and the surge caveats).
+The levels themselves are not adjusted for it.
 
 ## Glacier hazards
 
@@ -436,6 +476,8 @@ npx deluge portfolio --preset houston --csv public/demo/houston-portfolio.csv --
 npx deluge portfolio --preset houston --csv assets.csv --members 12 --seed 7 --out results.csv --summary summary.json
 npx deluge site --preset pittsburgh --at 40.4425,-80.0085 --use office --floors 3 --sweep --out report.json
 npx deluge site --preset houston --at 29.7725,-95.3837 --scenario a14-100   # NOAA Atlas 14 100-yr 1-hour rain
+npx deluge dam --nid MI00549 --breach flood       # a dam breach's peak band and hydrograph (no GPU)
+npx deluge dam --history                          # the breach relations scored on 21 documented failures
 npx deluge <command> --help                       # every option
 ```
 
@@ -466,6 +508,12 @@ then run-off — 120 simulated minutes unless `--minutes` says otherwise.
   `--rp x0.5=10,x1=100` for return periods the ladder lacks), with egress, EAL, the
   loss-exceedance points, the indicative finished-floor elevation, mitigation options with BCR and the verdict
   sentences.
+* **`dam`** is the dam-breach card without the map (no GPU): for an NID dam (`--nid`, from the app's baked index) or a
+  dam you describe (`--volume-m3 --head-m [--height-m] [--overtopping]`), sunny-day or flood-induced, the eight
+  relations' peaks with citations, the low / central / high band, the hydrograph the map would receive
+  (`--method central|low|high|parametric`; `--out` writes it as CSV), the indicative arrival spread and the
+  assumptions; `--json` for all of it. `--history` prints the score table of
+  [Dam breaches](#dam-breaches-and-coastal-surge).
 
 **Same numbers as the browser.** A run is the app's headless run: the store, `SimSync`, the stage ramp, the crest fill
 and the climate layer are the app's own classes; frames advance 1/60 s at 3600× and stop exactly on the target,
@@ -857,10 +905,12 @@ a simulation. `Deluge.app` serves the same build with `frame-ancestors 'none'` a
   stationary (historical) climate. A site that floods from a river needs a river ladder (presets) or your own return
   periods; the Atlas 14 values are read at the map centre from a 1/12° resampling (within a few per cent of NOAA's
   point values), and western Washington and Oregon have none.
-* **Dam breaches are regressions on an NID reservoir.** Froehlich 2008 breach geometry, a storage curve fitted to two
-  NID numbers, no spillways, gates or downstream dams, and the wave entering at the toe as a discharge (the DEM holds
-  the reservoir's surface, not its bed). On Teton 1976 the default method overshoots the observed peak by ~50 %
-  (conservative); published relations for one dam disagree by 2× or more.
+* **Dam breaches are regressions on an NID reservoir.** Eight published relations, a storage curve fitted to two NID
+  numbers, no spillways, gates or downstream dams, and the wave entering at the toe as a discharge (the DEM holds the
+  reservoir's surface, not its bed). The relations disagree by 2–5× for one dam, so the low–high band is shown; the
+  central case (Froehlich 1995, the best of the eight on 21 documented failures, all within ×2, in-sample) is a third
+  low on Teton 1976, and the band misses 4 of the 21 observed peaks. The arrival spread beside each simulated arrival
+  is a kinematic-wave rescaling, not a run. Erodibility is unknown for every NID dam (Xu & Zhang at medium).
 * **The surge ladder is still water at one gauge.** NOAA's extreme water levels at the nearest analysed tide station
   (up to 120 km away, perhaps in another bay), held on the seaward edges of the map: no wave run-up, no sea-floor
   bathymetry, no seawalls unless drawn, stationary unless Today vs future adds NOAA's sea-level rise.
