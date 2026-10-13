@@ -81,7 +81,9 @@ model. It sits at the moment *before* the decision, when someone needs to try op
    break-even cost, and an appendix of the inputs an engineer transcribes into FEMA's BCA Toolkit.
 3. **Egress and evacuation.** Each site gets the time its *last* dry road route to a shelter closes, against the time
    the water arrives, from the road network and the simulated flood. A live evacuation route re-plans as streets go
-   under. Scores and rasters do not say when you can still leave.
+   under. Then how many occupants get out before that: departures after the alert follow a published flood-warning
+   response curve, the cars queue at the route's bottleneck, and the clearance time is set against the route window.
+   Scores and rasters do not say when you can still leave.
 4. **Glacier hazard chains and early-warning design.** A lake outburst or ice-rock avalanche is routed tens of
    kilometres down a valley in a worker, drives the 2-D flood at the map edge, and gives every town, bridge and
    power plant a front time. Drop a sensor on the valley profile, and every place's lead time updates; the optimiser
@@ -136,6 +138,12 @@ assumption, labelled "your input" in the app and in the report) and the 1936 cre
 * a 361 m perimeter **floodwall**, 4.3 m high: $14.6 M ($7.3–21.9 M), **BCR 0.0–0.1**; an earthen **levee**: $6.1 M,
   BCR 0.1–0.2 (and it needs a 29 m strip all round);
 * **dry floodproofing**: not applicable (3.7 m of design water; FEMA TB-3 stops at 0.9 m, and at 5 ft/s).
+
+Leaving by road, Parcel A (a 6-storey apartment block: 2,494 occupants at the IBC design load, 1,247 cars) shows why
+egress needs a clock as well as a map. Even warned three hours ahead, only **57 %** of its occupants are out by car
+before the last route closes: the clearance takes 5 h 22 min against a 3 h 01 min window, set by how slowly people
+start to leave rather than by the queue. A prepared population with two exit lanes gets **89 %** out and the site
+clears.
 
 At the scale of the neighbourhood, *Compare designs* asks the same question as an investment. The one-click North
 Shore levee avoids **$11.7 M a year**; at FEMA's 7 % over its 50-year useful life its **BCR is 0.85, with a range of
@@ -215,9 +223,13 @@ optimiser's own caveat appears
 next to its answer: *"On model times the furthest-upstream site always wins; what limits it in practice is access and
 survival."*
 
-*Read these as differences, not absolutes.* The model front reaches Betrawati at 09:41; the official account puts the
-flood there around 09:20 (when its gauge went silent; about 09:00 in another reconstruction). On observed times the existing alert gave Betrawati
-minutes at most, and every lead time above is optimistic by the same margin. What a sensor *adds* over the existing
+*Read these as differences, not absolutes.* The model front reaches Betrawati at 09:41. The official account has the
+Betrawati gauge go silent at 09:20, and on the reporting pattern of the Syafrubesi gauge its last good reading was
+about 09:10, so the model is 22–32 minutes late. The gap is not in the river routing: the routed front runs at the
+published empirical speed of debris flows (Rickenmann 1999) for the discharge it carries, and matching the reported
+time would take about twice the routed peak held over 45 km. Either the avalanche ran much further down the Bhote
+Koshi than any back-analysis yet shows, or the reported times are telemetry losses rather than the water. Every lead
+time above is optimistic by that margin. What a sensor *adds* over the existing
 alert (+22 min at Rasuwagadhi, +31 min at the best site, for Betrawati) is the more robust number.
 
 ![The Early warning designer on the Nepal 2026 scene after Suggest best site: a lead-time chip per town and plant, and the valley timeline](docs/business/glacier-warning.jpg)
@@ -404,10 +416,17 @@ Say these before a customer finds them; the app says them in its panels and repo
 * **Screening-grade losses.** Global JRC depth–damage curves, values from footprint area × storeys × a national unit
   cost where the user gives none, and a documented heuristic for downtime. Not an insurance valuation, an engineering
   design or a catastrophe model.
-* **Model times for glacier floods.** The chain routes an uncertain source volume down a 1-D valley; at Betrawati the
-  model front is about 20 minutes later than the official account (§4.3).
-* **Egress is a road graph.** Census centre-lines, a road counts as cut at 0.3 m of water; traffic, debris on bridges
-  and late departures are not modelled.
+* **Model times for glacier floods.** The chain routes an uncertain source volume down a 1-D valley. At Betrawati the
+  model front is 22–32 minutes later than the official account (§4.3). The routing already runs at published
+  debris-flow speeds, so the residual sits in the source or the reported times, and it is not a knob to tune.
+* **A river-stage scene explains only the river's share of a flood.** Against Metro Nashville's survey of the
+  buildings damaged in May 2010, Deluge with the Cumberland at its gauged crest reaches 98 % of the damaged buildings
+  the river could reach, and 14 % of the buildings it floods were not recorded. But 70 % of the recorded damage was
+  out of the river's reach: creeks, rain and drains that the scene does not run.
+* **Egress is a road graph and a queue.** Census centre-lines; a road counts as cut at 0.3 m of water. Departures
+  follow Sorensen & Mileti's published flood-warning response curve; the cars queue at one bottleneck with lane counts
+  assumed by road class. Other evacuating traffic and debris on bridges are not modelled, so the clearance time is a
+  lower bound.
 * **Coverage.** Full quality in the US (USGS 3DEP); elsewhere a coarse global elevation fallback, except for baked
   scenes like Nepal and Sikkim.
 * **Time-lapse river rise** in the stage scenarios (the 1936 rise took ~30 hours; the app raises it in minutes, then
