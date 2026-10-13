@@ -36,6 +36,8 @@ export const EXACT = Object.freeze([
   'https://api.openstreetmap.org/api/0.6/map',
   'https://nominatim.openstreetmap.org/search',
   'https://nominatim.openstreetmap.org/reverse',
+  // MRLC GeoServer WCS: NLCD 2021 land cover for live areas — src/data/landcoverLive.ts
+  'https://www.mrlc.gov/geoserver/mrlc_download/wcs',
 ]);
 
 /**

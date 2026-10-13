@@ -9,10 +9,12 @@ const int = (n: number) => Math.round(n).toLocaleString('en-US');
 export function landSurfaceText(ls: LandSurfaceStatus | null): string {
   if (!ls) return 'Load a scene to see which land-surface data it has.';
   const parts: string[] = [];
-  if (ls.obstacleCells > 0) {
+  if (ls.obstacleCells > 0 || ls.porousCells > 0) {
     parts.push(
-      `Buildings: ${int(ls.buildings)} footprints fill ${int(ls.obstacleCells)} cells. Blocked, water runs round them and ` +
-        'the impact numbers read the depth against their walls; a footprint smaller than a cell blocks nothing.',
+      `Buildings: ${int(ls.buildings)} footprints fill ${int(ls.obstacleCells)} cells and partly cover ` +
+        `${int(ls.porousCells)} more. A filled cell blocks the water (the impact numbers read the depth against its ` +
+        'walls); a partly covered one stays passable through its open share, as gaps between houses do. Roof rain goes ' +
+        'down the downspouts: into the storm drains when they are on, onto the ground beside the building when not.',
     );
   } else {
     parts.push('Buildings: no footprints in this scene, nothing to block.');

@@ -46,6 +46,7 @@ import {
   type FloodSolver,
   type HazardFields,
   type LandSurface,
+  type LandSurfacePorosity,
   type SimParams,
   type SimSnapshot,
   type SimStats,
@@ -62,6 +63,8 @@ import {
   MAX_SOURCES,
   MAX_STORMS,
   MMHR_TO_MS,
+  POROSITY_EDGE_BAND,
+  POROSITY_MIN,
   VELOCITY_DEPTH,
   WET_DEPTH,
   type SolverOptions,
@@ -155,10 +158,19 @@ export class GpuFloodSolver implements FloodSolver {
   private readonly obstacle: Float32Array;
   private obstacleCount = 0;
   private readonly obstacleTex: GPUTexture;
-  /** rg32float: (roughness factor, drain capacity m/s) per cell — see SURFACE_WGSL in shaders/common.ts. */
+  /** rgba32float: (roughness factor, drain capacity m/s, downspout factor, 0) per cell — SURFACE_WGSL in shaders/common.ts. */
   private readonly surfaceTex: GPUTexture;
   private roughnessOn = false;
   private drainsOn = false;
+  /**
+   * Building porosity (setLandSurface): the porosities as given (null = off) and as applied — clamped, never on cells
+   * with initial water or in the edge band, faces capped at the smaller φ — in porosityTex, rgba32float (φ, ψ east,
+   * ψ south, roof share); see POROSITY_WGSL in shaders/common.ts.
+   */
+  private porosityInput: LandSurfacePorosity | null = null;
+  private readonly porosityTex: GPUTexture;
+  private porosityOn = false;
+  private porousCells = 0;
   private readonly groundTex: GPUTexture;
   private readonly stateTex: [GPUTexture, GPUTexture];
   private readonly fluxTex: GPUTexture;
@@ -180,9 +192,14 @@ export class GpuFloodSolver implements FloodSolver {
 
   private readonly momentumPipe: GPUComputePipeline;
   private readonly continuityPipe: GPUComputePipeline;
-  /** The same passes compiled with a land-surface layer on (ROUGHNESS_MAP, STORM_DRAINS); same bind groups. */
-  private readonly momentumRoughPipe: GPUComputePipeline;
-  private readonly continuityDrainPipe: GPUComputePipeline;
+  /**
+   * The same passes compiled with land-surface layers on, same bind groups: momentum [plain, ROUGHNESS_MAP, POROSITY,
+   * both], continuity [plain, STORM_DRAINS, POROSITY, both], export [plain, POROSITY] (index bit 1 = the first layer,
+   * bit 2 = POROSITY).
+   */
+  private readonly momentumPipes: GPUComputePipeline[];
+  private readonly continuityPipes: GPUComputePipeline[];
+  private readonly exportPipes: GPUComputePipeline[];
   private readonly exportPipe: GPUComputePipeline;
   private readonly brushPipe: GPUComputePipeline;
   private readonly raisePipe: GPUComputePipeline;
@@ -193,8 +210,8 @@ export class GpuFloodSolver implements FloodSolver {
   private readonly bgContinuity: GPUBindGroup[];
   /** [statePartity][exportParity] */
   private readonly bgExport: GPUBindGroup[][];
-  /** [exportParity] */
-  private readonly bgStats: GPUBindGroup[];
+  /** [stateParity][exportParity] */
+  private readonly bgStats: GPUBindGroup[][];
   private brushRes: { tex: GPUTexture[]; bg: GPUBindGroup[] } | null = null;
   /** raiseWaterSurface: the uploaded base array (by identity), its texture, bind groups and channel cells. */
   private raiseRes: {
@@ -332,9 +349,9 @@ export class GpuFloodSolver implements FloodSolver {
     pipes: {
       momentum: GPUComputePipeline;
       continuity: GPUComputePipeline;
-      momentumRough: GPUComputePipeline;
-      continuityDrains: GPUComputePipeline;
-      exportP: GPUComputePipeline;
+      momentumVariants: GPUComputePipeline[];
+      continuityVariants: GPUComputePipeline[];
+      exportVariants: GPUComputePipeline[];
       brush: GPUComputePipeline;
       brushLayout: GPUBindGroupLayout;
       raise: GPUComputePipeline;
@@ -390,12 +407,21 @@ export class GpuFloodSolver implements FloodSolver {
     this.barrierTexture = tex('sim.barrier', 'r32float', terrUsage);
     this.bedTexture = tex('sim.bed', 'r32float', terrUsage);
     this.obstacleTex = tex('sim.obstacle', 'r32float', U.TEXTURE_BINDING | U.COPY_DST);
-    this.surfaceTex = tex('sim.surface', 'rg32float', U.TEXTURE_BINDING | U.COPY_DST);
+    this.surfaceTex = tex('sim.surface', 'rgba32float', U.TEXTURE_BINDING | U.COPY_DST);
+    this.porosityTex = tex('sim.porosity', 'rgba32float', U.TEXTURE_BINDING | U.COPY_DST);
     {
-      // No land-surface layers: roughness factor 1, no drains (read only once a layer switches its flag on).
-      const surf = new Float32Array(this.N * 2);
-      for (let c = 0; c < this.N; c++) surf[2 * c] = 1;
-      device.queue.writeTexture({ texture: this.surfaceTex }, surf, { bytesPerRow: nx * 8 }, { width: nx, height: ny });
+      // No land-surface layers: roughness factor 1, no drains, no downspouts; every cell and face fully open (read only
+      // once a layer switches its pipeline variant on).
+      const surf = new Float32Array(this.N * 4);
+      const por = new Float32Array(this.N * 4);
+      for (let c = 0; c < this.N; c++) {
+        surf[4 * c] = 1;
+        por[4 * c] = 1;
+        por[4 * c + 1] = 1;
+        por[4 * c + 2] = 1;
+      }
+      device.queue.writeTexture({ texture: this.surfaceTex }, surf, { bytesPerRow: nx * 16 }, { width: nx, height: ny });
+      device.queue.writeTexture({ texture: this.porosityTex }, por, { bytesPerRow: nx * 16 }, { width: nx, height: ny });
       device.queue.writeTexture({ texture: this.obstacleTex }, this.obstacle, { bytesPerRow: nx * 4 }, { width: nx, height: ny });
     }
 
@@ -428,9 +454,10 @@ export class GpuFloodSolver implements FloodSolver {
 
     this.momentumPipe = pipes.momentum;
     this.continuityPipe = pipes.continuity;
-    this.momentumRoughPipe = pipes.momentumRough;
-    this.continuityDrainPipe = pipes.continuityDrains;
-    this.exportPipe = pipes.exportP;
+    this.momentumPipes = pipes.momentumVariants;
+    this.continuityPipes = pipes.continuityVariants;
+    this.exportPipes = pipes.exportVariants;
+    this.exportPipe = pipes.exportVariants[0];
     this.brushPipe = pipes.brush;
     this.brushLayout = pipes.brushLayout;
     this.raisePipe = pipes.raise;
@@ -448,6 +475,7 @@ export class GpuFloodSolver implements FloodSolver {
           { binding: 1, resource: this.stateTex[p].createView() },
           { binding: 2, resource: this.fluxTex.createView() },
           { binding: 3, resource: this.surfaceTex.createView() },
+          { binding: 4, resource: this.porosityTex.createView() },
         ],
       }),
     );
@@ -463,6 +491,7 @@ export class GpuFloodSolver implements FloodSolver {
           { binding: 4, resource: this.stateTex[1 - p].createView() },
           { binding: 5, resource: ub(this.accBuf) },
           { binding: 6, resource: this.surfaceTex.createView() },
+          { binding: 7, resource: this.porosityTex.createView() },
         ],
       }),
     );
@@ -477,24 +506,28 @@ export class GpuFloodSolver implements FloodSolver {
             { binding: 2, resource: this.exportTex[e].createView() },
             { binding: 3, resource: this.exportTex[1 - e].createView() },
             { binding: 4, resource: ub(this.hazardBuf) },
+            { binding: 5, resource: this.porosityTex.createView() },
           ],
         }),
       ),
     );
 
-    this.bgStats = [0, 1].map((e) =>
-      device.createBindGroup({
-        label: `sim.stats${e}`,
-        layout: this.statsPipe.getBindGroupLayout(0),
-        entries: [
-          { binding: 0, resource: ub(this.simBuf) },
-          { binding: 1, resource: this.exportTex[e].createView() },
-          { binding: 2, resource: ub(this.accBuf) },
-          { binding: 3, resource: ub(this.dryMaskBuf) },
-          { binding: 4, resource: ub(this.depthBuf) },
-          { binding: 5, resource: ub(this.blocksBuf) },
-        ],
-      }),
+    this.bgStats = [0, 1].map((p) =>
+      [0, 1].map((e) =>
+        device.createBindGroup({
+          label: `sim.stats${p}${e}`,
+          layout: this.statsPipe.getBindGroupLayout(0),
+          entries: [
+            { binding: 0, resource: ub(this.simBuf) },
+            { binding: 1, resource: this.exportTex[e].createView() },
+            { binding: 2, resource: ub(this.accBuf) },
+            { binding: 3, resource: ub(this.dryMaskBuf) },
+            { binding: 4, resource: ub(this.depthBuf) },
+            { binding: 5, resource: ub(this.blocksBuf) },
+            { binding: 6, resource: this.stateTex[p].createView() },
+          ],
+        }),
+      ),
     );
 
     this.forcing = this.packForcingNow();
@@ -583,7 +616,7 @@ export class GpuFloodSolver implements FloodSolver {
     let built: Awaited<ReturnType<typeof make>>[];
     try {
       built = await Promise.all([
-      make('sim.momentum', momentumWGSL, [uniform(0, SIM_UNIFORM_BYTES), sampled(1), storageTex(2, 'rg32float'), sampled(3)], [{}, { ROUGHNESS_MAP: 1 }]),
+      make('sim.momentum', momentumWGSL, [uniform(0, SIM_UNIFORM_BYTES), sampled(1), storageTex(2, 'rg32float'), sampled(3), sampled(4)], [{}, { ROUGHNESS_MAP: 1 }, { POROSITY: 1 }, { ROUGHNESS_MAP: 1, POROSITY: 1 }]),
       make('sim.continuity', continuityWGSL, [
         uniform(0, SIM_UNIFORM_BYTES),
         uniform(1, FORCING_UNIFORM_BYTES),
@@ -592,8 +625,9 @@ export class GpuFloodSolver implements FloodSolver {
         storageTex(4, 'rgba32float'),
         storageBuf(5),
         sampled(6),
-      ], [{}, { STORM_DRAINS: 1 }]),
-      make('sim.export', exportWGSL, [uniform(0, SIM_UNIFORM_BYTES), sampled(1), sampled(2), storageTex(3, 'rgba32float'), storageBuf(4)]),
+        sampled(7),
+      ], [{}, { STORM_DRAINS: 1 }, { POROSITY: 1 }, { STORM_DRAINS: 1, POROSITY: 1 }]),
+      make('sim.export', exportWGSL, [uniform(0, SIM_UNIFORM_BYTES), sampled(1), sampled(2), storageTex(3, 'rgba32float'), storageBuf(4), sampled(5)], [{}, { POROSITY: 1 }]),
       make('sim.brush', brushWGSL, [
         uniform(0, BRUSH_UNIFORM_BYTES),
         sampled(1),
@@ -614,6 +648,7 @@ export class GpuFloodSolver implements FloodSolver {
         storageBuf(3, 'read-only-storage'),
         storageBuf(4),
         storageBuf(5),
+        sampled(6),
       ]),
       ]);
     } catch (e) {
@@ -631,9 +666,9 @@ export class GpuFloodSolver implements FloodSolver {
       {
         momentum: momentum.pipeline,
         continuity: continuity.pipeline,
-        momentumRough: momentum.variants[1],
-        continuityDrains: continuity.variants[1],
-        exportP: exportP.pipeline,
+        momentumVariants: momentum.variants,
+        continuityVariants: continuity.variants,
+        exportVariants: exportP.variants,
         brush: brush.pipeline,
         brushLayout: brush.layout,
         raise: raise.pipeline,
@@ -1052,6 +1087,8 @@ export class GpuFloodSolver implements FloodSolver {
     this.initialVersion++;
     // Obstacles leave cells wet in the initial water open; the reset below rebuilds the state bed with them.
     this.applyObstacles();
+    // Porosity likewise (the initial depth is a true depth, so those cells are never porous).
+    if (this.porosityInput) this.applyPorosity();
     this.uploadDryMask();
     this.reset();
   }
@@ -1146,7 +1183,7 @@ export class GpuFloodSolver implements FloodSolver {
   destroy(): void {
     if (this.destroyed) return;
     this.destroyed = true;
-    for (const t of [...this.stateTex, ...this.exportTex, this.fluxTex, this.groundTex, this.barrierTexture, this.bedTexture, this.obstacleTex, this.surfaceTex]) {
+    for (const t of [...this.stateTex, ...this.exportTex, this.fluxTex, this.groundTex, this.barrierTexture, this.bedTexture, this.obstacleTex, this.surfaceTex, this.porosityTex]) {
       t.destroy();
     }
     for (const t of this.brushRes?.tex ?? []) t.destroy();
@@ -1383,8 +1420,9 @@ export class GpuFloodSolver implements FloodSolver {
     const tw = probe?.timestampWrites;
     let done = 0;
     // Land-surface layers on: their pipeline variants (same bind groups); off: the plain passes, which never read them.
-    const momentumPipe = this.roughnessOn ? this.momentumRoughPipe : this.momentumPipe;
-    const continuityPipe = this.drainsOn ? this.continuityDrainPipe : this.continuityPipe;
+    const por = this.porosityOn ? 2 : 0;
+    const momentumPipe = this.momentumPipes[(this.roughnessOn ? 1 : 0) + por];
+    const continuityPipe = this.continuityPipes[(this.drainsOn ? 1 : 0) + por];
     for (let s = 0; s <= cuts.length; s++) {
       const end = s < cuts.length ? cuts[s] : n;
       // The GPU timing spans every segment: the first pass writes the start, the last one the end.
@@ -1450,7 +1488,7 @@ export class GpuFloodSolver implements FloodSolver {
   /** The export pass alone (the caller keeps resetMaxPending / exportDirty / hazardTime). */
   private encodeExportPass(enc: GPUCommandEncoder): void {
     const pass = enc.beginComputePass({ label: 'sim.export' });
-    pass.setPipeline(this.exportPipe);
+    pass.setPipeline(this.exportPipes[this.porosityOn ? 1 : 0]);
     pass.setBindGroup(0, this.bgExport[this.cur][this.exportCur]);
     pass.dispatchWorkgroups(this.gx, this.gy);
     pass.end();
@@ -1782,13 +1820,18 @@ export class GpuFloodSolver implements FloodSolver {
 
   /**
    * Land-surface layers (FloodSolver.setLandSurface; contracts.ts LandSurface): building obstacles, the land-cover
-   * roughness map and storm drains. A key left out keeps that layer; null switches it off.
+   * roughness map, storm drains and building porosity. A key left out keeps that layer; null switches it off.
    *  • obstacles become part of the state bed at once, without a reset: a rebed pass (shaders/brush.ts kind 4) rebuilds
    *    z over the whole grid and keeps h, so water standing in a footprint is lifted onto the roof and spills off —
    *    mass is untouched. Cells wet in the initial water are never blocked (a footprint mapped over a river or a dock
    *    must not dam it); bedTexture and the CPU ground / barrier mirrors are unchanged (the renderer draws buildings).
    *  • roughness (absolute n at the default global n) and drain capacity (mm/hr) are uploaded to the surface texture;
-   *    their Sim flag bits switch the momentum / continuity reads on.
+   *    switching either on or off picks the pipeline variants that read it.
+   *  • porosity (src/data/porosity.ts) is uploaded to the porosity texture, and the POROSITY variants then read the
+   *    state's h as volume per unit cell area (shaders/common.ts POROSITY_WGSL). The state is kept as it is: switched
+   *    on or off mid-flood, the water volume is unchanged and its depth becomes V/φ (or V) at once. Applied as given
+   *    except: φ clamped to [POROSITY_MIN, 1] and 1 on blocked cells, cells with initial water and the edge band
+   *    (POROSITY_EDGE_BAND); ψ clamped to [0, min(φ of its two cells)], 1 on faces touching the edge band.
    */
   setLandSurface(layers: LandSurface): void {
     if (this.destroyed || !layers) return;
@@ -1799,14 +1842,24 @@ export class GpuFloodSolver implements FloodSolver {
     check(layers.obstacles, 'obstacles');
     check(layers.roughness, 'roughness');
     check(layers.drainCapacity, 'drainCapacity');
-    if (layers.roughness !== undefined || layers.drainCapacity !== undefined) {
+    const por = layers.porosity;
+    if (por) for (const k of ['cell', 'faceE', 'faceS', 'roof', 'spout'] as const) check(por[k], `porosity.${k}`);
+    if (layers.roughness !== undefined || layers.drainCapacity !== undefined || por !== undefined) {
       if (layers.roughness !== undefined) this.roughnessOn = !!layers.roughness;
       if (layers.drainCapacity !== undefined) this.drainsOn = !!layers.drainCapacity;
-      this.writeSurface(layers.roughness, layers.drainCapacity);
+      this.writeSurface(layers.roughness, layers.drainCapacity, por === undefined ? undefined : (por?.spout ?? null));
     }
     if (layers.obstacles !== undefined) {
       this.obstacleInput = layers.obstacles ? layers.obstacles.slice() : null;
       if (this.applyObstacles()) this.rebed();
+    }
+    if (por !== undefined) {
+      this.porosityInput = por
+        ? { cell: por.cell.slice(), faceE: por.faceE.slice(), faceS: por.faceS.slice(), roof: por.roof.slice(), spout: por.spout.slice() }
+        : null;
+      this.applyPorosity();
+    } else if (layers.obstacles !== undefined && this.porosityInput) {
+      this.applyPorosity();
     }
   }
 
@@ -1823,22 +1876,26 @@ export class GpuFloodSolver implements FloodSolver {
     return this.obstacleTex;
   }
 
-  /** Which land-surface layers are switched on, and how many cells the obstacles block. */
-  get landSurfaceState(): { obstacles: number; roughness: boolean; drains: boolean } {
-    return { obstacles: this.obstacleCount, roughness: this.roughnessOn, drains: this.drainsOn };
+  /** Which land-surface layers are switched on, how many cells the obstacles block and how many are porous. */
+  get landSurfaceState(): { obstacles: number; roughness: boolean; drains: boolean; porous: number } {
+    return { obstacles: this.obstacleCount, roughness: this.roughnessOn, drains: this.drainsOn, porous: this.porosityOn ? this.porousCells : 0 };
   }
 
   /**
-   * Re-upload the surface texture's channels that changed (undefined = keep; null = neutral: factor 1, no drain). The
-   * texture has two channels, so a change to one rewrites both from the CPU copy kept here.
+   * Re-upload the surface texture's channels that changed (undefined = keep; null = neutral: factor 1, no drain, no
+   * downspouts). A change to one channel rewrites the texture from the CPU copy kept here.
    */
   private surfaceCPU: Float32Array | null = null;
-  private writeSurface(roughness: Float32Array | null | undefined, drain: Float32Array | null | undefined): void {
+  private writeSurface(
+    roughness: Float32Array | null | undefined,
+    drain: Float32Array | null | undefined,
+    spout: Float32Array | null | undefined,
+  ): void {
     const { N, nx, ny } = this;
     let s = this.surfaceCPU;
     if (!s) {
-      s = new Float32Array(2 * N);
-      for (let c = 0; c < N; c++) s[2 * c] = 1;
+      s = new Float32Array(4 * N);
+      for (let c = 0; c < N; c++) s[4 * c] = 1;
       this.surfaceCPU = s;
     }
     const nRef = DEFAULT_SIM_PARAMS.manningN;
@@ -1846,16 +1903,69 @@ export class GpuFloodSolver implements FloodSolver {
       for (let c = 0; c < N; c++) {
         const n = roughness ? roughness[c] : nRef;
         // A cell with no valid n keeps the global value (factor 1).
-        s[2 * c] = Number.isFinite(n) && n > 0 ? n / nRef : 1;
+        s[4 * c] = Number.isFinite(n) && n > 0 ? n / nRef : 1;
       }
     }
     if (drain !== undefined) {
       for (let c = 0; c < N; c++) {
         const v = drain ? drain[c] : 0;
-        s[2 * c + 1] = Number.isFinite(v) && v > 0 ? v * MMHR_TO_MS : 0;
+        s[4 * c + 1] = Number.isFinite(v) && v > 0 ? v * MMHR_TO_MS : 0;
       }
     }
-    this.device.queue.writeTexture({ texture: this.surfaceTex }, s, { bytesPerRow: nx * 8 }, { width: nx, height: ny });
+    if (spout !== undefined) {
+      for (let c = 0; c < N; c++) {
+        const v = spout ? spout[c] : 0;
+        s[4 * c + 2] = Number.isFinite(v) && v > 0 ? v : 0;
+      }
+    }
+    this.device.queue.writeTexture({ texture: this.surfaceTex }, s, { bytesPerRow: nx * 16 }, { width: nx, height: ny });
+  }
+
+  /**
+   * Recompute the applied porosities from the given ones, the obstacles and the initial water (see setLandSurface) and
+   * upload them. Switches the POROSITY pipeline variants on or off.
+   */
+  private applyPorosity(): void {
+    const { N, nx, ny, initialDepth, obstacle } = this;
+    const inp = this.porosityInput;
+    const out = new Float32Array(4 * N);
+    let porous = 0;
+    const B = POROSITY_EDGE_BAND;
+    const band = (i: number, j: number) => i < B || j < B || i >= nx - B || j >= ny - B;
+    const clamp01 = (v: number) => (Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 1);
+    const phi = new Float32Array(N).fill(1);
+    if (inp) {
+      for (let j = 0; j < ny; j++) {
+        for (let i = 0; i < nx; i++) {
+          const c = j * nx + i;
+          if (obstacle[c] > 0 || initialDepth[c] > 0 || band(i, j)) continue;
+          const v = inp.cell[c];
+          phi[c] = Number.isFinite(v) ? Math.min(1, Math.max(POROSITY_MIN, v)) : 1;
+          if (phi[c] < 1) porous++;
+        }
+      }
+    }
+    for (let j = 0; j < ny; j++) {
+      for (let i = 0; i < nx; i++) {
+        const c = j * nx + i;
+        out[4 * c] = phi[c];
+        let pe = 1;
+        let ps = 1;
+        if (inp) {
+          if (i < nx - 1 && !band(i, j) && !band(i + 1, j)) pe = Math.min(clamp01(inp.faceE[c]), phi[c], phi[c + 1]);
+          if (j < ny - 1 && !band(i, j) && !band(i, j + 1)) ps = Math.min(clamp01(inp.faceS[c]), phi[c], phi[c + nx]);
+        }
+        out[4 * c + 1] = pe;
+        out[4 * c + 2] = ps;
+        out[4 * c + 3] = inp && initialDepth[c] <= 0 ? clamp01(inp.roof[c]) : 0;
+      }
+    }
+    this.porosityOn = !!inp;
+    this.porousCells = porous;
+    this.device.queue.writeTexture({ texture: this.porosityTex }, out, { bytesPerRow: nx * 16 }, { width: nx, height: ny });
+    // The exported depth of a porous cell is V/φ: refresh the export.
+    this.exportDirty = true;
+    this.stateVersionN++;
   }
 
   /**
@@ -2037,7 +2147,7 @@ export class GpuFloodSolver implements FloodSolver {
     const pass = enc.beginComputePass({ label: 'sim.stats' });
     pass.setPipeline(this.statsPipe);
     // exportCur was flipped after the last export: the latest exported texture is exportTex[exportCur].
-    pass.setBindGroup(0, this.bgStats[this.exportCur]);
+    pass.setBindGroup(0, this.bgStats[this.cur][this.exportCur]);
     pass.dispatchWorkgroups(Math.ceil(this.nx / 16 / WG), Math.ceil(this.ny / 16 / WG));
     pass.end();
     enc.clearBuffer(this.accBuf);

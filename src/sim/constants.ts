@@ -169,3 +169,12 @@ export const INFLOW_EDGE_MASK_CELLS = 24;
 
 /** Minimum effective footprint radius (cells) for sources / brushes so a footprint always covers a cell center. */
 export const MIN_FOOTPRINT_RADIUS = 0.75;
+
+/**
+ * Building porosity (FloodSolver.setLandSurface, LandSurface.porosity): cells within this many cells of a domain edge
+ * are never porous and their faces fully open — the open-boundary rule (bflux) reads the raw state of the edge cell
+ * and the two cells inside it, which must then be true depths and open-width discharges.
+ */
+export const POROSITY_EDGE_BAND = 3;
+/** Smallest storage porosity the solver accepts (a cell this full should be a building block; h = V/φ). */
+export const POROSITY_MIN = 0.05;

@@ -267,25 +267,45 @@ than showing a number.
 ## Buildings, a land-cover roughness map and storm drains
 
 The app has three optional land-surface layers (Advanced → *Land surface*; [ARCHITECTURE.md §3.11](../ARCHITECTURE.md#311-land-surface-buildings-as-obstacles-a-roughness-map-storm-drains)):
-building footprints as obstacles, Manning's n from NLCD 2021, and storm drains sized to the 2-year storm. The scenes
-above were re-run with each of them, through the same runs and the same scoring (`npx tsx
-scripts/validation/landsurface.ts`; a blocked footprint cell is scored at the water surface of its wettest open
-neighbour, the level a mark on its wall would record):
+buildings — a block where footprints fill a cell, an integral porosity where they only partly cover it, and roof rain
+sent down the downspouts — Manning's n from NLCD 2021, and storm drains sized to the 2-year storm. The scenes above
+were re-run with each of them, through the same runs and the same scoring (`npx tsx
+scripts/validation/landsurface.ts`; a blocked cell is scored at the water surface of its wettest open neighbour, the
+level a mark on its wall would record; a porous cell at the depth of its open part):
 
 | Scene and observation | none (shipped) | buildings | roughness | buildings + roughness | drains | all three |
 | --- | --- | --- | --- | --- | --- | --- |
-| Fort Myers, Ian marks: bias / RMSE | +0.07 / 0.14 m | +0.07 / 0.14 m | +0.01 / 0.17 m | +0.06 / 0.14 m | | |
-| Fort Myers, FEMA 1 % zone: CSI | **87.9 %** | 86.6 % | 80.9 % | 86.7 % | | |
-| Nashville, FEMA 1 % zone: CSI / profile bias | **82.3 %** / +0.26 m | 80.2 % / +0.27 m | 79.3 % / +0.24 m | 79.6 % / +0.28 m | | |
-| Pittsburgh, FEMA 1 % zone: CSI / profile bias | **60.9 %** / −0.38 m | 60.5 % / −0.38 m | 59.1 % / −0.40 m | 60.9 % / −0.38 m | | |
-| Asheville, gauge peaks: French Broad / Swannanoa | −1.44 / −1.22 m | −1.45 / −1.27 m | −1.69 / +0.00 m | −1.45 / −1.02 m | | |
-| Houston, Harvey marks (not like-for-like): bias / RMSE | −1.85 / 2.56 m | −1.01 / 2.40 m | −1.87 / 2.44 m | | −1.89 / 2.61 m | −1.07 / 2.48 m |
+| Fort Myers, Ian marks: bias / RMSE | +0.07 / 0.14 m | +0.04 / 0.16 m | +0.01 / 0.17 m | +0.04 / 0.15 m | | |
+| Fort Myers, FEMA 1 % zone: CSI | **87.9 %** | 85.8 % | 80.9 % | 85.7 % | | |
+| Nashville, FEMA 1 % zone: CSI / profile bias | **82.3 %** / +0.26 m | 80.2 % / +0.27 m | 79.3 % / +0.24 m | 79.4 % / +0.27 m | | |
+| Pittsburgh, FEMA 1 % zone: CSI / profile bias | **60.9 %** / −0.38 m | 60.5 % / −0.38 m | 59.1 % / −0.40 m | 60.8 % / −0.38 m | | |
+| Asheville, gauge peaks: French Broad / Swannanoa | −1.44 / −1.22 m | −1.44 / **−0.49 m** | −1.69 / +0.00 m | −1.41 / −0.55 m | | |
+| Houston, Harvey marks (not like-for-like): bias / RMSE | −1.85 / 2.56 m | −1.01 / 2.39 m | −1.87 / 2.44 m | | −1.89 / 2.61 m | −1.07 / 2.47 m |
 
-None improves a like-for-like score: buildings cost 0.4–2.1 CSI points, the roughness map 1.8–7.0, the two together
-0–2.7. The roughness map moves the two Helene gauges in opposite directions, so Asheville's error is the discharge and
-the burned channel, not the floodplain's n. That is why the shipped scenes — and the numbers above them on this page —
-stay on bare earth with one n. The layers remain available for what they do model (flow round blocks, drained
-ordinary storms), with the caveats in ARCHITECTURE.md.
+Before the porosity and downspouts (building blocks by cell centre alone), the buildings column read 86.6 %, 80.2 %,
+60.5 %, −1.45 / −1.27 m and −1.01 / 2.40 m: the extent scores moved by under a point, and the Swannanoa gauge came
+0.7 m closer to its observed peak (still short of it, like the French Broad).
+
+No layer improves every like-for-like score, so none is on in the shipped scenes. Buildings cost 0.4–2.1 CSI points,
+the roughness map 1.8–7.0, the two together 0.1–2.9. Two things are behind that, measured rather than assumed:
+
+* **The fixed hold.** The stage is held 30 min (60 min at Fort Myers) after it arrives, and FEMA's 1 % zone is where
+  water would stand with no time limit. Anything that slows the water leaves fringe cells short at the end of the
+  hold. Re-run with every hold three times as long (`--hold-scale=3`, a sensitivity, not the protocol), the roughness
+  map's loss shrinks to 0.6 points at Fort Myers (90.6 % against 90.0 %), 0.8 at Nashville and 1.2 at Pittsburgh,
+  and buildings' to 0.8 at Fort Myers and 0.3 at Pittsburgh.
+* **Watertight buildings.** At Nashville the buildings' loss grows with the longer hold (81.4 % against 77.4 %): of
+  the 781 zone cells bare earth wets and buildings do not (standard hold), 651 are open ground that stays completely
+  dry — pockets the buildings shut off. A real flood reaches them through doors, garages and courtyards; the model's
+  blocks do not leak, and FEMA maps the pockets by their ground elevation.
+
+The Manning's n values themselves were checked, not tuned: the land-cover raster is registered on the grid (the
+share of river cells on NLCD's water class is highest with no shift and falls for any shift of 4 cells; a live
+re-fetch reproduces the baked raster exactly), every river cell keeps the uniform 0.035 the scenes were set up with,
+and the class values sit inside the HEC-RAS 2D manual's ranges. The roughness map moves the two Helene gauges in
+opposite directions, so Asheville's error is the discharge and the burned channel, not the floodplain's n. The
+layers remain available for what they do model (flow round and between buildings, drained ordinary storms), with the
+caveats in ARCHITECTURE.md.
 
 ## What these numbers do not cover
 

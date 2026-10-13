@@ -26,6 +26,10 @@ import { boundsToMercator, centerOf, isLikelyUS, mercatorToLonLat } from '../src
 import { computeInitialWater } from '../src/data/initialWater';
 import { classTable, LANDCOVER_ATTRIBUTION, type LandCoverMeta, type LandCoverScheme, validateLandCoverMeta } from '../src/data/landcover';
 import type { PresetMeta } from '../src/data/presets';
+import { conusAlbers, NLCD_COVERAGE, NLCD_WCS } from '../src/data/landcoverLive';
+
+// EPSG:5070 (NAD83 / Conus Albers), shared with the live-area land cover; re-exported for the tests.
+export { conusAlbers };
 
 /** Land-cover raster edge length, pixels: about NLCD's own 30 m on the 8 km US presets, about 15 m for WorldCover. */
 export const LANDCOVER_SIZE_US = 256;
@@ -33,8 +37,6 @@ export const LANDCOVER_SIZE_GLOBAL = 512;
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const CACHE = path.resolve(HERE, '../artifacts/bake-cache');
-const NLCD_WCS = 'https://www.mrlc.gov/geoserver/mrlc_download/wcs';
-const NLCD_COVERAGE = 'mrlc_download__NLCD_2021_Land_Cover_L48';
 const WORLDCOVER_TILE = (lat: number, lon: number) => {
   const la = Math.floor(lat / 3) * 3;
   const lo = Math.floor(lon / 3) * 3;
@@ -71,35 +73,6 @@ async function fetchBytes(url: string): Promise<Uint8Array> {
       await new Promise((res) => setTimeout(res, 2000 * (attempt + 1)));
     }
   }
-}
-
-// ── EPSG:5070, NAD83 / Conus Albers: Albers equal-area conic on GRS80 (Snyder 1987, Map Projections — A Working Manual,
-//    eqs. 3-12, 14-3 … 14-6) ───────────────────────────────────────────────────────────────────────────────────────────
-const GRS80_A = 6378137;
-const GRS80_F = 1 / 298.257222101;
-const E2 = 2 * GRS80_F - GRS80_F * GRS80_F;
-const E = Math.sqrt(E2);
-const D2R = Math.PI / 180;
-const albersQ = (phi: number) => {
-  const s = Math.sin(phi);
-  return (1 - E2) * (s / (1 - E2 * s * s) - (1 / (2 * E)) * Math.log((1 - E * s) / (1 + E * s)));
-};
-const albersM = (phi: number) => Math.cos(phi) / Math.sqrt(1 - E2 * Math.sin(phi) ** 2);
-const A_PHI1 = 29.5 * D2R;
-const A_PHI2 = 45.5 * D2R;
-const A_PHI0 = 23 * D2R;
-const A_LAM0 = -96 * D2R;
-const A_M1 = albersM(A_PHI1);
-const A_M2 = albersM(A_PHI2);
-const A_N = (A_M1 * A_M1 - A_M2 * A_M2) / (albersQ(A_PHI2) - albersQ(A_PHI1));
-const A_C = A_M1 * A_M1 + A_N * albersQ(A_PHI1);
-const A_RHO0 = (GRS80_A * Math.sqrt(A_C - A_N * albersQ(A_PHI0))) / A_N;
-
-/** Geographic (NAD83 ≈ WGS84 at 30 m) → EPSG:5070 metres. */
-export function conusAlbers(lon: number, lat: number): { x: number; y: number } {
-  const rho = (GRS80_A * Math.sqrt(A_C - A_N * albersQ(lat * D2R))) / A_N;
-  const theta = A_N * (lon * D2R - A_LAM0);
-  return { x: rho * Math.sin(theta), y: A_RHO0 - rho * Math.cos(theta) };
 }
 
 /** Lon/lat of the centre of output pixel (x, y) of a size² raster over the preset's Web-Mercator bounds. */

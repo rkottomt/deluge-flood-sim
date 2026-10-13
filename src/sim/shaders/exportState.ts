@@ -28,7 +28,7 @@
  * a NaN comparison, which FXC folds away — and leave the accumulators untouched, so nothing non-finite is ever stored.
  */
 import { ARRIVAL_DEPTH } from '../constants';
-import { HELPERS_WGSL, SIM_WGSL } from './common';
+import { HELPERS_WGSL, POROSITY_WGSL, SIM_WGSL } from './common';
 
 const f = (x: number) => (Number.isInteger(x) ? `${x}.0` : String(x));
 
@@ -40,7 +40,18 @@ ${SIM_WGSL}
 @group(0) @binding(3) var outTex: texture_storage_2d<rgba32float, write>;
 // Hazard accumulators, nx·ny row-major: (max speed while wet m/s, max h·|u| m²/s, first-wet time s or −1, wet seconds).
 @group(0) @binding(4) var<storage, read_write> hazard: array<vec4f>;
+@group(0) @binding(5) var porTex: texture_2d<f32>;
+// Pipeline variant: building porosity on — the exported depth and velocity are those of the open part of the cell
+// (true depth V/φ, discharge per unit open width), what the renderer, the hazard maxima and the loss model read.
+override POROSITY: bool = false;
 ${HELPERS_WGSL}
+${POROSITY_WGSL}
+
+fn stx(i: i32, j: i32) -> vec4f {
+  let s = st(i, j);
+  if (POROSITY) { return openState(s, por(i, j)); }
+  return s;
+}
 
 const ARRIVAL = ${f(ARRIVAL_DEPTH)};
 
@@ -53,15 +64,15 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
   let i = i32(id.x);
   let j = i32(id.y);
   if (i >= sim.nx || j >= sim.ny) { return; }
-  let s = st(i, j);
+  let s = stx(i, j);
   let h = s.r;
   var u = 0.0;
   var v = 0.0;
   if (h >= sim.velDepth) {
-    let e = st(i + 1, j);
-    let w = st(i - 1, j);
-    let so = st(i, j + 1);
-    let n = st(i, j - 1);
+    let e = stx(i + 1, j);
+    let w = stx(i - 1, j);
+    let so = stx(i, j + 1);
+    let n = stx(i, j - 1);
     // Domain-edge faces: the ghost cell has the same depth, so hf = h; W/N boundary fluxes are recomputed.
     var qW = w.g;
     var hfW = faceDepth(w.r, w.a, h, s.a);

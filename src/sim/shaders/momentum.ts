@@ -76,8 +76,15 @@
  * slider stays a multiplier over the land-cover map. n² enters as sim.n2 · r_f², which is sim.n2 exactly when r = 1:
  * a uniform map is the uniform solver bit for bit. In the default pipeline the code is not compiled. The map applies to
  * water (Manning) only; a debris rheology keeps its own uniform coefficients.
+ *
+ * POROSITY (the POROSITY pipeline variant; LandSurface.porosity, src/data/porosity.ts; POROSITY_WGSL in common.ts). The
+ * state then holds the water volume per unit cell area V and the discharge per unit cell width. Every texel this pass
+ * reads goes through stm(): depth V/φ (the water depth in the open part of the cell) and discharge q/ψ (per unit open
+ * width of the face), so the equations above are solved in the open part unchanged — face depth, surface slope,
+ * friction, smoothing, advection — and the result is stored back as ψ·q. A closed face (ψ = 0) stores 0. The
+ * open-boundary rule reads raw texels, which is why the edge band is never porous (POROSITY_EDGE_BAND).
  */
-import { HELPERS_WGSL, SIM_WGSL, SURFACE_WGSL } from './common';
+import { HELPERS_WGSL, POROSITY_WGSL, SIM_WGSL, SURFACE_WGSL } from './common';
 
 export const momentumWGSL = /* wgsl */ `
 ${SIM_WGSL}
@@ -87,8 +94,20 @@ ${SIM_WGSL}
 @group(0) @binding(3) var surfTex: texture_2d<f32>;
 // Pipeline variant: the land-cover roughness map on (see ROUGHNESS MAP in the header). False in the default pipeline.
 override ROUGHNESS_MAP: bool = false;
+@group(0) @binding(4) var porTex: texture_2d<f32>;
+// Pipeline variant: building porosity on (see POROSITY in the header). False in the default pipeline.
+override POROSITY: bool = false;
 ${HELPERS_WGSL}
 ${SURFACE_WGSL}
+${POROSITY_WGSL}
+
+// The state this pass works with: the raw state, or with porosity on the open part of the cell (true depth, discharge
+// per unit open width; see POROSITY in the header).
+fn stm(i: i32, j: i32) -> vec4f {
+  let s = st(i, j);
+  if (POROSITY) { return openState(s, por(i, j)); }
+  return s;
+}
 
 // n² of the face between cells with roughness factors rL and rR (see ROUGHNESS MAP in the header).
 fn faceN2(rL: f32, rR: f32) -> f32 {
@@ -207,9 +226,9 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
 
   // C, E and S alone decide whether either face is wet. Most cells of a real map are dry, so the other
   // texels are fetched only when there is flow to compute (≈15–20 % faster on the Pittsburgh preset).
-  let c = st(i, j);
-  let e = st(i + 1, j);
-  let s = st(i, j + 1);
+  let c = stm(i, j);
+  let e = stm(i + 1, j);
+  let s = stm(i, j + 1);
   var hfx = 0.0;
   var hfy = 0.0;
   if (i < sim.nx - 1) { hfx = faceDepth(c.r, c.a, e.r, e.a); }
@@ -219,11 +238,11 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     textureStore(fluxOut, vec2i(i, j), vec4f(0.0));
     return;
   }
-  let w  = st(i - 1, j);
-  let n  = st(i, j - 1);
-  let ne = st(i + 1, j - 1);
-  let sw = st(i - 1, j + 1);
-  let se = st(i + 1, j + 1);
+  let w  = stm(i - 1, j);
+  let n  = stm(i, j - 1);
+  let ne = stm(i + 1, j - 1);
+  let sw = stm(i - 1, j + 1);
+  let se = stm(i + 1, j + 1);
 
   // Net outflow (m²/s) of this cell, for the smoothing limiter. The stored qx/qy of the last column/row are the
   // east/south boundary fluxes; west/north domain-edge fluxes are not stored, so evaluate the boundary rule.
@@ -249,7 +268,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
   if (i < sim.nx - 1) {
     let hf = hfx;
     if (isWet(hf)) {
-      let ee = st(i + 2, j);
+      let ee = stm(i + 2, j);
       let slope = ((e.a - c.a) + (e.r - c.r)) / sim.dx;
       let qPerp = 0.25 * (c.b + e.b + n.b + ne.b);
       // Depths of the neighbouring x-faces: i−½, i+3/2 (along x) and the faces south/north of this one.
@@ -288,7 +307,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
   if (j < sim.ny - 1) {
     let hf = hfy;
     if (isWet(hf)) {
-      let ss = st(i, j + 2);
+      let ss = stm(i, j + 2);
       let slope = ((s.a - c.a) + (s.r - c.r)) / sim.dx;
       let qPerp = 0.25 * (c.g + w.g + s.g + sw.g);
       // Depths of the neighbouring y-faces: j−½, j+3/2 (along y) and the faces east/west of this one.
@@ -321,6 +340,12 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     }
   }
 
+  if (POROSITY) {
+    // Back to discharge per unit cell width: what crosses the face is ψ × the open-width discharge.
+    let pc = por(i, j);
+    qxNew = qxNew * pc.g;
+    qyNew = qyNew * pc.b;
+  }
   textureStore(fluxOut, vec2i(i, j), vec4f(qxNew, qyNew, 0.0, 0.0));
 }
 `;

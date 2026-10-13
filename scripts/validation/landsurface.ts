@@ -5,6 +5,7 @@
  *
  *   npx tsx scripts/validation/landsurface.ts                          # every scene with observations, every variant
  *   npx tsx scripts/validation/landsurface.ts --preset=houston --variants=base,drains
+ *   npx tsx scripts/validation/landsurface.ts --hold-scale=3   # sensitivity only: every run held 3× as long
  *
  * Scoring with buildings blocked: the solver keeps water out of a footprint, while FEMA's zone maps the land the
  * buildings stand on. So before scoring, a blocked cell takes the water surface of its wettest open neighbour (filled
@@ -113,6 +114,8 @@ async function main() {
   const { device, description } = await createDelugeDevice(gpu);
   const only = arg('preset', Object.keys(SCENES).join(',')).split(',');
   const onlyVariants = arg('variants', '');
+  // Sensitivity only (not the validation protocol): every run's minutes × this, to see what the fixed hold costs a layer.
+  const holdScale = Number(arg('hold-scale', '1'));
   const rows: Array<{ preset: string; variant: string; metrics: Record<string, number | null>; headline: string; massError: number; blockedCells: number }> = [];
   for (const id of only) {
     const plan = PLANS[id];
@@ -124,7 +127,7 @@ async function main() {
       const outputs = new Map<string, RunOutput>();
       let massError = 0;
       for (const run of plan.runs(obs)) {
-        const o = await runScenario(device, p, { ...run, landSurface: layers });
+        const o = await runScenario(device, p, { ...run, minutes: run.minutes * holdScale, landSurface: layers });
         massError = Math.max(massError, o.stats.massError);
         const maxDepth = layers.obstacles ? fillBlocked(o.maxDepth, o.ground, layers.obstacles, p.meta.nx, p.meta.ny) : o.maxDepth;
         outputs.set(run.id, { ...o, maxDepth });
@@ -146,8 +149,9 @@ async function main() {
   }
   const out = path.join(ROOT, 'artifacts/validation');
   fs.mkdirSync(out, { recursive: true });
-  fs.writeFileSync(path.join(out, 'landsurface.json'), JSON.stringify({ gpu: description, at: new Date().toISOString(), rows }, null, 1));
-  console.log('\n→ artifacts/validation/landsurface.json');
+  const file = holdScale === 1 ? 'landsurface.json' : `landsurface-hold${holdScale}.json`;
+  fs.writeFileSync(path.join(out, file), JSON.stringify({ gpu: description, at: new Date().toISOString(), holdScale, rows }, null, 1));
+  console.log(`\n→ artifacts/validation/${file}`);
   await device.queue.onSubmittedWorkDone();
 }
 

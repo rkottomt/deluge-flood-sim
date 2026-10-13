@@ -17,7 +17,8 @@ import { copernicusTileId, copernicusTileUrl } from '../../src/data/demGlobal';
 import { ESRI_IMAGERY_EXPORT, ESRI_LABELS_TILE_TEMPLATE, ESRI_TILE_TEMPLATE, NAIP_IMAGERY_EXPORT, esriImageryUrl } from '../../src/data/imagery';
 import { OSM_MAP_API, TIGERWEB_TRANSPORT } from '../../src/data/roads';
 import { NOMINATIM_REVERSE, NOMINATIM_SEARCH } from '../../src/data/placeName';
-import { lonLatToMercator } from '../../src/data/geo';
+import { lonLatToMercator, squareDomain } from '../../src/data/geo';
+import { LIVE_LANDCOVER_SIZE, nlcdRequest } from '../../src/data/landcoverLive';
 
 /** A Leaflet tile template with a real tile filled in — what the browser actually requests. */
 const tile = (template: string) => template.replace('{z}', '12').replace('{x}', '1140').replace('{y}', '1541');
@@ -42,6 +43,8 @@ test('every URL the app fetches at runtime is allowed by connect-src', () => {
     // Place names: the picker's search box and reverse geocoding.
     `${NOMINATIM_SEARCH}?q=Pittsburgh&format=json&limit=5`,
     `${NOMINATIM_REVERSE}?format=jsonv2&lat=40.44000&lon=-80.00000&zoom=12`,
+    // Land cover for a live area in the lower 48 (NLCD 2021, MRLC WCS).
+    nlcdRequest(squareDomain({ lat: 40.44, lon: -80 }, 8000).bounds, LIVE_LANDCOVER_SIZE).url,
   ];
   for (const u of urls) assert.ok(cspAllows(u, 'connect-src'), `connect-src blocks ${u}`);
 });

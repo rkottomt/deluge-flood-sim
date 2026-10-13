@@ -1,15 +1,17 @@
 /**
  * Store → solver for the land-surface layers (FloodSolver.setLandSurface; ARCHITECTURE.md §3.11): building footprints
- * as obstacles, the land-cover roughness map and storm drains, switched by SimParams.buildingObstacles / roughnessMap /
- * drainage (the Advanced panel) and built from the scene's own data (TerrainData.buildings, .landCover).
+ * (a block where they fill a cell, a porosity where they partly cover it, roof rain to the downspouts;
+ * src/data/porosity.ts), the land-cover roughness map and storm drains, switched by SimParams.buildingObstacles /
+ * roughnessMap / drainage (the Advanced panel) and built from the scene's own data (TerrainData.buildings, .landCover).
  *
- * The layers are computed here, on the CPU, once per scene and switch (a few ms at 1024²), and pushed whole: the solver
- * only ever sees "this layer, or none". The roughness map depends on the obstacles switch — with buildings resolved,
- * developed land takes the open-ground n of its streets and lawns instead of the buildings-as-roughness value — so it
- * is rebuilt when either changes. A scene without the data keeps the layer off (live areas have no land cover).
+ * The layers are computed here, on the CPU, once per scene and switch, and pushed whole: the solver only ever sees
+ * "this layer, or none". The roughness map depends on the buildings switch — with buildings resolved, developed land
+ * takes the open-ground n of its streets and lawns instead of the buildings-as-roughness value — so it is rebuilt when
+ * either changes. A scene without the data keeps the layer off (live areas outside the lower 48 have no land cover).
  */
-import type { FloodSolver, LandSurfaceStatus, SimParams, Store, TerrainData } from '../contracts';
-import { landSurfaceFromCover, obstacleHeights } from '../data/landcover';
+import type { FloodSolver, LandSurface, LandSurfaceStatus, SimParams, Store, TerrainData } from '../contracts';
+import { landSurfaceFromCover } from '../data/landcover';
+import { buildingCellCounts, buildingLayers } from '../data/porosity';
 
 export interface LandSurfaceFlags {
   buildings: boolean;
@@ -32,32 +34,33 @@ export function buildLandSurface(
   terrain: TerrainData,
   initialWater: Float32Array | null,
   flags: LandSurfaceFlags,
-): { obstacles: Float32Array | null; roughness: Float32Array | null; drainCapacity: Float32Array | null } {
+): Required<Pick<LandSurface, 'obstacles' | 'roughness' | 'drainCapacity' | 'porosity'>> {
   const { nx, ny } = terrain;
-  // One flat roof per group of touching footprints (see obstacleHeights), on the terrain as loaded.
-  const obstacles = flags.buildings ? obstacleHeights(terrain.buildings ?? null, nx, ny, null, terrain.elevation) : null;
+  // Blocks (one flat roof per group of touching ones), porosity and the roof routing, on the terrain as loaded.
+  const b = flags.buildings ? buildingLayers(terrain.buildings ?? null, nx, ny, { ground: terrain.elevation, initialWater }) : null;
+  const obstacles = b?.obstacles ?? null;
+  const porosity = b?.porosity ?? null;
   const lc = terrain.landCover ?? null;
   let roughness: Float32Array | null = null;
   let drainCapacity: Float32Array | null = null;
   if (lc && (flags.roughness || flags.drains)) {
-    const layers = landSurfaceFromCover(lc, nx, ny, { buildingsResolved: !!obstacles, initialWater });
+    const layers = landSurfaceFromCover(lc, nx, ny, { buildingsResolved: !!(obstacles || porosity), initialWater });
     if (flags.roughness) roughness = layers.roughness;
     if (flags.drains && layers.drainedCells > 0) drainCapacity = layers.drainCapacity;
   }
-  return { obstacles, roughness, drainCapacity };
+  return { obstacles, roughness, drainCapacity, porosity };
 }
 
 /** What a scene has, whatever the switches (AppState.landSurface). */
 export function landSurfaceStatus(terrain: TerrainData, initialWater: Float32Array | null): LandSurfaceStatus {
   const { nx, ny } = terrain;
-  const obst = obstacleHeights(terrain.buildings ?? null, nx, ny);
-  let obstacleCells = 0;
-  if (obst) for (let c = 0; c < obst.length; c++) if (obst[c] > 0 && !(initialWater && initialWater[c] >= 0.01)) obstacleCells++;
+  const b = buildingCellCounts(terrain.buildings ?? null, nx, ny, initialWater);
   const lc = terrain.landCover ?? null;
   const drainCells = lc ? landSurfaceFromCover(lc, nx, ny, { buildingsResolved: false, initialWater }).drainedCells : 0;
   return {
     buildings: terrain.buildings?.count ?? 0,
-    obstacleCells,
+    obstacleCells: b.blockedCells,
+    porousCells: b.porousCells,
     landCover: lc ? (lc.scheme === 'nlcd' ? `NLCD ${lc.year}` : `ESA WorldCover ${lc.year}`) : null,
     drainCells,
     designRainMmHr: lc?.designRainMmHr ?? 0,

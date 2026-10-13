@@ -4,20 +4,19 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import type { BuildingSet, FloodSolver, LandSurface, TerrainData } from '../../src/contracts';
+import type { FloodSolver, LandSurface, TerrainData } from '../../src/contracts';
 import { createInitialState } from '../../src/app/defaults';
 import { buildLandSurface, LandSurfaceSync, landSurfaceStatus } from '../../src/app/landSurface';
 import { createStore } from '../../src/app/store';
 import type { LandCover } from '../../src/data/landcover';
 import { landSurfaceText } from '../../src/ui/landSurfaceText';
+import { rectBuildings } from '../helpers/footprints';
 
 const nx = 4;
 const ny = 4;
 
 function terrain(withData: boolean): TerrainData {
-  const raster = new Float32Array(nx * ny);
-  raster[5] = 10; // one building cell
-  raster[0] = 8; // a "building" over the river cell 0
+  // One building filling cell 5 (i = 1, j = 1), and a "building" over the river cell 0.
   const lc: LandCover = {
     scheme: 'nlcd',
     year: 2021,
@@ -37,7 +36,7 @@ function terrain(withData: boolean): TerrainData {
     bounds: { west: 0, south: 0, east: 1, north: 1 },
     imagery: null,
     roads: null,
-    buildings: withData ? ({ count: 2, heightRaster: raster } as unknown as BuildingSet) : null,
+    buildings: withData ? rectBuildings([[1, 1, 2, 2, 10], [0, 0, 1, 1, 8]]) : null,
     landCover: withData ? lc : null,
     attribution: '',
     scenario: null,
@@ -53,7 +52,7 @@ const river = (() => {
 test('buildLandSurface: each switch builds its layer from the scene data, null when off or missing', () => {
   const t = terrain(true);
   const off = buildLandSurface(t, river, { buildings: false, roughness: false, drains: false });
-  assert.deepEqual(off, { obstacles: null, roughness: null, drainCapacity: null });
+  assert.deepEqual(off, { obstacles: null, roughness: null, drainCapacity: null, porosity: null });
   const all = buildLandSurface(t, river, { buildings: true, roughness: true, drains: true });
   assert.equal(all.obstacles![5], 10);
   // With buildings resolved, high-intensity developed land takes its street n; the river cell keeps the channel n.
@@ -64,7 +63,7 @@ test('buildLandSurface: each switch builds its layer from the scene data, null w
   assert.equal(all.drainCapacity![5], Math.fround(0.85 * 30));
   assert.equal(all.drainCapacity![0], 0, 'no drains in the river');
   const none = buildLandSurface(terrain(false), river, { buildings: true, roughness: true, drains: true });
-  assert.deepEqual(none, { obstacles: null, roughness: null, drainCapacity: null }, 'no data, no layers');
+  assert.deepEqual(none, { obstacles: null, roughness: null, drainCapacity: null, porosity: null }, 'no data, no layers');
 });
 
 test('LandSurfaceSync pushes the layers on scene load and on each switch, and publishes the scene status', () => {
@@ -98,7 +97,7 @@ test('LandSurfaceSync pushes the layers on scene load and on each switch, and pu
 test('landSurfaceText says what the scene has and what each layer is not', () => {
   assert.match(landSurfaceText(null), /Load a scene/);
   const full = landSurfaceText(landSurfaceStatus(terrain(true), river));
-  assert.match(full, /2 footprints fill 1 cells/);
+  assert.match(full, /2 footprints fill 1 cells and partly cover 0 more/);
   assert.match(full, /NLCD 2021/);
   assert.match(full, /not a pipe network/);
   const live = landSurfaceText(landSurfaceStatus(terrain(false), river));

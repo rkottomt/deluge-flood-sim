@@ -7,8 +7,8 @@
  * DEM, at a coarser size), plus a `landcover` block in meta.json (scheme, year, size, the design rainfall used for the
  * drains). US presets use NLCD 2021 (USGS / MRLC, public domain, 30 m) at 256² (31 m pixels over the 8 km domains),
  * the others ESA WorldCover 2021 v200 (10 m, CC BY 4.0) at 512² (15.6 m). The grid cells (7.8 m) upsample by
- * nearest neighbour. scripts/bake-landcover.ts builds them. Live areas have no land cover (see src/data/csp.ts: no land
- * cover host is on the CSP allow-list), so their roughness stays uniform and they have no drains.
+ * nearest neighbour. scripts/bake-landcover.ts builds them. Live areas in the lower 48 fetch NLCD 2021 at load time
+ * (src/data/landcoverLive.ts); elsewhere they have none, so their roughness stays uniform and they have no drains.
  *
  * ROUGHNESS. `n` is the class value with buildings NOT resolved (developed classes then carry the extra resistance of
  * the buildings — the "increased roughness" treatment — as the HEC-RAS guidance intends); `nStreet` is the value

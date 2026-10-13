@@ -18,8 +18,9 @@
  *   solver.hazardBuffer         the same accumulators on the GPU (the renderer's arrival and hazard-class views)
  *   solver.setRheology(r, {uMax}) debris-flow friction law and speed cap for the scenario (contract extension;
  *                               coefficients in rheology.ts, ARCHITECTURE.md §3.9); solver.rheology, solver.speedCap
- *   solver.setLandSurface({obstacles, roughness, drainCapacity})  building obstacles, a per-cell Manning n and storm
- *                               drains (contract extension, ARCHITECTURE.md §3.11); solver.landSurfaceState,
+ *   solver.setLandSurface({obstacles, roughness, drainCapacity, porosity})  building blocks, a per-cell Manning n,
+ *                               storm drains, and building porosity with roof downspouts (contract extension,
+ *                               ARCHITECTURE.md §3.11); solver.landSurfaceState,
  *                               solver.getObstacleCPU(), solver.obstacleTexture (the renderer hides roof films with it)
  *   solver.options              numerical tunables (see SolverOptions / DEFAULT_SOLVER_OPTIONS)
  */
