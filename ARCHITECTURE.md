@@ -862,6 +862,44 @@ wet; a bridge at its two landings) gives operational / impaired / failed by per-
 its nearest substation (a Voronoi service area — labelled approximate), water works, exchange and wastewater plant,
 and on the nearest hospital and fire station by road at the peak (the router over the arrival-ordered flood, with
 the moment the last route was cut). Failed utilities add illustrative restoration days to the downtime heuristic.
+The shelters evacuees are sent to are dependencies too: each is listed with its own flooding (≥ 0.3 m, from the first
+arrival there) and its nearest substation, and a dry shelter whose substation fails is flagged ("no grid power
+there"). A shelter that floods already drops out of the routing — the car router skips it, `egress.ts` subtracts the
+drive there from its closure (§7.3), and the walk never counts a shelter that turns unsafe — so power is reported,
+not routed around.
+
+### 7.3 Leaving by road: departures and the queue (`src/routing/departure.ts`, `bottleneck.ts`, `src/loss/egressTiming.ts`)
+
+`egress.ts` gives the moment the last road route from a site to a shelter closes. Three things stand between that and
+"everyone is out", each a transparent calculation with sourced, editable defaults:
+
+* **The latest safe departure.** Per shelter, its closure (last route cut, or the shelter itself under 0.3 m) minus
+  the dry drive there; the latest over the shelters. A shelter that floods before a car leaving later could reach it
+  does not stretch the window.
+* **Departures after the alert.** People do not all leave at the alert. Sorensen & Mileti's (2015b, USACE)
+  protective-action-initiation curves for dam and levee floods, P(t) = m·(1 − exp(−t²/(a·b²))) with t in minutes after
+  the warning is received — a Rayleigh in t, capped at the share m that acts within 8 h. Coefficients as tabulated in
+  Silva, Eleutério, Apel & Kreibich (2025, NHESS 25:1501, Suppl. Table S2): unprepared / threat seen as likely
+  (the default: a 1.79, b 111.8 min, m 74.3 %), prepared / likely (1.37, 64.0, 88.8 %), unprepared / unlikely (1.79,
+  111.8, 57.0 %), and the fastest published bound (1.00, 25.0, 100 %). p10–p90 of the default: 49 min – 3 h 47 min.
+  The curve starts when the warning reaches people; the time to get the warning out is the user's alert time (which
+  may be before the run starts — the river-stage presets rise ~600× faster than the real event).
+* **The queue at the bottleneck.** Occupants (IBC design load by default) become cars at 2.0 per car for homes (Census
+  household size over 1.23 cars per evacuating household, a KLD ETE survey) and 1.18 for workplaces (NHTS 2017). The
+  route's bottleneck is the site exit (1 lane by default) or the weakest road class on the dry route (the router's
+  per-class lengths), lanes × a per-lane discharge: 500 veh/h for a local street or driveway joining at a stop sign
+  (HCM two-way-stop capacity of a right turn into 600 veh/h), 950 for a signalised road (HCM base saturation flow
+  1,900 pc/h/ln × 0.5 green), 1,600 for a highway (peak interstate flows in the Hurricane Floyd evacuation); lanes
+  2 / 2 / 1 / 1 by class (the road data has none). A point queue (Newell's cumulative curves:
+  D(t) = min over s ≤ t of A(s) + c·(t − s)) gives the share of occupants through the bottleneck when the window ends
+  — the rest still inside or still queued — and the clearance time (the curve's last 1 % taken at its 99th
+  percentile).
+
+Not a traffic simulation: other evacuating traffic on the route is not counted (the clearance is a lower bound), lane
+counts are assumed, and buses, ambulances and people who cannot drive are outside it. On the North Shore demo parcel
+A (a 6-storey apartment block, 2,494 occupants by the IBC load, 1,247 cars) at the 1936 crest the last route closes
+at T+3 min; with the alert at T+0 under 1 % are out, with the alert 3 h before the run 57 % are (clearance 5 h 22 min
+vs a 3 h 01 min window), and with a prepared population 89 %.
 
 ## 8. App loop and pacing
 
@@ -1146,6 +1184,8 @@ their own port and drive it in headless Chromium on the real GPU:
   (downspouts) instead of shedding into the cells against their walls; a pipe network with surcharge in place of the
   distributed drain sink; land cover for live areas.
 * Coverage beyond 3DEP (the Terrarium fallback works worldwide but is coarse).
+* Evacuation traffic (§7.3): background traffic from the rest of the evacuating zone on the shared links, lane counts
+  from OSM `lanes=` tags, and a warning-diffusion curve (Sorensen & Mileti 2015a) ahead of the departure curve.
 
 References: Bates, Horritt & Fewtrell (2010), *J. Hydrology* 387; de Almeida, Bates, Freer & Souvignet (2012), *Water
 Resources Research* 48; Ritter (1892) dam-break solution.
