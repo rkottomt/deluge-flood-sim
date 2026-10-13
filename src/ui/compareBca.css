@@ -1,0 +1,15 @@
+/* ─── Compare designs → Benefit–cost (src/ui/compareDesigns.ts, compareReport.ts bcaRows) ───────────────────── */
+.dl-cmp-bca td {
+  vertical-align: top;
+  white-space: normal;
+}
+.dl-cmp-bca td:not(:first-child) {
+  font-variant-numeric: tabular-nums;
+}
+.dl-cmp-bca tbody tr:last-child td {
+  color: var(--dl-text);
+  font-weight: 600;
+}
+.dl-cmp-bca-note {
+  margin-top: 4px;
+}

@@ -2457,6 +2457,42 @@ const FLOWS = [
       check(r, 'your scenario and walls are put back', JSON.stringify(out.state) === JSON.stringify(before) && Math.abs(after - reopened) <= 2, `${JSON.stringify(out.state)}; ${after} wall cells (were ${reopened})`);
       r.metrics.compare = { minutes, seconds, head: out.head, rows: out.rows, transfer: out.transfer };
       for (const x of out.rows) console.log(`    ${x.join(' | ')}`);
+
+      // Benefit–cost: every BCR with its range and the uncertainties named; inputs recompute without a re-run.
+      const bcaTable = () =>
+        D(() => ({
+          rows: [...document.querySelectorAll('[data-compare="bca"] tbody tr')].map((tr) => [...tr.children].map((td) => td.textContent)),
+          note: document.querySelector('[data-compare="bca-note"]')?.textContent ?? '',
+        }));
+      const bca0 = await bcaTable();
+      const brow = (t, label) => t.rows.find((x) => x[0].startsWith(label)) ?? [];
+      r.metrics.bca = { at7: bca0.rows, note: bca0.note };
+      for (const x of bca0.rows) console.log(`    ${x.join(' | ')}`);
+      check(
+        r,
+        'the benefit–cost block gives each design ΔEAL, PV, BCR with its range, net benefit, break-even cost and a verdict, and names its uncertainties',
+        ['Avoided EAL', 'Useful life', 'PV of benefits at 7 %', 'PV of costs', 'BCR (central)', 'BCR range', 'BCR · damage curves', 'Net benefit', 'Break-even', 'Verdict'].every((l) => brow(bca0, l).length === 3) &&
+          brow(bca0, 'Useful life').every((v, k) => k === 0 || /^50 yr \(FEMA standard\)$/.test(v)) &&
+          /damage curves ±1σ/.test(bca0.note) &&
+          /Never included/.test(bca0.note),
+        `BCR ${brow(bca0, 'BCR (central)').slice(1).join(' / ')}; range ${brow(bca0, 'BCR range').slice(1).join(' / ')}`,
+      );
+      const bcrA0 = Number((brow(bca0, 'BCR (central)')[1] ?? '').replace('−', '-'));
+      await page.fill('[data-compare-field="life-A"]', '30');
+      await page.dispatchEvent('[data-compare-field="life-A"]', 'change');
+      const bca30 = await bcaTable();
+      const bcrA30 = Number((brow(bca30, 'BCR (central)')[1] ?? '').replace('−', '-'));
+      await page.fill('[data-compare-field="discount-rate"]', '3.1');
+      await page.dispatchEvent('[data-compare-field="discount-rate"]', 'change');
+      const bca31 = await bcaTable();
+      const bcrA31 = Number((brow(bca31, 'BCR (central)')[1] ?? '').replace('−', '-'));
+      check(
+        r,
+        'a shorter useful life lowers the BCR and a lower discount rate raises it, without re-running',
+        bcrA0 > 0 && bcrA30 < bcrA0 && bcrA31 > bcrA30 && /^30 yr \(your input/.test(brow(bca30, 'Useful life')[1] ?? '') && brow(bca31, 'PV of benefits at 3.1 %').length === 3 && /^Done/.test(await D(() => document.querySelector('[data-compare="status"]')?.textContent ?? '')),
+        `design A BCR ${bcrA0} (50 yr, 7 %) → ${bcrA30} (30 yr) → ${bcrA31} (30 yr, 3.1 %)`,
+      );
+      r.metrics.bca.design30at31 = bca31.rows;
       await D(() => document.querySelector('[data-compare="results"]')?.scrollIntoView({ block: 'start' }));
       await sleep(400);
       const panelShot = path.join(OUT, '23-compare.png');
@@ -2468,7 +2504,27 @@ const FLOWS = [
       const repFile = path.join(OUT, '23-design-comparison.html');
       await rep.saveAs(repFile);
       const html = fs.readFileSync(repFile, 'utf8');
-      const need = ['mitigation design comparison', 'One-click levee', 'Shorter wall', 'Expected annual loss', 'BCR at 7 %', 'NPV at 3.1 %', 'Who gets wetter', 'Change in maximum depth', 'data:image/png', 'your input'];
+      const need = [
+        'mitigation design comparison',
+        'One-click levee',
+        'Shorter wall',
+        'Expected annual loss',
+        'BCR at 7 %',
+        'NPV at 3.1 %',
+        'Who gets wetter',
+        'Change in maximum depth',
+        'data:image/png',
+        'your input',
+        'Benefit–cost',
+        'BCR range',
+        'Appendix — FEMA BCA Toolkit inputs',
+        'This is not a FEMA-accepted benefit–cost analysis',
+        'Damages before mitigation',
+        'Damages after mitigation',
+        'Project useful life',
+        'Analysis year',
+        'not the Toolkit’s default (7 %)',
+      ];
       const missing = need.filter((s) => !html.includes(s));
       check(r, 'the comparison report renders every section, with the maps and no script', missing.length === 0 && !/<script/i.test(html), missing.length ? `missing: ${missing.join(', ')}` : `${(html.length / 1024).toFixed(0)} KB`);
 
@@ -2478,6 +2534,13 @@ const FLOWS = [
       await dl2.saveAs(file2);
       const saved2 = JSON.parse(fs.readFileSync(file2, 'utf8'));
       check(r, 'a saved project carries the comparison summary', saved2.comparison?.designs?.length === 2 && saved2.comparison.levels.length === 2, saved2.comparison ? `${saved2.comparison.designs.map((d) => `${d.name}: BCR7 ${d.bcr7 == null ? '—' : d.bcr7.toFixed(2)}`).join('; ')}` : 'none');
+      const c2 = saved2.comparison?.designs?.[0];
+      check(
+        r,
+        'the project keeps the benefit–cost inputs (rate, analysis year, useful life) and the BCR with its range',
+        saved2.bca?.discountRate === 0.031 && Number.isInteger(saved2.bca?.analysisYear) && saved2.designs[0].cost.usefulLifeYears === 30 && saved2.designs[1].cost.usefulLifeYears == null && saved2.comparison?.discountRate === 0.031 && c2?.years === 30 && c2.bcrLow <= c2.bcr && c2.bcr <= c2.bcrHigh,
+        `bca ${JSON.stringify(saved2.bca)}; design A ${c2 ? `${c2.years} yr, BCR ${c2.bcr?.toFixed(2)} (${c2.bcrLow?.toFixed(2)}–${c2.bcrHigh?.toFixed(2)})` : '—'}`,
+      );
       const walls2 = saved2.edits.filter((e) => e.op === 'wall').length;
       check(r, 'Clear walls during the comparison waits, and the edit log still matches the walls on the map', /Map editing paused/.test(midRun) && walls2 === 1, `notice: ${midRun.slice(0, 60) || '(none)'}; ${walls2} wall(s) in the saved log`);
 
@@ -2493,9 +2556,17 @@ const FLOWS = [
       const linked = await tab
         .waitForFunction(() => document.querySelectorAll('.dl-site-item').length === 1 && window.__deluge.getSolver()?.getBarrierCPU().some((v) => v > 0.2), null, { timeout: 60_000 })
         .then(() => true, () => false);
-      const tabInfo = await tab.evaluate(() => ({ cells: window.__deluge.getSolver().getBarrierCPU().reduce((n, v) => n + (v > 0.2 ? 1 : 0), 0), designs: document.querySelectorAll('[data-design-id]').length, names: [...document.querySelectorAll('.dl-site-item .dl-impact-name')].map((e) => e.textContent) }));
+      const tabInfo = await tab.evaluate(() => ({
+        cells: window.__deluge.getSolver().getBarrierCPU().reduce((n, v) => n + (v > 0.2 ? 1 : 0), 0),
+        designs: document.querySelectorAll('[data-design-id]').length,
+        names: [...document.querySelectorAll('.dl-site-item .dl-impact-name')].map((e) => e.textContent),
+        rate: document.querySelector('[data-compare-field="discount-rate"]')?.value ?? '',
+        lifeA: document.querySelector('[data-compare-field="life-A"]')?.value ?? '',
+        lifeB: document.querySelector('[data-compare-field="life-B"]')?.value ?? '',
+      }));
       await tab.close();
       check(r, 'the ?project= link reopens the wall, the site and the designs (no names carried)', value.startsWith('p1.') && value.length <= 6000 && linked && tabInfo.designs === 2 && tabInfo.names.join() === 'Site 1', `${value.length} characters; ${tabInfo.cells} wall cells, ${tabInfo.designs} designs, sites: ${tabInfo.names.join(', ')}`);
+      check(r, 'the link round-trips the benefit–cost inputs (3.1 %, design A 30 yr, design B FEMA default)', tabInfo.rate === '3.1' && tabInfo.lifeA === '30' && tabInfo.lifeB === '', `rate ${tabInfo.rate} %, life A ${tabInfo.lifeA || '(default)'}, life B ${tabInfo.lifeB || '(default)'}`);
 
       // Leave the app as the other flows expect it.
       await D(() => {
@@ -2756,6 +2827,115 @@ const FLOWS = [
       // Fort Myers Beach (Estero Island), where Hurricane Ian's surge did its worst; --surge-at=lat,lon for another point.
       const at = String(args['surge-at'] ?? '26.4515,-81.9506').split(',').map(Number);
       await surgeFlow(r, ctx, { tag: '29', fixtures: false, minutes: Number(args['surge-minutes'] ?? 90), point: { lat: at[0], lon: at[1] }, ffh: 0 });
+    },
+  },
+  {
+    id: 45,
+    name: 'Benefit–cost with the ensemble: the levee’s BCR at the ensemble’s p10 / p50 / p90, labelled',
+    timeoutMs: 900_000,
+    async run(r) {
+      if (PRESET !== 'pittsburgh') {
+        r.notes.push(`${PRESET}: the flow is written for Pittsburgh's levee and ladder: skipped`);
+        check(r, 'preset without the Pittsburgh levee (nothing to check)', true, PRESET);
+        return;
+      }
+      const minutes = Number(args['compare-minutes'] ?? 6);
+      await calm();
+      const openSection = (id) =>
+        D((sid) => {
+          const sec = document.querySelector(`[data-section="${sid}"]`);
+          if (sec && !sec.classList.contains('dl-open')) sec.querySelector('.dl-sec-head')?.click();
+        }, id);
+      // Start from no designs (flow 23 leaves two), then capture the one-click levee as the only design.
+      await openSection('designs');
+      await D(() => {
+        for (const card of document.querySelectorAll('[data-design-id]')) [...card.querySelectorAll('button')].find((b) => /Remove/.test(b.textContent ?? ''))?.click();
+      });
+      await page.click('.dl-try-step[data-step="levee"]');
+      const built = await page
+        .waitForFunction(() => (window.__deluge.getProtection()?.wallCells ?? 0) > 500 && /remove levee/i.test(document.querySelector('.dl-try-step[data-step="levee"]')?.textContent ?? ''), null, { timeout: 30_000 })
+        .then(() => true, () => false);
+      await D(() => window.__deluge.setPaused(true));
+      await page.click('[data-compare="capture"]');
+      const captured = await D(() => [...document.querySelectorAll('[data-design-id]')].map((e) => e.getAttribute('data-design-id')).join());
+      check(r, 'the one-click levee is captured as the only design', built && captured === 'A', captured);
+
+      // The ensemble: the bare scene at the 1936 crest, 3 members.
+      await page.click('[data-compare="clear"]');
+      await page.waitForFunction(() => window.__deluge.getSolver().getBarrierCPU().every((v) => v <= 0.2), null, { timeout: 10_000 });
+      const crest = await crestOffset();
+      await D((o) => {
+        const d = window.__deluge;
+        d.setStageOffset(o);
+        d.actions.resetWater();
+      }, crest.offset);
+      await D(() => {
+        const sec = document.querySelector('[data-section="ensemble"]');
+        if (sec && !sec.classList.contains('dl-open')) sec.querySelector('.dl-sec-head').click();
+      });
+      for (const [name, v] of [['members', '3'], ['minutes', String(minutes)]]) {
+        await page.fill(`[data-ens-field="${name}"]`, v);
+        await page.dispatchEvent(`[data-ens-field="${name}"]`, 'change');
+      }
+      await page.click('[data-ens="run"]');
+      const ensDone = await page
+        .waitForFunction(() => /^(Done|Stopped|Cancelled)/.test(document.querySelector('[data-ens="status"]')?.textContent ?? ''), null, { timeout: 480_000 })
+        .then(() => true, () => false);
+      const ens = await D(() => window.__deluge.getEnsemble());
+      check(r, 'a 3-member ensemble of the bare scene at the 1936 crest completes with a loss band', ensDone && ens?.members === 3 && Array.isArray(ens.loss) && ens.loss[1] > 0, ens ? `loss p10 / p50 / p90 ${ens.loss.map((v) => `$${num(v / 1e9, 2)} B`).join(' / ')}` : 'none');
+
+      // Compare on the 1936 crest with the 500-year return period typed (the user's input, as in flow 23).
+      await openSection('designs');
+      await page.fill('[data-compare-field="minutes"]', String(minutes));
+      await page.dispatchEvent('[data-compare-field="minutes"]', 'change');
+      await D(() => {
+        const sel = document.querySelector('[data-compare="ladder"]');
+        if (sel && sel.value !== 'stage') {
+          sel.value = 'stage';
+          sel.dispatchEvent(new Event('change'));
+        }
+      });
+      await D(() => {
+        for (const box of document.querySelectorAll('[data-compare-level]')) {
+          const want = box.dataset.compareLevel === 'record1936';
+          if (box.checked !== want) box.click();
+        }
+        const rp = document.querySelector('[data-compare-rp="record1936"]');
+        rp.value = '500';
+        rp.dispatchEvent(new Event('change'));
+      });
+      await page.click('[data-compare="run"]');
+      const done = await page
+        .waitForFunction(() => /^(Done|Comparison stopped|Cancelled)/.test(document.querySelector('[data-compare="status"]')?.textContent ?? ''), null, { timeout: 600_000 })
+        .then(() => true, () => false);
+      const out = await D(() => ({
+        status: document.querySelector('[data-compare="status"]')?.textContent ?? '',
+        rows: [...document.querySelectorAll('[data-compare="bca"] tbody tr')].map((tr) => [...tr.children].map((td) => td.textContent)),
+        note: document.querySelector('[data-compare="bca-note"]')?.textContent ?? '',
+      }));
+      r.metrics.bca = out;
+      for (const x of out.rows) console.log(`    ${x.join(' | ')}`);
+      const row = (label) => out.rows.find((x) => x[0].startsWith(label)) ?? [];
+      const ensRow = row('BCR · ensemble p10 / p50 / p90');
+      const nums = (s) => (s ?? '').split(/ \/ | – /).map((x) => Number(x.replace('−', '-')));
+      const [e10, e50, e90] = nums(ensRow[1]);
+      const [lo, hi] = nums(row('BCR range')[1]);
+      check(r, 'the comparison completes', done && /^Done/.test(out.status), out.status.slice(0, 110));
+      check(
+        r,
+        'the BCR is shown at the ensemble’s p10 / p50 / p90, inside the overall range, and the note says what the ensemble is',
+        /\(3 members\)/.test(ensRow[0] ?? '') && e10 <= e50 && e50 <= e90 && lo <= e10 && e90 <= hi && /the ensemble’s loss p10–p90/.test(out.note) && /ran on the scenario on screen, not on each design and level/.test(out.note),
+        `ensemble ${ensRow[1] ?? '—'}; range ${row('BCR range')[1] ?? '—'}`,
+      );
+      await D(() => document.querySelector('[data-compare="bca"]')?.scrollIntoView({ block: 'start' }));
+      await sleep(400);
+      const shot = path.join(OUT, '45-bca-ensemble.png');
+      await page.locator('.dl-panel').screenshot({ path: shot });
+      console.log(`  [shot] ${path.relative(ROOT, shot)}`);
+
+      // Leave the app as the other flows expect it.
+      if (/remove levee/i.test((await page.locator('.dl-try-step[data-step="levee"]').textContent()) ?? '')) await page.click('.dl-try-step[data-step="levee"]');
+      await calm();
     },
   },
 ];

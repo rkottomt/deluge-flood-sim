@@ -16,9 +16,10 @@ import { computeInitialWater } from '../data/initialWater';
 import { cleanPlaceLabel } from '../data/placeName';
 import { loadAtlas14Grid, lookupAtlas14, type Atlas14Point } from '../data/atlas14';
 import { analyze, DEBRIS_FLOW_PRESETS, ladderFor, MITIGATION_LABELS, rainLadder, RAIN_DESIGN_DURATION_S, RAIN_SWEEP_MINUTES, regionForBounds, SCALE_LADDER, SnapshotHazardAccumulator, wallGeometry, type MitigationType } from '../loss';
+import { BCA_DEFAULT_RATE, BCA_LIMITS, defaultUsefulLife, ensembleSpread, USEFUL_LIFE, type EnsembleSpread } from '../loss/bca';
 import { areaDelta, compareDesigns, comparisonSummary, depthChangeThumb, resolveCost, type ComparisonResult, type CompareLevel, type DesignInput, type LevelRun } from '../project/compare';
 import { cloneEdits, editLogFor, replayEdits } from '../project/edits';
-import { PROJECT_LIMITS, type ComparisonSummary, type DesignSpec, type LadderKind } from '../project/format';
+import { PROJECT_LIMITS, type BcaSettings, type ComparisonSummary, type DesignSpec, type LadderKind } from '../project/format';
 import { bridgeFor } from './bridge';
 import { button, segmented } from './controls';
 import { h, setText, toggleClass, type UIContext } from './dom';
@@ -26,7 +27,8 @@ import { downloadsBlocked, downloadText, safeFilename } from './download';
 import { fmtNum } from './format';
 import { headlessBusy, runHeadless, saveScenario } from './headless';
 import { printReport, reportHtmlDocument } from './impactReport';
-import { buildCompareReport, COMPARE_REPORT_CSS, comparisonHead, comparisonRows, depthChangeLegend, designSummaryLine, drawDepthChange, type DepthThumb } from './compareReport';
+import { bcaHead, bcaRows, bcaUncertaintyNote, buildCompareReport, COMPARE_REPORT_CSS, comparisonHead, comparisonRows, depthChangeLegend, designSummaryLine, drawDepthChange, type DepthThumb } from './compareReport';
+import './compareBca.css';
 import { projectHooksFor } from './projectState';
 import { numField } from './siteCheck';
 import { simpleTable } from './siteReport';
@@ -71,7 +73,11 @@ interface Outcome {
   cellSize: number;
   terrainName: string;
   cancelled: boolean;
+  /** What the numbers were computed from, so a change of cost, useful life or discount rate recomputes them at once. */
+  inputs: { levels: CompareLevel[]; baseline: LevelRun[]; runs: Map<string, LevelRun[]>; raster: Map<string, { lengthM: number; meanHeightM: number }>; country: 'US' | 'IN' | 'NP' | null; sceneKey: string };
 }
+
+const defaultBca = (): BcaSettings => ({ discountRate: BCA_DEFAULT_RATE, analysisYear: new Date().getFullYear() });
 
 export function createCompareSection(ctx: UIContext): CompareSection {
   const { store, actions } = ctx;
@@ -94,6 +100,7 @@ export function createCompareSection(ctx: UIContext): CompareSection {
   let cancelRequested = false;
   let mapLevel = -1;
   let rain: { for: TerrainData | null; point: Atlas14Point | null; status: 'idle' | 'loading' | 'ok' | 'none' | 'error' } = { for: null, point: null, status: 'idle' };
+  let bca: BcaSettings = defaultBca();
 
   // ─── DOM ────────────────────────────────────────────────────────────────────────────────────────────────────
   const badge = h('span', { class: 'dl-sec-badge', hidden: true });
@@ -147,6 +154,54 @@ export function createCompareSection(ctx: UIContext): CompareSection {
   htmlBtn.dataset.compare = 'report-html';
   const exportNote = h('p', { class: 'dl-impact-fine' });
 
+  // Benefit–cost inputs every design shares (each design's cost, O&M and useful life are on its card).
+  const rateIn = numField({
+    label: 'Discount rate',
+    unit: '%',
+    min: BCA_LIMITS.rate[0] * 100,
+    max: BCA_LIMITS.rate[1] * 100,
+    step: 0.1,
+    name: 'discount-rate',
+    attr: 'data-compare-field',
+    placeholder: `${BCA_DEFAULT_RATE * 100}`,
+    onChange: (v) => {
+      bca = { ...bca, discountRate: v == null ? BCA_DEFAULT_RATE : Math.round(v * 1000) / 100000 };
+      rateIn.set(bca.discountRate * 100, 2);
+      recompute();
+    },
+  });
+  const yearIn = numField({
+    label: 'Analysis year',
+    unit: '',
+    min: BCA_LIMITS.analysisYear[0],
+    max: BCA_LIMITS.analysisYear[1],
+    step: 1,
+    name: 'analysis-year',
+    attr: 'data-compare-field',
+    onChange: (v) => {
+      bca = { ...bca, analysisYear: v == null ? defaultBca().analysisYear : Math.round(v) };
+      yearIn.set(bca.analysisYear);
+      recompute();
+    },
+  });
+  const bcaNote = h(
+    'p',
+    { class: 'dl-impact-fine' },
+    `Defaults: 7 % real, the FEMA BCA Toolkit’s rate (OMB Circular A-94, reinstated in 2025; 3.1 % is the revoked 2023 rate), and per design FEMA’s standard useful life for its type (BCA Reference Guide, Appendix D: ${USEFUL_LIFE.floodwall.years} yr for flood walls and levees). Each design’s cost, O&M and useful life are on its card above.`,
+  );
+  const bcaBlock = h(
+    'div',
+    { class: 'dl-impact-block', 'data-compare': 'bca-inputs' },
+    h('div', { class: 'dl-label-row' }, h('span', { class: 'dl-label' }, 'Benefit–cost inputs')),
+    h('div', { class: 'dl-impact-inputs' }, rateIn.el, yearIn.el),
+    bcaNote,
+  );
+  function syncBcaInputs() {
+    rateIn.set(bca.discountRate * 100, 2);
+    yearIn.set(bca.analysisYear);
+  }
+  syncBcaInputs();
+
   const body = [
     intro,
     steps,
@@ -163,6 +218,7 @@ export function createCompareSection(ctx: UIContext): CompareSection {
       progress,
       status,
     ),
+    bcaBlock,
     resultsEl,
     h('div', { class: 'dl-impact-block' }, h('div', { class: 'dl-label-row' }, h('span', { class: 'dl-label' }, 'Export')), h('div', { class: 'dl-row dl-row-wrap' }, printBtn, htmlBtn), exportNote),
   ];
@@ -296,20 +352,38 @@ export function createCompareSection(ctx: UIContext): CompareSection {
         name.addEventListener('change', () => {
           update(d.id, { name: cleanPlaceLabel(name.value, PROJECT_LIMITS.designNameChars) || `Design ${d.id}` });
           renderCaptureBtn();
+          recompute();
         });
         const type = segmented<MitigationType>(
           (Object.keys(MITIGATION_LABELS) as MitigationType[]).map((k) => ({ value: k, label: MITIGATION_LABELS[k].replace(/ .*/, ''), tip: MITIGATION_LABELS[k] })),
           (v) => {
-            update(d.id, { cost: { ...d.cost, type: v } });
+            setCost(d.id, { type: v });
             type.set(v);
+            life.placeholder(`${defaultUsefulLife(v)} (FEMA)`);
           },
           { label: `Mitigation type of ${d.name}`, className: 'dl-seg-full', tipSide: 'top' },
         );
         type.set(d.cost.type);
-        const capex = numField({ label: 'Cost (override)', unit: '$', min: 0, max: 1e13, step: 100000, name: `capex-${d.id}`, attr: 'data-compare-field', placeholder: 'unit costs', onChange: (v) => update(d.id, { cost: { ...currentCost(d.id), capexUsd: v } }) });
+        const capex = numField({ label: 'Cost (override)', unit: '$', min: 0, max: 1e13, step: 100000, name: `capex-${d.id}`, attr: 'data-compare-field', placeholder: 'unit costs', onChange: (v) => setCost(d.id, { capexUsd: v }) });
         capex.set(d.cost.capexUsd);
-        const om = numField({ label: 'O&M per year', unit: '$', min: 0, max: 1e11, step: 1000, name: `om-${d.id}`, attr: 'data-compare-field', placeholder: '0', onChange: (v) => update(d.id, { cost: { ...currentCost(d.id), omUsdPerYear: v } }) });
+        const om = numField({ label: 'O&M per year', unit: '$', min: 0, max: 1e11, step: 1000, name: `om-${d.id}`, attr: 'data-compare-field', placeholder: '0', onChange: (v) => setCost(d.id, { omUsdPerYear: v }) });
         om.set(d.cost.omUsdPerYear);
+        const life = numField({
+          label: 'Useful life',
+          unit: 'yr',
+          min: BCA_LIMITS.years[0],
+          max: BCA_LIMITS.years[1],
+          step: 1,
+          name: `life-${d.id}`,
+          attr: 'data-compare-field',
+          placeholder: `${defaultUsefulLife(d.cost.type)} (FEMA)`,
+          onChange: (v) => {
+            const years = v == null ? null : Math.round(v);
+            life.set(years);
+            setCost(d.id, { usefulLifeYears: years });
+          },
+        });
+        life.set(d.cost.usefulLifeYears ?? null);
         const show = button('Show on map', () => showOnMap(d), { className: 'dl-btn-sm', tip: 'Replace the walls on the map with this design (resets the water)', side: 'top' });
         const replace = button('Replace with map', () => {
           const edits = log.snapshot();
@@ -327,15 +401,51 @@ export function createCompareSection(ctx: UIContext): CompareSection {
           h('label', { class: 'dl-num-field' }, h('span', { class: 'dl-num-label' }, `Design ${d.id}`), name),
           h('p', { class: 'dl-impact-fine' }, t ? designSummaryLine(d, t.cellSize) : ''),
           type.el,
-          h('div', { class: 'dl-impact-inputs' }, capex.el, om.el),
+          h('div', { class: 'dl-impact-inputs' }, capex.el, om.el, life.el),
           h('div', { class: 'dl-row dl-row-wrap' }, show, replace, remove),
         );
       }),
     );
   }
 
-  function currentCost(id: string) {
-    return designs.find((d) => d.id === id)!.cost;
+  /** Change one design's cost inputs; a comparison on screen is recomputed at once (no re-run: the losses stand). */
+  function setCost(id: string, patch: Partial<DesignSpec['cost']>) {
+    const d = designs.find((x) => x.id === id);
+    if (!d) return;
+    update(id, { cost: { ...d.cost, ...patch } });
+    recompute();
+  }
+
+  // ─── Benefit–cost ───────────────────────────────────────────────────────────────────────────────────────────
+  /** The flood-probability ensemble of this scene, as a loss spread (null: none has run here, or it has no loss). */
+  function currentEnsemble(): EnsembleSpread | null {
+    const e = bridge.ensemble;
+    const s = store.get();
+    if (!e || !e.summary || e.sceneKey !== `${s.presetId}|${s.terrainName}`) return null;
+    return ensembleSpread(e.summary.loss, e.rows.length);
+  }
+
+  /**
+   * Recompute the comparison's money from the losses already run: each design's cost re-resolved from its card (cost,
+   * O&M, type, useful life), the discount rate, and the ensemble if one has run since. The table, the benefit–cost
+   * block and the summary a project keeps all follow.
+   */
+  function recompute() {
+    const o = outcome;
+    if (!o || running) return renderResults();
+    const inputs: DesignInput[] = o.designs.map((run) => {
+      const spec = designs.find((d) => d.id === run.id);
+      const cost = spec ? spec.cost : run.cost;
+      return { id: run.id, name: spec?.name ?? run.name, cost: resolveCost(cost, run.edits, o.cellSize, o.inputs.country, o.inputs.raster.get(run.id) ?? null), levels: o.inputs.runs.get(run.id)! };
+    });
+    o.result = compareDesigns(o.inputs.levels, o.inputs.baseline, inputs, { rate: bca.discountRate, ensemble: o.inputs.sceneKey === sceneKey() ? currentEnsemble() : null });
+    summary = comparisonSummary(o.result, o.ladder, o.durationS);
+    renderResults();
+  }
+
+  function sceneKey() {
+    const s = store.get();
+    return `${s.presetId}|${s.terrainName}`;
   }
 
   function renderCaptureBtn() {
@@ -516,8 +626,19 @@ export function createCompareSection(ctx: UIContext): CompareSection {
     if (complete(baseRuns) && doneDesigns.length) {
       const cl: CompareLevel[] = todo.map((l) => ({ id: l.id, label: l.label, returnPeriod: l.sourceRp ?? l.userRp, rpFrom: l.sourceRp != null ? 'source' : l.userRp != null ? 'user' : null }));
       const inputs: DesignInput[] = doneDesigns.map((d) => ({ id: d.id, name: d.name, cost: resolveCost(d.cost, d.edits, terrain.cellSize, country, raster.get(d.id) ?? null), levels: runs.get(d.id)! }));
-      const result = compareDesigns(cl, baseRuns, inputs);
-      outcome = { result, ladder: kind, ladderLabel: ladderName(kind), durationS: dur, thumbs, designs: doneDesigns, cellSize: terrain.cellSize, terrainName: terrain.name, cancelled: out.cancelled };
+      const result = compareDesigns(cl, baseRuns, inputs, { rate: bca.discountRate, ensemble: currentEnsemble() });
+      outcome = {
+        result,
+        ladder: kind,
+        ladderLabel: ladderName(kind),
+        durationS: dur,
+        thumbs,
+        designs: doneDesigns,
+        cellSize: terrain.cellSize,
+        terrainName: terrain.name,
+        cancelled: out.cancelled,
+        inputs: { levels: cl, baseline: baseRuns, runs, raster, country, sceneKey: sceneKey() },
+      };
       summary = comparisonSummary(result, kind, dur);
       mapLevel = cl.length - 1;
     }
@@ -586,6 +707,14 @@ export function createCompareSection(ctx: UIContext): CompareSection {
     if (o.cancelled) parts.push(h('p', { class: 'dl-impact-fine dl-warn' }, 'Cancelled: only the designs that ran every level are compared.'));
     parts.push(h('div', { class: 'dl-impact-table dl-cmp-table', 'data-compare': 'table' }, simpleTable(comparisonHead(c), comparisonRows(c, true), '')));
     if (!c.withRp) parts.push(h('p', { class: 'dl-impact-fine dl-warn' }, 'No level has a return period: no EAL, NPV or BCR. Type return periods into the ladder and Compare again.'));
+    else parts.push(h('p', { class: 'dl-impact-fine' }, 'NPV and BCR above are central values; the benefit–cost block below gives each BCR with its range.'));
+    if (c.designs.some((d) => d.bca)) {
+      parts.push(
+        h('div', { class: 'dl-label-row' }, h('span', { class: 'dl-label' }, 'Benefit–cost')),
+        h('div', { class: 'dl-impact-table dl-cmp-table dl-cmp-bca', 'data-compare': 'bca' }, simpleTable(bcaHead(c), bcaRows(c), '')),
+        h('p', { class: 'dl-impact-fine dl-cmp-bca-note', 'data-compare': 'bca-note' }, bcaUncertaintyNote(c)),
+      );
+    }
     const transfer = c.designs.filter((d) => d.newlyReached > 0 || d.wetterAreaM2 > 0);
     if (transfer.length) {
       parts.push(h('p', { class: 'dl-impact-fine dl-warn', 'data-compare': 'transfer' }, `Transferred risk: ${transfer.map((d) => `${d.name} makes ${fmtNum(d.newlyReached)} building${d.newlyReached === 1 ? '' : 's'} newly wet and ${fmtNum(d.deeperBuildings)} deeper`).join('; ')} (most over the levels). The maps below show where.`));
@@ -637,7 +766,12 @@ export function createCompareSection(ctx: UIContext): CompareSection {
         /* a tainted or unavailable canvas: the report goes without the map */
       }
     }
-    return buildCompareReport({ generatedAt: new Date(), terrainName: o.terrainName, attribution: store.get().attribution, ladderLabel: o.ladderLabel, durationS: o.durationS, result: o.result, designs: o.designs, cellSize: o.cellSize, maps });
+    // The designs as they are now (a name, cost or useful life changed after the run is what the numbers use).
+    const now = o.designs.map((r) => {
+      const s = designs.find((x) => x.id === r.id);
+      return s ? { ...r, name: s.name, cost: s.cost } : r;
+    });
+    return buildCompareReport({ generatedAt: new Date(), terrainName: o.terrainName, attribution: store.get().attribution, ladderLabel: o.ladderLabel, durationS: o.durationS, result: o.result, designs: now, cellSize: o.cellSize, maps, bca: { ...bca } });
   }
 
   function doPrint() {
@@ -663,7 +797,16 @@ export function createCompareSection(ctx: UIContext): CompareSection {
       render();
     },
     summary: () => summary,
+    getBca: () => ({ ...bca }),
+    setBca(b) {
+      // The reader has bounded both (validate.ts readBca); null (an older file) puts the defaults back.
+      bca = b ? { discountRate: b.discountRate, analysisYear: b.analysisYear } : defaultBca();
+      syncBcaInputs();
+      recompute();
+    },
   };
+  // An ensemble that finishes (or is cleared) after a comparison widens (or narrows) its range at once.
+  ctx.own(bridge.ensembleChanged.on(() => recompute()));
   ctx.bind(
     (s) => `${s.presetId}|${s.terrainName}|${!!s.loading}`,
     (_k, s) => {

@@ -188,6 +188,37 @@ test('the benefit–cost analysis per design: the chosen rate, a user useful lif
   assert.ok(readProject({ format: PROJECT_FORMAT, version: PROJECT_VERSION, scene: { kind: 'preset', id: 'pittsburgh' }, scenario: { stageOffset: 0, sim: {} }, comparison: JSON.parse(JSON.stringify(fsum)) }).ok);
 });
 
+test('the benefit–cost rows never show a BCR without its range, and say which uncertainty is in it', async () => {
+  const { bcaHead, bcaRows, bcaUncertaintyNote } = await import('../../src/ui/compareReport');
+  const levels: CompareLevel[] = [
+    { id: 'rp100', label: 'FEMA 1 %', returnPeriod: 100, rpFrom: 'source' },
+    { id: 'record1936', label: '1936 crest', returnPeriod: 500, rpFrom: 'user' },
+  ];
+  const cost = { type: 'floodwall' as const, capex: 2e6, low: 1e6, high: 3e6, om: 0, lengthM: 200, meanHeightM: 3, basis: 'segments' as const, terrainNotCosted: false };
+  const designs = [
+    { id: 'A', name: 'Wall', cost, levels: [run(0), run(30e6)] },
+    { id: 'B', name: 'Free', cost: { ...cost, capex: 0, low: 0, high: 0, basis: 'override' as const, years: 30, yearsFrom: 'user' as const }, levels: [run(0), run(30e6)] },
+  ];
+  const plain = compareDesigns(levels, [run(10e6), run(100e6)], designs);
+  assert.deepEqual(bcaHead(plain), ['', 'Wall', 'Free']);
+  const rows = bcaRows(plain);
+  const row = (label: string) => rows.find((r) => r[0].startsWith(label))!;
+  assert.match(row('BCR range')[1], /^\d+\.\d\d – \d+\.\d\d$/);
+  assert.equal(row('BCR (central)')[2], '∞', 'a benefit at no cost');
+  assert.equal(row('BCR · construction cost')[2], 'your figure (no band)');
+  assert.equal(row('Useful life')[1], '50 yr (FEMA standard)');
+  assert.equal(row('Useful life')[2], '30 yr (your input; outside FEMA’s 35–50 yr)');
+  assert.ok(!rows.some((r) => r[0].includes('ensemble')), 'no ensemble row when none has run');
+  const note = bcaUncertaintyNote(plain);
+  assert.match(note, /At 7 % real/);
+  assert.match(note, /damage curves ±1σ/);
+  assert.match(note, /No flood-probability ensemble has run/);
+  assert.match(note, /Never included: the return periods themselves/);
+  const withEns = compareDesigns(levels, [run(10e6), run(100e6)], designs, { rate: 0.031, ensemble: { p10: 0.6, p90: 1.5, members: 12 } });
+  assert.ok(bcaRows(withEns).some((r) => r[0] === 'BCR · ensemble p10 / p50 / p90 (12 members)'));
+  assert.match(bcaUncertaintyNote(withEns), /At 3\.1 % real.*the ensemble’s loss p10–p90.*×0\.60, ×1\.50/s);
+});
+
 test('resolveCost: the useful life is the user’s, else FEMA’s standard value for the type', () => {
   const edits = [{ op: 'wall' as const, pts: [0, 0, 100, 0], h: 2, r: 1 }];
   const fema = resolveCost({ type: 'earthen', capexUsd: null, omUsdPerYear: null, lengthM: null, heightM: null }, edits, 8, 'US');
