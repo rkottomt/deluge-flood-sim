@@ -2100,7 +2100,10 @@ const FLOWS = [
         await page.click('[data-uc="address-choice"]');
         const out = await addressSetUp(r, AT, 120_000);
         r.metrics.loadAndSetUpSeconds = (Date.now() - t0) / 1000;
-        check(r, 'the address bar carries only the coordinates (no address text, no name)', /usecase=address/.test(out.url) && /at=29\.76040,-95\.36980/.test(out.url) && !/Smith|Houston|1600/i.test(decodeURIComponent(out.url)) && !/[?&]name=/.test(out.url), out.url);
+        // The app may write the area's own name back (?name=; here the coordinate fallback, as reverse geocoding is
+        // refused) — never the address the user typed.
+        const nameParam = new URLSearchParams(out.url).get('name');
+        check(r, 'the address bar carries the coordinates, never the typed address', /usecase=address/.test(out.url) && /at=29\.76040,-95\.36980/.test(out.url) && !/Smith|1600/i.test(decodeURIComponent(out.url)) && (nameParam === null || /^Area near /.test(nameParam)), out.url);
         const siteName = await D(() => document.querySelector('.dl-site-item .dl-impact-name')?.textContent ?? '');
         check(r, 'the site is named after the street address (kept in this tab only)', /^1600 Smith Street$/.test(siteName), siteName);
         await addressSweep(r, '20');
