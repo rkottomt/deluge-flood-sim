@@ -229,12 +229,21 @@ sources accessed 19-20 September 2026. The full research trail is artifacts/nepa
                      measured hydrograph"; chain-result.json carries that run's fronts, peaks, bands and lead times.
                      It replaced 11,100 m3/s held for 30 minutes (the volume divided by half an hour - arithmetic, not
                      a peak; WaterSource.stopAfter, still asserted in tests/sim). The 2-D clock is now the event's (t =
-                     0 five minutes before the modelled front reaches the edge); the model's front at Betrawati is ~60 %
-                     LATER than the reported 09:20 (70 min against 43; 75 min before the routing took Ferguson's
-                     boulder-bed resistance law, below), and the text says so - research spec §G.9 has the diagnosis.
+                     0 five minutes before the modelled front reaches the edge); the model's front at Betrawati is ~50 %
+                     LATER than the reported 09:20 (65 min against 43; 70 min before the third pass of October 2026,
+                     75 min before the routing took Ferguson's boulder-bed resistance law, below), and the text says
+                     so - research spec §G.9 has the diagnosis.
                    * Trishuli at Betrawati, DHM station 447 (dhm.gov.np/hydrology/hms-Single/52): warning level 4.1 m,
-                     danger level 5.0 m, last reading 3.55 m at 09:20 before the station was destroyed. There is no
-                     measured peak level or discharge here, and none is shown.
+                     danger level 5.0 m; its transmission stopped at 09:20 and its last reading was 3.55 m (DHM FFD
+                     technical report via Onlinekhabar, 27 Aug 2026) - so "09:20 at Betrawati" is when the gauge was
+                     lost. There is no measured peak level or discharge here, and none is shown.
+                   * the river's own flow: the Trishuli's MEAN AUGUST discharge, 621.8 m3/s at Betrawati (DHM station
+                     447, 1967-2010), from ESSA Technologies (2014), "Environmental Flows Assessment, Upper Trishuli-1
+                     Hydropower Project", Appendix E of the Supplemental ESIA prepared for NWEDC and the IFC, Table 5-2
+                     (557.8 m3/s at the UT-1 intake = Betrawati x 0.8971). Since the third pass the 1-D routing carries
+                     it (meta.json scenario.hazardChain.routing.tributaries: the Lhende's assumed 100 m3/s, 458 m3/s
+                     joining at the Rasuwagadhi confluence and 64 m3/s at the Upper Trishuli-1 site - the split is this
+                     bake's assumption), and it is the entry baseflow the 2-D inflow ramps down to.
                    * the only measured peak discharge in the system, 5,850 m3/s at Devghat (DHM, same report), is
                      168 km downstream and is not used as a Betrawati figure.
                  NOT CLAIMED: that this reproduces the real flood. The solver is clear water at up to 15 m/s against
@@ -314,6 +323,12 @@ sources accessed 19-20 September 2026. The full research trail is artifacts/nepa
                  THIS BAKE'S ASSUMPTION (no surveyed D84 for these rivers was found; middle of the 0.3-1 m taken for
                  boulder-bed mountain rivers; not fitted to the arrival times). At flood depths it equals n ~ 0.044-
                  0.047; it moved the Betrawati front from 75 to 70 min (observed 43). Research spec §G.9.
+                 SOURCE AND RIVER (third pass, October 2026): the avalanche's flood leaves the impact as a debris-flow
+                 SURGE (peak at the front, linear recession; src/hazard/mass.ts surgeHydrograph) instead of a
+                 breach-like gamma curve that peaked 11 min after the mass reached the river, and it runs on the
+                 river's mean August flow (above). Betrawati 70 -> 65 min, Syafrubesi gauge 32 -> 29, Rasuwagadhi
+                 17 -> 14. A sliding-block runout (src/hazard/runout.ts) was tried with the Chamoli friction pair and
+                 NOT adopted: no back-analysed pair exists for this event, and that one made Rasuwagadhi later.
                  Profile: 63.8 km, 639 nodes, from 2,879 m to 560 m; 233 kB.
                  s = 0 is where the Lhende's bed on this DEM first falls below 2,900 m, the elevation at which the
                  YAE/KU rapid report has the avalanche reaching the river. The impact point itself was not located in
@@ -342,7 +357,14 @@ sources accessed 19-20 September 2026. The full research trail is artifacts/nepa
                  NDRRMA SitRep #01 series (Rasuwagadhi ~08:40, Betrawati ~09:20, Galchhi 10:28, Malekhu 11:50, Mugling
                  13:00, Devghat 15:20 with its 5,850 m3/s peak at 16:00) and DHM's Syafrubesi gauge going dead at 08:50
                  (an upper bound on arrival, and labelled so). The four below Betrawati are beyond the profile and say
-                 so in their notes.
+                 so in their notes. Since the third pass the notes say what these times are: per the DHM technical
+                 report the Bhotekoshi-Syafrubesi gauge read 1.62 m (normal; warning 6 m) at 08:40 and its data
+                 stopped at 08:50, so NDRRMA's "~08:40 at Rasuwagadhi" is probably that gauge timestamp (28 km in 3 min
+                 would be ~150 m/s), and Betrawati's 09:20 is when station 447 stopped transmitting. OPRI's
+                 reconstruction (S. Rauniyar, "The Langtang Collapse", 3 Sep 2026) adds Timure ~08:50 and Syafrubesi
+                 ~09:00, shown as secondary. (Of the hazardChain above, the trigger has been DIRECT FLOW since the
+                 first calibration and the rheology O'Brien-Julien quadratic - research spec §G.9; scripts/chain-defs.ts
+                 is the current statement.)
 
 Chungthang - Teesta Valley (the `chungthang` preset). Sources and terms
 -----------------------------------------------------------------------
@@ -387,12 +409,16 @@ licences, same caveats, and every one of them is in the on-screen scenario text.
                  on 3 October 2023 about 14.7 million m3 of frozen lateral moraine collapsed into South Lhonak Lake
                  (~5,200 m), raising a ~20 m displacement wave that breached the moraine dam; ~50 million m3 - about
                  half the lake - was released, ~270 million m3 of sediment mobilised, and the flood reached Chungthang
-                 and the 60 m Teesta-III dam (1,200 MW) about 00:30 and destroyed it (Sattar et al. 2025, Science,
-                 doi:10.1126/science.ads2659, read via Eos / The Landslide Blog and the Newcastle University release -
-                 not from the paper itself). A later study puts the debris input at ~38 million m3 (Mohanty et al.
+                 and the 60 m Teesta-III dam (1,200 MW) about 00:35 and destroyed it (Sattar et al. 2025, Science,
+                 doi:10.1126/science.ads2659; first read via Eos / The Landslide Blog and the Newcastle University
+                 release, since October 2026's third pass from the accepted manuscript, eprints.whiterose.ac.uk/224098:
+                 the lake level fell 28 m, the 55 m breach was complete by ~22:24, the outflow peaked at 4.85e4 m3/s of
+                 water at the lake, and their HEC-RAS run puts the flood at Chungthang at ~00:30 "in line with the
+                 reported arrival time (~00:35)" - so 00:30, quoted here before, is a model result and 00:35 is the
+                 report; how it was recorded is not stated). A later study puts the debris input at ~38 million m3 (Mohanty et al.
                  2026, Science Advances); the disagreement is real and is recorded, not resolved.
-                 Peak at Chungthang: NO GAUGE. Published values are model reconstructions spanning 7,355 to 14,673
-                 m3/s (research spec §G.3); the text quotes that whole range. THE FORCING IS THE HAZARD CHAIN'S
+                 Peak at Chungthang: NO GAUGE. Published values are model reconstructions spanning 5,340 (Sattar et al.
+                 2025's own HEC-RAS run) to 14,673 m3/s (research spec §G.3); the text quotes that whole range. THE FORCING IS THE HAZARD CHAIN'S
                  (since October 2026): scripts/bake-chain-result.ts runs the chain (impulse wave -> overtopping ->
                  breach -> 1-D routing down chain.json), takes the ensemble's median member and writes its routed
                  hydrograph at the north edge as the inflow, labelled "modelled ... not a measured hydrograph"; that
@@ -425,13 +451,17 @@ licences, same caveats, and every one of them is in the on-screen scenario text.
                  28 September 2023), 102.4 Mm3 (EGU24-18788, 2015-2023 mean; consistent with "50 Mm3 = half the lake"),
                  elevation ~5,200 m (EGU24-18788). The volume band 77-128 Mm3 (+-25 %), the mass's ice fraction 0.2,
                  fall height 150 m and path length 500 m are THIS BAKE'S ASSUMPTIONS. Breach: weir + linear erosion at
-                 the spec's trigger-driven 100 m/h, final depth 40 m (the spec's assumed value for this lake). Voellmy
-                 debris-flood rheology and a 25 m/s cap. Observations: the failure, wave and release (Sattar et al.
-                 2025), arrival at Chungthang ~00:30 (8,200 s), the modelled 7,355 m3/s peak with its published range,
-                 and the gauged 8,252 m3/s at Gazoldoba (beyond the profile, and the note says so). Bed resistance:
-                 Manning n 0.05, NOT the Ferguson (2007) law Nepal and Chamoli use - with the same assumed 0.5 m D84
-                 it moves the Chungthang front from 109 to 103 min, further early of the ~137 min observed, so it was
-                 not adopted here (research spec §G.9).
+                 the spec's trigger-driven 100 m/h (consistent with Sattar et al.'s ~11 min to full breach depth),
+                 final depth 28 m - Sattar et al.'s measured lake-level drop (it was the spec's assumed 40 m until the
+                 third pass; 43 Mm3 drains against their 50 +- 1.8, which includes water displaced by the slide).
+                 Rheology O'Brien-Julien quadratic and a 25 m/s cap. Observations: the failure, wave and release
+                 (Sattar et al. 2025), arrival at Chungthang ~00:35 (8,500 s; it was 00:30 = 8,200 s, which turned out
+                 to be the paper's model result), the modelled 5,340 and 7,355 m3/s peaks with the published range,
+                 and the gauged 8,252 m3/s at Gazoldoba (beyond the profile, and the note says so). Model (third pass):
+                 front at Chungthang 121 min against ~142 (-14 %; 109 min, -23 %, with the 40 m breach), peak ~5,700
+                 m3/s. Bed resistance: Manning n 0.05, NOT the Ferguson (2007) law Nepal and Chamoli use - with the
+                 same assumed 0.5 m D84 it makes the Chungthang front earlier still (121 -> 118 min), so it is not
+                 adopted here (research spec §G.9).
 
 Chamoli - Raini-Tapovan, Dhauliganga Valley (the `chamoli` preset). Sources and terms
 -------------------------------------------------------------------------------------
@@ -519,20 +549,29 @@ same licences, same caveats, every one of them in the on-screen scenario text. W
                  winter baseflow. Rheology: O'Brien-Julien quadratic, Cv 0.45, material Glenwood 1 (the fluid end of
                  O'Brien & Julien 1988's table), K 2,285; 25 m/s cap. The stiff end (Aspen Pit 1) and Voellmy mu 0.05
                  both STALL on the Dhauliganga's 2.3 % bed (measured on the GPU; mu 0.05 exceeds the slope outright).
-                 The avalanche's own travel (3.7 km) uses the chain's default 50 m/s. Bed resistance of the 1-D
+                 The avalanche's own motion (third pass, October 2026): a Voellmy-Salm sliding block from the
+                 detachment (src/hazard/runout.ts) with mu 0.12, xi 2,500 m/s2 - the RAMMS back-analysis of this
+                 event by Zhang, Yin, Li et al. 2022, J. Rock Mech. Geotech. Eng. 15:296-308,
+                 doi:10.1016/j.jrmge.2022.04.003 (read through a secondary source; inside Allen et al. 2009's
+                 compilation for rock-ice avalanches, mu 0.05-0.2, xi 1,500-4,500, NHESS 9:481) - runs down the path
+                 (mean 52 m/s) and the upper Ronti Gad until the routed flood is the faster, 3.4 km down the profile;
+                 the flood leaves there as a debris-flow surge (peak at its front). Bed resistance of the 1-D
                  routing: Ferguson's (2007) variable-power law on an assumed 0.5 m D84, as for Nepal (the file's
                  Manning n 0.05 is not used; research spec §G.9). Observations: the failure, the
                  reconstructed discharges at Raini and below Tapovan (band centres shown, bands in the notes), the
-                 ~15 min seismic arrival at Tapovan, and the 10 m/s mean to Joshimath (a derived figure, no time).
+                 seismic times - Rishiganga HEP damaged 04:57 UTC (6 min) and the first wave at Tapovan 05:07 (16 min)
+                 from Tiwari et al. 2022, Sci. Rep. 12:3733, doi:10.1038/s41598-022-07491-y; Tapovan ~15 min (Cook et
+                 al. 2021); the flood at the bridge near Joshimath at 10:58:33 IST (37.5 min; Cook et al. 2021 via the
+                 GFZ press release - it replaced the derived "~10 m/s mean" figure).
 
   chain-result.json  The baked chain run (scripts/bake-chain-result.ts): the 9-member ensemble's median member
                  (source Cv 0.2: 4.9 Mm3 of melt water, 6.2 Mm3 of flow, peak 13,900 m3/s at the source) routed down
-                 the profile. MODEL against PUBLISHED: peak ~10,900 m3/s at Raini (published mean 8,200-14,200),
-                 ~5,900 m3/s below Tapovan (2,900-4,900 - the model is ~20 % above the top of the band), front at the
-                 Tapovan barrage ~21 min after the collapse (band 18-25) against ~15 min observed - the model is LATE
-                 by about 40 %, and the scenario text says so. Raini -> Joshimath 22 min (published mean ~10 m/s over
-                 16 km, ~27 min). Before the Ferguson resistance law (October 2026): 10,400 / 5,400 m3/s, 22 min
-                 (band 19-27), Raini -> Joshimath 24 min.
+                 the profile. MODEL against PUBLISHED (third pass): peak ~9,400 m3/s at Raini (published mean
+                 8,200-14,200), ~5,600 m3/s below Tapovan (2,900-4,900 - the model is ~14 % above the top of the band),
+                 fronts at Raini 11 min (seismic 6), at the Tapovan barrage 19 min (band 16-23; seismic 15-16) and at
+                 Joshimath 34 min (seismic 37.5): LATE above Tapovan, EARLY below it, and the scenario text says so.
+                 Second pass (Ferguson law, gamma source at the stream head): 10,900 / 5,900 m3/s, fronts 14 / 21 / 36
+                 min. Before the Ferguson law: 10,400 / 5,400 m3/s, Tapovan 22 min.
 
 Place names used for shelters and camera framing are ordinary geographic names; no third-party place database is
 redistributed here. For the Nepal preset the two shelter names are read out of the OSM extracts listed above, and

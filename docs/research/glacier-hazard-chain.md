@@ -391,10 +391,11 @@ Notes:
 | same | Betrawati → Galchhi → Malekhu → Mugling → Devghat | 09:20 → 10:28 → 11:50 → 13:00 → 15:20 (peak Devghat 16:00, 5,850 m³/s, stage 6.57 m; total 57.40 Mm³ of which 19.96 Mm³ excess) | ~4–10 m/s in the wider Trishuli; "4–6 m/s" quoted | [V] NDRRMA SitRep 1 (01 Sep 2026) |
 | same | Galchhi / Malekhu stage | +9 m in ~30 min / +7 m | — | [V] YAE/KU rapid report |
 | Chamoli 2021 | Raini (15 km from source) → Joshimath (+16 km) | front 25 m/s at Raini; 16 m/s before Tapovan; 12 m/s below; mean ≈ 10 m/s Raini→Joshimath | 36–90 km/h | [V] Shugar 2021 |
+| Chamoli 2021 (seismic) | release 04:51:10 UTC → Ronti Gad–Rishiganga confluence → Rishiganga HEP → Tapovan → Joshimath bridge | 04:54 / 04:57 / 05:07 (2nd wave 05:12) / 10:58:33 IST = 3 / 6 / 16 / 37.5 min | ~55 m/s to the confluence, ~27 m/s to Raini, ~13 m/s to Tapovan | [V] Tiwari et al. 2022, Sci. Rep. 12:3733; Joshimath [S] Cook et al. 2021 via GFZ |
 | Chamoli 2021 | Raini → below Tapovan (~11 km) | 8,200–14,200 → 2,900–4,900 m³/s | peak ÷ ~3 in 11 km (incl. Tapovan reservoir) | [V] |
 | Gongbatongsha 2016 | lake → confluence (6.5 km) → UBK dam (23 km) | arrival at confluence ~20 min, peak ~47 min; 620 → 4,123 → 1,611 m³/s | mean ~5.5 m/s (seismic ~5 m/s), debris-flow front 20–25 m/s before confluence | [V] Sattar 2022 |
 | Thame 2024 | upper lake → Thame village (~9 km) | onset ~13:00, Thame ~13:30 LT (20–25 min); modelled 1,300 s; 912 → 574 m³/s | ~6–7 m/s; ~10 m/s at village | [V] Khadka 2026 |
-| South Lhonak 2023 | lake → Chungthang/Teesta-III (62–68 km) | moraine failure 22:13 IST; Chungthang ≈ 00:30 (≈ 2 h 15 min) | ≈ 8 m/s (29 km/h) | [S] Sattar 2025 via Eos/NCL |
+| South Lhonak 2023 | lake → Chungthang/Teesta-III (62–68 km) | moraine failure 22:12–22:13 IST; Chungthang reported ≈ 00:35 (≈ 2 h 22 min; 00:30 is the paper’s HEC-RAS result) | ≈ 8 m/s (29 km/h) | [V] Sattar 2025 accepted manuscript (§G.9) |
 | Dig Tsho 1985 | 7.1 km → 27 km | 2,350 → 1,375 m³/s (−41 % over 20 km) | — | [S] Cenderelli & Wohl 2001, Geomorphology 40:57–90, doi:10.1016/S0169-555X(01)00037-X |
 | Nare 1977 | 8.6 km | 1,900 m³/s | — | [S] same |
 | Imja (modelled, 2007) | 45 km | attenuates to ~2,000 m³/s at buffer-zone edge | — | [S] Bajracharya et al. 2007, MRD 27(4) |
@@ -507,8 +508,8 @@ the bake from OSM/DEM before display).
   eroded = > 142 Mm³ solids/ice (assumed depths, "field verification required") [V]; HEC-RAS with 121 Mm³ gave
   23,000 m³/s at Syafrubesi, 15 m/s, 15 m depth [V — model, likely high]. Excess water at Devghat 19.96 Mm³ (DHM) [V].
   Chinese side barrier lake ~2 Mm³ (CCTV via Kathmandu Post) [S].
-* Timeline [V NDRRMA/YAE]: 08:37 failure; ~08:40 Rasuwagadhi; 08:50 Syafrubesi gauge dead (1.62 m); 09:00–09:16 DHM
-  warnings, 632,295–679,295 SMS; ~09:20 Betrawati (gauge 447 last 3.55 m); 10:28 Galchhi; 11:50 Malekhu; 13:00
+* Timeline [V NDRRMA/YAE]: 08:37 failure; ~08:40 Rasuwagadhi (= the last NORMAL gauge reading, 1.62 m at 08:40 — DHM; §G.9 third pass); 08:50 Syafrubesi gauge data stop; 09:00–09:16 DHM
+  warnings, 632,295–679,295 SMS; ~09:20 Betrawati (= when gauge 447 stopped transmitting; last reading 3.55 m); 10:28 Galchhi; 11:50 Malekhu; 13:00
   Mugling; 15:20 Devghat, peak 16:00 = 5,850 m³/s.
 * Losses: 14 hydropower projects damaged, 748 MW (354 MW operating + 394 MW under construction; IPPAN) — named:
   Rasuwagadhi 111 MW, Upper Trishuli-1 216 MW (u/c), Rasuwa Bhotekoshi 120 MW (u/c), Chilime, Trishuli-3A/3B, Upper
@@ -539,7 +540,7 @@ the bake from OSM/DEM before display).
 
 * Lake 27.9125 N, 88.1964 E [S Eos], ~5,200 m [S NCL]. Trigger: 14.7 Mm³ frozen lateral moraine failure 22:13:20 IST;
   ~20 m displacement wave; ~50 Mm³ released (≈ half the lake); ~270 Mm³ sediment mobilised; flood 11 m high ~1 km
-  below; reached Chungthang (Teesta-III, 1,200 MW, 60 m dam, destroyed) ~68 km downstream ≈ 2 h later (~00:30);
+  below; reached Chungthang (Teesta-III, 1,200 MW, 60 m dam, destroyed) ~68 km downstream ≈ 2 h 20 min later (~00:35 reported; ~00:30 in their own HEC-RAS run — §G.9 third pass);
   4 other dams impacted; 55 dead + 74 missing; ~25,900 buildings damaged; 31 major bridges; 276 km² farmland; effects
   to 385 km. Chungthang ≈ 27.60 N, 88.64 E (≈).
 * Peaks (modelled, inconsistent): 7,355 m³/s at Chungthang and 8,282 at Gazoldoba (HEC-HMS/RAS, Nat. Hazards 2025,
@@ -708,6 +709,139 @@ Nepal run with the VPE (0.17 % with Manning), 0.16 % (0.07 %) at Chamoli — sti
   ~40–50 m/s above Rasuwagadhi, which no water-routing law gives; the South Lhonak breach hydrograph) and the 30 m DEM
   sections — and this per-preset choice is a statement of where the model stands, not a finding that the Lachen Chu
   is rougher.
+
+**Third pass: the sources, the river and the observations (October 2026).** The second pass ended by naming four
+suspects for the residuals: (a) the source models, (b) the DEM's gorge sections, (c) the South Lhonak breach and the
+Teesta-III reservoir, (d) what the observed times actually are. Each was checked against evidence; four changes were
+adopted, each on physics or a measurement and never on the clock, and two were tried and refused.
+
+*What the observations are (d).* Read again, three of the "arrival times" are not sightings of the front:
+* Nepal. The DHM Flood Forecasting Division's technical report (27 Aug 2026, via Onlinekhabar [V for the article]):
+  the Bhotekoshi–Syafrubesi gauge's **last reading was 1.62 m at 08:40** (warning level 6 m — a normal river) and its
+  **data stopped at 08:50**; Betrawati (station 447) **stopped transmitting at 09:20**, last reading 3.55 m (warning
+  4.1 m). NDRRMA's "~08:40 at Rasuwagadhi" coincides with that last normal reading (Nepali Times places the 1.62 m
+  gauge at the border [S]); 13 km of path plus 15 km of river in 3 min would be ~150 m/s, so it is most likely the
+  gauge timestamp, not the flood. "09:20 at Betrawati" is when the gauge went silent — an upper bound on the front if
+  the flood destroyed it, no bound if the telemetry failed first. The OPRI reconstruction (S. Rauniyar, "The Langtang
+  Collapse", SPF OPRI, 3 Sep 2026 [V, not peer-reviewed]) adds "~08:50, surge crosses at Rasuwagadhi–Timure and
+  reaches Syabrubesi … in roughly ten minutes" (Timure ~13 min, Syafrubesi ~23 min), and its CCTV 08:44 at Gyirong
+  Port; ICIMOD via AFP gives ~20 km in ~7 min [S]. These are now on the stations with their provenance.
+* South Lhonak. Sattar et al. 2025 (accepted manuscript, eprints.whiterose.ac.uk/224098 [V]): their HEC-RAS run (water
+  only, n = 0.05) puts the flood at Chungthang at "~00:30:00 IST … in line with the reported arrival time (~00:35)".
+  **00:30 — the observation the chain was compared with — was their model result**; the report is ~00:35 (8,500 s
+  from the 22:13:20 clock zero; their own main text has the collapse at 22:12:20), source not stated. Their modelled
+  Chungthang peak is 5,340 m³/s (first arrival + ~6 min), a fourth reconstruction beside 7,355 and 10,282–14,673.
+* Chamoli. Tiwari et al. 2022 (Sci. Rep. 12:3733, doi:10.1038/s41598-022-07491-y [V]) time it from seismic records:
+  release 04:51:10 UTC; debris at the Ronti Gad–Rishiganga confluence 04:54 ("~55 m/s from the source"); Rishiganga
+  HEP damaged 04:57 (6 min; "~27 m/s, verified with available videos"); first wave at Tapovan 05:07 (16 min), a
+  second at 05:12; ~13 m/s Raini → Tapovan. Cook et al. 2021 (via the GFZ press release [S]): the flood at the bridge
+  near Joshimath at 10:58:33 IST — 37.5 min, replacing the derived "~27 min from 10 m/s".
+* The front rule (first Q above baseflow + max(10 m³/s, 5 % of the peak excess), or 0.5 m of stage) is kept: a
+  destroyed gauge or a camera records the destructive surge, which in the model comes seconds to minutes after the 5 %
+  front, so switching to the peak would make every late station later. It is not where the gap is.
+
+*The source models (a).*
+* **Debris-flow surge — adopted for Nepal and Chamoli.** The direct-flow hydrograph was the §B.4 gamma curve (a = 3), a
+  breach's shape: it put the peak 11 min (Nepal) and 6.6 min (Chamoli) after the mass reached the river, and the 5 %
+  front waited for its slow rising limb. A mass that hits the river at tens of m/s is already a surge, with its
+  highest discharge at the front (Iverson 1997, Rev. Geophys. 35:245 [M]). `shape: 'surge'` (src/hazard/mass.ts
+  surgeHydrograph) keeps the peak (Jitousono) and the volume, rises over the avalanche body's length over its speed
+  (ℓ = 2·V^(1/3), Chamoli ≈ 600 m — the slab of Shugar et al. implies ≈ 610 m [C]; ≈ 12–20 s) and falls linearly to
+  T = 2V/Qp (Chamoli ≈ 15 min, Shugar's "10–20 min" at Raini [V]). On a prismatic channel the router's front into a
+  low baseflow moves at ~1.1 × the mean velocity of the flow behind it (a shock: (Q₂ − Q₁)/(A₂ − A₁)) [C], which is
+  why the front's speed is set by the discharge right behind it.
+* **Sliding-block runout — adopted for Chamoli only.** src/hazard/runout.ts: a Voellmy–Salm block (v dv/ds = g(sinθ −
+  μcosθ) − g v²/(ξh), integrated exactly per reach; h the depth at which the section passes the surge's Qp at the
+  block's speed) from the detachment, down the path and the profile, handing over to the routed flood where the
+  flood's normal-flow velocity at Qp catches up. Friction pair: μ 0.12, ξ 2,500 m/s² from Zhang, Yin, Li et al. 2022
+  (J. Rock Mech. Geotech. Eng. 15:296, doi:10.1016/j.jrmge.2022.04.003), the RAMMS back-analysis of THIS event [S —
+  via a secondary source; the primary was not retrievable], inside Allen et al. 2009's compilation for large rock–ice
+  avalanches (μ 0.05–0.2, ξ 1,500–4,500 m/s²; NHESS 9:481 [V]). Independent checks: mean speed on the path 52 m/s
+  (the chain's default 50; ~55 m/s source → confluence, Tiwari); run on to rest the block stops at ~8.8 km, the 6 %
+  stretch 1.6 km above the Ronti Gad–Rishiganga confluence where Shugar et al. mapped ~8 Mm³ of deposit. It hands
+  over at 3.4 km, 2.7 min after the collapse. For Nepal no back-analysed pair exists; with Chamoli's the block reaches
+  the river at a mean 40 m/s (slower than OPRI's ~50) and stops within 1.5 km (consistent with the reported brief
+  blockage of the Lhende), and it makes Rasuwagadhi 1.4 min LATER: not adopted. Only μ ≈ 0.05 (Allen's most mobile
+  end, Kolka-type) would carry the mass toward Rasuwagadhi at the reported speeds; choosing it for that is the tuning
+  this calibration refuses.
+* **The river's own flow — adopted for Nepal.** The routing ran the flood down a river carrying only the Lhende's
+  assumed 100 m³/s. The Trishuli's **mean August flow is 621.8 m³/s at Betrawati** (557.8 at the Upper Trishuli-1
+  intake = Betrawati × 0.8971; DHM station 447, 1967–2010; ESSA Technologies 2014, Environmental Flows Assessment,
+  Supplemental ESIA Upper Trishuli-1, Appendix E, Table 5-2 [V]), and the Betrawati gauge read 3.55 m against a 4.1 m
+  warning level before it was lost. `HazardChainSpec.routing.tributaries`: +458 m³/s at the Rasuwagadhi confluence
+  (the Kerung) and +64 at the Upper Trishuli-1 site [H for the split]. For Chungthang (October) and Chamoli (February)
+  no flow record was found; their baseflows stay as they were (sensitivity below).
+* **South Lhonak breach — adopted.** Sattar et al. 2025 [V]: the lake level fell **28 m**; the 55 m breach was complete
+  by ~22:24 (~11 min); outflow steady after ~18 min; peak 4.85×10⁴ m³/s of water at the lake; 50 ± 1.8 Mm³ released.
+  finalDepth 40 m (the spec's assumption) → 28 m; k = 100 m/h agrees with the ~11 min breach (k = 30, which would put
+  the front on the reported time, does not — refused). 43 Mm³ drains (the slide's 14.7 Mm³ of displaced water is not
+  modelled). The impulse-wave pulse lasted ~3 min in their reconstruction against the engine's 60 s [H]; tested at
+  180 s, it changes nothing below the lake (not changed). The Teesta-III reservoir held ~5 Mm³ (Sattar et al.) and is
+  already a storage curve in the profile; they model no delay by it.
+
+*Gorge sections (b) — tried, not adopted.* A hydraulic-geometry floor — bedrock-channel width w ∝ Q^0.38 (Craddock et
+al. 2007, JGR 112, F03007 [S]; w ≈ 6.2·Q^0.38 m in one restatement [S, unverified]), ≈ 70 m for Nepal's 558 m³/s —
+in place of the 25 m resolution floor, and a plain 50 m floor, both move Nepal EARLIER (−5 to −6 min at Betrawati:
+wider floors attenuate the peak less), but Chungthang earlier too and Chamoli LATER (+1 min at Tapovan): the same
+geometry rule cannot be chosen per preset by the sign it gives, and nothing surveyed says which floor is right.
+
+Median member, front in minutes after the trigger / peak in m³/s (each row the adopted configuration with one change):
+
+| Nepal | Rasuwagadhi | Timure | Syafrubesi gauge | Betrawati |
+|---|---|---|---|---|
+| second pass (gamma, Lhende baseflow only) | 16.9 / 24,836 | 20.4 | 32.3 | 69.7 / 10,872 |
+| + surge only | 14.0 | 17.7 | 30.2 | 68.1 |
+| + August flow only | 16.9 | 20.1 | 31.5 | 66.5 |
+| **adopted (surge + August flow)** | **14.0 / 21,266** | **17.4** | **29.3** | **64.9 / 12,075** |
+| 458 m³/s joining at Syafrubesi instead | 14.0 | 17.7 | 30.2 | 65.7 |
+| + sliding block μ 0.12, ξ 2,500 | 15.4 | 18.8 | 30.7 | 66.2 |
+| + sliding block μ 0.05, ξ 4,500 | 10.5 | 14.0 | 26.4 | 60.6 |
+| floor 50 m / 70 m | 13.7 / 13.8 | 16.6 | 27.3 / 27.0 | 59.6 / 59.2 |
+| Manning n 0.05 (no VPE) | 14.8 | 18.5 | 31.4 | 70.4 |
+| observed | ~3 (gauge timestamp), ~7 (CCTV) | ~13 (OPRI) | ≤ 13 (gauge lost) / ~23 (OPRI) | ≤ 43 (gauge lost) / ~23 (OPRI) |
+
+| South Lhonak | Lachen | Chungthang | Teesta-III dam |
+|---|---|---|---|
+| second pass (finalDepth 40 m) | 82.7 / 11,832 | 108.5 / 9,829 | 109.8 |
+| **adopted (28 m, Sattar)** | **90.7 / 6,508** | **121.2 / 5,622** | **122.6** |
+| k 30 m/h | 107.0 | 138.9 / 5,495 | 140.3 |
+| VPE D84 0.5 m | 88.7 | 117.6 | 119.0 |
+| baseflow 100 m³/s (not 20) | 88.3 | 117.5 | 119.0 |
+| floor 50 m | 90.7 | 119.0 / 7,235 | 120.4 |
+| observed | — | ~142 (reported 00:35); peak 5,340–14,673 (models) | — |
+
+| Chamoli | Raini | Tapovan barrage | below Tapovan | Joshimath |
+|---|---|---|---|---|
+| second pass (gamma at the stream head) | 13.8 / 10,882 | 20.9 | 21.4 / 5,917 | 36.0 |
+| + surge only | 12.0 / 8,869 | 19.4 | 20.0 / 5,253 | 35.0 |
+| **adopted (surge + block μ 0.12, ξ 2,500)** | **11.4 / 9,412** | **18.8** | **19.3 / 5,568** | **34.1** |
+| block μ 0.05 / 0.20 (ξ 2,500) | 9.7 / 12.2 | 16.7 / 19.6 | 6,279 / 5,326 | 31.6 / 35.1 |
+| block ξ 1,500 / 4,500 (μ 0.12) | 12.0 / 10.7 | 19.5 / 18.1 | 5,333 / 5,821 | 35.0 / 33.2 |
+| floor 50 m | 12.1 | 20.0 | 5,938 | 34.9 |
+| observed | 6 (seismic); 8,200–14,200 | 15–16 (seismic) | 2,900–4,900 | 37.5 (seismic) |
+
+Ensembles (p10–p90): Betrawati 55–76 min (was 58–83); Chungthang 110–156 (contains ~142); Tapovan barrage 16–23.
+The baked Chungthang median member is now the high-volume one (×1.25: 121.3 min, 5,663 m³/s).
+
+*Decision, per preset, and what remains.*
+* **Nepal**: surge + August flow. Every station moves toward its observations (Betrawati +62 % → +51 % of NDRRMA's
+  43 min; Rasuwagadhi 17 → 14). STILL UNEXPLAINED: ~22 min at Betrawati. The router's mean speed Rasuwagadhi →
+  Betrawati is ~13 m/s; the reports imply ~19 m/s (NDRRMA) to ~45 m/s (OPRI) — the latter physically implausible for
+  a 2.6 % channel at any published roughness, and YAE/KU's own HEC-RAS gave ~15 m/s at Syafrubesi, as this model does.
+  Either the reported times are early (both lower-valley "arrivals" are gauge-loss times, and telemetry failure need
+  not wait for the water), or the avalanche itself — not its melt water — ran far down the Bhote Koshi at Kolka-like
+  speeds (μ ≈ 0.05), which no back-analysis of this event yet supports.
+* **Chamoli**: surge + sliding block. Raini 13.8 → 11.4 min (seismic 6), Tapovan barrage 20.9 → 18.8 (15–16), below-
+  Tapovan peak 5,917 → 5,568 (top of band 4,900), Raini peak still inside its band — but Joshimath 36.0 → 34.1 against
+  a now-timed 37.5 min. UNEXPLAINED: the mass reached the confluence in ~3 min (~55 m/s) where the block, with its
+  published friction, is at 2.7 min only 3.4 km down the profile, so Raini is still 5 min late; and below Tapovan the
+  model is too fast (Tapovan → Joshimath 15 min against ~21) and too high — the barrage, its reservoir and the mud the
+  flow left there are not in the profile.
+* **Chungthang**: Sattar's drawdown. 108.5 → 121.2 min against ~142 (−23 % → −14 %), inside the band; peak 9,829 →
+  5,622, beside Sattar's own 5,340. Manning n 0.05 still (the VPE makes it earlier). UNEXPLAINED: ~20 min — with the
+  same n, Sattar et al.'s HEC-RAS reached Chungthang ~16 min later than this model; the obvious candidates are their
+  2-D floodplain storage in the wide upper valleys against these 1-D DEM sections, and the debris load, which this
+  router relaxes to a Takahashi equilibrium of ~0.04 at 2–4 % slopes.
 
 ---------------------------------------------------------------------------------------------------------------------
 
@@ -930,7 +1064,15 @@ Qp but +3 m freeboard against displacement waves; honest, quantitative "what mit
 * Heller & Hager 2010, J. Waterway Port Coastal Ocean Eng. 136:145
 * Shugar et al. 2021, Science 373:300 — doi:10.1126/science.abh4455 (accepted MS read: eprints.whiterose.ac.uk/175202)
 * Sattar et al. 2022, Sci. Rep. 12:12421 — doi:10.1038/s41598-022-16337-6 (read)
-* Sattar et al. 2025, Science — doi:10.1126/science.ads2659 (via eos.org/thelandslideblog/sikkim-glof-october-2023, ncl.ac.uk press)
+* Sattar et al. 2025, Science — doi:10.1126/science.ads2659 (via eos.org/thelandslideblog/sikkim-glof-october-2023, ncl.ac.uk press; accepted MS read Oct 2026: eprints.whiterose.ac.uk/224098)
+* Tiwari et al. 2022, Sci. Rep. 12:3733 — doi:10.1038/s41598-022-07491-y (read: Chamoli seismic timeline)
+* Cook et al. 2021, Science 374:87 — doi:10.1126/science.abj1227 (via the GFZ press release and The Landslide Blog)
+* Zhang, Yin, Li et al. 2022, J. Rock Mech. Geotech. Eng. 15:296 — doi:10.1016/j.jrmge.2022.04.003 (Chamoli RAMMS; μ/ξ via a secondary source)
+* Allen, Schneider & Owens 2009, NHESS 9:481 — doi:10.5194/nhess-9-481-2009 (read: Voellmy back-analyses of rock–ice avalanches)
+* Huggel et al. 2005, NHESS 5:173 (Kolka–Karmadon speeds, read); Craddock et al. 2007, JGR 112, F03007 — doi:10.1029/2006JF000589 (abstract)
+* ESSA Technologies 2014, Environmental Flows Assessment, Supplemental ESIA Upper Trishuli-1 HEP, Appendix E (IFC project 35701; read: Table 5-2)
+* DHM Flood Forecasting Division technical report, 27 Aug 2026 — via english.onlinekhabar.com/technical-report-rasuwa-flood.html (read)
+* S. Rauniyar, "The Langtang Collapse", SPF Ocean Policy Research Institute, 3 Sep 2026 (read; not peer-reviewed)
 * Cenderelli & Wohl 2001, Geomorphology 40:57 — doi:10.1016/S0169-555X(01)00037-X
 * Immerzeel et al. 2014, WRR 50:2212 (PDF read); Parajuli et al. 2015 PIAHS 368:409 (read); Kayastha et al. 2000 IAHS 264:71 (read)
 * NDRRMA Situation Report #01, 01 Sep 2026 — ndrrma.gov.np/mediafiles/rasuwa/Rasuwa_Flood_SitRep_Temp_ENG_01_01092026.pdf (read)

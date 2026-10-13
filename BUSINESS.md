@@ -185,27 +185,27 @@ hydropower schemes to Betrawati, where it took the only road bridge into Rasuwa.
 
 | Place (model front time) | Existing alert, 09:15 NPT | One automated gauge + SMS at Rasuwagadhi (2 min latency) | Optimiser's single sensor, 1 km below the source |
 |---|---|---|---|
-| Rasuwagadhi (08:53) | none — water first | none — water first | 9 min |
-| Rasuwagadhi HEP headworks (08:54) | none | none | 9 min |
-| Timure (08:57) | none | 2 min | 12 min |
-| Syafrubesi (09:09) | none | 13 min | 24 min |
-| Chilime HEP powerhouse (09:10) | none | 14 min | 25 min |
-| Upper Trishuli-1 HEP (09:28) | 14 min | 33 min | 44 min |
-| Upper Trishuli-3A HEP (09:37) | 22 min | 41 min | 52 min |
-| Upper Trishuli-3B HEP (09:42) | 28 min | 47 min | 57 min |
-| **Betrawati (09:46)** | **32 min** (ensemble p10: 20 min) | **51 min** (p10 41) | **1 h 2 min** (p10 50) |
+| Rasuwagadhi (08:51) | none — water first | none — water first | 7 min |
+| Rasuwagadhi HEP headworks (08:51) | none | none | 8 min |
+| Timure (08:54) | none | 1 min | 10 min |
+| Syafrubesi (09:06) | none | 13 min | 22 min |
+| Chilime HEP powerhouse (09:07) | none | 14 min | 23 min |
+| Upper Trishuli-1 HEP (09:25) | 10 min | 32 min | 41 min |
+| Upper Trishuli-3A HEP (09:32) | 18 min | 40 min | 49 min |
+| Upper Trishuli-3B HEP (09:38) | 23 min | 45 min | 54 min |
+| **Betrawati (09:41)** | **27 min** (ensemble p10: 17 min) | **49 min** (p10 40) | **58 min** (p10 48) |
 
 The read-out for an owner or lender: the existing alert reached none of the first five places, down to the Chilime
-powerhouse, before the water did; one gauge at the border town gives Chilime 14 minutes where it had none and every plant below it 19 minutes
-more; and the best single site gives every place on the river, the worst-off included, about 9 minutes or more. The
+powerhouse, before the water did; one gauge at the border town gives Chilime 14 minutes where it had none and every plant below it 22 minutes
+more; and the best single site gives every place on the river, the worst-off included, about 7 minutes or more. The
 optimiser's own caveat appears
 next to its answer: *"On model times the furthest-upstream site always wins; what limits it in practice is access and
 survival."*
 
-*Read these as differences, not absolutes.* The model front reaches Betrawati at 09:46; the official account puts the
-flood there around 09:20 (about 09:00 in another reconstruction). On observed times the existing alert gave Betrawati
+*Read these as differences, not absolutes.* The model front reaches Betrawati at 09:41; the official account puts the
+flood there around 09:20 (when its gauge went silent; about 09:00 in another reconstruction). On observed times the existing alert gave Betrawati
 minutes at most, and every lead time above is optimistic by the same margin. What a sensor *adds* over the existing
-alert (+19 min at Rasuwagadhi, +30 min at the best site, for Betrawati) is the more robust number.
+alert (+22 min at Rasuwagadhi, +31 min at the best site, for Betrawati) is the more robust number.
 
 ![The Early warning designer on the Nepal 2026 scene after Suggest best site: a lead-time chip per town and plant, and the valley timeline](docs/business/glacier-warning.jpg)
 
@@ -276,7 +276,7 @@ Say these before a customer finds them; the app says them in its panels and repo
   cost where the user gives none, and a documented heuristic for downtime. Not an insurance valuation, an engineering
   design or a catastrophe model.
 * **Model times for glacier floods.** The chain routes an uncertain source volume down a 1-D valley; at Betrawati the
-  model front is about 30 minutes later than the official account (§4.3).
+  model front is about 20 minutes later than the official account (§4.3).
 * **Egress is a road graph.** Census centre-lines, a road counts as cut at 0.3 m of water; traffic, debris on bridges
   and late departures are not modelled.
 * **Coverage.** Full quality in the US (USGS 3DEP); elsewhere a coarse global elevation fallback, except for baked
