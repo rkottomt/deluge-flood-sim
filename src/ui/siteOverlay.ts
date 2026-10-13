@@ -25,6 +25,8 @@ export interface SiteOverlay {
   el: HTMLElement;
   /** Egress route to draw (grid polyline) and whether it is still open; null clears it. */
   setRoute(route: Float32Array | null, open: boolean): void;
+  /** Walking route of the selected site's occupants (grid polyline; evacPeople.ts); null clears it. */
+  setWalkRoute(route: Float32Array | null, cut?: boolean): void;
   setVisible(on: boolean): void;
   /** Re-read the registry (sites changed). */
   refresh(): void;
@@ -48,6 +50,8 @@ export function createSiteOverlay(deps: {
   root.append(gRoute, gSites, gDraft);
   let route: Float32Array | null = null;
   let routeOpen = true;
+  let walkRoute: Float32Array | null = null;
+  let walkCut = false;
   let visible = true;
   let raf = 0;
 
@@ -59,7 +63,9 @@ export function createSiteOverlay(deps: {
   }
   let shapes: Shape[] = [];
   const routeLine = svg('polyline', { class: 'dl-site-route' });
-  gRoute.append(routeLine);
+  const walkLine = svg('polyline', { class: 'dl-site-walk', 'data-site': 'walk-route' });
+  const walkEnd = svg('circle', { class: 'dl-site-walk-end', r: 5 });
+  gRoute.append(routeLine, walkLine, walkEnd);
   const draftLine = svg('polyline', { class: 'dl-site-draft' });
   gDraft.append(draftLine);
 
@@ -95,7 +101,7 @@ export function createSiteOverlay(deps: {
   const frame = () => {
     raf = 0;
     const draft = deps.registry.draft;
-    if (!visible || (!shapes.length && !route && !draft)) {
+    if (!visible || (!shapes.length && !route && !draft && !walkRoute)) {
       el.hidden = true;
       return;
     }
@@ -142,6 +148,11 @@ export function createSiteOverlay(deps: {
     }
     routeLine.setAttribute('points', route ? line(route, Math.max(1, Math.floor(route.length / 2 / 400))) : '');
     routeLine.setAttribute('class', `dl-site-route${routeOpen ? '' : ' dl-cut'}`);
+    walkLine.setAttribute('class', `dl-site-walk${walkCut ? ' dl-cut' : ''}`);
+    walkLine.setAttribute('points', walkRoute ? line(walkRoute, Math.max(1, Math.floor(walkRoute.length / 2 / 400))) : '');
+    const we = walkRoute && walkRoute.length >= 2 ? project(walkRoute[walkRoute.length - 2], walkRoute[walkRoute.length - 1]) : null;
+    walkEnd.setAttribute('transform', we ? `translate(${we[0].toFixed(1)} ${we[1].toFixed(1)})` : 'translate(-99 -99)');
+    walkEnd.style.display = we ? '' : 'none';
     draftLine.setAttribute('points', draft ? line(draft, Math.max(1, Math.floor(draft.length / 2 / 300))) : '');
     schedule();
   };
@@ -158,6 +169,11 @@ export function createSiteOverlay(deps: {
     setRoute(r, open) {
       route = r;
       routeOpen = open;
+      schedule();
+    },
+    setWalkRoute(r, cut = false) {
+      walkCut = cut;
+      walkRoute = r;
       schedule();
     },
     setVisible(on) {

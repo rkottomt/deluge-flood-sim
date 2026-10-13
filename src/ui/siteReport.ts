@@ -249,7 +249,8 @@ export const SITE_LIMITATIONS: readonly string[] = [
   'A river stage is held at the domain edges and raised at a limited rate; real crests last hours to days, so wet durations here are lower bounds.',
   'Pittsburgh and Nashville are regulated rivers: historic crests before the flood-control reservoirs (1936 at Pittsburgh) would crest lower today.',
   'Return periods are inputs. Where none is published here, the EAL rests on yours; with one or two points it is a rough bracket, not a figure.',
-  'Egress uses road centrelines and the shelters on the map; it ignores traffic, closures for other reasons and walking routes.',
+  'Road egress uses road centrelines and the shelters on the map; it ignores traffic and closures for other reasons. Evacuation on foot walks the same road centrelines (no footways in the data) and ignores crowding on the street.',
+  'Infrastructure dependencies are approximate: the nearest substation stands in for the real feeder, and a facility OpenStreetMap does not map is missing.',
   'Damage curves (JRC 2017) and unit costs are screening values with a ±1σ band that understates the real uncertainty.',
   'Indicative only — not engineering advice, not a flood determination, not an appraisal.',
 ];
@@ -275,6 +276,8 @@ export interface SiteReportSite {
   verdict: string[];
   /** Today vs a future climate (siteClimate.ts), when that comparison was run. */
   climate?: ClimateComparison | null;
+  /** Extra sections after "The flood on screen" (evacuation on foot, infrastructure dependencies — evacPeople.ts). */
+  extra?: HTMLElement[];
 }
 
 export interface SiteReportInput {
@@ -287,6 +290,8 @@ export interface SiteReportInput {
   current: { simTime: number; source: 'gpu' | 'snapshots' } | null;
   sweep: { durationS: number; source: 'gpu' | 'snapshots'; ladder: 'stage' | 'scale' | 'rain'; gaugeLabel: string; sourceKeys: string[]; levels: number; cancelled: boolean } | null;
   sites: SiteReportSite[];
+  /** Extra method notes for the appendix. */
+  methods?: ReadonlyArray<{ title: string; text: string }>;
 }
 
 export function buildSiteReport(i: SiteReportInput): HTMLElement {
@@ -316,6 +321,7 @@ export function buildSiteReport(i: SiteReportInput): HTMLElement {
     if (s.verdict.length) parts.push(h('div', { class: 'dl-rep-verdict' }, h('h3', null, 'Verdict'), h('ul', null, ...s.verdict.map((v) => h('li', null, v)))));
     parts.push(h('h3', null, 'Summary'), kvList(siteSpecRows(s.spec, s.current ?? s.sweep?.rows[0]?.run ?? null, money)));
     if (s.current) parts.push(h('h3', null, 'The flood on screen'), kvList(siteRunRows(s.current, money, i.alertTime)));
+    if (s.extra?.length) parts.push(...s.extra);
     if (s.sweep && s.sweep.rows.length) {
       parts.push(h('h3', null, 'Sweep'), simpleTable(SWEEP_HEAD, sweepRows(s.sweep, money), 'dl-rep-table dl-rep-wide'));
       const chart = exceedanceChart(s.sweep, money, { width: 420, height: 170 });
@@ -361,7 +367,7 @@ export function buildSiteReport(i: SiteReportInput): HTMLElement {
   sections.push(
     h('section', { class: 'dl-rep-appendix' },
       h('h2', null, 'Methods'),
-      ...SITE_METHOD_NOTES.map((n) => h('div', { class: 'dl-rep-method' }, h('h3', null, n.title), h('p', null, n.text))),
+      ...[...SITE_METHOD_NOTES, ...(i.methods ?? [])].map((n) => h('div', { class: 'dl-rep-method' }, h('h3', null, n.title), h('p', null, n.text))),
       h('h2', null, 'Limitations'),
       h('ul', null, ...SITE_LIMITATIONS.map((t) => h('li', null, t))),
       h('h2', null, 'Sources'),
