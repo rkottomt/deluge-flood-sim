@@ -1,6 +1,8 @@
 /**
- * The three business use cases (src/ui/useCases.ts draws them; src/app/url.ts reads `?usecase=`):
+ * The business use cases (src/ui/useCases.ts draws them; src/app/url.ts reads `?usecase=`):
  *
+ *   address    Check any US address — a geocoder search (or `?usecase=address&at=<lat>,<lon>`) loads a 5 km live area
+ *              around the point, drops a site on it and opens Site check on the NOAA Atlas 14 rain ladder.
  *   site       Check a site before you build — Pittsburgh, two demo parcels in Site check (a North Shore lot and one on
  *              the higher ground of Allegheny Center), handed over as a `?sites=` value through the same strict decoder
  *              a shared link uses (src/loss/site.ts decodeSites).
@@ -10,11 +12,16 @@
  *
  * Pure data and parsing only (no DOM), so the URL parser and the unit tests can import it.
  *
- * SECURITY. `?usecase=` is matched exactly against the three ids below; anything else is dropped with a fixed sentence
- * and never echoed (FINDINGS.json SEC-01). No part of the value reaches the page.
+ * SECURITY. `?usecase=` is matched exactly against the ids below; anything else is dropped with a fixed sentence and
+ * never echoed (FINDINGS.json SEC-01). No part of the value reaches the page. The address case takes NO text from the
+ * link — no address, no name — only `at=<lat>,<lon>`, read by a strict number pattern (parseAddressAt); the place's
+ * name comes from the app's own reverse geocoding, as for any live area.
  */
 
-export const USE_CASE_IDS = ['site', 'glacier', 'portfolio'] as const;
+import type { LiveAreaRequest } from '../contracts';
+import { isLikelyUS } from '../data/geo';
+
+export const USE_CASE_IDS = ['site', 'glacier', 'portfolio', 'address'] as const;
 export type UseCaseId = (typeof USE_CASE_IDS)[number];
 
 /** URL parameter that opens a use case. */
@@ -22,8 +29,8 @@ export const USE_CASE_PARAM = 'usecase';
 
 export interface UseCaseDef {
   id: UseCaseId;
-  /** Preset the use case runs on. */
-  preset: string;
+  /** Preset the use case runs on; null for the address case (a live area where the user points). */
+  preset: string | null;
   title: string;
   /** Who it is for, one line. */
   who: string;
@@ -58,7 +65,60 @@ export const USE_CASES: readonly UseCaseDef[] = [
     blurb: 'A fictional 19-asset Houston portfolio under Hurricane Harvey’s worst hour of rain: depth, loss, insured loss and downtime per asset, read from a CSV in this tab.',
     howTo: 'The demo portfolio is loaded in Impact & loss and updates as the rain falls. Load your own CSV there; it never leaves this tab.',
   },
+  {
+    id: 'address',
+    preset: null,
+    title: 'Check any US address',
+    who: 'Developers, lenders, site selection',
+    blurb: 'Type an address: Deluge loads 5 km of terrain, imagery and roads around it, drops a site there and sweeps it through NOAA Atlas 14 rain return periods to an expected annual loss.',
+    howTo: 'The site is in Site check with the NOAA Atlas 14 rain ladder ticked (2- to 500-year, 1-hour storm). Press Run sweep for depth, egress and expected annual loss.',
+  },
 ];
+
+// ─── The address use case ───────────────────────────────────────────────────────────────────────────────────────────
+
+/** Link parameter carrying the address point: `at=<lat>,<lon>`. */
+export const ADDRESS_PARAM = 'at';
+/** Side of the live area loaded around an address, m (a 5 km square at the default 1024² grid: ~4.9 m cells). */
+export const ADDRESS_AREA_M = 5000;
+/** Fixed warning for a missing or bad `at=` (the value itself is never shown). */
+export const ADDRESS_WARNING = 'Ignoring an invalid ?at= link value (expected lat,lon in the United States, e.g. 29.7604,-95.3698)';
+/** Up to 6 decimals (~0.1 m), optional minus, no exponent, no spaces, no extra fields. */
+const AT_RE = /^(-?\d{1,2}(?:\.\d{1,6})?),(-?\d{1,3}(?:\.\d{1,6})?)$/;
+
+/**
+ * Read `at=<lat>,<lon>` strictly: two plain decimals inside U.S. coverage (src/data/geo.ts isLikelyUS — Atlas 14 and
+ * 3DEP are U.S. datasets). A missing value is no point and no warning; anything else is no point and a fixed warning.
+ */
+export function parseAddressAt(search: string): { at: { lat: number; lon: number } | null; warnings: string[] } {
+  let raw: string | null = null;
+  try {
+    raw = new URLSearchParams(search).get(ADDRESS_PARAM);
+  } catch {
+    raw = null;
+  }
+  if (raw === null || raw === '') return { at: null, warnings: [] };
+  const m = raw.length <= 32 ? AT_RE.exec(raw) : null;
+  if (m) {
+    const lat = Number(m[1]);
+    const lon = Number(m[2]);
+    if (isLikelyUS(lat, lon)) return { at: { lat, lon }, warnings: [] };
+  }
+  return { at: null, warnings: [ADDRESS_WARNING] };
+}
+
+/** Grid of the live area loaded around an address (the app default). */
+export const ADDRESS_RESOLUTION = 1024;
+
+/** The live area the address use case loads around a point. */
+export function addressAreaRequest(at: { lat: number; lon: number }): LiveAreaRequest {
+  return { center: { lat: at.lat, lon: at.lon }, sizeMeters: ADDRESS_AREA_M, resolution: ADDRESS_RESOLUTION };
+}
+
+/** `lat,lon` as the link writes it (5 decimals, ~1 m). */
+export function formatAddressAt(lat: number, lon: number): string {
+  return `${lat.toFixed(5)},${lon.toFixed(5)}`;
+}
 
 export function useCaseById(id: UseCaseId): UseCaseDef {
   return USE_CASES.find((u) => u.id === id)!;
@@ -69,7 +129,7 @@ export function isUseCaseId(v: unknown): v is UseCaseId {
 }
 
 /** Fixed warning for a `?usecase=` value that is not one of the ids (the value itself is never shown). */
-export const USE_CASE_WARNING = 'Ignoring an unknown ?usecase= link value (expected site, glacier or portfolio)';
+export const USE_CASE_WARNING = 'Ignoring an unknown ?usecase= link value (expected site, glacier, portfolio or address)';
 
 /**
  * Read `?usecase=` strictly: exactly one of the ids, case-sensitive, no surrounding junk. A missing or empty value is
@@ -125,10 +185,11 @@ export const BRIEF: readonly BriefItem[] = [
       'When the water arrives and how long it stays',
       'Damage and loss for the planned building, with the damage-curve range',
       'A sweep over NWS flood categories, FEMA / NOAA 1 %-type levels and historic crests: expected annual loss and a loss-exceedance chart',
+      'Anywhere in the US: a sweep over NOAA Atlas 14 rain return periods (2- to 500-year, 1-hour storm) at the address, with its expected annual loss from surface-water flooding',
       'An indicative finished-floor elevation (design water level + ASCE 24-14 freeboard) and a verdict in plain sentences',
     ],
     caveat:
-      'Return periods are filled in only where a published source gives one (Pittsburgh, Nashville, Fort Myers); elsewhere they are yours to enter and labelled so. Without them there is no expected annual loss.',
+      'River and tide return periods are filled in only where a published source gives one (Pittsburgh, Nashville, Fort Myers); elsewhere they are yours to enter and labelled so. The NOAA Atlas 14 rain ladder is rain only — no river or storm surge on the map — and stationary (today’s climate).',
   },
   {
     question: 'How do people get out?',

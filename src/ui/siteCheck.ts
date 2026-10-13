@@ -17,6 +17,7 @@
 import type { FloodSolver, HazardFields, StageControl, TerrainData, WaterSource } from '../contracts';
 import { computeInitialWater } from '../data/initialWater';
 import { makeGeoToGrid } from '../data/geo';
+import { loadAtlas14Grid, lookupAtlas14, type Atlas14Point } from '../data/atlas14';
 import { cleanPlaceLabel } from '../data/placeName';
 import {
   assessSiteRun,
@@ -27,12 +28,17 @@ import {
   defaultFirstFloorHeight,
   encodeSites,
   FloodTimeline,
+  formatReturnPeriod,
   freeboardFor,
   ladderFor,
   LADDER_SOURCES,
   mitigationOptions,
   OCCUPANCY_PROFILES,
   pickDesign,
+  RAIN_DESIGN_DURATION_S,
+  RAIN_LADDER_CAVEATS,
+  RAIN_SWEEP_MINUTES,
+  rainLadder,
   recommendFfe,
   regionForBounds,
   SCALE_LADDER,
@@ -98,6 +104,8 @@ interface LevelCfg {
   label: string;
   ft: number;
   scale: number;
+  /** Rain ladder: uniform rain rate for the first hour, mm/h; NaN otherwise. */
+  mmPerHour: number;
   sourceRp: number | null;
   userRp: number | null;
   source: string;
@@ -107,6 +115,9 @@ interface LevelCfg {
   outOfRange: boolean;
 }
 
+/** stage: river / tide levels · scale: the scenario's forcing × multipliers · rain: NOAA Atlas 14 1-hour rain. */
+export type LadderKind = 'stage' | 'scale' | 'rain';
+
 interface SweepState {
   levels: SweepLevelInfo[];
   rows: Map<string, SweepRow[]>;
@@ -114,7 +125,7 @@ interface SweepState {
   specs: Map<string, string>;
   durationS: number;
   source: 'gpu' | 'snapshots';
-  ladder: 'stage' | 'scale';
+  ladder: LadderKind;
   gaugeLabel: string;
   sourceKeys: string[];
   cancelled: boolean;
@@ -126,6 +137,13 @@ export interface SiteSection {
   badge: HTMLElement;
   overlay: HTMLElement;
   activate(): void;
+  /**
+   * Switch to the NOAA Atlas 14 rain ladder with every level ticked, once the lookup for this scene is done. False when
+   * there is no Atlas 14 estimate for the map (outside coverage, or the grid could not be loaded) or a sweep is running.
+   */
+  useRainLadder(): Promise<boolean>;
+  /** Press "Run sweep". */
+  runSweep(): Promise<void>;
 }
 
 export const specKey = (s: SiteSpec) => JSON.stringify([s.lon, s.lat, s.ring, s.occupancy, s.floors, s.value, s.footprintM2, s.firstFloorHeight, s.criticalElev]);
@@ -167,7 +185,14 @@ export function createSiteSection(ctx: UIContext): SiteSection {
   let current: { fields: HazardFields; source: 'gpu' | 'snapshots'; endDepth: Float32Array | null; runs: Map<string, SiteRun>; alertTime: number } | null = null;
   let sweep: SweepState | null = null;
   let levels: LevelCfg[] = [];
+  /** The ladder on screen, and the user's choice of one ('auto' until they pick). */
+  let ladderKind: LadderKind = 'scale';
+  let ladderChoice: LadderKind | 'auto' = 'auto';
+  /** NOAA Atlas 14 at the map centre (src/data/atlas14.ts), per scene. */
+  let rain: { for: TerrainData | null; status: 'idle' | 'loading' | 'ok' | 'none' | 'error'; point: Atlas14Point | null; ready: Promise<boolean> } = { for: null, status: 'idle', point: null, ready: Promise.resolve(false) };
   let durationMin = SWEEP_MINUTES_DEFAULT;
+  /** The user typed a duration: switching ladders no longer resets it to the ladder's default. */
+  let durationTouched = false;
   let sweeping = false;
   let cancelRequested = false;
   let busy = false;
@@ -185,6 +210,8 @@ export function createSiteSection(ctx: UIContext): SiteSection {
     'Is this parcel a good place to build, and how do people get out? Drop a site, describe the planned building, then check it against the flood on screen or sweep it through a ladder of flood levels. Indicative screening — not engineering advice.',
   );
   const placeBtn = button('Place a site', () => selectTool(store, 'site'), { icon: 'site', variant: 'primary', className: 'dl-btn-sm', tip: 'Site tool (S): click the map for a pin, or drag around a parcel', side: 'top' });
+  const addressBtn = button('Check an address', () => bridge.openAddressCheck?.(), { icon: 'search', className: 'dl-btn-sm', tip: 'Type any US address: load 5 km around it, drop a site there and sweep NOAA Atlas 14 rain return periods', side: 'top' });
+  addressBtn.dataset.site = 'check-address';
   const shareBtn = button('Share link', () => shareLink(), { className: 'dl-btn-sm', tip: 'Put the sites in the address bar (?sites=) so a copied link reopens them. Nothing is uploaded.', side: 'top' });
   const listEl = h('div', { class: 'dl-site-list' });
   const formEl = h('div', { class: 'dl-site-form' });
@@ -195,7 +222,28 @@ export function createSiteSection(ctx: UIContext): SiteSection {
 
   const sweepIntro = h('p', { class: 'dl-impact-fine' });
   const ladderEl = h('div', { class: 'dl-impact-table dl-site-ladder' });
-  const durIn = numField({ label: 'Simulated time per level', unit: 'min', min: SWEEP_MINUTES_MIN, max: SWEEP_MINUTES_MAX, step: 1, name: 'duration', onChange: (v) => (durationMin = v ?? SWEEP_MINUTES_DEFAULT) });
+  const ladderSel = h('select', { class: 'dl-num-input', 'aria-label': 'Event ladder', 'data-site': 'ladder' });
+  ladderSel.addEventListener('change', () => {
+    const v = ladderSel.value;
+    if (v !== 'stage' && v !== 'scale' && v !== 'rain') return;
+    ladderChoice = v;
+    buildLadder();
+    render();
+  });
+  const ladderPick = h('label', { class: 'dl-num-field' }, h('span', { class: 'dl-num-label' }, 'Event ladder'), ladderSel);
+  const rainNote = h('p', { class: 'dl-impact-fine', 'data-site': 'rain-status' });
+  const durIn = numField({
+    label: 'Simulated time per level',
+    unit: 'min',
+    min: SWEEP_MINUTES_MIN,
+    max: SWEEP_MINUTES_MAX,
+    step: 1,
+    name: 'duration',
+    onChange: (v) => {
+      durationTouched = v != null;
+      durationMin = v ?? defaultDuration();
+    },
+  });
   durIn.set(durationMin);
   const runBtn = button('Run sweep', () => void runSweep(), { icon: 'play', variant: 'primary', className: 'dl-btn-sm', tip: 'Run every ticked level headless at full speed; your scenario is put back afterwards', side: 'top' });
   runBtn.dataset.site = 'run-sweep';
@@ -223,7 +271,7 @@ export function createSiteSection(ctx: UIContext): SiteSection {
 
   const body = [
     intro,
-    h('div', { class: 'dl-row dl-row-wrap' }, placeBtn, shareBtn),
+    h('div', { class: 'dl-row dl-row-wrap' }, placeBtn, addressBtn, shareBtn),
     listEl,
     formEl,
     h('div', { class: 'dl-impact-block' }, h('div', { class: 'dl-label-row' }, h('span', { class: 'dl-label' }, 'This run')), h('div', { class: 'dl-row dl-row-wrap' }, assessBtn, evacBtn), status, cardEl),
@@ -232,6 +280,8 @@ export function createSiteSection(ctx: UIContext): SiteSection {
       { class: 'dl-impact-block' },
       h('div', { class: 'dl-label-row' }, h('span', { class: 'dl-label' }, 'Scenario sweep')),
       sweepIntro,
+      ladderPick,
+      rainNote,
       ladderEl,
       durIn.el,
       h('div', { class: 'dl-row dl-row-wrap' }, runBtn, climateBtn, cancelBtn),
@@ -267,6 +317,10 @@ export function createSiteSection(ctx: UIContext): SiteSection {
       router = createRouter();
       router.setNetwork(t.roads, t.cellSize, { nx: t.nx, ny: t.ny });
     }
+    ladderChoice = 'auto';
+    rain = { for: null, status: 'idle', point: null, ready: Promise.resolve(false) };
+    // The Atlas 14 grid is fetched only once Site check is in use (activate / the address case), not on every scene.
+    if (active) ensureRain();
     buildLadder();
     overlay.refresh();
     render();
@@ -276,22 +330,97 @@ export function createSiteSection(ctx: UIContext): SiteSection {
     return store.get().scenario?.stage ?? null;
   }
 
+  /** The map centre, where the rain ladder's Atlas 14 values are read (rain is uniform over the map). */
+  function mapCentre(t: TerrainData): { lat: number; lon: number } {
+    return { lat: (t.bounds.north + t.bounds.south) / 2, lon: (t.bounds.east + t.bounds.west) / 2 };
+  }
+
+  /**
+   * Look NOAA Atlas 14 up for this scene (the grid is downloaded once per page, from this app's own origin). Only
+   * scenes in the Americas fetch it at all: Atlas 14 covers the U.S. alone, and the Himalayan presets need nothing.
+   */
+  function ensureRain() {
+    const t = terrainRef;
+    if (!t || rain.for === t) return;
+    const c = mapCentre(t);
+    if (!(c.lon < -60 && c.lat > 15)) {
+      rain = { for: t, status: 'none', point: null, ready: Promise.resolve(false) };
+      return;
+    }
+    const mine = { for: t as TerrainData | null, status: 'loading' as typeof rain.status, point: null as Atlas14Point | null, ready: Promise.resolve(false) };
+    mine.ready = loadAtlas14Grid().then(
+      (g) => {
+        if (terrainRef !== t) return false;
+        const p = lookupAtlas14(g, c.lat, c.lon);
+        rain = { ...mine, status: p ? 'ok' : 'none', point: p };
+        if (!sweeping) buildLadder();
+        render();
+        return !!p;
+      },
+      (e) => {
+        if (terrainRef !== t) return false;
+        console.warn('[site] NOAA Atlas 14 grid unavailable:', e);
+        rain = { ...mine, status: 'error', point: null };
+        render();
+        return false;
+      },
+    );
+    rain = mine;
+  }
+
+  /** Which ladders this scene can run, and which one 'auto' means. */
+  function ladderOptions(): { kinds: LadderKind[]; auto: LadderKind } {
+    const st = stageCtl();
+    const s = store.get();
+    const researched = !!(st && ladderFor(s.presetId));
+    const rainOk = rain.status === 'ok' && !!rain.point;
+    const kinds: LadderKind[] = [...(st ? (['stage'] as const) : []), ...(rainOk ? (['rain'] as const) : []), 'scale'];
+    // A researched river / tide ladder first; then, on a live area or a rain-led preset, the rain ladder.
+    const rainLed = s.presetId === null || (s.scenario?.rainRate ?? 0) > 0;
+    const auto: LadderKind = researched ? 'stage' : rainOk && rainLed ? 'rain' : st ? 'stage' : 'scale';
+    return { kinds, auto };
+  }
+
+  function defaultDuration(): number {
+    return ladderKind === 'rain' ? RAIN_SWEEP_MINUTES : SWEEP_MINUTES_DEFAULT;
+  }
+
   function buildLadder() {
     const st = stageCtl();
     const ladder = ladderFor(store.get().presetId);
-    if (st && ladder) {
+    const opts = ladderOptions();
+    ladderKind = ladderChoice !== 'auto' && opts.kinds.includes(ladderChoice) ? ladderChoice : opts.auto;
+    if (!durationTouched) {
+      durationMin = defaultDuration();
+      durIn.set(durationMin);
+    }
+    if (ladderKind === 'rain' && rain.point) {
+      levels = rainLadder(rain.point).map((l) => ({
+        id: l.id,
+        label: l.label,
+        ft: NaN,
+        scale: NaN,
+        mmPerHour: l.mmPerHour,
+        sourceRp: l.returnPeriod,
+        userRp: null,
+        source: l.source,
+        note: `${l.ari}-yr average recurrence`,
+        on: true,
+        outOfRange: false,
+      }));
+    } else if (ladderKind === 'stage' && st && ladder) {
       levels = ladder.map((l) => {
         const off = l.ft * FT + st.gaugeDatum - st.normalLevel;
-        return { id: l.id, label: l.label, ft: l.ft, scale: NaN, sourceRp: l.returnPeriod, userRp: null, source: l.source, note: l.note ?? '', on: true, outOfRange: off < 0 || off > st.maxOffset };
+        return { id: l.id, label: l.label, ft: l.ft, scale: NaN, sourceRp: l.returnPeriod, userRp: null, mmPerHour: NaN, source: l.source, note: l.note ?? '', on: true, outOfRange: off < 0 || off > st.maxOffset };
       });
-    } else if (st) {
+    } else if (ladderKind === 'stage' && st) {
       // A stage scenario without a researched ladder: the slider's own marks.
       levels = [
         ...(st.floodStageFt != null ? [{ label: 'Flood stage', ft: st.floodStageFt }] : []),
         ...(st.marks ?? []).map((m) => ({ label: m.label, ft: m.ft })),
-      ].map((m, i) => ({ id: `m${i}`, label: m.label, ft: m.ft, scale: NaN, sourceRp: null, userRp: null, source: '', note: '', on: true, outOfRange: false }));
+      ].map((m, i) => ({ id: `m${i}`, label: m.label, ft: m.ft, scale: NaN, mmPerHour: NaN, sourceRp: null, userRp: null, source: '', note: '', on: true, outOfRange: false }));
     } else {
-      levels = SCALE_LADDER.map((k) => ({ id: `x${k}`, label: `Scenario forcing × ${k}`, ft: NaN, scale: k, sourceRp: null, userRp: null, source: '', note: '', on: k === 0.5 || k === 1, outOfRange: false }));
+      levels = SCALE_LADDER.map((k) => ({ id: `x${k}`, label: `Scenario forcing × ${k}`, ft: NaN, scale: k, mmPerHour: NaN, sourceRp: null, userRp: null, source: '', note: '', on: k === 0.5 || k === 1, outOfRange: false }));
     }
     for (const l of levels) if (l.outOfRange) l.on = false;
   }
@@ -412,6 +541,7 @@ export function createSiteSection(ctx: UIContext): SiteSection {
     if (!todo.length) return setSweepStatus('Tick at least one level.', 'warn');
     if (headlessBusy(store)) return setSweepStatus('An ensemble is running (Uncertainty): wait for it, or cancel it.', 'warn');
     const st = stageCtl();
+    const kind = ladderKind;
     const s0 = store.get();
     const saved = saveScenario(s0);
     const gpu = hasGpuFields(solver);
@@ -424,8 +554,8 @@ export function createSiteSection(ctx: UIContext): SiteSection {
       specs: new Map(specs.map((s) => [s.id, specKey(s)])),
       durationS: dur,
       source: gpu ? 'gpu' : 'snapshots',
-      ladder: st ? 'stage' : 'scale',
-      gaugeLabel: st?.label ?? '',
+      ladder: kind,
+      gaugeLabel: kind === 'stage' ? (st?.label ?? '') : '',
       sourceKeys: [...new Set(todo.map((l) => l.source).filter(Boolean))],
       cancelled: false,
       presetId: s0.presetId,
@@ -448,9 +578,13 @@ export function createSiteSection(ctx: UIContext): SiteSection {
       cases: todo.map((L, li) => ({
         L,
         apply: () => {
-          setSweepStatus(`Level ${li + 1} of ${todo.length}: ${L.label} — running ${fmtNum(durationMin)} simulated min…`);
-          if (st) {
+          setSweepStatus(`Level ${li + 1} of ${todo.length}: ${L.label}${kind === 'rain' ? ` (${fmtNum(L.mmPerHour)} mm/h for ${fmtNum(Math.min(durationMin, RAIN_DESIGN_DURATION_S / 60))} min)` : ''} — running ${fmtNum(durationMin)} simulated min…`);
+          if (kind === 'stage' && st) {
             store.set({ stageOffset: L.ft * FT + st.gaugeDatum - st.normalLevel });
+          } else if (kind === 'rain') {
+            // Rain only: rivers held at their normal level, inflows and storm cells off, the level's 1-hour intensity
+            // over the whole map (stopped after RAIN_DESIGN_DURATION_S in afterChunk).
+            store.set({ stageOffset: 0, sources: saved.sources.filter((src) => src.type !== 'inflow'), storms: [], sim: { ...store.get().sim, rainRate: L.mmPerHour } });
           } else {
             const f = scaledForcing(L.scale, saved);
             store.set({ sources: f.sources, storms: f.storms, sim: { ...store.get().sim, rainRate: f.rainRate } });
@@ -468,8 +602,11 @@ export function createSiteSection(ctx: UIContext): SiteSection {
           acc.setBaseline(null);
         }
       },
-      afterChunk: () => {
+      afterChunk: (_i, t) => {
         if (!gpu) feed(acc);
+        // The design storm lasts an hour; the rest of the run is run-off. Chunks are whole minutes, so the rain stops
+        // on the hour exactly.
+        if (kind === 'rain' && t >= RAIN_DESIGN_DURATION_S - 1e-3 && store.get().sim.rainRate > 0) store.set({ sim: { ...store.get().sim, rainRate: 0 } });
       },
       onProgress: (fr) => (progress.value = fr),
       collect: async (_li, { L }) => {
@@ -481,6 +618,7 @@ export function createSiteSection(ctx: UIContext): SiteSection {
           label: L.label,
           ft: L.ft,
           scale: L.scale,
+          ...(kind === 'rain' ? { rainMmH: L.mmPerHour } : {}),
           returnPeriod: L.sourceRp ?? L.userRp,
           rpFrom: L.sourceRp != null ? 'source' : L.userRp != null ? 'user' : null,
           durationS: r.fields.simTime,
@@ -521,7 +659,7 @@ export function createSiteSection(ctx: UIContext): SiteSection {
 
   function syncClimateBtn() {
     const s = store.get();
-    const c = sweepComparable(climateForcing(s.climate, s.presetId), stageCtl() ? 'stage' : 'scale');
+    const c = sweepComparable(climateForcing(s.climate, s.presetId), ladderKind);
     climateBtn.disabled = sweeping || comparing || !c.ok;
     climateBtn.dataset.tip = c.ok ? `Run the ticked levels under today’s forcing, then under ${climateForcing(s.climate, s.presetId).label}, and compare loss and EAL` : c.why;
   }
@@ -532,7 +670,7 @@ export function createSiteSection(ctx: UIContext): SiteSection {
     const s0 = store.get();
     const sel = s0.climate ?? { ...CLIMATE_TODAY };
     const f = climateForcing(sel, s0.presetId);
-    const ok = sweepComparable(f, stageCtl() ? 'stage' : 'scale');
+    const ok = sweepComparable(f, ladderKind);
     if (!ok.ok) return setSweepStatus(ok.why, 'warn');
     const want = levels.filter((l) => l.on && !l.outOfRange).length;
     const complete = (st: SweepState | null) => !!st && !st.cancelled && st.levels.length === want;
@@ -710,12 +848,40 @@ export function createSiteSection(ctx: UIContext): SiteSection {
   function renderLadder() {
     const st = stageCtl();
     const ladder = ladderFor(store.get().presetId);
+    const t = getTerrain();
+    const c = t ? mapCentre(t) : null;
     setText(
       sweepIntro,
-      st
-        ? `${st.label}: each ticked level resets the water, raises the river to that gauge reading and runs the chosen simulated time headless${ladder ? '' : ' (this scenario has no researched ladder: the slider’s marks)'}. Return periods marked “source” are published; type one for any other level you know — it is labelled as your input.`
-        : 'No river stage here: the ladder scales the scenario’s rain, storm cells and inflows. No return period is known for any multiplier — type one per level (e.g. from NOAA Atlas 14), or the sweep gives levels without an EAL.',
+      ladderKind === 'rain'
+        ? `NOAA Atlas 14 rain at the map centre${c ? ` (${c.lat.toFixed(3)}, ${c.lon.toFixed(3)})` : ''}: each ticked level resets the water and rains that return period’s 1-hour intensity uniformly over the whole map for one hour, then lets it run off for the rest of the simulated time. Rain only — rivers stay at their normal level, inflows and storm cells are off. Return periods are NOAA’s, converted to annual chance.`
+        : ladderKind === 'stage' && st
+          ? `${st.label}: each ticked level resets the water, raises the river to that gauge reading and runs the chosen simulated time headless${ladder ? '' : ' (this scenario has no researched ladder: the slider’s marks)'}. Return periods marked “source” are published; type one for any other level you know — it is labelled as your input.`
+          : 'The ladder scales the scenario’s rain, storm cells and inflows. No return period is known for any multiplier — type one per level, or the sweep gives levels without an EAL.',
     );
+    // The ladder picker: only when there is a choice.
+    const opts = ladderOptions();
+    const names: Record<LadderKind, string> = {
+      stage: st ? `${st.label}${ladder ? '' : ' (slider marks)'}` : 'River / tide levels',
+      rain: 'Rain: NOAA Atlas 14, 1-hour',
+      scale: 'Scenario forcing × multiplier',
+    };
+    ladderSel.replaceChildren(...opts.kinds.map((k) => h('option', { value: k, selected: k === ladderKind }, names[k])));
+    ladderSel.disabled = sweeping || comparing;
+    ladderPick.hidden = opts.kinds.length < 2;
+    const usLike = !!c && c.lon < -60 && c.lat > 15;
+    setText(
+      rainNote,
+      rain.status === 'loading'
+        ? 'Looking up NOAA Atlas 14 rain return periods for this map…'
+        : rain.status === 'error'
+          ? 'NOAA Atlas 14 rain return periods could not be loaded; the other ladders still work.'
+          : rain.status === 'none' && usLike
+            ? 'No NOAA Atlas 14 estimate covers this map (western Washington and Oregon are still on NOAA Atlas 2), so there is no rain ladder here.'
+            : ladderKind === 'rain'
+              ? `Uniform 1-hour storm; simulated time per level ${durationMin < RAIN_DESIGN_DURATION_S / 60 ? '(shorter than the storm: the rain is cut off) ' : ''}includes the run-off afterwards.`
+              : '',
+    );
+    rainNote.hidden = !rainNote.textContent;
     if (!levels.length) {
       ladderEl.replaceChildren();
       return;
@@ -733,7 +899,7 @@ export function createSiteSection(ctx: UIContext): SiteSection {
             box.addEventListener('change', () => (l.on = box.checked));
             let rp: HTMLElement;
             if (l.sourceRp != null) {
-              rp = h('span', { class: 'dl-impact-meta', title: LADDER_SOURCES[l.source]?.text ?? '' }, `${fmtNum(l.sourceRp)} yr · source`);
+              rp = h('span', { class: 'dl-impact-meta', title: LADDER_SOURCES[l.source]?.text ?? '' }, `${formatReturnPeriod(l.sourceRp)} yr · source`);
             } else {
               const inp = h('input', { type: 'number', class: 'dl-num-input dl-site-rp', min: 1, max: 100000, step: 1, placeholder: 'yr?', value: l.userRp ?? '', 'aria-label': `Return period of ${l.label}, years (your input)` });
               inp.addEventListener('change', () => {
@@ -753,7 +919,7 @@ export function createSiteSection(ctx: UIContext): SiteSection {
               'tr',
               { class: l.outOfRange ? 'dl-site-off' : '' },
               h('td', null, box),
-              h('td', null, h('span', { class: 'dl-impact-name' }, l.label), h('span', { class: 'dl-impact-meta' }, `${Number.isFinite(l.ft) ? `${fmtNum(l.ft, 2)} ft` : `× ${l.scale}`}${l.note ? ` · ${l.note}` : ''}${l.outOfRange ? ' · beyond this scenario’s stage range' : ''}`)),
+              h('td', null, h('span', { class: 'dl-impact-name' }, l.label), h('span', { class: 'dl-impact-meta' }, `${Number.isFinite(l.ft) ? `${fmtNum(l.ft, 2)} ft` : Number.isFinite(l.mmPerHour) ? `${fmtNum(l.mmPerHour)} mm/h` : `× ${l.scale}`}${l.note ? ` · ${l.note}` : ''}${l.outOfRange ? ' · beyond this scenario’s stage range' : ''}`)),
               h('td', null, rp),
             );
           }),
@@ -778,6 +944,9 @@ export function createSiteSection(ctx: UIContext): SiteSection {
     const parts: Array<HTMLElement | null> = [];
     if (stale) parts.push(h('p', { class: 'dl-impact-fine dl-warn' }, 'The site was edited after the sweep: these numbers are for the building as it was then. Run the sweep again.'));
     parts.push(h('div', { class: 'dl-site-verdict', 'data-site': 'verdict' }, ...d.verdict.map((v) => h('p', null, v))));
+    if (sweep.ladder === 'rain') {
+      parts.push(h('details', { class: 'dl-impact-methods', 'data-site': 'rain-caveats' }, h('summary', null, 'What the rain ladder leaves out'), h('ul', { class: 'dl-impact-issues' }, ...RAIN_LADDER_CAVEATS.map((c) => h('li', null, c)))));
+    }
     const cc = climatePair ? compareClimate(climatePair, s.id, rpOf) : null;
     if (cc) parts.push(climateCompareBlock(cc, money));
     parts.push(h('div', { class: 'dl-impact-table dl-site-table' }, simpleTable(SWEEP_HEAD_COMPACT, sweepRowsCompact(d.sum, money), '')));
@@ -911,7 +1080,21 @@ export function createSiteSection(ctx: UIContext): SiteSection {
     activate() {
       active = true;
       ensureScene(getTerrain());
+      ensureRain();
+      render();
       startTracking();
     },
+    async useRainLadder() {
+      ensureScene(getTerrain());
+      ensureRain();
+      const ok = await rain.ready;
+      if (!ok || sweeping) return false;
+      ladderChoice = 'rain';
+      for (const l of levels) l.on = true;
+      buildLadder();
+      render();
+      return ladderKind === 'rain';
+    },
+    runSweep: () => runSweep(),
   };
 }

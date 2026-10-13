@@ -6,7 +6,7 @@
  * under it) has changed this much", which is the forcing-scaled answer, not a re-fitted frequency curve. Said so on
  * screen and in the report.
  */
-import { summarizeSweep, type SweepRow } from '../loss';
+import { formatReturnPeriod, summarizeSweep, type SweepRow } from '../loss';
 import { h } from './dom';
 
 /** A plain table (siteReport.ts has the same helper; not imported, because siteReport imports this file). */
@@ -96,7 +96,7 @@ export function climateCompareBlock(c: ClimateComparison, money: (v: number) => 
       { class: 'dl-impact-table' },
       table(
         ['Level', 'Loss today', `Loss ${c.label}`],
-        c.rows.map((r) => [r.label + (r.returnPeriod ? ` · ${r.returnPeriod} yr` : ''), fmt(r.today), fmt(r.future)]),
+        c.rows.map((r) => [r.label + (r.returnPeriod ? ` · ${formatReturnPeriod(r.returnPeriod)} yr` : ''), fmt(r.today), fmt(r.future)]),
         c.rows.map((r) => `${Math.round(r.todayS)}|${Math.round(r.futureS)}`),
       ),
     ),

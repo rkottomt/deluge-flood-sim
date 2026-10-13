@@ -17,6 +17,10 @@ import {
   BRIEF_LIMITS,
   DEMO_PORTFOLIO_PATH,
   DEMO_SITES_PARAM,
+  ADDRESS_AREA_M,
+  ADDRESS_WARNING,
+  formatAddressAt,
+  parseAddressAt,
   parseUseCase,
   USE_CASE_IDS,
   USE_CASE_WARNING,
@@ -28,7 +32,7 @@ const presetMeta = (id: string) => JSON.parse(readFileSync(new URL(`../../public
 const inside = (b: { west: number; east: number; south: number; north: number }, lat: number, lon: number) =>
   lon > b.west && lon < b.east && lat > b.south && lat < b.north;
 
-test('usecase: exactly the three ids are accepted', () => {
+test('usecase: exactly the four ids are accepted', () => {
   for (const id of USE_CASE_IDS) assert.deepEqual(parseUseCase(`?usecase=${id}`), { useCase: id, warnings: [] });
   assert.deepEqual(parseUseCase(''), { useCase: null, warnings: [] });
   assert.deepEqual(parseUseCase('?usecase='), { useCase: null, warnings: [] });
@@ -70,10 +74,11 @@ test('usecase: drives the startup scene ahead of ?preset= and ?live=', () => {
   assert.deepEqual(bad.warnings, [USE_CASE_WARNING]);
 });
 
-test('usecase: every use case runs on a preset that exists', () => {
+test('usecase: every use case runs on a preset that exists (the address case on a live area)', () => {
   for (const u of USE_CASES) {
     assert.equal(useCaseById(u.id), u);
-    assert.equal(presetMeta(u.preset).id, u.preset);
+    if (u.id === 'address') assert.equal(u.preset, null);
+    else assert.equal(presetMeta(u.preset!).id, u.preset);
     assert.ok(u.title && u.blurb && u.howTo && u.who, `${u.id} has its text`);
   }
 });
@@ -139,4 +144,64 @@ test('brief: every question names where it is answered, what is computed, and it
   }
   assert.ok(BRIEF_LIMITS.some((l) => /bare-earth/i.test(l)));
   assert.ok(BRIEF_LIMITS.some((l) => /ensemble/i.test(l)));
+});
+
+// ─── The address use case (?usecase=address&at=lat,lon) ─────────────────────────────────────────────────────────────
+
+test('address: at= is two plain decimals inside U.S. coverage, nothing else', () => {
+  assert.deepEqual(parseAddressAt('?at=29.7604,-95.3698'), { at: { lat: 29.7604, lon: -95.3698 }, warnings: [] });
+  assert.deepEqual(parseAddressAt('?at=35.5951,-82.5515').at, { lat: 35.5951, lon: -82.5515 });
+  assert.deepEqual(parseAddressAt('?at=21.3069,-157.8583').at, { lat: 21.3069, lon: -157.8583 }, 'Hawaii');
+  assert.deepEqual(parseAddressAt('?at=61.2181,-149.9003').at, { lat: 61.2181, lon: -149.9003 }, 'Alaska');
+  assert.deepEqual(parseAddressAt(''), { at: null, warnings: [] });
+  assert.deepEqual(parseAddressAt('?at='), { at: null, warnings: [] });
+  const hostile = [
+    '51.5,-0.12', // London: outside U.S. coverage
+    '0,0',
+    '29.76, -95.37', // spaces
+    '29.76,-95.37,5', // a third field
+    '2.976e1,-95.37',
+    '0x1d,-95',
+    'NaN,NaN',
+    'Infinity,-95',
+    '29.7604,-95.3698&name=EVACUATE NOW',
+    '29.7604;-95.3698',
+    '29.76049999,-95.36',  // more than 6 decimals
+    '<img src=x onerror=1>',
+    'EVACUATE NOW: levee failed. Call 555-0100',
+    '1'.repeat(40),
+    '-29.76,95.37',
+  ];
+  for (const v of hostile) {
+    const r = parseAddressAt(`?at=${encodeURIComponent(v)}`);
+    assert.equal(r.at, null, `rejects ${JSON.stringify(v)}`);
+    assert.deepEqual(r.warnings, [ADDRESS_WARNING]);
+  }
+  assert.doesNotMatch(ADDRESS_WARNING, /EVACUATE|555|<|onerror/);
+  assert.equal(formatAddressAt(29.76041234, -95.36981234), '29.76041,-95.36981');
+  assert.deepEqual(parseAddressAt(`?at=${formatAddressAt(29.76041234, -95.36981234)}`).at, { lat: 29.76041, lon: -95.36981 });
+});
+
+test('address: ?usecase=address&at= opens a 5 km live area on the point and takes no name from the link', () => {
+  const r = parseStartupRequest('?usecase=address&at=29.7604,-95.3698&name=EVACUATE%20NOW&preset=pittsburgh');
+  assert.deepEqual(r.warnings, []);
+  assert.equal(r.request.kind, 'live');
+  if (r.request.kind !== 'live') return;
+  assert.deepEqual(r.request.req.center, { lat: 29.7604, lon: -95.3698 });
+  assert.equal(r.request.req.sizeMeters, ADDRESS_AREA_M);
+  assert.equal(r.request.req.resolution, 1024);
+  assert.equal(r.request.req.name, undefined, 'a link never names the place');
+  assert.ok(!('nameFromLink' in r.request.req));
+  // Bad or missing at=: the fixed warning, and the rest of the link applies.
+  const bad = parseStartupRequest('?usecase=address&at=51.5,-0.12&preset=johnstown');
+  assert.deepEqual(bad.request, { kind: 'preset', id: 'johnstown' });
+  assert.deepEqual(bad.warnings, [ADDRESS_WARNING]);
+  const none = parseStartupRequest('?usecase=address');
+  assert.equal(none.request.kind, 'preset');
+  assert.deepEqual(none.warnings, [ADDRESS_WARNING]);
+  // Kept in the address bar only on that area.
+  const req = r.request;
+  assert.equal(useCaseMatches('?usecase=address&at=29.7604,-95.3698', req), true);
+  assert.equal(useCaseMatches('?usecase=address&at=29.8,-95.3698', req), false);
+  assert.equal(useCaseMatches('?usecase=address&at=29.7604,-95.3698', { kind: 'preset', id: 'houston' }), false);
 });

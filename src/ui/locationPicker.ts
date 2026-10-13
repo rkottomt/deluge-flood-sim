@@ -17,8 +17,8 @@ import { createModal, type Modal } from './modal';
 import { squareDomain, isLikelyUS } from '../data/geo';
 import { ESRI_LABELS_TILE_TEMPLATE, ESRI_TILE_TEMPLATE } from '../data/imagery';
 import { fetchJSON, MB } from '../data/net';
-import { cleanPlaceLabel, NOMINATIM_REVERSE, NOMINATIM_SEARCH, placeNameFromNominatim } from '../data/placeName';
-import { geoChoices, isLatLon, MAX_GEO_RESULTS } from './geoResults';
+import { cleanPlaceLabel, NOMINATIM_REVERSE, placeNameFromNominatim } from '../data/placeName';
+import { isLatLon, searchUSPlaces, type GeoChoice } from './geoResults';
 import { formatLatLon, fmtNum } from './format';
 import { looksLikeNetworkError, probeConnectivity } from './connectivity';
 import { postNotice } from './bridge';
@@ -76,24 +76,17 @@ export function createLocationPicker(ctx: UIContext): Modal {
   const searchForm = h('form', { class: 'dl-search', role: 'search' }, h('span', { class: 'dl-search-icon' }, icon('search', 16)), searchInput, searchBtn, results);
 
   let searchAbort: AbortController | null = null;
-  let lastSearchAt = 0;
   searchForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     const q = searchInput.value.trim();
     if (!q) return;
-    // Nominatim usage policy: ≤ 1 request/second.
-    const wait = Math.max(0, 1000 - (performance.now() - lastSearchAt));
-    if (wait) await new Promise((r) => setTimeout(r, wait));
-    lastSearchAt = performance.now();
     searchAbort?.abort();
     searchAbort = new AbortController();
     results.hidden = false;
     results.replaceChildren(h('div', { class: 'dl-search-status' }, h('span', { class: 'dl-spinner dl-spin-on' }), 'Searching…'));
     try {
-      const url = `${NOMINATIM_SEARCH}?q=${encodeURIComponent(q)}&format=json&limit=${MAX_GEO_RESULTS}&countrycodes=us&addressdetails=0`;
-      // Through net.ts rather than raw fetch: one capped, timed-out attempt (a geocoder answer is kilobytes).
-      const list = await fetchJSON<unknown>(url, { signal: searchAbort.signal, retries: 0, timeoutMs: 10000, maxBytes: MB });
-      showResults(list);
+      // Rate-limited (Nominatim: ≤ 1 request/second), capped and validated in geoResults.ts.
+      showResults(await searchUSPlaces(q, searchAbort.signal));
     } catch (err) {
       if ((err as Error).name === 'AbortError') return;
       results.replaceChildren(h('div', { class: 'dl-search-status dl-search-error' }, icon('warning', 14), 'Search is unavailable right now — click the map instead.'));
@@ -127,11 +120,10 @@ export function createLocationPicker(ctx: UIContext): Modal {
   });
 
   /**
-   * Render geocoder results. `list` is whatever the service answered: geoChoices() validates, cleans and caps it
+   * Render geocoder results, already validated, cleaned and capped by geoChoices() inside searchUSPlaces
    * (FINDINGS SEC-09/SEC-01), so nothing unusable ever becomes a clickable button.
    */
-  function showResults(list: unknown) {
-    const choices = geoChoices(list);
+  function showResults(choices: GeoChoice[]) {
     if (!choices.length) {
       results.replaceChildren(h('div', { class: 'dl-search-status' }, 'No US places found. Try a city and state, e.g. “Nashville, TN”.'));
       return;
