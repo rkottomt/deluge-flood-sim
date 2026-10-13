@@ -1,5 +1,5 @@
 /**
- * The CLI's commands — `presets`, `run`, `portfolio`, `site` — written against a small environment (CliEnv) so tests
+ * The CLI's commands — `presets`, `run`, `portfolio`, `site`, `dam` — written against a small environment (CliEnv) so tests
  * can drive them with a stand-in scene (tests/cli/parity.test.ts) and the real binary drives the GPU (main.ts).
  */
 import type { AppState, HazardFields, SimSnapshot, TerrainData, WaterSource } from '../contracts';
@@ -48,6 +48,8 @@ import { geotiffBytes, hazardLayers } from './rasters';
 import { buildLadder, feetOf, parseClimate, rainForcing, resolveForcing, scaledForcing, UsageError, type Ladder, type LadderKind, type LadderRung, type ResolvedForcing } from './scenario';
 import { SURGE_LADDER_CAVEATS, SURGE_SWEEP_MINUTES } from '../surge/stations';
 import { formatMoney } from '../ui/format';
+import type { NidIndex } from '../dams/nidIndex';
+import { damCommand } from './dam';
 
 const FT = 0.3048;
 
@@ -80,6 +82,8 @@ export interface CliEnv {
   loadTerrain(id: string, onProgress?: (message: string, fraction: number) => void): Promise<TerrainData>;
   /** The baked NOAA Atlas 14 grid (public/atlas14/pf60m-pds.bin, the app's file, decoded by the app's decoder). */
   loadAtlas14(): Promise<Atlas14Grid>;
+  /** The baked NID index (public/dams/nid-index.bin, the app's file, decoded by the app's decoder). */
+  loadNidIndex(): Promise<NidIndex>;
   openScene(terrain: TerrainData, presetId: string, opts: { climate: ClimateSelection; appCadence: boolean }): Promise<SceneLike>;
   /** Adapter description, for the reports. */
   gpuName(): Promise<string>;
@@ -793,4 +797,5 @@ export const HANDLERS: Record<keyof typeof COMMANDS, (env: CliEnv, o: ParsedOpti
   run: runCommand,
   portfolio: portfolioCommand,
   site: siteCommand,
+  dam: damCommand,
 };

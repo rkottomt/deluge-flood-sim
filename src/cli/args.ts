@@ -123,6 +123,30 @@ export const COMMANDS: Record<string, CommandSpec> = {
       'deluge site --preset houston --at 29.7725,-95.3837 --scenario a14-100',
     ],
   },
+  dam: {
+    name: 'dam',
+    summary: 'Dam-breach outflow for a dam in the National Inventory of Dams (or one you describe): the peak from eight published breach relations as a low / central / high band, the hydrograph the app sends to the map, and the assumptions (offline, no GPU). With --history, how each relation did on 21 documented failures.',
+    usage: 'deluge dam (--nid <id> | --volume-m3 <m3> --head-m <m> [--height-m <m>]) [--breach sunny|flood] [--method central|low|high|parametric] [--json] [--out <hydrograph.csv>]',
+    options: [
+      { name: 'nid', kind: 'string', arg: '<id>', help: 'NID id of the dam (e.g. MI00549, Edenville Dam), from the index the app ships.' },
+      { name: 'breach', kind: 'string', arg: '<sunny|flood>', help: 'Sunny-day (piping at normal pool; default) or flood-induced (overtopping at maximum pool, the NID spillway discharge under it).' },
+      { name: 'method', kind: 'string', arg: '<case>', help: 'Hydrograph: central (default; the relation that scores best on past failures), low, high, or parametric (Froehlich 2008 breach routed through the reservoir).' },
+      { name: 'volume-m3', kind: 'number', arg: '<m3>', help: 'Instead of --nid: the volume released, m³.' },
+      { name: 'head-m', kind: 'number', arg: '<m>', help: 'With --volume-m3: the depth of water above the breach bottom at failure, m.' },
+      { name: 'height-m', kind: 'number', arg: '<m>', help: 'With --volume-m3: the breach (dam) height, m (default the head).' },
+      { name: 'overtopping', kind: 'boolean', help: 'With --volume-m3: an overtopping failure (default piping).' },
+      { name: 'history', kind: 'boolean', help: 'Print how each relation scores on 21 documented failures (Wahl 1998) and exit.' },
+      { name: 'json', kind: 'boolean', help: 'Machine-readable result on stdout (with the hydrograph).' },
+      { name: 'out', kind: 'string', arg: '<file>', help: 'Write the hydrograph sent to the map as CSV (t_s,q_m3s).' },
+      { name: 'quiet', kind: 'boolean', help: 'No notes on stderr.' },
+      { name: 'help', kind: 'boolean', help: 'This help.' },
+    ],
+    examples: ['deluge dam --nid MI00549 --breach flood', 'deluge dam --nid CA00035 --method high --out oroville-high.csv', 'deluge dam --volume-m3 3.1e8 --head-m 77.4 --height-m 86.9', 'deluge dam --history'],
+    notes: [
+      'Screening for planning, not an Emergency Action Plan inundation study.',
+      'The relations were fitted mostly to earth and rockfill dams; for concrete and masonry dams they are indicative only.',
+    ],
+  },
 };
 
 /** Parse `argv` (after the command) against a command's options. */

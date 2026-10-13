@@ -7,6 +7,7 @@
  *   deluge run --preset …                  one scenario → GeoTIFF rasters + summary.json
  *   deluge portfolio --preset … --csv …    per-asset metrics, optional ensemble p10/p50/p90
  *   deluge site --preset … --at …          Site check (with --sweep: ladder, EAL, FFE, mitigation, verdict)
+ *   deluge dam --nid …                     a dam breach's peak band and hydrograph (no GPU)
  *
  * Exit codes: 0 ok · 1 simulation or output failed · 2 bad arguments or input file · 3 no WebGPU adapter.
  */
@@ -18,7 +19,7 @@ import { HANDLERS, type CliEnv } from './commands';
 import { finishGpu, getGpu, gpuErrors, NoGpuError } from './gpu';
 import { HeadlessScene } from './headless';
 import { createLog, writeOutput } from './io';
-import { availablePresetIds, loadAtlas14FromDisk, loadPresetFromDisk, readPresetJson, readPresetMeta } from './presetFiles';
+import { availablePresetIds, loadAtlas14FromDisk, loadNidIndexFromDisk, loadPresetFromDisk, readPresetJson, readPresetMeta } from './presetFiles';
 import { UsageError } from './scenario';
 
 function version(): string {
@@ -75,6 +76,7 @@ export async function main(argv: readonly string[]): Promise<number> {
     presetMeta: readPresetMeta,
     loadTerrain: loadPresetFromDisk,
     loadAtlas14: loadAtlas14FromDisk,
+    loadNidIndex: loadNidIndexFromDisk,
     async openScene(terrain, presetId, o) {
       const gpu = await getGpu();
       return HeadlessScene.create(gpu.device, terrain, { presetId, climate: o.climate, appCadence: o.appCadence, readPresetJson: (file) => readPresetJson(presetId, file) });
