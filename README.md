@@ -230,6 +230,67 @@ report (return periods stay today's). Both runs of a level are exactly as long a
 climate, not run length. Forcing-scaled, not downscaled projections; method, sources and gaps in
 [docs/research/climate-scenarios.md](docs/research/climate-scenarios.md), code in [`src/climate`](src/climate).
 
+## Batch / API
+
+The same simulator without the browser, for portfolios, sweeps and scheduled jobs: `deluge` is a Node CLI
+([`src/cli`](src/cli), launched by [`bin/deluge.mjs`](bin/deluge.mjs)) that runs the app's own TypeScript — solver,
+scenario wiring, loss model — on the machine's GPU through Dawn (the `webgpu` package the GPU tests use: D3D12 on
+Windows, Metal on macOS, Vulkan on Linux). Offline, nothing uploaded. After `npm ci`:
+
+```bash
+npx deluge presets --levels                       # the ten scenarios and their Site check levels (no GPU)
+npx deluge run --preset houston --minutes 60 --rain 173 --out results/harvey
+npx deluge run --preset pittsburgh --stage-ft 46 --out results/1936
+npx deluge run --preset houston --climate 2050:ssp585 --out results/houston-2050
+npx deluge portfolio --preset houston --csv public/demo/houston-portfolio.csv --minutes 60 --out results.csv
+npx deluge portfolio --preset houston --csv assets.csv --members 12 --seed 7 --out results.csv --summary summary.json
+npx deluge site --preset pittsburgh --at 40.4425,-80.0085 --use office --floors 3 --sweep --out report.json
+npx deluge <command> --help                       # every option
+```
+
+(`npm run deluge -- …` works too.) Scenario options are shared: `--minutes` (default 30, as in the app), `--stage-ft`
+(a gauge reading, as on the slider), `--rain` (mm/hr), `--scale k` (rain, storm cells and inflows × k), `--manning`,
+`--climate 2050|2080|2100:ssp245|ssp585[:cc|super10|super14]`, and `--scenario <level>` for a rung of the preset's Site
+check ladder (`rp100`, `record1936`, `x0.5` …).
+
+* **`run`** writes four GeoTIFFs and `summary.json`. The rasters are the solver's hazard fields
+  (`FloodSolver.readHazardFields`), single band, in **EPSG:3857** with the tie point on the grid's outer north-west
+  corner — the grid is linear in Web Mercator ([src/contracts.ts](src/contracts.ts) `GeoBounds`), so QGIS / GDAL place
+  them exactly: `max_depth_m.tif` and `max_speed_ms.tif` (Float32), `arrival_min.tif` (minutes until water first stood
+  > 0.15 m on land dry at the start; nodata −9999), `hazard_aidr.tif` (AIDR H1–H6 on flooded land, UInt8, 0 = none).
+  The summary has the scenario as run (stage levels, rain, climate multipliers, the hazard chain's routed peak),
+  flooded area, area per hazard class, the mass ledger, buildings reached / damaged / destroyed and the dollar loss.
+* **`portfolio`** reads the in-app portfolio CSV (`asset_id`, `lat`/`lon` or `wkt`, values, floors, revenue, policy
+  terms …) and writes the **in-app export's columns** cell for cell — depth, speed, AIDR and FD2321 class, arrival,
+  damage, loss with its ±1σ range, downtime, BI, insured loss, access road — plus an `outside` row for any asset off
+  the map. `--members N` adds the Uncertainty panel's ensemble (Latin hypercube from `--seed`, the same bands, the
+  terrain-error field): `ens_reached_members` ("floods in k of N"), depth and loss p10 / p50 / p90.
+* **`site`** is the Site check card: for the scenario, or with `--sweep` across the ladder the app ticks by default
+  (`--levels` to choose, `--rp x0.5=10,x1=100` for return periods the ladder lacks), with egress, EAL, the
+  loss-exceedance points, the indicative finished-floor elevation, mitigation options with BCR and the verdict
+  sentences.
+
+**Same numbers as the browser.** A run is the app's headless run: the store, `SimSync`, the stage ramp, the crest fill
+and the climate layer are the app's own classes; frames advance 1/60 s at 3600× and stop exactly on the target,
+hazard maxima are sampled every 5 simulated seconds; the loss calls are the panels' calls. The one deliberate
+difference is when the GPU is read back — every 60 *simulated* seconds instead of every 300 ms of wall clock — which
+makes a CLI run **bit-identical when repeated** on the same machine, where two browser runs agree to millimetres
+([§ Impact & loss](#impact--loss)); `--app-cadence` restores the browser's cadence. Checked two ways:
+`tests/cli/parity.test.ts` feeds the commands and the loss module the same fields and compares the CSV and the report
+cell for cell, and `tests/cli/smoke.test.ts` (GPU) reproduces the binary's portfolio CSV from an in-process run and
+runs a sweep twice. Against the app's own published numbers: the 60-minute Harvey portfolio gives 14 of 19 assets
+reached, **$17.1 M** (±1σ $8.8–25.9 M), insured $23.5 M (BUSINESS.md §4.2 has 14–15, $17.2–17.3 M, $23.6 M); the
+Point office sweep gives 1.03 m at the FEMA 1 % level and 4.50 m at the 1936 crest, an indicative floor 1.33 m above
+grade (the panel: 0.98 m, 4.5 m, 1.28 m).
+
+**Speed on the GTX 1660 Ti here** (1024² grids, 2–6 s of the total is loading the preset): Pittsburgh at the 1936
+crest, 30 simulated minutes in 4.5 s; Houston under Harvey's rain, 60 minutes in 13 s; the seven-level Point sweep in
+48 s. Those are with the GPU to itself; with other GPU jobs on the machine the same runs took 2–4× longer.
+
+Progress and notes go to stderr, results to files or stdout (`--out -`). Exit codes: 0 done, 1 the simulation or an
+output failed, 2 bad arguments or input file (checked before the GPU starts), 3 no WebGPU adapter. Turning this into
+an HTTP service is the next step; the OpenAPI shape is sketched in [docs/api.md](docs/api.md).
+
 ## Ten scenarios, offline
 
 Every scene is baked into the repo and needs no network. The seven US cities in the table below have real USGS
@@ -357,7 +418,8 @@ every ~300 ms, never blocking: stats reduction pass ─▶ mapAsync ─▶ HUD +
 ## Repo tour
 
 * `src/<module>/` — the app, one folder per module, integrated through [`src/contracts.ts`](src/contracts.ts).
-* `tests/<module>/` — `node:test` suites (sim and render on a real GPU through Dawn).
+* `tests/<module>/` — `node:test` suites (sim, render and the CLI smoke test on a real GPU through Dawn).
+* `src/cli/`, `bin/deluge.mjs` — the headless batch CLI ([Batch / API](#batch--api)).
 * `scripts/bake-presets.ts` — bakes `public/presets/*` (raw downloads cached in `artifacts/bake-cache`);
   `scripts/e2e.mjs` — end-to-end demo flows in headless Chromium on the real GPU; `scripts/bench.mjs` — the
   performance benchmark (`npm run demo`, then `npm run bench -- --scenario=pgh`); `scripts/shot.mjs` — screenshots.
