@@ -24,6 +24,7 @@
 
 import type { HazardChainSpec, Rheology } from './hazard/types';
 import type { ClimateSelection } from './climate/scenarios';
+import type { LandCover } from './data/landcover';
 
 // ────────────────────────────────────────────────────────────────────────────────────────────
 // Geography / terrain data
@@ -145,6 +146,12 @@ export interface TerrainData {
    * any preset baked before buildings existed). Renderers must feature-detect: `terrain.buildings ?? null`.
    */
   buildings?: BuildingSet | null;
+  /**
+   * EXTENSION: land-cover classes over the domain (NLCD 2021 in the US, ESA WorldCover 2021 elsewhere; src/data/landcover.ts),
+   * or null (live areas, the sandbox, presets baked before land cover existed). Feeds the solver's roughness map and
+   * storm drains (FloodSolver.setLandSurface).
+   */
+  landCover?: LandCover | null;
   /** Attribution line(s) for the data shown on screen. */
   attribution: string;
   /** Optional scenario that comes with a preset. */

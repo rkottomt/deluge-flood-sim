@@ -12,7 +12,7 @@
   "east": -78.87375663713932,
   "north": 40.361433710823334
  },
- "attribution": "Elevation: USGS 3DEP · Imagery: USDA NAIP via USGS The National Map · Roads: U.S. Census Bureau TIGER/Line · Buildings © OpenStreetMap contributors & Microsoft ML Building Footprints (ODbL)",
+ "attribution": "Elevation: USGS 3DEP · Imagery: USDA NAIP via USGS The National Map · Roads: U.S. Census Bureau TIGER/Line · Buildings © OpenStreetMap contributors & Microsoft ML Building Footprints (ODbL) · Land cover: NLCD 2021 (USGS / MRLC)",
  "scenario": {
   "description": "Johnstown fills a narrow valley where the Little Conemaugh and Stonycreek rivers join to form the Conemaugh. On May 31, 1889, after a night of heavy rain, the South Fork Dam on a branch of the Little Conemaugh 14 miles upstream gave way, and 57 minutes later its lake struck the city as a wall of water and debris that killed 2,209 people. Here that flood comes down the valley into today's city: about 3,730 m³/s (132,000 ft³/s), Lake Conemaugh's 14.5 million m³ spread over the roughly 65 minutes it took to drain (the breach itself peaked at 7,200–9,000 m³/s), while the Stonycreek runs at a typical yearly flood peak. The inflow never stops: remove it after an hour of simulated time to let the valley drain. After the 1936 flood (25 deaths) the Army Corps of Engineers built the concrete channels you see here to carry that flood; in July 1977 up to 12 inches of rain in eight hours and seven failed dams still killed at least 78 people.",
   "sources": [
@@ -1383,7 +1383,8 @@
   "imagery": "imagery.jpg",
   "roads": "roads.json",
   "buildings": "buildings.json",
-  "imageryDetail": "imagery-detail.jpg"
+  "imageryDetail": "imagery-detail.jpg",
+  "landcover": "landcover.u8"
  },
  "bake": {
   "bakedAt": "2026-09-17T10:12:57.637Z",
@@ -1532,6 +1533,10 @@
    "sizeMeters": 2502,
    "texels": 4096,
    "metersPerTexel": 0.611
+  },
+  "landcover": {
+   "bakedAt": "2026-10-13T03:07:27.010Z",
+   "waterShare": 0.167
   }
  },
  "imageryDetail": {
@@ -1539,5 +1544,29 @@
   "y0": 322,
   "x1": 753,
   "y1": 688
+ },
+ "landcover": {
+  "scheme": "nlcd",
+  "year": 2021,
+  "width": 256,
+  "height": 256,
+  "designRainMmHr": 31,
+  "designRainSource": "NOAA Atlas 14 Volume 2 Version 3, 2-year 60-minute intensity (partial-duration series) at 40.330, -78.915",
+  "classCounts": {
+   "11": 299,
+   "21": 14032,
+   "22": 11424,
+   "23": 7361,
+   "24": 3911,
+   "31": 270,
+   "41": 22692,
+   "42": 19,
+   "43": 3434,
+   "52": 113,
+   "71": 249,
+   "81": 1618,
+   "82": 92,
+   "95": 22
+  }
  }
 }
