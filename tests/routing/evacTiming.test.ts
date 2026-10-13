@@ -28,7 +28,16 @@ import {
   twscCapacity,
   vehiclesFor,
 } from '../../src/routing/bottleneck';
+import { formatTPlus } from '../../src/routing/pedestrianEvac';
 import { CELL_SIZE, makeCity, shelterAt } from './city';
+
+test('alert times before the run starts read T−', () => {
+  assert.equal(formatTPlus(-600), 'T−10 min');
+  assert.equal(formatTPlus(-7200), 'T−2 h 00 min');
+  assert.equal(formatTPlus(0), 'T+0 min');
+  assert.equal(formatTPlus(-10), 'T+0 min');
+  assert.equal(formatTPlus(5400), 'T+1 h 30 min');
+});
 
 const close = (a: number, b: number, tol: number, msg = '') => assert.ok(Math.abs(a - b) <= tol, `${msg} ${a} vs ${b} (±${tol})`);
 

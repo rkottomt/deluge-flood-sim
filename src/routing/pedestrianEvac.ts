@@ -345,8 +345,9 @@ function normalise(mix: readonly GroupShare[]): GroupShare[] {
 
 const tPlus = (s: number) => {
   if (!Number.isFinite(s)) return '—';
-  const m = Math.round(s / 60);
-  return m < 90 ? `T+${m} min` : `T+${Math.floor(m / 60)} h ${String(m % 60).padStart(2, '0')} min`;
+  const sign = s < -30 ? 'T−' : 'T+';
+  const m = Math.abs(Math.round(s / 60));
+  return m < 90 ? `${sign}${m} min` : `${sign}${Math.floor(m / 60)} h ${String(m % 60).padStart(2, '0')} min`;
 };
 
 /** The three headline sentences: everyone out, X of N, vertical evacuation. */

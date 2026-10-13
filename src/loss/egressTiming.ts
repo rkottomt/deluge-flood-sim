@@ -21,8 +21,9 @@
  */
 import type { Occupancy } from './value';
 import type { EgressResult } from './egress';
-import { departureBand, type DepartureCurve } from '../routing/departure';
-import { bottleneckQueue, defaultPersonsPerVehicle, departedBy, routeBottleneck, throughBy, vehiclesFor, type Bottleneck } from '../routing/bottleneck';
+import { DEFAULT_DEPARTURE_CURVE, departureBand, departureCurve, type DepartureCurve, type DepartureCurveId } from '../routing/departure';
+import { bottleneckQueue, DEFAULT_EXIT_LANES, defaultPersonsPerVehicle, departedBy, routeBottleneck, throughBy, vehiclesFor, type Bottleneck } from '../routing/bottleneck';
+import { defaultOccupants } from '../routing/pedestrianEvac';
 
 export interface EgressTimingInput {
   occupants: number;
@@ -72,6 +73,40 @@ export interface EgressTiming {
 export function timingDefaults(occ: Occupancy): { personsPerVehicle: number; basis: string } {
   const d = defaultPersonsPerVehicle(occ);
   return { personsPerVehicle: d.value, basis: d.basis };
+}
+
+/** A site's inputs as the user typed them (null / absent = the default). Shared by Site check and the CLI. */
+export interface TimingOverrides {
+  occupants?: number | null;
+  /** When the warning reaches the occupants, min since the run started (negative: before it). */
+  alertMin?: number | null;
+  departure?: DepartureCurveId;
+  departBMin?: number | null;
+  departMaxPct?: number | null;
+  personsPerCar?: number | null;
+  exitLanes?: number | null;
+}
+
+/**
+ * Leaving by road for one run of a planned building: occupants default to the IBC design load for its use and floor
+ * area (pedestrianEvac.defaultOccupants — an upper bound), cars to the use's persons per car, the curve to
+ * DEFAULT_DEPARTURE_CURVE, one exit lane, the alert to `alertTime` (s since reset). Null for a site outside the map.
+ */
+export function timingForRun(run: { result: { occ: Occupancy; gfaM2: number } | null; egress: EgressResult | null }, alertTime: number, o: TimingOverrides = {}): EgressTiming | null {
+  const r = run.result;
+  if (!r) return null;
+  const occ = defaultOccupants(r.occ, r.gfaM2);
+  const d = timingDefaults(r.occ);
+  const curve = departureCurve(o.departure ?? DEFAULT_DEPARTURE_CURVE, { bMin: o.departBMin ?? null, maxShare: o.departMaxPct == null ? null : o.departMaxPct / 100 });
+  return egressTiming(run.egress, {
+    occupants: o.occupants ?? occ.n,
+    occupantsBasis: o.occupants != null ? 'your input' : `${occ.basis} — a design maximum`,
+    personsPerVehicle: o.personsPerCar ?? d.personsPerVehicle,
+    personsPerVehicleBasis: o.personsPerCar != null ? 'your input' : d.basis,
+    exitLanes: o.exitLanes ?? DEFAULT_EXIT_LANES,
+    curve,
+    alertTime: o.alertMin != null ? o.alertMin * 60 : alertTime,
+  });
 }
 
 export function egressTiming(e: EgressResult | null, input: EgressTimingInput): EgressTiming {

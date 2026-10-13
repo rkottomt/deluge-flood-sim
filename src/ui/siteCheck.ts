@@ -321,7 +321,10 @@ export function createSiteSection(ctx: UIContext): SiteSection {
     getGround: () => getSolver()?.getGroundCPU() ?? getTerrain()?.elevation ?? null,
     getRouter: () => router,
     setWalkRoute: (r, cut) => overlay.setWalkRoute(r, cut),
-    rerender: () => renderCard(),
+    rerender: () => {
+      renderCard();
+      renderSweep();
+    },
   });
 
   // ─── Scene ──────────────────────────────────────────────────────────────────────────────────────────────────
@@ -744,7 +747,7 @@ export function createSiteSection(ctx: UIContext): SiteSection {
     const country = t ? regionForBounds(t.bounds).costCountry : null;
     const run0 = sum.rows[0]?.run;
     const options = rec && run0 ? mitigationOptions(sum, { occ: spec.occupancy, rec, country, perimeterM: run0.geometry.perimeterM }) : [];
-    return { sum, rec, options, verdict: siteVerdict(spec.name || 'The site', sum, money) };
+    return { sum, rec, options, verdict: siteVerdict(spec.name || 'The site', sum, money, (run) => extras.timing(spec, run, current?.alertTime ?? 0)) };
   }
 
   // ─── Rendering ──────────────────────────────────────────────────────────────────────────────────────────────
@@ -1061,7 +1064,7 @@ export function createSiteSection(ctx: UIContext): SiteSection {
       sites: registry.sites.map((spec) => {
         const d = derived(spec);
         const run = current?.runs.get(spec.id) ?? null;
-        return { spec, current: run, extra: extras.report(spec, run, current?.fields ?? null, current?.alertTime ?? 0), sweep: d.sum, rec: d.rec, options: d.options, verdict: d.verdict, climate: climatePair ? compareClimate(climatePair, spec.id, rpOf) : null };
+        return { spec, current: run, extra: extras.report(spec, run, current?.fields ?? null, current?.alertTime ?? 0), timing: (r: SiteRun) => extras.timing(spec, r, current?.alertTime ?? 0), sweep: d.sum, rec: d.rec, options: d.options, verdict: d.verdict, climate: climatePair ? compareClimate(climatePair, spec.id, rpOf) : null };
       }),
     };
   }

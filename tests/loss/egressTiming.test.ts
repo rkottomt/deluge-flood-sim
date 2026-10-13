@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { HazardFields, Shelter } from '../../src/contracts';
 import { analyzeEgress, type EgressResult, type EgressRouter } from '../../src/loss/egress';
-import { clearanceSentence, egressTiming, shareOutSentence, timingCaveats, timingDefaults, type EgressTimingInput } from '../../src/loss/egressTiming';
+import { clearanceSentence, egressTiming, shareOutSentence, timingCaveats, timingDefaults, timingForRun, type EgressTimingInput } from '../../src/loss/egressTiming';
 import { DEPARTURE_CURVES, departedShare, type DepartureCurve } from '../../src/routing/departure';
 
 const NX = 64;
@@ -190,6 +190,27 @@ test('route closes before the alert, stays open, or was never there', () => {
   const old = egress(300);
   delete old.lastSafeDepartureAt;
   assert.equal(egressTiming(old, input()).windowS, 420);
+});
+
+test('a planned building’s defaults: IBC occupants, persons per car by use, the default curve, one exit lane', () => {
+  const e = egress(3600);
+  // A 3-storey office of 2,000 m² a floor: 6,000 m² / (150 ft² = 13.94 m²) = 431 occupants → 366 cars at 1.18.
+  const t = timingForRun({ result: { occ: 'office', gfaM2: 6000 }, egress: e }, 0)!;
+  assert.equal(t.occupants, 431);
+  assert.match(t.occupantsBasis, /IBC 1004\.5 business.*design maximum/);
+  assert.equal(t.vehicles, 366);
+  assert.equal(t.curve.id, 'poor-likely');
+  assert.equal(t.bottleneck.capacityVph, 500);
+  assert.equal(t.windowS, 3600);
+  // Overrides: the user's count, an alert 2 h before the run, the prepared curve, two lanes, 1.5 per car.
+  const o = timingForRun({ result: { occ: 'office', gfaM2: 6000 }, egress: e }, 0, { occupants: 300, alertMin: -120, departure: 'good-likely', exitLanes: 2, personsPerCar: 1.5 })!;
+  assert.equal(o.occupantsBasis, 'your input');
+  assert.equal(o.vehicles, 200);
+  assert.equal(o.alertTime, -7200);
+  assert.equal(o.windowS, 3600 + 7200);
+  assert.equal(o.curve.id, 'good-likely');
+  assert.equal(o.bottleneck.capacityVph, 1000, 'two exit lanes (1,000/h) onto a major road (1,900/h): the exit');
+  assert.equal(timingForRun({ result: null, egress: e }, 0), null);
 });
 
 test('defaults by use: cars per person', () => {
