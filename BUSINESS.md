@@ -244,6 +244,39 @@ value rather than by compute.
    explainability of a vendor score (show the water behind a First Street or Fathom number).
 6. **Municipal BCA packs** around FEMA grant cycles, sold through the same engineers.
 
+### 6.1 How a customer integrates: the CLI now, an HTTP API next
+
+An underwriter, a lender's collateral team or a REIT does not want a browser tab per asset; they want a job that
+reads their asset file and writes numbers into their own systems. Today that is the **`deluge` CLI**
+([README → Batch / API](README.md#batch--api)), which runs on any machine with a GPU (a workstation, a cloud GPU VM, the
+customer's own server — Windows, macOS or Linux), offline, with nothing leaving the box:
+
+```bash
+npx deluge portfolio --preset houston --csv book-2026Q3.csv --minutes 60 --members 12 --out exposure.csv --summary run.json
+npx deluge site --preset pittsburgh --at 40.4425,-80.0085 --use office --floors 3 --sweep --out lot-4.json
+npx deluge run --preset houston --climate 2050:ssp585 --out maps/houston-2050      # GeoTIFFs for the GIS team
+```
+
+* **Input** is the portfolio CSV the app already reads (asset id, coordinates or a WKT outline, values, floors,
+  first-floor height, revenue, deductible and limit); **output** is the app's own export, one row per asset with
+  depth, speed, hazard class, arrival, damage, loss with its range, downtime, business interruption, insured loss and
+  access — plus, with `--members`, "floods in k of N" and p10 / p50 / p90. The site report is JSON with the sweep, EAL,
+  the recommended floor elevation, mitigation BCRs and the verdict; the maps are EPSG:3857 GeoTIFFs that drop into
+  QGIS or ArcGIS.
+* **The numbers are the app's numbers.** The CLI runs the browser's code, and a run is bit-for-bit repeatable, which
+  matters for an audit trail: the 60-minute Harvey portfolio of §4.2 comes out at 14 of 19 assets reached and $17.1 M
+  ($8.8–25.9 M), insured $23.5 M, against the panel's 14–15, $17.2–17.3 M and $23.6 M.
+* **It fits a batch window.** On the GTX 1660 Ti development machine a 60-minute Harvey hour over all of central
+  Houston takes about 15 s of GPU time and the seven-level Pittsburgh Site check sweep under a minute; a 12-member
+  ensemble is a few minutes. A portfolio across several cities is one job per preset, scriptable from cron, Airflow or
+  a CI pipeline; exit codes and machine-readable outputs make failures visible.
+
+**Next: an HTTP API** that wraps the same commands as asynchronous jobs — `POST /v1/portfolio-assessments` with the
+CSV, a webhook when the results are ready, idempotency keys, per-key metering for the *API / ensemble compute* tier
+in §5 — sketched as OpenAPI in [docs/api.md](docs/api.md). It adds queueing, auth and storage around the CLI, not new
+physics, so an API number will equal a CLI number will equal the browser's. A private deployment is the same
+container on the customer's GPU host, which answers the data-residency question before it is asked.
+
 ## 7. Roadmap
 
 * **Ensemble mode (in progress):** many runs over terrain bias, roughness, inflow and timing, giving p10 / p50 / p90 on
@@ -253,8 +286,9 @@ value rather than by compute.
   rivers.
 * **A FEMA-BCA appendix** that lists the BCA Toolkit inputs (useful life, discount rate, damages before / after per
   return period) for an engineer to transcribe.
-* **Headless batch / API:** the same solver on a server GPU for portfolios of thousands and for parametric trigger
-  design (what fraction of insured sites is wet when the gauge reads X; basis risk).
+* **Headless batch / API:** the batch CLI is in ([§6.1](#61-how-a-customer-integrates-the-cli-now-an-http-api-next));
+  next, the HTTP job API around it ([docs/api.md](docs/api.md)) on server GPUs for portfolios of thousands, and
+  parametric trigger design on top (what fraction of insured sites is wet when the gauge reads X; basis risk).
 * **Watch mode:** ingest forecasts (NWS, GloFAS), re-run, and tell asset owners their lead time.
 * **Terrain that knows about buildings and drains:** building footprints as obstacles, culverts and a simple storm
   sewer sink.
