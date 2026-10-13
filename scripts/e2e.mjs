@@ -2269,6 +2269,120 @@ const FLOWS = [
       await addressSweep(r, '22');
     },
   },
+  {
+    id: 23,
+    name: 'Infrastructure & evacuation on foot: Pittsburgh 1936 and Houston — facilities out, a site’s walking evacuation, dependencies, report',
+    timeoutMs: 600_000,
+    async run(r) {
+      /** Drop one site at a lon/lat (camera straight down on it, click with the Site tool); clears earlier sites first. */
+      const placeSite = async (lonlat) => {
+        await D(() => {
+          for (const b of document.querySelectorAll('.dl-site-remove')) b.click();
+        });
+        const g = await D((p) => window.__deluge.geoToGrid(p.lon, p.lat), lonlat);
+        await D((p) => {
+          const d = window.__deluge;
+          d.setCamera({ target: { gx: p.gx, gy: p.gy, elevation: d.sampleAt(p.gx, p.gy).ground }, distance: 1600, yaw: 0, pitch: Math.PI / 2 - 0.01 });
+        }, g);
+        await D(() => window.__deluge.waitFrames(4));
+        await D(() => window.__deluge.selectTool('site'));
+        const box = await page.locator('#deluge-canvas').boundingBox();
+        await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+        await page.waitForFunction(() => document.querySelectorAll('.dl-site-item').length === 1, null, { timeout: 5000 });
+        await D(() => window.__deluge.selectTool('orbit'));
+      };
+      /** Infrastructure: open the section, assess, read the summary. */
+      const assessInfra = async (tag) => {
+        await D(() => {
+          const sec = document.querySelector('[data-section="infra"]');
+          if (!sec.classList.contains('dl-open')) sec.querySelector('.dl-sec-head').click();
+        });
+        await page.waitForFunction(() => !document.querySelector('[data-infra="assess"]')?.disabled, null, { timeout: 20_000 });
+        await page.click('[data-infra="assess"]');
+        await page.waitForFunction(() => /Flood at T\+/.test(document.querySelector('[data-infra="status"]')?.textContent ?? ''), null, { timeout: 30_000 });
+        const out = await D(() => ({
+          summary: document.querySelector('[data-infra="summary"]')?.textContent ?? '',
+          rows: [...document.querySelectorAll('[data-infra-row]')].map((tr) => [...tr.querySelectorAll('td')].map((td) => td.textContent ?? '').slice(1).join(' | ')),
+          pins: document.querySelectorAll('.dl-infra-pin').length,
+          failedPins: document.querySelectorAll('.dl-infra-pin.dl-infra-failed').length,
+        }));
+        await D(() => document.querySelector('[data-infra="summary"]')?.scrollIntoView({ block: 'start' }));
+        await sleep(400);
+        const sp = path.join(OUT, `23-${tag}-infra-panel.png`);
+        await page.locator('.dl-panel').screenshot({ path: sp });
+        console.log(`  [shot] ${path.relative(ROOT, sp)}`);
+        return out;
+      };
+      /** Site check: assess this run and read the evacuation-on-foot and dependency blocks. */
+      const assessSite = async (tag) => {
+        await page.click('[data-section="site"] button:has-text("Assess this run")');
+        await page.waitForFunction(() => /reach safety on foot|not assessed/.test(document.querySelector('[data-site="people"]')?.textContent ?? ''), null, { timeout: 60_000 });
+        await page.waitForFunction(() => /Power|Dependencies/.test(document.querySelector('[data-site="deps"]')?.textContent ?? '') && !/loading facilities/.test(document.querySelector('[data-site="deps"]')?.textContent ?? ''), null, { timeout: 30_000 }).catch(() => {});
+        const out = await D(() => ({
+          people: [...document.querySelectorAll('[data-people="summary"] p')].map((p) => p.textContent ?? ''),
+          deps: [...document.querySelectorAll('[data-site="deps"] dt')].map((dt) => `${dt.textContent}: ${dt.nextElementSibling?.textContent ?? ''}`),
+          flags: [...document.querySelectorAll('[data-site="dep-flags"] li')].map((li) => li.textContent ?? ''),
+          walkPts: (document.querySelector('[data-site="walk-route"]')?.getAttribute('points') ?? '').split(' ').filter(Boolean).length,
+        }));
+        await D(() => document.querySelector('[data-site="people"]')?.scrollIntoView({ block: 'start' }));
+        await sleep(400);
+        const sp = path.join(OUT, `23-${tag}-site-card.png`);
+        await page.locator('.dl-panel').screenshot({ path: sp });
+        console.log(`  [shot] ${path.relative(ROOT, sp)}`);
+        await shot(`23-${tag}-map`);
+        return out;
+      };
+
+      // ── Pittsburgh at the 1936 crest ──
+      await D((p) => window.__deluge.loadPreset(p), 'pittsburgh');
+      await calm();
+      const crest = await crestOffset();
+      await D((o) => window.__deluge.setStageOffset(o), crest.offset);
+      await runFor(1800);
+      const pi = await assessInfra('pittsburgh');
+      r.metrics.pittsburghInfra = pi.summary;
+      r.metrics.pittsburghInfraRows = pi.rows.slice(0, 12);
+      check(r, 'Pittsburgh 1936: facilities assessed, some out of service, icons on the map', /out of service/.test(pi.summary) && pi.rows.length > 0 && pi.pins > 50 && pi.failedPins > 0, `${pi.summary.slice(0, 140)} · ${pi.pins} icons (${pi.failedPins} red)`);
+      // A three-storey office on the North Shore, by PNC Park.
+      await placeSite({ lon: -80.0057, lat: 40.4474 });
+      const ps = await assessSite('pittsburgh');
+      r.metrics.pittsburghSite = ps;
+      check(r, 'site card: everyone-out time, X of N, vertical evacuation', ps.people.length === 3 && /Everyone out of the building by T\+/.test(ps.people[0]) && /of [\d,]+ reach safety on foot/.test(ps.people[1]) && /Vertical evacuation feasible: (yes|no)/.test(ps.people[2]), ps.people.join(' / ').slice(0, 300));
+      check(r, 'walking route drawn on the map (dashed, distinct from the car route)', ps.walkPts >= 2, `${ps.walkPts} points`);
+      check(r, 'dependency lines: power (approximate service area), hospital, fire station', ps.deps.some((d) => /^Power: .*approximate service area/.test(d)) && ps.deps.some((d) => /^Hospital:/.test(d)) && ps.deps.some((d) => /^Fire station:/.test(d)), ps.deps.join(' / ').slice(0, 300));
+      const [dl] = await Promise.all([page.waitForEvent('download', { timeout: 20_000 }), page.click('[data-site="report-html"]')]);
+      const file = path.join(OUT, '23-site-assessment.html');
+      await dl.saveAs(file);
+      const html = fs.readFileSync(file, 'utf8');
+      const has = ['Evacuation on foot', 'Infrastructure dependencies', 'reach safety on foot', 'Vertical evacuation feasible', 'approximate service area', 'SFPE', 'FD2321', 'Voronoi'];
+      const missing = has.filter((s) => !html.includes(s));
+      check(r, 'site assessment report carries both sections and their methods', missing.length === 0 && !/<script/i.test(html), missing.length ? `missing: ${missing.join(', ')}` : `${(html.length / 1024).toFixed(0)} KB`);
+
+      // ── Houston, Harvey rain ──
+      await D((p) => window.__deluge.loadPreset(p), 'houston');
+      await D(() => {
+        const d = window.__deluge;
+        d.actions.restoreScenario();
+        d.setPaused(false);
+        d.actions.resetWater();
+      });
+      await runFor(1200);
+      const hi = await assessInfra('houston');
+      r.metrics.houstonInfra = hi.summary;
+      r.metrics.houstonInfraRows = hi.rows.slice(0, 12);
+      check(r, 'Houston: facilities assessed against the Harvey rain', /operational/.test(hi.summary) && hi.pins > 50, `${hi.summary.slice(0, 160)} · ${hi.pins} icons`);
+      // Downtown Houston, by City Hall.
+      await placeSite({ lon: -95.3694, lat: 29.7604 });
+      const hs = await assessSite('houston');
+      r.metrics.houstonSite = hs;
+      check(r, 'Houston site: walking evacuation and dependencies assessed', hs.people.length >= 2 && /reach safety on foot/.test(hs.people.join(' ')) && hs.deps.some((d) => /^Power:/.test(d)), `${hs.people.join(' / ').slice(0, 240)} · ${hs.deps.slice(0, 2).join(' / ').slice(0, 160)}`);
+      await D(() => {
+        for (const b of document.querySelectorAll('.dl-site-remove')) b.click();
+      });
+      await D((p) => window.__deluge.loadPreset(p), PRESET);
+      await calm();
+    },
+  },
 ];
 
 // ─── "Check any US address" helpers (flows 20 and 21) ────────────────────────────────────────────
