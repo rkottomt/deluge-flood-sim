@@ -1,0 +1,4 @@
+# Raw rasters baked into public/presets are binary: never diff, merge or convert line endings in them. The land-cover
+# codes of ESA WorldCover (10, 20, …) contain no NUL byte, so git would otherwise take landcover.u8 for text.
+*.u8 binary
+*.f32 binary
