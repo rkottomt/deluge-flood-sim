@@ -44,6 +44,7 @@ import { bridgeFor } from './bridge';
 import { sitesFor } from './sites';
 import { createChainSection } from './chainPanel';
 import { createClimateBlock, createClimateNote } from './climatePanel';
+import { createInfraSection } from './infraPanel';
 
 export interface Panel {
   el: HTMLElement;
@@ -803,6 +804,14 @@ export function createPanel(ctx: UIContext): Panel {
     }),
   );
 
+  // ════════════════════════════════ Infrastructure ════════════════════════════════
+  // Critical facilities against the flood (infraPanel.ts). Collapsed; nothing is fetched until it is opened.
+  const infra = createInfraSection(ctx);
+  const infraSec = section('Infrastructure', 'bolt', infra.body, { id: 'infra', open: false, badge: infra.badge });
+  infraSec.querySelector('.dl-sec-head')?.addEventListener('click', () => {
+    if (infraSec.classList.contains('dl-open')) infra.activate();
+  });
+
   // ════════════════════════════════ Uncertainty ════════════════════════════════
   // The flood-probability ensemble (src/ui/ensemble.ts). Collapsed until asked for; nothing runs until Run.
   const ensemble = createEnsembleSection(ctx);
@@ -814,7 +823,7 @@ export function createPanel(ctx: UIContext): Panel {
   const chainSec = section('Hazard chain', 'mountain', chain.body, { id: 'chain', badge: chain.badge });
   chain.onVisible((v) => (chainSec.hidden = !v));
 
-  const scroller = h('div', { class: 'dl-panel-scroll' }, scenarioSec, chainSec, weatherSec, evacSec, impactSec, siteSec, ensembleSec, viewSec, advancedSec, attribution);
+  const scroller = h('div', { class: 'dl-panel-scroll' }, scenarioSec, chainSec, weatherSec, evacSec, impactSec, siteSec, infraSec, ensembleSec, viewSec, advancedSec, attribution);
   const closeBtn = h(
     'button',
     { type: 'button', class: 'dl-icon-btn dl-panel-close', 'aria-label': 'Hide panel', onclick: () => api.setOpen(false) },
@@ -827,7 +836,7 @@ export function createPanel(ctx: UIContext): Panel {
   const listeners = new Set<() => void>();
   const api: Panel = {
     el,
-    overlays: [impact.overlay, site.overlay],
+    overlays: [impact.overlay, site.overlay, infra.overlay],
     loadPortfolio: (name, text, opts) => impact.loadPortfolioText(name, text, opts),
     siteCheck: { useRainLadder: () => site.useRainLadder(), runSweep: () => site.runSweep() },
     isOpen: () => open,
