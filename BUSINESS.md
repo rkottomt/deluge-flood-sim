@@ -188,7 +188,7 @@ hydropower schemes to Betrawati, where it took the only road bridge into Rasuwa.
 | Place (model front time) | Existing alert, 09:15 NPT | One automated gauge + SMS at Rasuwagadhi (2 min latency) | Optimiser's single sensor, 1 km below the source |
 |---|---|---|---|
 | Rasuwagadhi (08:51) | none — water first | none — water first | 7 min |
-| Rasuwagadhi HEP headworks (08:51) | none | none | 8 min |
+| Rasuwagadhi HEP headworks (08:51) | none | none | 7 min |
 | Timure (08:54) | none | 1 min | 10 min |
 | Syafrubesi (09:06) | none | 13 min | 22 min |
 | Chilime HEP powerhouse (09:07) | none | 14 min | 23 min |
