@@ -836,6 +836,33 @@ and a multi-target Dijkstra on travel time (highway 25 m/s, major 15, minor 11, 
 dry shelter. The result carries the street names (`via`), metres of wet road, and a reason and advice when the route
 is blocked.
 
+### 7.1 Evacuation on foot (`src/routing/pedestrian.ts`, `pedestrianEvac.ts`)
+
+Site check also asks how the people in a building get out on foot. The baked roads (TIGER / OSM drivable ways) carry
+no footways, so people walk every road edge in both directions. A per-edge timeline is rebuilt from the run's
+HazardFields as in `egress.ts`: an edge becomes unsafe for people when any of its cells (bridge spans over water at
+reset, and their approaches, excepted) reaches FD2321 HR = d(v + 0.5) + DF ≥ 0.75 or AIDR H3, counted from the first
+arrival of water there (early, pessimistic). A label-setting Dijkstra on arrival time uses an edge only if the walker
+is across it before it closes; edges only close, so arrival is FIFO and the latest safe departure is found by
+bisection. Refuges are shelters that stay safe and any network node that stays dry and stands 1 m above the highest
+water within 300 m. Occupants (IBC 1004.5 design load by default) leave through the exits at the SFPE specific flow
+(≈ 1.3 persons/s per metre of effective width) after a pre-movement time, in walking groups (1.22 / 0.91 / 0.6 m/s);
+the result is "everyone out by T+x", "X of N reach safety" with the alert at T0, and vertical evacuation (the first
+floor 1 m above the site's max depth, in a building outside the fast-water collapse band). Pittsburgh at the 1936
+crest, no GPU: a 3-storey North Shore office's walk takes 63 ms (`tests/routing/pedestrianPreset.test.ts`).
+
+### 7.2 Infrastructure dependencies (`src/data/facilities.ts`, `src/loss/infra.ts`, `infraDeps.ts`)
+
+`scripts/bake-facilities.ts` bakes substations, power plants, hospitals, clinics, fire and police stations, water and
+wastewater works, telecom exchanges, bridges on major roads and fuel stations from OpenStreetMap (Overpass) into a
+`facilities.json` per preset (78 KB for all eleven). Live areas have none: Overpass is not in the CSP, and the allowed
+OSM API `/map` call returns whole map tiles. Each facility's exposure (max depth within 60 m, first arrival, time
+wet; a bridge at its two landings) gives operational / impaired / failed by per-type screening thresholds
+(substations out at 0.45 m, hospitals at 0.6 m …, each with its basis in `FACILITY_THRESHOLDS`). A site depends on
+its nearest substation (a Voronoi service area — labelled approximate), water works, exchange and wastewater plant,
+and on the nearest hospital and fire station by road at the peak (the router over the arrival-ordered flood, with
+the moment the last route was cut). Failed utilities add illustrative restoration days to the downtime heuristic.
+
 ## 8. App loop and pacing
 
 The store is the single source of truth; `SimSync` pushes parameter changes into the solver. A work budget

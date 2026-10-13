@@ -88,6 +88,8 @@ import { headlessBusy, runHeadless, saveScenario } from './headless';
 import { CLIMATE_TODAY, climateForcing, sweepComparable } from '../climate';
 import { climateCompareBlock, compareClimate, type ClimateSweepPair } from './siteClimate';
 import type { SiteCheckSettings } from '../project/format';
+import { createSiteExtras, PEOPLE_METHOD_NOTES } from './evacPeople';
+import { INFRA_METHOD_NOTES } from './infraPanel';
 
 const FT = 0.3048;
 /** Simulated minutes per sweep level, default and range. */
@@ -307,6 +309,15 @@ export function createSiteSection(ctx: UIContext): SiteSection {
     onSelect: (id) => registry.select(id),
   });
   ctx.own(() => overlay.destroy());
+  // Evacuation on foot and infrastructure dependencies for the selected site (evacPeople.ts).
+  const extras = createSiteExtras({
+    store,
+    getTerrain,
+    getGround: () => getSolver()?.getGroundCPU() ?? getTerrain()?.elevation ?? null,
+    getRouter: () => router,
+    setWalkRoute: (r, cut) => overlay.setWalkRoute(r, cut),
+    rerender: () => renderCard(),
+  });
 
   // ─── Scene ──────────────────────────────────────────────────────────────────────────────────────────────────
   function ensureScene(t: TerrainData | null) {
@@ -317,6 +328,7 @@ export function createSiteSection(ctx: UIContext): SiteSection {
     designId = null;
     tracking = false;
     liveAcc.reset();
+    extras.reset();
     router = null;
     if (t?.roads && t.roads.edges.length) {
       router = createRouter();
@@ -818,12 +830,14 @@ export function createSiteSection(ctx: UIContext): SiteSection {
     if (!s || !run) {
       cardEl.replaceChildren(current ? h('p', { class: 'dl-impact-fine' }, 'Select a site.') : h('p', { class: 'dl-impact-fine' }, 'Press “Assess this run” to check the sites against the flood on screen.'), ...(ens ? [ens] : []));
       overlay.setRoute(null, true);
+      overlay.setWalkRoute(null);
       return;
     }
     const money = (v: number) => formatMoney(v);
     cardEl.replaceChildren(
       ...(ens ? [ens] : []),
       kvList(siteRunRows(run, money, current!.alertTime), 'dl-site-kv'),
+      extras.card(s, run, current!.fields, current!.alertTime),
       h('details', { class: 'dl-impact-methods' }, h('summary', null, 'Planned building, as assessed'), kvList(siteSpecRows(s, run, money), 'dl-site-kv')),
     );
     const e = run.egress;
@@ -1026,9 +1040,11 @@ export function createSiteSection(ctx: UIContext): SiteSection {
       alertTime: current?.alertTime ?? 0,
       current: current ? { simTime: current.fields.simTime, source: current.source } : null,
       sweep: sweep ? { durationS: sweep.durationS, source: sweep.source, ladder: sweep.ladder, gaugeLabel: sweep.gaugeLabel, sourceKeys: sweep.sourceKeys, levels: sweep.levels.length, cancelled: sweep.cancelled } : null,
+      methods: [...PEOPLE_METHOD_NOTES, ...INFRA_METHOD_NOTES],
       sites: registry.sites.map((spec) => {
         const d = derived(spec);
-        return { spec, current: current?.runs.get(spec.id) ?? null, sweep: d.sum, rec: d.rec, options: d.options, verdict: d.verdict, climate: climatePair ? compareClimate(climatePair, spec.id, rpOf) : null };
+        const run = current?.runs.get(spec.id) ?? null;
+        return { spec, current: run, extra: extras.report(spec, run, current?.fields ?? null, current?.alertTime ?? 0), sweep: d.sum, rec: d.rec, options: d.options, verdict: d.verdict, climate: climatePair ? compareClimate(climatePair, spec.id, rpOf) : null };
       }),
     };
   }
