@@ -1534,7 +1534,18 @@ const FLOWS = [
         // The timeline follows the stats readback (~300 ms), not the reset itself: wait until a readback shows the
         // reset clock, or 'before' reads the previous run's lit stations.
         for (let i = 0; i < 50 && (await D(() => window.__deluge.getStats()?.simTime ?? 0)) > 120; i++) await sleep(100);
-        await sleep(200); // and one timeline update (≤ 10 Hz)
+        // ...and until the timeline has redrawn from it: its updates are coalesced (≤ 10 Hz) and trail the readback, so
+        // poll the lit-station count until three reads 150 ms apart agree.
+        {
+          const lit = () => D(() => document.querySelectorAll('.dl-cl-chipbox.dl-cl-passed').length);
+          let prev = await lit();
+          for (let i = 0, same = 0; i < 40 && same < 2; i++) {
+            await sleep(150);
+            const n = await lit();
+            same = n === prev ? same + 1 : 0;
+            prev = n;
+          }
+        }
         const read = () =>
           D(() => ({
             x: Number(document.querySelector('.dl-cl-frontline')?.getAttribute('x1') ?? NaN),
