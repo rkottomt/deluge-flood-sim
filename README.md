@@ -119,6 +119,16 @@ periods are only filled in where published; the rest are the user's input and la
 1 % level (35.4 ft) and 4.5 m at the 1936 crest, and loses its last dry route to a shelter as the water arrives; the
 indicative floor is 1.28 m above grade. Indicative screening, not engineering advice.
 
+Every headless run (sweep levels, ensemble members, today-vs-future pairs) runs **exactly** the simulated time asked
+— the solver lands on it with a short last substep instead of running on until a readback catches up (600 s used to
+end anywhere in 614–706 s) — and repeats agree: the hazard maxima are sampled every 5 simulated seconds rather than
+whenever a frame happened to render, and the river stage rises on a fixed simulated-time grid rather than in
+frame-sized steps. The fast-water collapse rule reads the 90th percentile of the footprint's cells, not its single
+worst one, and ramps from the depth curve to total loss across 5–9 m²/s (the cited 7 m²/s at its centre) — both
+labelled heuristics. The North Shore demo parcel at the 1936 crest, whose damage used to flip between 15 % and
+100 % from one sweep to the next, now reads 79–81 % ($39.2–40.1 M) across fourteen sweeps, and Houston's today-vs-2050 loss for the 100-yr level read $2.7 M → $3.2 M in four of four repeats (the change used to come out anywhere from −30 % to +18 %). Choosing a design event other
+than the 1 % level says so, and what the 1 % level that was also run gives at the site.
+
 **Uncertainty** (its own panel section) turns "this street floods" into "this street floods in 9 of 12 plausible
 versions of this event". It re-runs the scenario on screen N times (12 by default, 3–32) headless at full speed — the
 Site check machinery: render hold, progress with an ETA, Cancel, your scenario put back afterwards — with its
@@ -172,7 +182,8 @@ makes the flood:
 It is a layer on what the solver receives: the rain slider, the inflow list and the stage slider keep showing
 today's values, and the block lists every modified number with its source. In **Site check**, **Today vs future**
 runs the ladder twice and reports "EAL today $X → 2050 · SSP5-8.5 $Y" with per-level losses, in the panel and the
-report (return periods stay today's). Forcing-scaled, not downscaled projections; method, sources and gaps in
+report (return periods stay today's). Both runs of a level are exactly as long as asked, so the difference is the
+climate, not run length. Forcing-scaled, not downscaled projections; method, sources and gaps in
 [docs/research/climate-scenarios.md](docs/research/climate-scenarios.md), code in [`src/climate`](src/climate).
 
 ## Seven cities, offline

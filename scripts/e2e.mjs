@@ -1866,10 +1866,11 @@ const FLOWS = [
       check(r, 'the site card shows “EAL today $X → 2050 · SSP5-8.5 $Y”', /^EAL today .+ a year → 2050 · SSP5-8\.5 /.test(out.eal), out.eal);
       const money = (s) => Number(String(s).replace(/[^0-9.kKMB]/g, '').replace(/k$/i, 'e3').replace(/M$/, 'e6').replace(/B$/, 'e9'));
       const worse = out.rows.length === 2 && out.rows.every((row) => !(money(row[2]) < money(row[1]))) && out.rows.some((row) => money(row[2]) > money(row[1]));
-      // Soft: each headless run overshoots its 10 min by up to a readback (rows end "today s|future s"), which moves a
-      // rain-driven loss by as much as an 11 % rain increase does; the panel warns when the lengths differ > 5 %.
+      // Soft: a lot whose water comes from a front can still sit on either side of it by run-to-run timestep noise
+      // (the runs themselves are now exactly as long: rows end "today s|future s").
       check(r, 'per-level loss under 2050 SSP5-8.5 is no lower than today, and higher somewhere', worse, JSON.stringify(out.rows), { soft: true });
-      check(r, 'both runs of every level ran the asked 10 min (± overshoot)', out.rows.length === 2 && out.rows.every((row) => String(row[3]).split('|').every((s) => Number(s) >= 599)), JSON.stringify(out.rows.map((row) => row[3])));
+      // Headless runs stop on the asked time (they used to overshoot by up to a readback: 614–706 s for 600).
+      check(r, 'both runs of every level ran exactly the asked 10 min', out.rows.length === 2 && out.rows.every((row) => String(row[3]).split('|').every((s) => Number(s) === 600)), JSON.stringify(out.rows.map((row) => row[3])));
       check(r, 'the user’s climate is put back afterwards', out.climate?.horizon === '2050' && Math.abs(out.solverRain / today.solverRain - expected) < 1e-3, `${JSON.stringify(out.climate)}, solver rain ${num(out.solverRain, 1)}`);
       await D(() => document.querySelector('[data-site="climate-compare"]')?.scrollIntoView({ block: 'center' }));
       await sleep(400);
@@ -1919,6 +1920,53 @@ const FLOWS = [
       check(r, 'site: Site check section open, use case kept in the link', (await sec('site')) && /usecase=site/.test(site.url), site.url);
       await sleep(1600); // camera flight to the parcel
       await shot('19-usecase-site');
+
+      // Repeated sweeps agree. The North Shore parcel at the 1936 crest is the demo's fast-water case: its damage used
+      // to flip between 15 % and 100 % from one sweep to the next (runs of unequal length, the hazard maxima sampled at
+      // whatever moment a readback fell on, the stage raised in metre steps at 3600×, and a step at d·v = 7 m²/s read
+      // off the worst cell). Three sweeps of FEMA's 1 % level and the 1936 crest, 30 simulated minutes each.
+      await page.click('.dl-site-item:has-text("Demo parcel A") .dl-site-pick');
+      await page.fill('[data-site-field="duration"]', '30');
+      await page.dispatchEvent('[data-site-field="duration"]', 'change');
+      await D(() => {
+        for (const box of document.querySelectorAll('.dl-site-ladder input[type=checkbox]')) {
+          const want = box.dataset.level === 'rp100' || box.dataset.level === 'record1936';
+          if (box.checked !== want) box.click();
+        }
+      });
+      const money = (s) => {
+        const m = String(s).replace(/[^0-9.kMB]/g, '').match(/^([0-9.]+)([kMB]?)$/);
+        return m ? Number(m[1]) * ({ k: 1e3, M: 1e6, B: 1e9 }[m[2]] ?? 1) : NaN;
+      };
+      const sweeps = [];
+      for (let k = 0; k < 3; k++) {
+        await page.click('[data-site="run-sweep"]');
+        const ok = await page
+          .waitForFunction(() => /^(Done|Sweep stopped|Cancelled)/.test(document.querySelector('[data-site="sweep-status"]')?.textContent ?? ''), null, { timeout: 180_000 })
+          .then(() => true, () => false);
+        const row = await D(() => {
+          const tr = [...document.querySelectorAll('.dl-site-sweep-out table tbody tr')].find((t) => /1936/.test(t.textContent ?? ''));
+          return { site: document.querySelector('.dl-site-item.dl-on')?.textContent ?? '', status: document.querySelector('[data-site="sweep-status"]')?.textContent ?? '', cells: tr ? [...tr.children].map((td) => td.textContent ?? '') : [] };
+        });
+        sweeps.push({ ok: ok && /^Done: 2 levels/.test(row.status), site: row.site, depth: Number(row.cells[1]), loss: money(row.cells[3]), text: row.cells.join(' | ') });
+      }
+      r.metrics.repeatSweeps = sweeps;
+      const losses = sweeps.map((s) => s.loss);
+      const spread = (Math.max(...losses) - Math.min(...losses)) / Math.max(...losses);
+      check(r, 'site: three sweeps complete, on parcel A', sweeps.every((s) => s.ok && /Demo parcel A/.test(s.site)), sweeps.map((s) => s.text).join(' ¦ '));
+      // Measured on the GTX 1660 Ti: $39.2–40.1 M (damage 79–81 %) across sweeps; it used to be $7.5 M or $49.5 M.
+      check(r, 'site: repeated sweeps agree on the 1936-crest loss at parcel A (within 10 %)', losses.every(Number.isFinite) && spread <= 0.1, `${losses.map((l) => `$${(l / 1e6).toFixed(1)} M`).join(', ')} (spread ${(spread * 100).toFixed(1)} %)`);
+
+      // The design event: choosing the 1936 crest must not claim that no 1 % level was run — it was.
+      await D(() => {
+        const sel = document.querySelector('.dl-site-sweep-out select[aria-label="Design event"]');
+        if (sel) {
+          sel.value = 'record1936';
+          sel.dispatchEvent(new Event('change'));
+        }
+      });
+      const design = await D(() => [...document.querySelectorAll('.dl-site-sweep-out .dl-site-kv')].map((e) => e.textContent ?? '').join(' '));
+      check(r, 'site: a user-chosen design event says the 1 % level was also run', /your selection; the 1 % level was also run \(FEMA 1 % \(100-yr\)/.test(design) && !/no 1 % level was run/.test(design), design.slice(0, 200));
 
       // The cards and the brief, from the top bar.
       await page.click('.dl-uc-btn');
