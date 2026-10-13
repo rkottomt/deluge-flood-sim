@@ -48,6 +48,11 @@ import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+/**
+ * Vite's CLI run with this Node directly, not through `npx`: on Windows `npx` is a .cmd shim that spawn() cannot
+ * start without a shell, and killing the shim would leave `vite preview` running.
+ */
+const VITE_BIN = path.join(ROOT, 'node_modules', 'vite', 'bin', 'vite.js');
 const OUT_DIR = path.join(ROOT, 'artifacts', 'perf');
 
 // ── arguments ───────────────────────────────────────────────────────────────────────────────────
@@ -311,7 +316,7 @@ async function buildAndServe(distDir, port, logFile) {
   // Production build in every respect that costs frames (minified, tree-shaken, real assets) but with the
   // automation surface compiled in: SEC-07 strips window.__deluge from a released bundle, and this suite
   // measures through it. scripts/e2e.mjs does the same. The released build is what test:security checks.
-  const build = spawn('npx', ['vite', 'build', '--outDir', distDir], {
+  const build = spawn(process.execPath, [VITE_BIN, 'build', '--outDir', distDir], {
     cwd: ROOT,
     stdio: ['ignore', 'pipe', 'pipe'],
     env: { ...process.env, DELUGE_DEBUG_API: '1' },
@@ -324,7 +329,7 @@ async function buildAndServe(distDir, port, logFile) {
   if (await portOpen(port)) throw new Error(`port ${port} is already in use — pass --port=<free port>`);
   // `detached` puts the server in its own process group: `npx` forks the real vite process, so killing the npx
   // pid alone leaves a preview server holding the port for the next run. killTree() kills the group.
-  const server = spawn('npx', ['vite', 'preview', '--outDir', distDir, '--port', String(port), '--strictPort'], {
+  const server = spawn(process.execPath, [VITE_BIN, 'preview', '--outDir', distDir, '--port', String(port), '--strictPort'], {
     cwd: ROOT,
     stdio: ['ignore', 'pipe', 'pipe'],
     detached: true,

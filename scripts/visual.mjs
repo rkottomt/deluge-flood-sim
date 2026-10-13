@@ -47,6 +47,11 @@ import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+/**
+ * Vite's CLI run with this Node directly, not through `npx`: on Windows `npx` is a .cmd shim that spawn() cannot
+ * start without a shell, and killing the shim would leave `vite preview` running.
+ */
+const VITE_BIN = path.join(ROOT, 'node_modules', 'vite', 'bin', 'vite.js');
 const OUT_DIR = path.join(ROOT, 'artifacts', 'visual');
 const BASELINE_DIR = path.join(ROOT, 'tests', 'visual', 'baselines');
 
@@ -940,7 +945,7 @@ async function buildAndServe(distDir, port, logFile) {
   process.stdout.write(`[visual] building production bundle → ${path.relative(ROOT, distDir)} … `);
   // The released bundle has no window.__deluge (SEC-07); this suite freezes the scenes through it, so it builds
   // the same production output with the automation surface compiled in, exactly as scripts/e2e.mjs does.
-  const build = spawn('npx', ['vite', 'build', '--outDir', distDir], {
+  const build = spawn(process.execPath, [VITE_BIN, 'build', '--outDir', distDir], {
     cwd: ROOT,
     stdio: ['ignore', 'pipe', 'pipe'],
     env: { ...process.env, DELUGE_DEBUG_API: '1' },
@@ -951,7 +956,7 @@ async function buildAndServe(distDir, port, logFile) {
   if (code !== 0) throw new Error(`vite build failed (exit ${code}); see ${logFile}`);
   console.log('ok');
   if (await portOpen(port)) throw new Error(`port ${port} is already in use — pass --port=<free port>`);
-  const server = spawn('npx', ['vite', 'preview', '--outDir', distDir, '--port', String(port), '--strictPort'], {
+  const server = spawn(process.execPath, [VITE_BIN, 'preview', '--outDir', distDir, '--port', String(port), '--strictPort'], {
     cwd: ROOT,
     stdio: ['ignore', 'pipe', 'pipe'],
     detached: true,
