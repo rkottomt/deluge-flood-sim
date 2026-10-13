@@ -15,13 +15,15 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { COMMANDS, commandHelp, EXIT, flag, mainHelp, parseOptions } from './args';
 import { HANDLERS, type CliEnv } from './commands';
+import { serveCommand, type Engine } from './server';
 import { finishGpu, getGpu, gpuErrors, NoGpuError } from './gpu';
 import { HeadlessScene } from './headless';
 import { createLog, writeOutput } from './io';
 import { availablePresetIds, loadAtlas14FromDisk, loadPresetFromDisk, readPresetJson, readPresetMeta } from './presetFiles';
 import { UsageError } from './scenario';
 
-function version(): string {
+/** The engine version (package.json), recorded in every result. */
+export function version(): string {
   try {
     const pkg = JSON.parse(fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../package.json'), 'utf8')) as { version?: string };
     return pkg.version ?? '0.0.0';
@@ -36,6 +38,27 @@ function routeConsoleToStderr(): void {
   console.log = toErr;
   console.info = toErr;
   console.debug = toErr;
+}
+
+/** What every command shares: the presets on disk and this machine's GPU through Dawn (the CLI and `deluge serve`). */
+export function gpuEngine(v: string): Engine {
+  return {
+    version: v,
+    presetIds: availablePresetIds,
+    presetMeta: readPresetMeta,
+    loadTerrain: loadPresetFromDisk,
+    loadAtlas14: loadAtlas14FromDisk,
+    async openScene(terrain, presetId, o) {
+      const gpu = await getGpu();
+      return HeadlessScene.create(gpu.device, terrain, { presetId, climate: o.climate, appCadence: o.appCadence, readPresetJson: (file) => readPresetJson(presetId, file) });
+    },
+    async gpuName() {
+      return (await getGpu()).description;
+    },
+    gpuErrorCount: () => gpuErrors.length,
+    settle: finishGpu,
+    now: () => new Date(),
+  };
 }
 
 export async function main(argv: readonly string[]): Promise<number> {
@@ -68,24 +91,13 @@ export async function main(argv: readonly string[]): Promise<number> {
   }
   routeConsoleToStderr();
   const log = createLog({ quiet: flag(opts, 'quiet') });
+  if (cmd === 'serve') return serveCommand(opts, gpuEngine(v), log);
   const env: CliEnv = {
     log,
-    version: v,
-    presetIds: availablePresetIds,
-    presetMeta: readPresetMeta,
-    loadTerrain: loadPresetFromDisk,
-    loadAtlas14: loadAtlas14FromDisk,
-    async openScene(terrain, presetId, o) {
-      const gpu = await getGpu();
-      return HeadlessScene.create(gpu.device, terrain, { presetId, climate: o.climate, appCadence: o.appCadence, readPresetJson: (file) => readPresetJson(presetId, file) });
-    },
-    async gpuName() {
-      return (await getGpu()).description;
-    },
+    ...gpuEngine(v),
     readText: (file) => fs.readFileSync(file, 'utf8'),
     write: writeOutput,
     stdout: (text) => void process.stdout.write(text),
-    now: () => new Date(),
   };
   try {
     const code = await HANDLERS[cmd as keyof typeof COMMANDS](env, opts);

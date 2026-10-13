@@ -123,6 +123,27 @@ export const COMMANDS: Record<string, CommandSpec> = {
       'deluge site --preset houston --at 29.7725,-95.3837 --scenario a14-100',
     ],
   },
+  serve: {
+    name: 'serve',
+    summary: 'Serve the commands above as an HTTP job API (docs/api.md): POST a run, portfolio or site check, poll the job, download its files. One job at a time on the GPU.',
+    usage: 'deluge serve [--host 127.0.0.1] [--port 8787] [--token-file <file>] [--data-dir <dir>] [--retention-hours <h>]',
+    options: [
+      { name: 'host', kind: 'string', arg: '<addr>', help: 'Address to listen on (default 127.0.0.1, this machine only). Any other address needs a token.' },
+      { name: 'port', kind: 'number', arg: '<n>', help: 'TCP port (default 8787; 0 = any free port, printed on start).' },
+      { name: 'token-file', kind: 'string', arg: '<file>', help: 'File holding the bearer token clients must send (at least 16 characters). Or set DELUGE_API_TOKEN.' },
+      { name: 'data-dir', kind: 'string', arg: '<dir>', help: 'Where job records and result files live (default results/api).' },
+      { name: 'retention-hours', kind: 'number', arg: '<h>', help: 'Delete a finished job and its files this long after it ends (default 720 = 30 days).' },
+      { name: 'max-queue', kind: 'number', arg: '<n>', help: 'Jobs waiting for the GPU at most; more are refused with 503 (default 32).' },
+      { name: 'quiet', kind: 'boolean', help: 'No job log on stderr (warnings and errors still).' },
+      { name: 'help', kind: 'boolean', help: 'This help.' },
+    ],
+    examples: [
+      'deluge serve',
+      'DELUGE_API_TOKEN=$(openssl rand -hex 24) deluge serve --host 0.0.0.0 --port 8787 --data-dir /var/lib/deluge',
+      'curl -s -X POST localhost:8787/v1/runs -H "content-type: application/json" -d \'{"preset":"houston","scenario":{"minutes":10}}\'',
+    ],
+    notes: ['Endpoints: GET /v1/presets · POST /v1/runs · POST /v1/portfolio-assessments · POST /v1/site-checks · GET /v1/jobs/<id> · GET /v1/jobs/<id>/results/<file> · DELETE /v1/jobs/<id>.'],
+  },
 };
 
 /** Parse `argv` (after the command) against a command's options. */
