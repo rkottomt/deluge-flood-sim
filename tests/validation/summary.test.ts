@@ -57,6 +57,37 @@ test('committed FEMA zone rasters decode to their preset’s grid', () => {
   }
 });
 
+test('a committed parcel damage survey is a mask on the grid with the gauged crest, and nothing personal', () => {
+  let found = 0;
+  for (const id of presets) {
+    const raw = fs.readFileSync(path.join(PUB, id, 'observed.json'), 'utf8');
+    const obs = JSON.parse(raw) as ObservedFile;
+    if (!obs.damage) continue;
+    found++;
+    const meta = JSON.parse(fs.readFileSync(path.join(ROOT, 'public/presets', id, 'meta.json'), 'utf8')) as { nx: number; ny: number };
+    const mask = rleDecode(obs.damage.maskRle, meta.nx * meta.ny);
+    const cells = mask.reduce((s, v) => s + v, 0);
+    assert.ok(cells >= obs.damage.parcels, `${id}: ${cells} mask cells for ${obs.damage.parcels} parcels`);
+    assert.ok(mask.every((v) => v === 0 || v === 1));
+    const g = obs.damage.gauge;
+    assert.ok(Math.abs(g.elevation - (g.stageFt + g.gaugeDatumFt) * 0.3048) < 0.01, `${id}: crest datum arithmetic`);
+    assert.ok(obs.sources.some((s) => s.id === 'parcel-damage'), `${id}: the survey is cited`);
+    // The source layer carries owner names and addresses; none of it may reach the repo.
+    assert.doesNotMatch(raw, /OWNER|PROP_ADDR|STANPAR/);
+  }
+  assert.ok(found >= 1, 'the Nashville May 2010 survey is committed');
+});
+
+test('a second observed flood shows as a further line in the Validation block', () => {
+  const t = validationText(summary.presets.nashville);
+  assert.ok(t && t.more.length >= 1);
+  for (const m of t.more) {
+    assert.match(m.label, /2010/);
+    assert.ok(m.value.length > 5 && !/NaN|undefined|null/.test(m.value), m.value);
+  }
+  assert.deepEqual(validationText({ preset: 'x', event: 'e', headline: { label: 'l', value: 'v', note: 'n' }, metrics: {}, runs: [] })?.more, []);
+});
+
 test('public/validation stays small (it ships with the app)', () => {
   let bytes = 0;
   const walk = (d: string) => {

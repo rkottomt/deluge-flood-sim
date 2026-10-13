@@ -3039,6 +3039,53 @@ const FLOWS = [
       await calm();
     },
   },
+  {
+    id: 55,
+    name: 'Checked against the real flood: the Scenario section’s validation block per scene, Nashville’s May 2010 line under its headline',
+    timeoutMs: 240_000,
+    async run(r) {
+      const block = () =>
+        D(() => {
+          const el = document.querySelector('[data-validation="block"]');
+          if (!el) return null;
+          const more = el.querySelector('[data-validation="more"]');
+          return {
+            hidden: el.hidden,
+            label: el.querySelector('.dl-validation-label')?.textContent ?? '',
+            value: el.querySelector('.dl-validation-value')?.textContent ?? '',
+            moreHidden: !more || more.hidden,
+            more: more ? [...more.querySelectorAll('.dl-validation-item')].map((m) => m.textContent ?? '') : [],
+          };
+        });
+      const show = async (id, want) => {
+        await D((p) => window.__deluge.loadPreset(p), id);
+        // The summary is fetched once and filled in asynchronously after the preset change.
+        const deadline = Date.now() + 15_000;
+        let b = await block();
+        while (Date.now() < deadline && !(b && !b.hidden && b.label && want(b))) {
+          await sleep(200);
+          b = await block();
+        }
+        return b;
+      };
+      const nash = await show('nashville', (b) => b.more.length > 0);
+      r.metrics.nashville = nash;
+      check(r, 'nashville: the headline is the FEMA 1 % comparison', !!nash && !nash.hidden && /FEMA 1 %/.test(nash.label) && /CSI \d+ %/.test(nash.value), nash ? `${nash.label}: ${nash.value}` : 'no block');
+      check(
+        r,
+        'nashville: a second line for the May 2010 flood, with its hit rate and false alarms',
+        !!nash && !nash.moreHidden && nash.more.length === 1 && /2010/.test(nash.more[0]) && /reaches \d+ %/.test(nash.more[0]) && /\d+ % of the buildings it floods/.test(nash.more[0]) && !/NaN|undefined|null/.test(nash.more[0]),
+        nash?.more[0]?.slice(0, 200) ?? 'none',
+      );
+      await D(() => document.querySelector('[data-validation="block"]')?.scrollIntoView({ block: 'center' }));
+      await shot('55-validation-nashville');
+      const fm = await show('ftmyers', (b) => /high-water/.test(b.label));
+      check(r, 'ftmyers: the Ian marks, and no second line', !!fm && /high-water marks/.test(fm.label) && fm.moreHidden, fm ? `${fm.label}: ${fm.value} · more ${fm.more.length}` : 'no block');
+      const ch = await show('chamoli', (b) => /Not checked/.test(b.label));
+      check(r, 'chamoli: says there is nothing to compare against, and no second line', !!ch && /Not checked/.test(ch.label) && ch.moreHidden, ch ? ch.label : 'no block');
+      await shot('55-validation-block');
+    },
+  },
 ];
 
 

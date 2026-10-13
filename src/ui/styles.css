@@ -6271,8 +6271,15 @@ select.dl-num-input {
   color: var(--dl-text-2);
 }
 .dl-validation[hidden],
-.dl-validation-value[hidden] {
+.dl-validation-value[hidden],
+.dl-validation-more[hidden] {
   display: none;
+}
+/* A second observed flood for the same scene (summary.json `more`), set off from the headline by a hairline. */
+.dl-validation-item {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
 }
 .dl-validation-title {
   font-size: 10.5px;

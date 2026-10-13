@@ -23,7 +23,8 @@ import { fileURLToPath } from 'node:url';
 import { create, globals } from 'webgpu';
 import { createDelugeDevice } from '../src/gpu';
 import { loadPresetData, runScenario, stageDiscMask, type PresetData, type RunDef, type RunOutput } from './validation/run';
-import { EXTENT_CELL, FLOOD_M, GAUGE_SEARCH_M, HWM_SEARCH_M, WET_M, EMS_NEAR_M, scoreBfeProfile, scoreEms, scoreFema, scoreGauges, scoreHwms, type EmsResult, type FemaResult, type ModelFields, type PointResult } from '../src/validation/score';
+import { EXTENT_CELL, FLOOD_M, GAUGE_SEARCH_M, HWM_SEARCH_M, WET_M, EMS_NEAR_M, scoreBfeProfile, scoreDamage, scoreEms, scoreFema, scoreGauges, scoreHwms, type DamageResult, type EmsResult, type FemaResult, type ModelFields, type PointResult } from '../src/validation/score';
+import { decodeBuildings, type CompactBuildings } from '../src/data/buildings';
 import type { ExtentScores, PointScores } from '../src/validation/metrics';
 import { lineCells, rleDecode } from '../src/validation/raster';
 import type { FemaZonesFile, ObservedFile, ValidationHeadline, ValidationSummary, ValidationSummaryEntry } from '../src/validation/types';
@@ -49,7 +50,23 @@ export interface PresetPlan {
   femaRun?: string;
   femaLikeForLike?: boolean;
   emsRun?: string;
+  /** The run compared with a parcel damage survey (observed.json `damage`). */
+  damageRun?: string;
 }
+
+/**
+ * Minutes the May 2010 crest is held after it arrives. The real crest stood above 50 ft for about a day, so the like-
+ * for-like comparison is the steady flood at that level: chosen as the shortest hold after which the flooded
+ * footprints stop changing, not by the score: holds of 30, 60, 120 and 240 min flood the same 172 footprints and
+ * land within 0.2 % of each other (docs/VALIDATION.md, Nashville 2010) — the same 30 min as the FEMA run.
+ */
+export const NASHVILLE_2010_HOLD_MIN = 30;
+
+const damageRun = (obs: ObservedFile): RunDef[] => {
+  const d = obs.damage;
+  if (!d) return [];
+  return [{ id: 'may2010', description: `the May 2010 crest: stage raised to ${d.gauge.stageFt} ft at ${d.gauge.id} (USGS peak, ${d.date}) and held ${NASHVILLE_2010_HOLD_MIN} min`, minutes: NASHVILLE_2010_HOLD_MIN, stageFt: d.gauge.stageFt }];
+};
 
 const ladderRun = (obs: ObservedFile, minutes: number): RunDef[] => {
   const l = obs.fema?.ladder;
@@ -59,7 +76,7 @@ const ladderRun = (obs: ObservedFile, minutes: number): RunDef[] => {
 
 export const PLANS: Record<string, PresetPlan> = {
   pittsburgh: { runs: (o) => ladderRun(o, 30), femaRun: 'fema-1pct', femaLikeForLike: true },
-  nashville: { runs: (o) => ladderRun(o, 30), femaRun: 'fema-1pct', femaLikeForLike: true },
+  nashville: { runs: (o) => [...ladderRun(o, 30), ...damageRun(o)], femaRun: 'fema-1pct', femaLikeForLike: true, damageRun: 'may2010' },
   ftmyers: {
     runs: (o) => [
       { id: 'ian', description: 'Hurricane Ian: the tide raised to the 12.92 ft record at NOAA 8725520 and held 60 min', minutes: 60, stageFt: 12.92 },
@@ -117,9 +134,23 @@ export interface PresetResult {
   ems?: EmsResult & { run: string };
   /** Deluge's water surface against FEMA's 1 % profile (Base Flood Elevation lines crossing the forced rivers). */
   bfe?: PointResult & { run: string };
+  /** A parcel damage survey of a historic flood, building by building (src/validation/score.ts scoreDamage). */
+  damage?: Omit<DamageResult, 'outcome' | 'centroids'> & { run: string; event: string; parcels: number; stageFt: number; gauge: string };
 }
 
-export function scorePreset(p: PresetData, obs: ObservedFile, plan: PresetPlan, outputs: Map<string, RunOutput>): { result: PresetResult; femaCells: Uint8Array | null } {
+/** The preset's building footprints (grid coordinates), or null when it has none. */
+export function loadFootprints(p: PresetData) {
+  const f = p.meta.files.buildings;
+  if (!f) return null;
+  return decodeBuildings(readJson<CompactBuildings>(path.join(ROOT, 'public/presets', p.id, f)));
+}
+
+export function scorePreset(
+  p: PresetData,
+  obs: ObservedFile,
+  plan: PresetPlan,
+  outputs: Map<string, RunOutput>,
+): { result: PresetResult; femaCells: Uint8Array | null; damage: DamageResult | null } {
   const result: PresetResult = {
     preset: p.id,
     name: p.meta.name,
@@ -177,7 +208,15 @@ export function scorePreset(p: PresetData, obs: ObservedFile, plan: PresetPlan, 
   if (plan.emsRun && obs.ems && outputs.has(plan.emsRun)) {
     result.ems = { ...scoreEms(fieldsOf(plan.emsRun), obs.ems), run: plan.emsRun };
   }
-  return { result, femaCells };
+  let damage: DamageResult | null = null;
+  const fp = plan.damageRun && obs.damage && outputs.has(plan.damageRun) ? loadFootprints(p) : null;
+  if (plan.damageRun && obs.damage && fp) {
+    const sfha = obs.fema ? rleDecode(readJson<FemaZonesFile>(path.join(PUB, p.id, obs.fema.file)).rle, p.meta.nx * p.meta.ny) : null;
+    damage = scoreDamage(fieldsOf(plan.damageRun), obs.damage.maskRle, fp, { sfhaCls: sfha, crestLevel: obs.damage.gauge.elevation });
+    const { outcome: _o, centroids: _c, ...rest } = damage;
+    result.damage = { ...rest, run: plan.damageRun, event: obs.damage.event, parcels: obs.damage.parcels, stageFt: obs.damage.gauge.stageFt, gauge: obs.damage.gauge.id };
+  }
+  return { result, femaCells, damage };
 }
 
 /** The one number per preset the app shows, and the metrics the regression test pins. */
@@ -253,10 +292,26 @@ export function summarise(r: PresetResult): ValidationSummaryEntry {
       note: 'Share of the buildings EMS graded destroyed or damaged that the modelled flood reaches, and agreement on which road stretches were destroyed.',
     };
   }
+  const more: ValidationHeadline[] = [];
+  if (r.damage) {
+    const d = r.damage;
+    putExtent('damage.buildings', d.buildings);
+    put('damage.parcelArea', d.parcelCells ? d.parcelCellsFlooded / d.parcelCells : null);
+    if (d.inReach) putExtent('damage.inReach', d.inReach);
+    const b = d.buildings;
+    const reach = d.inReach;
+    const outOfReach = reach && b.hits + b.misses ? 1 - (reach.hits + reach.misses) / (b.hits + b.misses) : null;
+    more.push({
+      label: `May 2010 flood: Metro Nashville’s damage survey, river at the ${d.stageFt.toFixed(2)} ft crest`,
+      value: `reaches ${pct(b.hitRate)} of the damaged buildings${reach ? ` (${pct(reach.hitRate)} of those the river could reach)` : ''} · ${pct(b.falseAlarmRatio)} of the buildings it floods were not recorded`,
+      note: `Building by building, against the parcels the city recorded as damaged.${outOfReach !== null ? ` ${pct(outOfReach)} of that damage stands above the crest or out of the river’s reach — creeks, rain and drains this scene does not run.` : ''} Damage is not inundation.`,
+    });
+  }
   return {
     preset: r.preset,
     event: r.event,
     headline,
+    ...(more.length ? { more } : {}),
     metrics,
     runs: r.runs.map((x) => ({ id: x.id, description: x.description, simMinutes: x.simMinutes })),
   };
@@ -301,6 +356,17 @@ function markdown(results: PresetResult[], gpu: string): string {
       L.push('', `Share of the 0.2 % zone (shaded X) flooded: ${pct(r.fema.floodedIn02, 1)}`, '');
     }
     if (r.bfe) pointTable(`FEMA 1 % profile: Deluge water surface at each Base Flood Elevation line crossing a forced river (run \`${r.bfe.run}\`)`, r.bfe);
+    if (r.damage) {
+      const d = r.damage;
+      const b = d.buildings;
+      L.push(`### ${d.event}: parcel damage survey, building by building (run \`${d.run}\`, ${d.stageFt} ft at ${d.gauge})`, '');
+      L.push(`${d.parcels} damaged parcels in the domain. Building footprints compared: ${b.cells}.`, '');
+      L.push('| Comparison | CSI | Hit rate | False-alarm ratio | Frequency bias | Hits | Misses | False alarms | Correct dry |', '| --- | --- | --- | --- | --- | --- | --- | --- | --- |');
+      L.push(`| footprints: on a damaged parcel vs modelled flooded | ${ext(b)} |`);
+      if (d.inReach) L.push(`| … only footprints within the river's reach at the crest (below ${d.stageFt} ft, connected to the river) | ${ext(d.inReach)} |`);
+      L.push('');
+      L.push(`Damaged-parcel land flooded by the model: ${pct(d.parcelCells ? d.parcelCellsFlooded / d.parcelCells : null, 1)} of ${d.parcelCells} cells.${d.damagedInSfha !== null ? ` Damaged footprints touching FEMA's 1 % zone: ${d.damagedInSfha} of ${b.hits + b.misses} (${pct(b.hits + b.misses ? d.damagedInSfha / (b.hits + b.misses) : null)}).` : ''}`, '');
+    }
     if (r.ems) {
       L.push(`### Copernicus EMS EMSR927 damage grading (run \`${r.ems.run}\`, ${r.ems.analysedCells} analysed cells)`, '');
       L.push('| Grade | Buildings | Reached by the modelled flood |', '| --- | --- | --- |');
@@ -444,6 +510,49 @@ function emsShot(p: PresetData, obs: ObservedFile, maxDepth: Float32Array, r: Pr
   return { file: `${p.id}-ems.png`, html, width: 672, height: Math.round((640 * H) / W) + 170 };
 }
 
+/** A parcel damage survey over the modelled flood: every compared building as a dot coloured by its outcome. */
+function damageShot(p: PresetData, obs: ObservedFile, maxDepth: Float32Array, damage: DamageResult, r: PresetResult): Shot {
+  const { nx, ny, cellSize } = p.meta;
+  const hs = hillshade(p.elevation, nx, ny, cellSize);
+  const mask = rleDecode(obs.damage!.maskRle, nx * ny);
+  const rgba = Buffer.alloc(nx * ny * 4);
+  const put = (k: number, c: number[], a = 1) => {
+    for (let q = 0; q < 3; q++) rgba[4 * k + q] = Math.round(rgba[4 * k + q] * (1 - a) + c[q] * a);
+  };
+  for (let k = 0; k < nx * ny; k++) {
+    rgba[4 * k] = rgba[4 * k + 1] = rgba[4 * k + 2] = hs[k];
+    rgba[4 * k + 3] = 255;
+    if (p.initialWater[k] > 0) put(k, [125, 165, 200]);
+    else if (maxDepth[k] >= FLOOD_M) put(k, [37, 99, 235], 0.35);
+    if (mask[k]) put(k, [120, 113, 108], 0.35);
+  }
+  const colour: Record<number, number[]> = {
+    [EXTENT_CELL.hit]: [30, 58, 138],
+    [EXTENT_CELL.miss]: [245, 158, 11],
+    [EXTENT_CELL.falseAlarm]: [219, 39, 119],
+  };
+  for (let b = 0; b < damage.outcome.length; b++) {
+    const c = colour[damage.outcome[b]];
+    if (!c) continue;
+    const i = Math.floor(damage.centroids[2 * b]);
+    const j = Math.floor(damage.centroids[2 * b + 1]);
+    for (let dj = -1; dj <= 1; dj++) for (let di = -1; di <= 1; di++) {
+      const x = i + di;
+      const y = j + dj;
+      if (x >= 0 && y >= 0 && x < nx && y < ny) put(y * nx + x, c);
+    }
+  }
+  const png = encodePng(rgba, nx, ny).toString('base64');
+  const d = r.damage!;
+  const html = `<!doctype html><meta charset="utf-8"><style>${PAGE_CSS}</style><div class="wrap" id="shot" style="width:640px">
+<h1>${p.meta.name}: Deluge at the May 2010 crest (${d.stageFt} ft) vs Metro Nashville's damage survey</h1>
+<p>Buildings on damaged parcels reached ${pct(d.buildings.hitRate, 1)} · buildings flooded but not recorded ${pct(d.buildings.falseAlarmRatio, 1)} · CSI ${pct(d.buildings.csi, 1)} · flooded = max depth ≥ ${FLOOD_M} m · ${(nx * cellSize / 1000).toFixed(1)} km across, north up</p>
+<img src="data:image/png;base64,${png}" style="width:640px;height:640px;display:block;margin-top:8px;image-rendering:auto">
+<div class="legend"><span><i style="background:#9fb6ea"></i>Deluge flood</span><span><i style="background:#7da5c8"></i>river at t = 0</span><span><i style="background:#b9b4b0"></i>parcel recorded damaged</span><span><i style="background:#1e3a8a"></i>building on a damaged parcel, flooded</span><span><i style="background:#f59e0b"></i>on a damaged parcel, dry in the model</span><span><i style="background:#db2777"></i>flooded, not recorded</span></div>
+<p style="margin-top:6px">Damage survey: Metro Nashville (MetroGIS, Metro Stormwater, Metro Codes). Buildings © OpenStreetMap contributors (ODbL).</p></div>`;
+  return { file: `${p.id}-may2010-damage.png`, html, width: 672, height: 800 };
+}
+
 function scatterShot(id: string, title: string, subtitle: string, pr: PointResult, xLabel = 'Observed peak water level (m NAVD88)'): Shot {
   const W = 560;
   const H = 520;
@@ -577,13 +686,14 @@ async function main(): Promise<void> {
         outputs.set(run.id, o);
       }
     }
-    const { result, femaCells } = scorePreset(p, obs, plan, outputs);
+    const { result, femaCells, damage } = scorePreset(p, obs, plan, outputs);
     allResults[id] = result;
     summary.presets[id] = summarise(result);
     const h = summary.presets[id].headline;
     console.log(`  headline: ${h ? `${h.label}: ${h.value}` : obs.none ?? 'none'}`);
     if (!args['no-images']) {
       if (femaCells && result.fema) shots.push(extentShot(p, femaCells, result));
+      if (damage && result.damage && plan.damageRun) shots.push(damageShot(p, obs, outputs.get(plan.damageRun)!.maxDepth, damage, result));
       if (result.ems && plan.emsRun) shots.push(emsShot(p, obs, outputs.get(plan.emsRun)!.maxDepth, result));
       if (result.hwm) shots.push(scatterShot(`${id}-hwm`, `${p.meta.name}: Deluge vs USGS high-water marks`, `${obs.hwm?.event} · run: ${plan.runs(obs).find((r) => r.id === result.hwm?.run)?.description}`, result.hwm));
       if (result.bfe && result.bfe.rows.length) shots.push(scatterShot(`${id}-bfe-profile`, `${p.meta.name}: Deluge vs FEMA's 1 % profile`, `water surface at each Base Flood Elevation line crossing a forced river · run: ${plan.runs(obs).find((r) => r.id === result.bfe?.run)?.description}`, result.bfe, 'FEMA Base Flood Elevation (m NAVD88)'));

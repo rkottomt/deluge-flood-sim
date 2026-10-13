@@ -68,6 +68,27 @@ export interface EmsDamage {
   roads: Array<{ pts: number[]; grade: string; type: string }>;
 }
 
+/**
+ * A local government's post-flood damage assessment of PARCELS (Metro Nashville's windshield survey of May 2010):
+ * which parcels had a structure damaged by the flood, rasterised onto the preset grid, with the gauged peak of the
+ * same flood that the comparison run is raised to. Only the mask is committed — no owners, addresses or parcel IDs.
+ */
+export interface ParcelDamage {
+  event: string;
+  /** Date of the flood's crest at the gauge, YYYY-MM-DD. */
+  date: string;
+  /** Who surveyed what (shown in the report). */
+  survey: string;
+  /** The gauged crest of this flood at the stage gauge the scene's slider reads. */
+  gauge: { id: string; name: string; stageFt: number; gaugeDatumFt: number; datum: 'NAVD88'; elevation: number; source: string };
+  /** Damaged parcels inside the domain. */
+  parcels: number;
+  /** Of those, parcels smaller than one cell centre (condominium units, small lots): marked at their centroid's cell. */
+  subCellParcels: number;
+  /** RLE (src/validation/raster.ts) of the damaged-parcel mask on the grid: 1 = on a parcel with a damaged structure. */
+  maskRle: number[];
+}
+
 export interface ObservedFile {
   version: 1;
   preset: string;
@@ -86,6 +107,7 @@ export interface ObservedFile {
   gauges?: GaugePeak[];
   fema?: { file: string; counts: Record<string, number>; dfirm: string[]; ladder?: FemaLadder };
   ems?: EmsDamage;
+  damage?: ParcelDamage;
 }
 
 export interface FemaZonesFile {
@@ -114,6 +136,8 @@ export interface ValidationSummaryEntry {
   preset: string;
   event: string;
   headline: ValidationHeadline | null;
+  /** Further comparisons for the same scene (another observed flood), shown under the headline. */
+  more?: ValidationHeadline[];
   /** Machine-readable metrics (the regression test pins these). */
   metrics: Record<string, number | null>;
   runs: Array<{ id: string; description: string; simMinutes: number }>;

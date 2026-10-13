@@ -28,11 +28,23 @@ export function ringToGrid(grid: GridSpec, ring: ReadonlyArray<ReadonlyArray<num
   return out;
 }
 
+/** The row-major indices of the cells whose centres are inside the polygon made of `rings` (even–odd). */
+export function polygonCells(nx: number, ny: number, rings: readonly GridRing[]): number[] {
+  // Even–odd pairs on one scanline never overlap, so every cell is visited once.
+  const cells: number[] = [];
+  scanPolygon(nx, ny, rings, (k) => cells.push(k));
+  return cells;
+}
+
 /**
  * Set `value` in `out` (nx·ny) for every cell whose centre is inside the polygon made of `rings` (even–odd).
  * Scanline fill: for each row, intersect the row's centre line with every edge, sort, and fill between pairs.
  */
 export function fillPolygon(out: Uint8Array, nx: number, ny: number, rings: readonly GridRing[], value: number): number {
+  return scanPolygon(nx, ny, rings, (k) => (out[k] = value));
+}
+
+function scanPolygon(nx: number, ny: number, rings: readonly GridRing[], visit: (k: number) => void): number {
   let ymin = Infinity;
   let ymax = -Infinity;
   for (const r of rings) {
@@ -68,7 +80,7 @@ export function fillPolygon(out: Uint8Array, nx: number, ny: number, rings: read
       const i0 = Math.max(0, Math.ceil(xs[k] - 0.5));
       const i1 = Math.min(nx - 1, Math.floor(xs[k + 1] - 0.5));
       for (let i = i0; i <= i1; i++) {
-        out[j * nx + i] = value;
+        visit(j * nx + i);
         filled++;
       }
     }

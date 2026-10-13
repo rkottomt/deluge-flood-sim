@@ -404,7 +404,11 @@ grain size, a breach rate or a friction pair to the clock. Some of the gap was t
 Rasuwagadhi", "08:50 at Syafrubesi" and "09:20 at Betrawati" are gauge timestamps (a last normal reading, data lost),
 and Chungthang's "00:30" was a published model's answer, not a sighting. What is left — Nepal still ~50 % late,
 Chamoli late above Tapovan and early below it, Chungthang ~14 % early — is listed with its suspects in
-[§G.9](docs/research/glacier-hazard-chain.md). Every scenario's on-screen text gives its own error. Lead times from the
+[§G.9](docs/research/glacier-hazard-chain.md). Nepal's gap is not in the routing: below Rasuwagadhi the routed front
+moves at Rickenmann's (1999) empirical debris-flow velocity for the discharge it carries (14.8 against 15.5 m/s over
+the 45 km to Betrawati; a test pins it within ±15 %), and the reported time would need about 40,000 m³/s held over
+those 45 km — 1.6× the ensemble's p90 peak. No published celerity, width or resistance closes it, so the model was
+left as it is. Every scenario's on-screen text gives its own error. Lead times from the
 designer are therefore best read as differences between sensor designs, not absolute minutes.
 
 ## Future climate
@@ -735,13 +739,15 @@ underpasses, depressed roadways, underground stations). Full table: [ARCHITECTUR
 
 **Checked against real floods.** Every scene is re-run on the GPU and scored against what was observed — USGS
 high-water marks and gauge peaks, the FEMA 1 % flood zone at FEMA's own 1 % river level, Copernicus EMS damage
-grading — by `npx tsx scripts/validate.ts`, pinned by a regression test, and shown in the app's Scenario section.
+grading, Metro Nashville's May 2010 damage survey — by `npx tsx scripts/validate.ts`, pinned by a regression test,
+and shown in the app's Scenario section.
 Full report, with the misses and why: [docs/VALIDATION.md](docs/VALIDATION.md).
 
 | Scene | Observed | Deluge |
 | --- | --- | --- |
 | Fort Myers, Hurricane Ian | 25 USGS high-water-mark sites (tide set to the gauged peak) | bias +0.07 m, RMSE 0.14 m, all within ±0.3 m |
 | Fort Myers / Nashville / Pittsburgh | FEMA 1 % zone at FEMA's 1 % level | CSI 88 % / 82 % / 61 % |
+| Nashville, May 2010 | Metro Nashville's survey of damaged parcels, against 13,668 building footprints (river at the gauged 52.55 ft crest) | reaches 31 % of the damaged buildings — 98 % of those the river could reach; 70 % of the recorded damage is out of its reach (creeks, rain, drains); 14 % of the buildings it floods were not recorded |
 | Asheville, Helene | USGS peak stage at 2 gauges | 1.44 m and 1.22 m too low |
 | Houston, Harvey | 9 USGS high-water-mark sites (the scene is 1 hour of a 4-day flood) | 1.85 m too low on average |
 | Betrawati, Nepal | Copernicus EMS EMSR927 damage grading | reaches 40 % of destroyed/damaged buildings, no false alarms on undamaged roads |
@@ -1002,6 +1008,12 @@ a simulation. `Deluge.app` serves the same build with `frame-ancestors 'none'` a
   water does not dilute it, and the bed never changes. Yield stress and Coulomb friction stop flow on gentle ground —
   that is how deposits form, and also why a Coulomb coefficient set for steep gorges (Voellmy μ 0.05 stops flow below
   ~3°) holds a surge back on a flatter valley floor.
+* **Glacier flood times are model times.** The hazard chain's front reaches Betrawati 65 min after the avalanche,
+  against ≤ 43 min reported (when the gauge went silent; about 22 minutes late), and Chungthang ~14 % early. The Nepal
+  residual is not the 1-D routing — its front moves at Rickenmann's (1999) empirical debris-flow velocity for its own
+  discharge — but either a source mechanism no back-analysis yet supports (the avalanche itself running far down the
+  Bhote Koshi) or observations that are telemetry losses rather than the flood. Lead times are best read as
+  differences between sensor designs ([§G.9](docs/research/glacier-hazard-chain.md)).
 * **Boundaries.** River stages are imposed where rivers cross the domain edge, with a small head that keeps the
   rivers flowing downstream; discharges at the 1936 crest are lower than the historic record.
 * **Coverage.** Live areas are US-only at full quality (USGS 3DEP); elsewhere the coarse Terrarium fallback is used.
@@ -1034,7 +1046,9 @@ that forbids redistribution (details, per city, in [public/presets/SOURCES.txt](
   Buffalo Bayou at Houston 08074000, Boulder Creek 06730200, Stonycreek 03040000, Patapsco 01589000)
 * Validation data (`public/validation`, [docs/VALIDATION.md](docs/VALIDATION.md)): **USGS** STN high-water marks and
   NWIS peaks, **FEMA** National Flood Hazard Layer (public domain); damage grading © European Union, 2026,
-  **Copernicus Emergency Management Service** (EMSR927)
+  **Copernicus Emergency Management Service** (EMSR927); the May 2010 parcel damage assessment of the **Metropolitan
+  Government of Nashville and Davidson County** (MetroGIS, Metro Stormwater, Metro Codes; a public record, committed
+  only as a rasterised mask — no owners, addresses or parcel IDs)
 * Land cover: **NLCD 2021** (USGS / MRLC) for the US presets; the drain design rainfall from **NOAA Atlas 14**. The three
   Himalayan presets use **ESA WorldCover 2021** (© ESA WorldCover project 2021 / Contains modified Copernicus Sentinel
   data (2021) processed by ESA WorldCover consortium, CC BY 4.0), credited on screen with the rest of their data

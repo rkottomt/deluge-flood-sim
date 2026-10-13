@@ -16,7 +16,7 @@
  *    of a creek the scenario does not force is a different flood, not a miss. Both numbers are reported.
  */
 import { connectedTo, extentScores, pointScores, type ExtentScores, type PointScores } from './metrics';
-import { lineCells, rleDecode } from './raster';
+import { lineCells, polygonCells, rleDecode } from './raster';
 import type { EmsDamage, FemaZonesFile, GaugePeak, ObservedFile } from './types';
 
 /** Depth that counts as "the model put water here" for matching a point, m. */
@@ -307,4 +307,146 @@ export function scoreEms(f: ModelFields, ems: EmsDamage, floodM = FLOOD_M): EmsR
   const model = new Uint8Array(N);
   for (let k = 0; k < N; k++) model[k] = f.maxDepth[k] >= floodM ? 1 : 0;
   return { buildings, buildingHitRate: aff ? affHit / aff : null, buildingHitRateNear: aff ? affNear / aff : null, roads: extentScores(model, obs, msk), analysedCells };
+}
+
+/** Footprints in grid coordinates, as BuildingSet stores them (src/contracts.ts): ring k is verts[2·offsets[k] …]. */
+export interface Footprints {
+  count: number;
+  offsets: ArrayLike<number>;
+  verts: ArrayLike<number>;
+}
+
+export interface DamageResult {
+  /**
+   * Over building footprints: observed = the footprint stands on a parcel the survey recorded damaged; modelled = the
+   * model floods the footprint (≥ FLOOD_M on any of its cells). Footprints touching the water the scene starts with
+   * or a stage disc are left out.
+   */
+  buildings: ExtentScores;
+  /**
+   * The same over the footprints WITHIN THE RIVER'S REACH only — those with a cell below the observed crest level and
+   * connected to the river through ground below it (crestReach). A damaged building standing above the crest was
+   * damaged by something the scene does not force (a creek, rain, a backed-up drain). Null without a crest level.
+   */
+  inReach: ExtentScores | null;
+  /** Land cells of damaged parcels (not river at t = 0, not a stage disc), and how many the model floods. */
+  parcelCells: number;
+  parcelCellsFlooded: number;
+  /** Context, not skill: damaged footprints touching FEMA's 1 % zone (null without a zone raster). */
+  damagedInSfha: number | null;
+  /** Per-footprint outcome for the map: EXTENT_CELL.hit / miss / falseAlarm / correctDry, or outside (left out). */
+  outcome: Uint8Array;
+  /** Vertex centroid of each footprint, grid coordinates (for the map). */
+  centroids: Float32Array;
+}
+
+/**
+ * A parcel damage survey against the modelled flood, building by building. The survey lists damaged parcels only, so
+ * the population that makes it two-sided is every building footprint in the domain: a footprint the model floods on
+ * a parcel nobody recorded is a false alarm, a footprint on a recorded parcel the model leaves dry a miss.
+ *
+ * A footprint is "on a damaged parcel" when at least half of its cells — or, for a footprint smaller than one cell
+ * centre, the cell under its centroid — lie in the parcel mask. Damage is not inundation: a windshield survey records
+ * what looked damaged from the street (a basement flooded from the drains, a wall hit by a tributary the scene does
+ * not force), and a structure can stand in water without visible damage. It is a consistency check, like EMS grades.
+ */
+export function scoreDamage(
+  f: ModelFields,
+  maskRle: readonly number[],
+  footprints: Footprints,
+  opts: { sfhaCls?: Uint8Array | null; crestLevel?: number | null; floodM?: number } = {},
+): DamageResult {
+  const floodM = opts.floodM ?? FLOOD_M;
+  const sfhaCls = opts.sfhaCls ?? null;
+  const N = f.nx * f.ny;
+  const mask = rleDecode(maskRle, N);
+  const reach = opts.crestLevel != null ? crestReach(f, opts.crestLevel) : null;
+  const n = footprints.count;
+  const model = new Uint8Array(n);
+  const obs = new Uint8Array(n);
+  const use = new Uint8Array(n);
+  const useReach = new Uint8Array(n);
+  const centroids = new Float32Array(2 * n);
+  let damagedInSfha = 0;
+  for (let b = 0; b < n; b++) {
+    const a0 = footprints.offsets[b];
+    const a1 = footprints.offsets[b + 1];
+    if (a1 - a0 < 3) continue;
+    const ring: number[] = [];
+    let cx = 0;
+    let cy = 0;
+    for (let v = a0; v < a1; v++) {
+      ring.push(footprints.verts[2 * v], footprints.verts[2 * v + 1]);
+      cx += footprints.verts[2 * v];
+      cy += footprints.verts[2 * v + 1];
+    }
+    cx /= a1 - a0;
+    cy /= a1 - a0;
+    centroids[2 * b] = cx;
+    centroids[2 * b + 1] = cy;
+    const ci = Math.floor(cx);
+    const cj = Math.floor(cy);
+    const centre = ci >= 0 && cj >= 0 && ci < f.nx && cj < f.ny ? cj * f.nx + ci : -1;
+    let cells = polygonCells(f.nx, f.ny, [ring]);
+    if (cells.length === 0) {
+      if (centre < 0) continue;
+      cells = [centre];
+    }
+    if (cells.some((k) => f.initialWater[k] > 0 || (f.exclude && f.exclude[k]))) continue;
+    use[b] = 1;
+    let inMask = 0;
+    let wet = false;
+    let sfha = false;
+    for (const k of cells) {
+      if (mask[k]) inMask++;
+      if (f.maxDepth[k] >= floodM) wet = true;
+      if (sfhaCls && sfhaCls[k] === 1) sfha = true;
+      if (reach && reach[k]) useReach[b] = 1;
+    }
+    obs[b] = inMask * 2 >= cells.length || (centre >= 0 && mask[centre] === 1) ? 1 : 0;
+    model[b] = wet ? 1 : 0;
+    if (obs[b] && sfha) damagedInSfha++;
+  }
+  let parcelCells = 0;
+  let parcelCellsFlooded = 0;
+  for (let k = 0; k < N; k++) {
+    if (!mask[k] || f.initialWater[k] > 0 || (f.exclude && f.exclude[k])) continue;
+    parcelCells++;
+    if (f.maxDepth[k] >= floodM) parcelCellsFlooded++;
+  }
+  const outcome = new Uint8Array(n);
+  for (let b = 0; b < n; b++) {
+    if (!use[b]) outcome[b] = EXTENT_CELL.outside;
+    else if (model[b] && obs[b]) outcome[b] = EXTENT_CELL.hit;
+    else if (obs[b]) outcome[b] = EXTENT_CELL.miss;
+    else if (model[b]) outcome[b] = EXTENT_CELL.falseAlarm;
+    else outcome[b] = EXTENT_CELL.correctDry;
+  }
+  return {
+    buildings: extentScores(model, obs, use),
+    inReach: reach ? extentScores(model, obs, useReach) : null,
+    parcelCells,
+    parcelCellsFlooded,
+    damagedInSfha: sfhaCls ? damagedInSfha : null,
+    outcome,
+    centroids,
+  };
+}
+
+/**
+ * Land a river at `level` (m, the datum of `ground`) could reach: cells whose ground is below the level and that are
+ * 4-connected to the water the scene starts with through such cells. A flat surface at the gauge's crest — for sorting
+ * observations into "the river's flood" and "something else", never for scoring the model's own water.
+ */
+export function crestReach(f: Pick<ModelFields, 'nx' | 'ny' | 'ground' | 'initialWater'>, level: number): Uint8Array {
+  const N = f.nx * f.ny;
+  const below = new Uint8Array(N);
+  const seed = new Uint8Array(N);
+  for (let k = 0; k < N; k++) {
+    below[k] = f.ground[k] < level ? 1 : 0;
+    seed[k] = f.initialWater[k] > 0 ? 1 : 0;
+  }
+  const reach = connectedTo(below, seed, f.nx, f.ny);
+  for (let k = 0; k < N; k++) if (seed[k]) reach[k] = 0;
+  return reach;
 }

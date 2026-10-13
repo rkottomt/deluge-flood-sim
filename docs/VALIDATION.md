@@ -15,6 +15,7 @@ that happened. This page does, as far as public data allows — and in several p
 | **Fort Myers** (Hurricane Ian 2022) | 29 USGS high-water marks at 25 sites | yes, with a caveat: the tide is set to the gauged peak | **bias +0.07 m, RMSE 0.14 m, 25/25 within ±0.3 m** |
 | **Fort Myers** | FEMA 1 % zone at FEMA's 1 % stillwater level | yes | **CSI 88 %**, hit rate 88 %, false alarms 0.6 % |
 | **Nashville** | FEMA 1 % zone and 1 % profile at FEMA's 1 % level | yes | **CSI 82 %**, hit rate 88 %, false alarms 7 %; water surface **+0.26 m** vs the 1 % profile (RMSE 0.27 m, 10 lines) |
+| **Nashville** (May 2010) | Metro Nashville's survey of parcels with a damaged structure, against all 13,668 building footprints | yes for the river (stage at the USGS-gauged crest); the survey also holds creek and rain damage | reaches **31 %** of the buildings on damaged parcels — **98 %** of those the river could reach at the crest — and **14 %** of the buildings it floods were not recorded (CSI 29 %); **70 %** of the recorded damage is out of the river's reach |
 | **Pittsburgh** | FEMA 1 % zone and 1 % profile at FEMA's 1 % level | yes | **CSI 61 %**, hit rate 65 %, false alarms 10 %; water surface **−0.38 m** vs the profile (RMSE 0.71 m, 24 lines) — too flat |
 | **Asheville** (Helene 2024) | USGS peak stages at the 2 gauges in the domain | yes (steady peak discharge) | **−1.44 m** (French Broad) and **−1.22 m** (Swannanoa): too low |
 | **Houston** (Harvey 2017) | 13 USGS high-water marks at 9 sites | **no** — the scene is one hour of Harvey's rain, the marks record four days | bias −1.85 m, RMSE 2.56 m (7 wetted), 2 marks dry in the model |
@@ -25,7 +26,9 @@ that happened. This page does, as far as public data allows — and in several p
 The short reading: **where a scene is forced by the measured water level and the terrain controls the rest — a
 storm-surge stillwater, a river at a known stage — Deluge puts the water where the surveys and FEMA put it, to tens of
 centimetres and 80–90 % CSI. Where the answer depends on how much water a river carries (Asheville) or on days of rain
-the scene does not simulate (Houston), it is low by one to two metres.** The reasons are specific and listed per scene
+the scene does not simulate (Houston), it is low by one to two metres. Against the one surveyed record of a whole
+city's damage (Nashville, May 2010), the river at its gauged crest reaches nearly every damaged building the river
+could reach — and that is under a third of the damage the city recorded.** The reasons are specific and listed per scene
 below; the biggest are a single Manning's n for every surface, bare-earth terrain, and stage boundaries that hold a
 nearly flat water surface across the domain.
 
@@ -124,7 +127,7 @@ over the terrain.
 
 | | Value |
 | --- | --- |
-| FEMA 1 % level at USGS 03431500 | 416 ft NAVD88 = 48.55 ft on the gauge (the 2010 flood was 51.86 ft) |
+| FEMA 1 % level at USGS 03431500 | 416 ft NAVD88 = 48.55 ft on the gauge (the 2010 flood crested at 52.55 ft) |
 | CSI (connected zones) / all zones | **82.3 %** / 53.9 % |
 | Hit rate / false-alarm ratio / frequency bias | 87.5 % / 6.8 % / 0.94 |
 | Water surface vs 1 % profile (10 BFE lines) | **bias +0.26 m, RMSE 0.27 m**, 7 of 10 within ±0.3 m |
@@ -135,6 +138,51 @@ over the terrain.
 The best riverine agreement of the set. The modelled surface is 0.1–0.4 m above FEMA's profile everywhere; the misses
 (orange) are low pockets of the east-bank floodplain that FEMA maps below the 1 % level but that the model's water
 does not reach, or reaches less than 0.15 m deep, within the 30-minute hold.
+
+## Nashville — the Cumberland flood of 1–3 May 2010
+
+Two days of rain (13.57 in at the airport) put the Cumberland at Nashville to its highest level since the Corps'
+dams were built: **52.55 ft on USGS 03431500 on 3 May 2010** (the USGS annual peak, 188,000 ft³/s; the NWS lists
+the same crest — the scene's slider marks the 2010 flood at 51.86 ft). No USGS high-water marks exist for it, but
+the Metropolitan Government of Nashville and Davidson County surveyed the damage afterwards: a windshield assessment
+by Metro Stormwater and Metro Codes of every parcel whose structure was damaged "based on outward appearance",
+published as a public map service. 563 damaged parcels lie in the domain.
+
+The run raises the stage to the gauged 52.55 ft through the app's ramp and holds it 30 min. The real crest stood
+above 50 ft for about a day, so the like-for-like comparison is the steady flood at that level: holds of 30, 60, 120
+and 240 min flood the same 172 footprints and the same land to 0.2 %, so 30 min (the FEMA run's hold) is steady.
+
+![Deluge at the May 2010 crest vs Metro Nashville's damage survey](validation/nashville-may2010-damage.png)
+
+**How it is scored** (`src/validation/score.ts` scoreDamage). The survey lists damaged parcels only, so on its own it
+could only say what the model reaches, never what it floods wrongly. The population that makes it two-sided is every
+building footprint the scene has (OpenStreetMap, 13,668 compared): a footprint is *damaged* when at least half of its
+cells (or, for one smaller than a cell, the cell under its centroid) lie on a damaged parcel, and *flooded* when the
+model puts ≥ 0.15 m on any of its cells. A **crest-reach mask** — ground below the crest level and connected to the
+river through ground below it, a flat surface at the gauge — sorts the damage into what the river could have done
+and what it could not; it never scores the model's own water.
+
+| Buildings | CSI | Hit rate | False-alarm ratio | Frequency bias | Hits | Misses | False alarms |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| all 13,668 in the domain | **29.1 %** | **30.6 %** | **14.3 %** | 0.36 | 132 | 299 | 22 |
+| the 161 within the river's reach at the crest | 84.3 % | **98.5 %** | 14.6 % | 1.15 | 129 | 2 | 22 |
+
+Of the 431 buildings on damaged parcels, **300 (70 %) stand above the crest or behind higher ground**, and only 82
+(19 %) touch FEMA's 1 % zone. The model floods 45 % of the damaged parcels' land.
+
+**Reading it.** Where the Cumberland could reach at its crest, Deluge reaches it: 129 of 131 damaged buildings, and
+the 22 buildings it floods that the city did not record (14 % of what it floods) are on the same waterfront (not
+separated here: no visible damage from the street, a parcel the survey did not reach, or a model error). Inside the
+reach this is close to a bathtub test (8 buildings in reach stay dry); the level, not the hydraulics, decides it.
+The 299 misses are the larger finding: seven in ten damaged buildings in this domain were damaged by something a
+river-stage scene does not run — the creeks (the south-east cluster is along Browns Creek), rain on the city, storm
+drains backing up under a river 12 ft above flood stage (the downtown cluster just inland of the riverfront stands
+above the crest level), and basement and utility damage that a windshield survey records as damage. Damage is not inundation, and this is not a skill
+score for those floods; it is a measured statement of how much of a real city's flood damage the river alone
+explains, which is what a buyer of a river-stage model needs to know.
+
+Not tuned: the stage is the gauged peak, the hold is set by steadiness, the 0.15 m threshold and the one-half rule
+were fixed before the comparison, and the crest-reach mask comes from the DEM and the gauge alone.
 
 ## Pittsburgh — Three Rivers at FEMA's 1 % level
 
@@ -317,7 +365,7 @@ caveats in ARCHITECTURE.md.
   it does not close Asheville's −1.3 m either, which points at the discharge and the burned channel instead.
 * **Scenario simplifications.** Stage scenes hold a nearly level water surface between their boundaries (Pittsburgh's
   profile); event scenes run a constant peak or one hour of rain, not the event's hydrograph (Houston).
-* **Small samples.** 25, 9 and 2 points, and three like-for-like extent maps. The FEMA zone is itself a model
+* **Small samples.** 25, 9 and 2 points, three like-for-like extent maps and one city damage survey. The FEMA zone is itself a model
   (FEMA's own hydraulics, often decades old), not an observation of a flood; it is the reference an insurer or
   lender uses, which is why it is here.
 * **One machine.** Numbers were produced on an NVIDIA GTX 1660 Ti (D3D12); the regression test's tolerances cover
@@ -331,10 +379,20 @@ caveats in ARCHITECTURE.md.
 | Annual peak stage and gauge datum, 03451500 and 03451000 | USGS NWIS, `nwis.waterdata.usgs.gov/nwis/peak`, `waterservices.usgs.gov` | Public domain (USGS) | Asheville |
 | Flood Hazard Zones (layer 28), Base Flood Elevations (16), Coastal Transects (15) | FEMA National Flood Hazard Layer, `hazards.fema.gov/arcgis/rest/services/public/NFHL/MapServer` | Public domain (U.S. Government work) | the eight U.S. scenes |
 | Damage grading, EMSR927 AOI 03 GRA_MONIT01 | Copernicus Emergency Management Service Rapid Mapping, `rapidmapping.emergency.copernicus.eu` | © European Union, 2026, Copernicus EMS; free use with attribution | Betrawati |
+| May 2010 flood parcel damage assessment (layer 1, "Parcels with Damaged Structure") | Metropolitan Government of Nashville and Davidson County — MetroGIS, Metro Stormwater, Metro Codes; `maps.nashville.gov/arcgis/rest/services/May2010Flood/May2010_DamageParcels/MapServer` | Public record, published as a public map service; no licence stated, used with attribution. Only the parcel geometry is requested and only a rasterised mask is committed — the layer's owner names, addresses and parcel IDs are never downloaded | Nashville 2010 |
+| 2010 crest and gauge datum, 03431500 | USGS NWIS annual peaks and site file | Public domain (USGS) | Nashville 2010 |
 
 Searched and not available for a domain: USGS STN marks for Helene in North Carolina (the event's STN records are in
 FL, SC and VA; USACE's Helene marks are a report, not a dataset), for the May 2010 Nashville flood, for the 2016
 Ellicott City flood and inside the Boulder domain; Copernicus EMS activations for Chamoli 2021 and Sikkim 2023.
+In October 2026 every one of the STN database's events was checked against every U.S. domain: only Harvey (Houston)
+and Ian (Fort Myers) have surveyed NAVD88 marks inside one — Irma's 506 and Helene's 321 marks have none inside the
+Fort Myers domain, and the Milton and Beryl events hold almost no marks at all. The STN does hold digitised historical
+marks inside two domains — "1972 Jun OH Flood" (Agnes) and "2004 Sep OH Flood" (Ivan) at Pittsburgh (8 and 5), and
+the 1889, 1936 and 1977 floods at Johnstown (3, 17 and 32) — but every one is type
+*Other*, quality *Unknown/Historical*, on a "local control point" datum and mostly taken at bridges; the datum rule
+refuses them (one Agnes mark at the Point gauge equals the gauge's NGVD29 crest, which suggests that datum, but
+"suggests" is a guess this page does not make).
 
 Raw downloads are cached under `artifacts/validation/raw/` (not committed). What is committed is the compact
 extract per scene in `public/validation/<scene>/`: `observed.json` (screened marks merged by site, with every rejected
