@@ -179,7 +179,7 @@ export function siteDependencies(site: { lon: number; lat: number; gx: number; g
 }
 
 export function facilityName(e: FacilityExposure): string {
-  return e.facility.name || `${FACILITY_LABELS[e.facility.kind]} ${e.facility.id}`;
+  return e.facility.name || `Unnamed ${FACILITY_LABELS[e.facility.kind].toLowerCase()} (OSM ${e.facility.id})`;
 }
 
 /** "Substation X floods at T+42 min (approximate service area)" and the like, one line per utility. */

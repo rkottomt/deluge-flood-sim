@@ -188,7 +188,15 @@ export interface PeopleEvacResult {
   reach: number;
   groups: GroupResult[];
   /** The able-adult route at the first-out moment (or the slowest group's when that fails). */
-  route: { polyline: Float32Array; meters: number; refuge: string; refugeKind: 'shelter' | 'high-ground'; via: string } | null;
+  route: {
+    polyline: Float32Array;
+    meters: number;
+    refuge: string;
+    refugeKind: 'shelter' | 'high-ground';
+    via: string;
+    /** No group reaches a refuge: this is the walk the flood closed (dry-network route). */
+    cut: boolean;
+  } | null;
   vertical: VerticalEvac | null;
   /** Simulated span the answer covers, s. */
   horizon: number;
@@ -279,10 +287,19 @@ export function analyzePeopleEvac(net: WalkNetwork, start: { gx: number; gy: num
       if (!r.ok) continue;
       const rt = net.route(start.gx, start.gy, r.node);
       const shelter = net.refugeLabel(r.node);
-      out.route = { ...rt, refuge: shelter || (net.streetAt(r.node) ? `high ground on ${net.streetAt(r.node)}` : 'high ground'), refugeKind: shelter ? 'shelter' : 'high-ground', via: net.mainStreet(r.node) };
+      out.route = { ...rt, refuge: shelter || (net.streetAt(r.node) ? `high ground on ${net.streetAt(r.node)}` : 'high ground'), refugeKind: shelter ? 'shelter' : 'high-ground', via: net.mainStreet(r.node), cut: false };
       break;
     }
     if (out.route) break;
+  }
+  if (!out.route) {
+    // Nobody makes it: show the walk the flood closed (the dry-network route), drawn as cut.
+    const r = net.search(seeds, 0, WALK_GROUPS.able.speed, { ignoreHazard: true });
+    if (r.ok) {
+      const rt = net.route(start.gx, start.gy, r.node);
+      const shelter = net.refugeLabel(r.node);
+      out.route = { ...rt, refuge: shelter || (net.streetAt(r.node) ? `high ground on ${net.streetAt(r.node)}` : 'high ground'), refugeKind: shelter ? 'shelter' : 'high-ground', via: net.mainStreet(r.node), cut: true };
+    }
   }
   return out;
 }
@@ -304,7 +321,7 @@ export function peopleEvacSentences(r: PeopleEvacResult): string[] {
   if (!r.known) return [`Evacuation on foot not assessed: ${r.note}`];
   const out: string[] = [];
   const alert = `if the alert goes out at ${tPlus(r.alertTime)}`;
-  const route = r.route ? ` (${r.route.refuge}, ${r.route.meters >= 995 ? `${(r.route.meters / 1000).toFixed(1)} km` : `${Math.round(r.route.meters / 10) * 10} m`} on foot${r.route.via ? ` via ${r.route.via}` : ''})` : '';
+  const route = r.route ? ` (${r.route.cut ? 'the walk it closed: ' : ''}${r.route.refuge}, ${r.route.meters >= 995 ? `${(r.route.meters / 1000).toFixed(1)} km` : `${Math.round(r.route.meters / 10) * 10} m`} on foot${r.route.via ? ` via ${r.route.via}` : ''})` : '';
   if (Number.isFinite(r.everyoneSafeAt)) {
     out.push(`Everyone out of the building by ${tPlus(r.everyoneOutAt)} and at a refuge by ${tPlus(r.everyoneSafeAt)} ${alert}${route}.`);
   } else {

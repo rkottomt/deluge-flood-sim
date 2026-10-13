@@ -88,6 +88,8 @@ export interface WalkSeed {
   node: number;
   /** Straight-line connector from the point to the node, m. */
   meters: number;
+  /** When the connector's own ground turns unsafe for people, s (+∞ never). */
+  tUnsafe: number;
 }
 
 export interface WalkSearchResult {
@@ -201,38 +203,47 @@ export class WalkNetwork {
       best.sort((a, b) => a.d2 - b.d2);
     }
     // Only nodes about as near as the nearest (a door connects to its own street, not to one 300 m away across a
-    // block), and never across a river or water that turns unsafe at any time in the run.
+    // block), and never across a river; water that turns unsafe later closes the connector from then, like an edge.
     const near = best.length ? Math.sqrt(best[0].d2) * g.cellSize + SEED_SLACK_M : 0;
     return best
-      .map((b) => ({ node: b.node, meters: Math.sqrt(b.d2) * g.cellSize }))
-      .filter((b) => b.meters <= near && !this.crossesWater(gx, gy, g.nodeX[b.node], g.nodeY[b.node]));
+      .map((b) => ({ node: b.node, meters: Math.sqrt(b.d2) * g.cellSize, tUnsafe: this.connectorUnsafeAt(gx, gy, g.nodeX[b.node], g.nodeY[b.node]) }))
+      .filter((b) => b.meters <= near && b.tUnsafe > -Infinity);
   }
 
-  /** The straight connector (x0,y0) → (x1,y1) crosses a river, or water unsafe for people at any time in the run. */
-  private crossesWater(x0: number, y0: number, x1: number, y1: number): boolean {
+  /**
+   * When the straight connector (x0,y0) → (x1,y1) turns unsafe for people (s; +∞ never), or −∞ when it crosses a
+   * river (water present at reset, ≥ 0.3 m): nobody walks across that.
+   */
+  private connectorUnsafeAt(x0: number, y0: number, x1: number, y1: number): number {
     const f = this.fields;
-    if (!f) return false;
+    if (!f) return Infinity;
     const steps = Math.ceil(Math.hypot(x1 - x0, y1 - y0) * 2);
+    let t = Infinity;
     for (let k = 1; k < steps; k++) {
       const c = this.fieldCell(x0 + ((x1 - x0) * k) / steps, y0 + ((y1 - y0) * k) / steps);
-      if (f.firstWet[c] === 0 ? f.maxDepth[c] >= 0.3 : unsafeForWalking(f.maxDepth[c], f.maxSpeed[c], f.maxDV[c])) return true;
+      if (f.firstWet[c] === 0) {
+        if (f.maxDepth[c] >= 0.3) return -Infinity;
+        continue;
+      }
+      if (unsafeForWalking(f.maxDepth[c], f.maxSpeed[c], f.maxDV[c])) t = Math.min(t, f.firstWet[c] > 0 ? f.firstWet[c] : 0);
     }
-    return false;
+    return t;
   }
 
   /**
    * Earliest arrival at any refuge, departing the seeds' point at t0 and walking at `speed` m/s. Without fields every
    * edge is safe and only shelters (none) count — callers set fields first.
    */
-  search(seeds: readonly WalkSeed[], t0: number, speed: number): WalkSearchResult {
+  search(seeds: readonly WalkSeed[], t0: number, speed: number, opts: { ignoreHazard?: boolean } = {}): WalkSearchResult {
     const g = this.g;
-    const hz = this.hz;
+    const hz = opts.ignoreHazard ? null : this.hz;
     const dist = this.dist, pred = this.pred, heap = this.heap;
     dist.fill(Infinity);
     heap.clear();
     if (!(speed > 0)) return { ok: false, arrive: NaN, node: -1 };
     for (const s of seeds) {
       const t = t0 + s.meters / speed;
+      if (hz && t > s.tUnsafe) continue;
       if (t < dist[s.node]) {
         dist[s.node] = t;
         pred[s.node] = -1;
