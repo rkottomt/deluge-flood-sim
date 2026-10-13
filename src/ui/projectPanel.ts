@@ -420,7 +420,14 @@ export function createProjectSection(ctx: UIContext): ProjectSection {
           durationMs: 30000,
         });
       } else {
-        bridge.notify({ kind: 'info', key: 'project-link', title: 'Project link opened', message: `Walls, sites and settings from the link are on screen. Names are not carried by links.${kept}` });
+        const stored = kept ? parseProjectText(readAutosave() ?? '') : null;
+        bridge.notify({
+          kind: 'info',
+          key: 'project-link',
+          title: 'Project link opened',
+          message: `Walls, sites and settings from the link are on screen. Names are not carried by links.${kept}`,
+          ...(stored?.ok ? { action: { label: 'Restore my project', run: () => void open(stored, false) }, durationMs: 15000 } : {}),
+        });
       }
     })();
   } else if (autosaveOn) {

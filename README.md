@@ -414,8 +414,11 @@ neighbours than the full levee does. Screening numbers on bare-earth terrain, li
 
 **Autosave** (off by default, under Project → Privacy) is the one thing in Deluge that writes to browser storage:
 when switched on it keeps the project (never the portfolio) in this browser's localStorage and offers it back next
-time; switching it off deletes the copy. The desktop app clears storage each time it starts, so there it lasts until
-you quit, and it blocks downloads by design (Save says so; Share link still works).
+time; switching it off deletes the copy. It never overwrites that copy on its own: a session writes only after a real
+change (or a restore), and its first write keeps the previous copy one step back (Project → Privacy → Restore the
+earlier copy). The desktop app clears storage each time it starts, so there it lasts until you quit, and it blocks
+downloads by design (Save says so; Share link still works). A `?project=` link opens its walls, sites and settings at
+once but asks before applying its digging, and the reader refuses a project whose edits would take too long to replay.
 
 ## Batch / API
 
