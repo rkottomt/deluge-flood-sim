@@ -118,3 +118,18 @@
   padding-left: 18px;
   color: #ffc14d;
 }
+.dl-road-late {
+  color: var(--dl-warn-text);
+}
+.dl-road-curve {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 6px 0 0;
+  font-size: 11px;
+  opacity: 0.85;
+}
+.dl-road-curve select {
+  width: 100%;
+  box-sizing: border-box;
+}

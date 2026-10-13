@@ -34,6 +34,9 @@ import {
   RESULT_COLUMNS,
   resultRow,
   siteVerdict,
+  clearanceSentence,
+  shareOutSentence,
+  timingCaveats,
   summarizeSweep,
   tallySentence,
   toCsv,
@@ -44,6 +47,7 @@ import {
   type MemberResult,
   type PortfolioAsset,
   type ResultRowInput,
+  type EgressTiming,
   type SiteRun,
   type SiteSpec,
   type SweepLevelInfo,
@@ -192,7 +196,7 @@ const num = (v: number | null | undefined, digits = 3): number | null => (v == n
 const mins = (s: number | null | undefined): number | null => (s == null || !Number.isFinite(s) || s < 0 ? null : Math.round((s / 60) * 10) / 10);
 
 /** One site run as plain JSON (no typed arrays, no NaN). */
-export function siteRunJson(run: SiteRun): Record<string, unknown> {
+export function siteRunJson(run: SiteRun, timing?: EgressTiming | null): Record<string, unknown> {
   const r = run.result;
   const e = run.egress;
   return {
@@ -241,8 +245,41 @@ export function siteRunJson(run: SiteRun): Record<string, unknown> {
           cutOffAtLeastMin: mins(e.cutOffAtLeastS),
           peakShelter: e.peakShelter || null,
           shelters: e.shelters.map((s) => ({ name: s.name, openAtStart: s.openAtStart, openAtPeak: s.openAtPeak, closesAtMin: mins(s.closesAt), driveM: num(s.lengthM, 0), driveMin: mins(s.etaS) })),
+          lastSafeDepartureMin: e.lastSafeDepartureAt === Infinity ? 'open' : signedMins(e.lastSafeDepartureAt),
+          lastSafeShelter: e.lastSafeShelter || null,
         }
       : null,
+    ...(timing !== undefined ? { egressTiming: timingJson(timing) } : {}),
+  };
+}
+
+const signedMins = (s: number | null | undefined): number | null => (s == null || !Number.isFinite(s) ? null : Math.round((s / 60) * 10) / 10);
+
+/** Leaving by road (egressTiming.ts) as plain JSON: "open" for a window that never ends, null for NaN. */
+export function timingJson(t: EgressTiming | null): Record<string, unknown> | null {
+  if (!t) return null;
+  const open = t.windowS === Infinity;
+  return {
+    known: t.known,
+    note: t.note || null,
+    occupants: t.occupants,
+    occupantsBasis: t.occupantsBasis,
+    vehicles: t.vehicles,
+    personsPerVehicle: t.personsPerVehicle,
+    departureCurve: { id: t.curve.id, label: t.curve.label, a: t.curve.a, bMin: t.curve.bMin, maxShare: t.curve.maxShare, source: t.curve.source },
+    departureP10Min: signedMins(t.band.p10),
+    departureP90Min: signedMins(t.band.p90),
+    bottleneck: { where: t.bottleneck.where, label: t.bottleneck.label, lanes: t.bottleneck.lanes, perLaneVph: t.bottleneck.perLaneVph, capacityVph: t.bottleneck.capacityVph },
+    alertMin: signedMins(t.alertTime),
+    routeWindowMin: open ? 'open' : signedMins(t.windowS),
+    clearanceMin: signedMins(t.clearanceS),
+    queueOnlyMin: signedMins(t.queueOnlyS),
+    sharePctOutBeforeClose: open ? null : num(t.shareOut * 100, 1),
+    sharePctQueuedAtClose: open ? null : num(t.shareQueued * 100, 1),
+    sharePctInsideAtClose: open ? null : num(t.shareInside * 100, 1),
+    clearsInWindow: t.known ? t.clearsInWindow : null,
+    summary: t.known ? [shareOutSentence(t), clearanceSentence(t)] : [],
+    caveats: t.known ? timingCaveats(t) : [],
   };
 }
 
@@ -273,7 +310,11 @@ export interface SiteSweepReport {
 }
 
 /** The Site check card after a sweep (siteCheck.ts derived): EAL, FFE recommendation, mitigation options, verdict. */
-export function siteSweepReport(spec: SiteSpec, rows: readonly SweepRow[], opts: { designId?: string | null; freeboardM?: number; country: 'US' | 'IN' | 'NP' | null }): SiteSweepReport {
+export function siteSweepReport(
+  spec: SiteSpec,
+  rows: readonly SweepRow[],
+  opts: { designId?: string | null; freeboardM?: number; country: 'US' | 'IN' | 'NP' | null; timing?: (run: SiteRun) => EgressTiming | null },
+): SiteSweepReport {
   const sum = summarizeSweep(rows);
   const money = (v: number) => formatMoney(v).replace(/ /g, ' ');
   const design = pickDesign(sum.rows, opts.designId ?? null);
@@ -282,7 +323,7 @@ export function siteSweepReport(spec: SiteSpec, rows: readonly SweepRow[], opts:
   const options = rec && run0 ? mitigationOptions(sum, { occ: spec.occupancy, rec, country: opts.country, perimeterM: run0.geometry.perimeterM }) : [];
   const band3 = (b: { mid: number; low: number; high: number } | null) => (b ? { mid: num(b.mid, 2), low: num(b.low, 2), high: num(b.high, 2) } : null);
   return {
-    levels: sum.rows.map((r) => ({ level: levelJson(r.level), run: siteRunJson(r.run) })),
+    levels: sum.rows.map((r) => ({ level: levelJson(r.level), run: siteRunJson(r.run, opts.timing ? opts.timing(r.run) : undefined) })),
     firstReached: sum.firstReached?.level.id ?? null,
     firstInside: sum.firstInside?.level.id ?? null,
     firstCutOff: sum.firstCutOff?.level.id ?? null,
@@ -319,6 +360,6 @@ export function siteSweepReport(spec: SiteSpec, rows: readonly SweepRow[], opts:
       breakEvenCapex7: num(o.breakEvenCapex7, 0),
       caveats: o.caveats,
     })),
-    verdict: siteVerdict(spec.name || 'The site', sum, money),
+    verdict: siteVerdict(spec.name || 'The site', sum, money, opts.timing),
   };
 }

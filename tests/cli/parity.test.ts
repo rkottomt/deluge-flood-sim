@@ -39,6 +39,7 @@ import {
   type SweepRow,
 } from '../../src/loss';
 import { createRouter } from '../../src/routing';
+import { timingForRun } from '../../src/loss/egressTiming';
 import { formatMoney } from '../../src/ui/format';
 import { COMMANDS, parseOptions } from '../../src/cli/args';
 import { HANDLERS, type CliEnv, type SceneLike } from '../../src/cli/commands';
@@ -280,7 +281,15 @@ test('site --sweep: levels, EAL, FFE, mitigation and verdict equal the loss modu
   assert.equal(sw.ffe.ffeAboveGradeM, Math.round(rec.ffeAboveGrade * 1000) / 1000);
   assert.equal(sw.ffe.designEvent, rec.designLabel);
   assert.deepEqual(sw.mitigation.map((m: { kind: string; avoidedEal: number }) => [m.kind, m.avoidedEal]), options.map((o) => [o.kind, Number.isFinite(o.deltaEal) ? Math.round(o.deltaEal) : null]));
-  assert.deepEqual(sw.verdict, siteVerdict('The site', sum, (v) => formatMoney(v).replace(/ /g, ' ')));
+  assert.deepEqual(sw.verdict, siteVerdict('The site', sum, (v) => formatMoney(v).replace(/ /g, ' '), (run) => timingForRun(run, 0)));
+  // Leaving by road on every level, with the app's defaults (no flags given).
+  assert.deepEqual(
+    sw.levels.map((l: { run: { egressTiming: { known: boolean; vehicles: number; clearanceMin: number } } }) => [l.run.egressTiming.known, l.run.egressTiming.vehicles, l.run.egressTiming.clearanceMin]),
+    sum.rows.map((r) => {
+      const t = timingForRun(r.run, 0)!;
+      return [t.known, t.vehicles, Math.round((t.clearanceS / 60) * 10) / 10];
+    }),
+  );
   assert.equal(sw.firstReached, sum.firstReached?.level.id ?? null);
 });
 
@@ -289,6 +298,9 @@ test('site: a pin off the map, a bad occupancy and --sweep with a stage are usag
   await assert.rejects(cli(['site', '--preset', 'pittsburgh', '--at', '40.44,-80.0', '--use', 'castle']), (e: unknown) => e instanceof UsageError && /--use/.test(e.message));
   await assert.rejects(cli(['site', '--preset', 'pittsburgh', '--at', '40.44,-80.0', '--sweep', '--stage-ft', '40']), UsageError);
   await assert.rejects(cli(['site', '--preset', 'pittsburgh', '--at', '40.44,-80.0', '--sweep', '--levels', 'rp100,nope']), (e: unknown) => e instanceof UsageError && /nope/.test(e.message));
+  await assert.rejects(cli(['site', '--preset', 'pittsburgh', '--at', '40.44,-80.0', '--departure', 'panic']), (e: unknown) => e instanceof UsageError && /--departure must be one of good-likely, poor-likely/.test(e.message));
+  await assert.rejects(cli(['site', '--preset', 'pittsburgh', '--at', '40.44,-80.0', '--exit-lanes', '0']), (e: unknown) => e instanceof UsageError && /--exit-lanes/.test(e.message));
+  await assert.rejects(cli(['site', '--preset', 'pittsburgh', '--at', '40.44,-80.0', '--alert-min', '-2000']), (e: unknown) => e instanceof UsageError && /--alert-min/.test(e.message));
 });
 
 // ─── Pure pieces ────────────────────────────────────────────────────────────────────────────────────────────────
@@ -384,7 +396,7 @@ test('--scenario a14-100: rain only, the level’s 1-hour intensity, stopping af
   // Outside Atlas 14 (or not looked up): no such level, and the error says why.
   assert.throws(() => resolveForcing('houston', hou, { level: 'a14-100' }), /no level "a14-100".*Atlas 14 does not cover/);
 
-  const { code, files, scene } = await cli(['site', '--preset', 'houston', '--at', '29.7725,-95.3837', '--scenario', 'a14-100', '--out', 'a14.json']);
+  const { code, files, scene } = await cli(['site', '--preset', 'houston', '--at', '29.7725,-95.3837', '--scenario', 'a14-100', '--occupants', '500', '--persons-per-car', '1', '--alert-min', '-30', '--departure', 'fast', '--out', 'a14.json']);
   assert.equal(code, 0);
   // 120 simulated minutes by default (the app's rain sweep): 60 of rain, 60 of run-off.
   assert.deepEqual(scene.segments.map((g) => [g.seconds, g.rainRate, g.inflows, g.storms]), [
@@ -395,6 +407,15 @@ test('--scenario a14-100: rain only, the level’s 1-hour intensity, stopping af
   assert.equal(report.scenario.level.id, 'a14-100');
   assert.equal(report.scenario.level.rainMmHr, want.mmPerHour);
   assert.equal(report.scenario.simulatedMinutes, 120);
+  // Leaving by road with the flags: 500 occupants, one per car, warned 30 min before the run, the fastest curve.
+  const t = report.run.egressTiming;
+  assert.equal(t.occupants, 500);
+  assert.equal(t.occupantsBasis, 'your input');
+  assert.equal(t.vehicles, 500);
+  assert.equal(t.alertMin, -30);
+  assert.equal(t.departureCurve.id, 'fast');
+  assert.equal(t.bottleneck.capacityVph <= 500, true, 'one exit lane at most 500 cars/h');
+  if (t.known) assert.ok(t.clearanceMin >= 60, `${t.clearanceMin}`);
 });
 
 test('site --sweep on a rain-led preset sweeps the Atlas 14 rain ladder, as the Site check does', async () => {

@@ -1,10 +1,12 @@
 /**
- * Site check extras: EVACUATION ON FOOT from the selected site (src/routing/pedestrianEvac.ts) and its INFRASTRUCTURE
- * DEPENDENCIES (src/loss/infraDeps.ts), as a block in the site card, a dashed walking route on the map and two
+ * Site check extras: EVACUATION ON FOOT from the selected site (src/routing/pedestrianEvac.ts), LEAVING BY ROAD — the
+ * departure curve after the alert and the queue at the exit (src/loss/egressTiming.ts) — and its INFRASTRUCTURE
+ * DEPENDENCIES (src/loss/infraDeps.ts), as blocks in the site card, a dashed walking route on the map and three
  * sections of the printed site assessment.
  *
- * The occupants, their mix of walking paces, the exit width, the pre-movement time and the alert time are per site
- * and stay in this tab (defaults from the planned use: IBC occupant load, IBC egress width). Everything is computed
+ * The occupants, their mix of walking paces, the exit width, the pre-movement time, the alert time, the departure
+ * curve, persons per car and exit lanes are per site and stay in this tab (defaults from the planned use: IBC
+ * occupant load, IBC egress width, Sorensen & Mileti's departure curve, persons per car by use). Everything is computed
  * for the flood Site check last read ("Assess this run"), and cached per flood, site and inputs.
  *
  * Built with h() and text nodes only.
@@ -12,7 +14,10 @@
 import type { HazardFields, TerrainData, Store } from '../contracts';
 import { OCCUPANCY_PROFILES, type SiteRun, type SiteSpec } from '../loss';
 import type { EgressRouter } from '../loss/egress';
-import { downtimeWithDependencies, reachLine, siteDependencies, utilityLine, type SiteDependencies } from '../loss/infraDeps';
+import { clearanceSentence, EGRESS_TIMING_METHOD, fmtMin, shareOutSentence, timingCaveats, timingDefaults, timingForRun, type EgressTiming } from '../loss/egressTiming';
+import { downtimeWithDependencies, reachLine, shelterLine, siteDependencies, utilityLine, type SiteDependencies } from '../loss/infraDeps';
+import { DEFAULT_EXIT_LANES, LANE_FLOW_SOURCES } from '../routing/bottleneck';
+import { DEFAULT_DEPARTURE_CURVE, DEPARTURE_CURVES, type DepartureCurveId } from '../routing/departure';
 import { WalkNetwork } from '../routing/pedestrian';
 import {
   analyzePeopleEvac,
@@ -40,8 +45,18 @@ export interface PeopleParams {
   impairedPct: number | null;
   exitWidthM: number | null;
   preMovementMin: number;
+  /** When the warning reaches the occupants, min since the run started (negative: before it). */
   alertMin: number | null;
+  /** Leaving by road (null / absent = the default). */
+  departure?: DepartureCurveId;
+  departBMin?: number | null;
+  departMaxPct?: number | null;
+  personsPerCar?: number | null;
+  exitLanes?: number | null;
 }
+
+/** Bounds of the "Alert at T+ min" input: a warning up to a day before the run starts, or a day into it. */
+export const ALERT_MIN_RANGE = { min: -1440, max: 1440 } as const;
 
 const DEFAULT_PARAMS: PeopleParams = { occupants: null, olderPct: null, impairedPct: null, exitWidthM: null, preMovementMin: DEFAULT_PRE_MOVEMENT_S / 60, alertMin: null };
 
@@ -67,6 +82,7 @@ export interface SiteExtrasResult {
 
 /** Methods for the report appendix. */
 export const PEOPLE_METHOD_NOTES: ReadonlyArray<{ title: string; text: string }> = [
+  EGRESS_TIMING_METHOD,
   {
     title: 'Evacuation on foot',
     text:
@@ -163,9 +179,17 @@ export function createSiteExtras(deps: SiteExtrasDeps) {
     if (!t || !r) return { deps: null, note: '', downtime: null };
     if (st.load.status !== 'ok') return { deps: null, note: st.load.status === 'loading' || st.load.status === 'idle' ? 'loading facilities…' : st.load.note || 'no facility data for this map', downtime: null };
     const ex = st.exposuresFor(f, t, st.load.list);
-    const d = siteDependencies({ lon: spec.lon, lat: spec.lat, gx: run.geometry.gx, gy: run.geometry.gy, siteWet: r.reached }, { fields: f, exposures: ex, router: deps.getRouter() });
+    const d = siteDependencies(
+      { lon: spec.lon, lat: spec.lat, gx: run.geometry.gx, gy: run.geometry.gy, siteWet: r.reached },
+      { fields: f, exposures: ex, router: deps.getRouter(), shelters: deps.store.get().shelters, grid: { nx: t.nx, ny: t.ny, cellSize: t.cellSize } },
+    );
     const withDeps = downtimeWithDependencies({ baseDays: r.downtimeDays, depthAboveFloor: r.depthAboveFloor, damage: r.damage, rebuildDays: OCCUPANCY_PROFILES[r.occ].rebuildDays, utilityDays: d.utilityDays });
     return { deps: d, note: '', downtime: { base: r.downtimeDays, withDeps, from: d.utilityDaysFrom } };
+  }
+
+  /** Leaving by road for one run of a site (the current flood or a sweep level): cheap, not cached. */
+  function timingFor(spec: SiteSpec, run: SiteRun, alertTime: number): EgressTiming | null {
+    return timingForRun(run, alertTime, paramsFor(spec.id));
   }
 
   function keyOf(spec: SiteSpec, run: SiteRun, alertTime: number): string {
@@ -256,10 +280,80 @@ export function createSiteExtras(deps: SiteExtrasDeps) {
         input('Mobility-impaired %', p.impairedPct, String(Math.round(mix.impaired * 100)), 'impaired', 0, 100, 1, (v) => upd({ impairedPct: v })),
         input('Exit width m', p.exitWidthM, fmtNum(defaultExitWidth(p.occupants ?? occ.n), 2), 'exit', 0.5, 100, 0.1, (v) => upd({ exitWidthM: v })),
         input('Pre-movement min', p.preMovementMin, String(DEFAULT_PRE_MOVEMENT_S / 60), 'pre', 0, 240, 1, (v) => upd({ preMovementMin: v ?? DEFAULT_PRE_MOVEMENT_S / 60 })),
-        input('Alert at T+ min', p.alertMin, '0', 'alert', 0, 1440, 1, (v) => upd({ alertMin: v })),
+        input('Alert at T+ min', p.alertMin, '0', 'alert', ALERT_MIN_RANGE.min, ALERT_MIN_RANGE.max, 1, (v) => upd({ alertMin: v })),
       ),
     );
     return h('div', { class: 'dl-people', 'data-site': 'people' }, ...parts);
+  }
+
+  /** "Leaving by road": who is out when the way out closes, clearance vs window, and the inputs behind it. */
+  function roadBlock(spec: SiteSpec, run: SiteRun, alertTime: number): HTMLElement {
+    const p = paramsFor(spec.id);
+    const upd = (patch: Partial<PeopleParams>) => {
+      params.set(spec.id, { ...paramsFor(spec.id), ...patch });
+      deps.rerender();
+    };
+    const t = timingFor(spec, run, alertTime);
+    const parts: HTMLElement[] = [h('p', { class: 'dl-people-head' }, 'Leaving by road')];
+    if (!t || !t.known) parts.push(h('p', { class: 'dl-impact-fine' }, `Not assessed: ${t?.note || 'no flood read'}.`));
+    else {
+      parts.push(
+        h(
+          'div',
+          { class: 'dl-people-lines dl-road-lines', 'data-road': 'summary' },
+          h('p', { 'data-road': 'share' }, shareOutSentence(t)),
+          h('p', { class: t.clearsInWindow ? null : 'dl-road-late', 'data-road': 'clearance' }, clearanceSentence(t)),
+        ),
+      );
+      parts.push(
+        h(
+          'p',
+          { class: 'dl-impact-fine' },
+          `Alert at T${t.alertTime < 0 ? '−' : '+'}${fmtMin(Math.abs(t.alertTime))}${Number.isFinite(t.lastSafeAt) ? ` · latest safe departure ${t.lastSafeShelter ? `for ${t.lastSafeShelter} ` : ''}T${t.lastSafeAt < 0 ? '−' : '+'}${fmtMin(Math.abs(t.lastSafeAt))} (its closure minus the drive)` : ''} · occupants: ${t.occupantsBasis} · ${t.personsPerVehicleBasis} · longest queue ${num(t.maxQueue)} cars.`,
+        ),
+        h(
+          'details',
+          { class: 'dl-impact-methods', 'data-road': 'caveats' },
+          h('summary', null, 'What this leaves out'),
+          h('ul', { class: 'dl-impact-issues' }, ...timingCaveats(t).map((c) => h('li', null, c)), ...LANE_FLOW_SOURCES.map((c) => h('li', null, `Capacity — ${c}.`))),
+        ),
+      );
+    }
+    const curveSel = h(
+      'select',
+      { class: 'dl-num-input', 'aria-label': 'Departure curve', 'data-road': 'curve' },
+      ...(Object.keys(DEPARTURE_CURVES) as DepartureCurveId[]).map((id) => h('option', { value: id, selected: id === (p.departure ?? DEFAULT_DEPARTURE_CURVE) }, DEPARTURE_CURVES[id].label)),
+    );
+    curveSel.addEventListener('change', () => {
+      const id = curveSel.value as DepartureCurveId;
+      if (Object.hasOwn(DEPARTURE_CURVES, id)) upd({ departure: id, departBMin: null, departMaxPct: null });
+    });
+    const base = DEPARTURE_CURVES[p.departure ?? DEFAULT_DEPARTURE_CURVE];
+    const occDefault = run.result ? timingDefaults(run.result.occ).personsPerVehicle : 1.18;
+    parts.push(
+      h('label', { class: 'dl-road-curve' }, 'Departures after the alert', curveSel),
+      h(
+        'div',
+        { class: 'dl-people-inputs', 'data-road': 'inputs' },
+        input('Departure scale b, min', p.departBMin ?? null, fmtNum(base.bMin, 1), 'depart-b', 1, 1440, 1, (v) => upd({ departBMin: v })),
+        input('Ever leave %', p.departMaxPct ?? null, fmtNum(base.maxShare * 100, 1), 'depart-max', 0, 100, 1, (v) => upd({ departMaxPct: v })),
+        input('Persons per car', p.personsPerCar ?? null, fmtNum(occDefault, 2), 'per-car', 1, 10, 0.1, (v) => upd({ personsPerCar: v })),
+        input('Exit lanes', p.exitLanes ?? null, String(DEFAULT_EXIT_LANES), 'lanes', 1, 12, 1, (v) => upd({ exitLanes: v == null ? null : Math.round(v) })),
+      ),
+    );
+    return h('div', { class: 'dl-people', 'data-site': 'road' }, ...parts);
+  }
+
+  function roadRows(t: EgressTiming | null): Array<[string, string]> {
+    if (!t || !t.known) return [['Result', `not assessed${t?.note ? ` (${t.note})` : ''}`]];
+    return [
+      ['Out before the last route closes', shareOutSentence(t)],
+      ['Clearance vs route window', clearanceSentence(t)],
+      ['Departure curve', `${t.curve.label}: a ${fmtNum(t.curve.a, 2)}, b ${fmtNum(t.curve.bMin, 1)} min, ${fmtNum(t.curve.maxShare * 100, 1)} % ever leave — ${t.curve.source}`],
+      ['Alert', `T${t.alertTime < 0 ? '−' : '+'}${fmtMin(Math.abs(t.alertTime))}`],
+      ['Cars', `${num(t.vehicles)} — ${num(t.occupants)} occupants (${t.occupantsBasis}); ${t.personsPerVehicleBasis}`],
+      ...timingCaveats(t).map((c, k): [string, string] => [k === 0 ? 'Caveats' : '', c]),
+    ];
   }
 
   function depsRows(res: SiteExtrasResult): Array<[string, string]> {
@@ -271,6 +365,7 @@ export function createSiteExtras(deps: SiteExtrasDeps) {
     if (!d.utilities.some((u) => u.utility === 'power')) rows.push(['Power', 'no substation mapped on this map — service area unknown']);
     if (d.hospital) rows.push(['Hospital', reachLine(d.hospital)]);
     if (d.fire) rows.push(['Fire station', reachLine(d.fire)]);
+    for (const s of d.shelters) rows.push([`Shelter ${s.name}`, shelterLine(s)]);
     if (res.downtime) {
       const dt = res.downtime;
       rows.push(['Downtime (heuristic)', dt.withDeps > dt.base + 0.05 ? `${num(dt.base, 0)} d on its own → ${num(dt.withDeps, 0)} d with ${dt.from} (illustrative restoration days)` : `${num(dt.base, 0)} d — no dependency adds to it`]);
@@ -307,7 +402,7 @@ export function createSiteExtras(deps: SiteExtrasDeps) {
       const key = keyOf(spec, run, alertTime);
       const cached = cacheFields === f ? cache.get(key) : undefined;
       const fill = (res: SiteExtrasResult) => {
-        el.replaceChildren(peopleBlock(spec, run, res), depsBlock(res));
+        el.replaceChildren(peopleBlock(spec, run, res), roadBlock(spec, run, alertTime), depsBlock(res));
         deps.setWalkRoute(res.evac?.route?.polyline ?? null, !!res.evac?.route?.cut);
       };
       if (cached) fill(cached);
@@ -325,6 +420,8 @@ export function createSiteExtras(deps: SiteExtrasDeps) {
       }
       return el;
     },
+    /** Leaving by road for one run of a site (the verdict calls it for the sweep's levels). */
+    timing: timingFor,
     /** Report sections for a site (computed now if needed). */
     report(spec: SiteSpec, run: SiteRun | null, f: HazardFields | null, alertTime: number): HTMLElement[] {
       if (!run || !run.result || !f) return [];
@@ -343,6 +440,8 @@ export function createSiteExtras(deps: SiteExtrasDeps) {
       return [
         h('h3', null, 'Evacuation on foot'),
         kvList(rows.length ? rows : [['Result', 'not assessed']]),
+        h('h3', null, 'Leaving by road'),
+        kvList(roadRows(timingFor(spec, run, alertTime))),
         h('h3', null, 'Infrastructure dependencies'),
         ...(res.deps && res.deps.flags.length ? [h('ul', { class: 'dl-rep-note' }, ...res.deps.flags.map((x) => h('li', null, x)))] : []),
         kvList(depsRows(res)),

@@ -136,7 +136,10 @@ behind it is pure TypeScript in [`src/loss`](src/loss), every assumption a named
 click to drop a site or drag around the parcel to outline it, describe the planned building (use, floors, value,
 first-floor height, critical equipment), and it reports depth at grade and above the planned floor, speed, AIDR class,
 arrival and time under water, damage and loss, and **egress** — when the last road route from the site to a shelter
-closes, against when the water arrives (the evacuation router over the flood rebuilt from the run's arrival times).
+closes, against when the water arrives (the evacuation router over the flood rebuilt from the run's arrival times),
+and **who actually gets out by road**: departures spread over the hours after the alert by a published flood-warning
+response curve, cars queuing at the route's bottleneck, and "X % of occupants out before the last route closes",
+"clearance time Y min vs route window Z min" (*Leaving by road*, below).
 **Run sweep** replays the scenario headless at full speed for a ladder of levels — NWS flood categories, FEMA / NOAA
 1 %-type levels and historic crests for Pittsburgh, Nashville and Fort Myers, each with its source
 ([src/loss/ladders.ts](src/loss/ladders.ts)), or multiples of the rain and inflows elsewhere — then puts the user's
@@ -228,7 +231,27 @@ refuge by T+y if the alert goes out at T0*, *X of N reach safety*, the latest sa
 adults 1.22 m/s, older adults 0.91, mobility-impaired 0.6), *vertical evacuation feasible: yes/no (floor k)*, and the
 route drawn dashed on the map (orange when the flood closed it). The scenarios are time-lapses — Pittsburgh's 1936
 rise plays in minutes — so on the North Shore nobody walks out after a 10-minute pre-movement; that is the point of
-the alert-time input. Details: [ARCHITECTURE.md §7.1](ARCHITECTURE.md#71-evacuation-on-foot-srcroutingpedestriants-pedestrianevacts).
+the alert-time input, which also takes a warning issued before the run starts (T−180 min). Details: [ARCHITECTURE.md §7.1](ARCHITECTURE.md#71-evacuation-on-foot-srcroutingpedestriants-pedestrianevacts).
+
+**Leaving by road.** The same card says how many of the occupants get out by car before the
+way out closes, instead of only whether a route exists. Three transparent steps, every default sourced and editable
+per site: (1) the *latest safe departure* — each shelter's closure (its last road cut, or the shelter itself under
+0.3 m) minus the drive there, so a shelter that floods before the cars arrive does not count; (2) *departures after
+the alert* follow Sorensen & Mileti's (2015b, USACE) protective-action-initiation curves for dam and levee floods,
+P(t) = m·(1 − e^(−t²/(a·b²))) — by default the most likely curve for an unprepared population that sees the threat as
+likely (a 1.79, b 111.8 min; 74.3 % act within 8 h; p10–p90 49 min – 3 h 47 min after the warning), with the
+prepared, threat-unlikely and fastest published curves to pick from (coefficients as tabulated in Silva et al. 2025,
+NHESS 25:1501); (3) *a queue at the bottleneck* — occupants become cars (2.0 per car at home, 1.18 at work) and pass the
+site exit (1 lane) or the weakest road on the route at lanes × a per-lane rate: 500 cars/h for a local street joining
+at a stop sign (HCM two-way-stop capacity), 950 for a signalised road (HCM's 1,900 pc/h/ln saturation flow × half the
+green), 1,600 for a highway (peak flows in the Hurricane Floyd evacuation). Out come *X % of occupants out before the
+last route closes (p10–p90 of the departure curve)*, how many are still inside or still in the queue, and *clearance
+time Y min vs route window Z min*, in the card, the verdict, the report and `deluge site` (`--occupants`,
+`--alert-min`, `--departure`, `--persons-per-car`, `--exit-lanes`). On the North Shore demo parcel A at the 1936 crest
+(a 6-storey apartment block: 2,494 occupants by the IBC load, 1,247 cars) the last route closes at T+3 min: with the
+alert at T+0 under 1 % are out; with it 3 h before the run, 57 % (clearance 5 h 22 min vs a 3 h 01 min window); for a
+prepared population, 89 %. A bottleneck queue, not a traffic simulation: neighbours evacuating on the same roads are
+not counted, so the clearance is a lower bound. Details: [ARCHITECTURE.md §7.3](ARCHITECTURE.md#73-leaving-by-road-departures-and-the-queue-srcroutingdeparturets-bottleneckts-srclossegresstimingts).
 
 **Infrastructure** (its own panel section) checks the scenario's substations, power plants, hospitals, clinics, fire
 and police stations, water and wastewater works, telecom exchanges, major-road bridges and fuel stations
@@ -236,7 +259,9 @@ and police stations, water and wastewater works, telecom exchanges, major-road b
 thresholds per type, and from when, with status-coloured icons on the map. Site check lists what each site depends
 on: "power: Substation X floods at T+42 min (approximate service area)", the nearest hospital and fire station by
 road with flooded roads closed, flags such as *site dry but its substation floods* or *nearest hospital unreachable*,
-and the longer business-interruption downtime that follows (a labelled heuristic). At the 1936 crest after 30
+each shelter on the map with its own flooding and its substation (*shelter stays dry but its substation floods — no
+grid power there*; a shelter that floods is already left out of the evacuation routing), and the longer
+business-interruption downtime that follows (a labelled heuristic). At the 1936 crest after 30
 simulated minutes, 53 of Pittsburgh's 193 mapped facilities are out of service (mostly bridge approaches); under
 Harvey's rain after 20 minutes, 27 of Houston's 279 are out and 104 impaired. Live areas have no facilities (the
 selective OpenStreetMap query is not an allowed endpoint). Details: [ARCHITECTURE.md §7.2](ARCHITECTURE.md#72-infrastructure-dependencies-srcdatafacilitiests-srclossinfrats-infradepsts).
@@ -547,7 +572,10 @@ then run-off — 120 simulated minutes unless `--minutes` says otherwise.
   multipliers — and the levels it ticks by default (`--ladder stage|rain|scale` and `--levels` to choose,
   `--rp x0.5=10,x1=100` for return periods the ladder lacks), with egress, EAL, the
   loss-exceedance points, the indicative finished-floor elevation, mitigation options with BCR and the verdict
-  sentences.
+  sentences. Every run carries `egressTiming` — leaving by road: share of occupants out before the last route closes,
+  clearance vs route window, the departure curve and the bottleneck — set with `--occupants`, `--alert-min` (negative:
+  warned before the run), `--departure good-likely|poor-likely|poor-unlikely|fast`, `--persons-per-car` and
+  `--exit-lanes`. The HTTP API runs them at their defaults.
 * **`dam`** is the dam-breach card without the map (no GPU): for an NID dam (`--nid`, from the app's baked index) or a
   dam you describe (`--volume-m3 --head-m [--height-m] [--overtopping]`), sunny-day or flood-induced, the eight
   relations' peaks with citations, the low / central / high band, the hydrograph the map would receive
@@ -958,7 +986,14 @@ a simulation. `Deluge.app` serves the same build with `frame-ancestors 'none'` a
   back by the walls with and without them; they ignore how long water leaking through a gap would take to fill the
   land behind it.
 * **Time-lapse rise.** Raising the river is ~600–850× faster than the 1936 rise; the flood that follows is solved at
-  its real speed.
+  its real speed. Evacuation windows on these presets are therefore minutes, not hours: set the alert before the run
+  starts (a negative alert time) to read Site check's "leaving by road" for a real warning.
+* **Evacuation timing is a queue, not traffic.** Road egress closes roads for flooding only (no debris on bridges, no
+  police closures). Departures follow a published average curve for flood warnings (Sorensen & Mileti 2015b) that
+  starts when the warning reaches people — getting the warning out is the alert time you enter — and one building's
+  occupants can be faster or slower than the average. Cars queue at one bottleneck with lane counts assumed by road
+  class; other evacuating traffic on the same roads is not counted, so the clearance time is a lower bound. Buses,
+  ambulances and people who cannot drive are outside it; occupants default to the IBC design load, an upper bound.
 * **Scheme.** Local-inertial with first-order upwind advection: excellent for floodplain inundation, less so for
   strongly supercritical flow (hydraulic jumps, violent dam breaks).
 * **Debris flows are one uniform material.** A hazard-chain preset swaps Manning for its debris-flow friction law

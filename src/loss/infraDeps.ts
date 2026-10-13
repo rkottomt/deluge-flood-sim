@@ -74,6 +74,8 @@ export interface SiteDependencies {
   utilityDays: number;
   /** Which utility sets it ('' when none). */
   utilityDaysFrom: string;
+  /** The shelters (DependencyContext.shelters), in order; [] when none were given. */
+  shelters: ShelterDependency[];
 }
 
 /** Nearest facility of a kind by straight line (lon/lat). */
@@ -133,6 +135,66 @@ export interface DependencyContext {
   /** A car router carrying this grid's roads (null: no road reach). */
   router: EgressRouter | null;
   timeline?: FloodTimeline;
+  /** The shelters evacuees are sent to (AppState.shelters), on the terrain grid `grid`: their own flooding and power. */
+  shelters?: readonly Shelter[];
+  /** The terrain grid the shelters' and facilities' gx/gy are on (default: the fields' grid). */
+  grid?: { nx: number; ny: number; cellSize: number };
+}
+
+/**
+ * A shelter as a facility evacuation depends on: does it flood itself, and does it keep grid power? Its own flooding
+ * already takes it out of the routing — the car router skips a shelter under ≥ 0.3 m (egress.ts lastSafeDepartureAt
+ * subtracts the drive there), the walking network never counts one that turns unsafe (pedestrian.ts). Power is
+ * reported, not routed around: a shelter on backup power is still a refuge, but someone has to know.
+ */
+export interface ShelterDependency {
+  name: string;
+  /** Early estimate of when water ≥ 0.3 m stood at the shelter (first arrival of 15 cm there), s; 0 = from the start; NaN never. */
+  floodsAt: number;
+  depth: number;
+  /** Nearest substation on the map (approximate service area) and its fate; null when none is mapped. */
+  power: { exposure: FacilityExposure; distanceM: number; far: boolean } | null;
+}
+
+/** Depth at which a shelter is no shelter: the router's flooded-road depth (router.ts skips such shelters). */
+export const SHELTER_FLOODED_DEPTH = 0.3;
+
+export function shelterDependencies(shelters: readonly Shelter[], ctx: { fields: HazardFields; exposures: readonly FacilityExposure[]; grid?: { nx: number; ny: number; cellSize: number } }): ShelterDependency[] {
+  const f = ctx.fields;
+  const g = ctx.grid ?? { nx: f.nx, ny: f.ny, cellSize: NaN };
+  const subs = ctx.exposures.filter((e) => e.facility.kind === 'substation' && e.inside);
+  return shelters.map((s) => {
+    const i = Math.min(f.nx - 1, Math.max(0, Math.floor((s.gx * f.nx) / g.nx)));
+    const j = Math.min(f.ny - 1, Math.max(0, Math.floor((s.gy * f.ny) / g.ny)));
+    const c = j * f.nx + i;
+    const depth = f.maxDepth[c];
+    const fw = f.firstWet[c];
+    const floodsAt = depth >= SHELTER_FLOODED_DEPTH ? (fw >= 0 ? fw : f.simTime) : NaN;
+    let power: ShelterDependency['power'] = null;
+    let best = Infinity;
+    for (const e of subs) {
+      const d = Math.hypot(e.gx - s.gx, e.gy - s.gy);
+      if (d < best) {
+        best = d;
+        const m = Number.isFinite(g.cellSize) ? d * g.cellSize : NaN;
+        power = { exposure: e, distanceM: m, far: m > FAR_DEPENDENCY_M };
+      }
+    }
+    return { name: s.name, floodsAt, depth, power };
+  });
+}
+
+/** "Shelter X floods (0.80 m) at T+40 min" / "…its substation (Y) floods at T+20 min — no grid power", or '' when neither. */
+export function shelterLine(d: ShelterDependency): string {
+  const parts: string[] = [];
+  if (Number.isFinite(d.floodsAt)) parts.push(`floods itself (${d.depth.toFixed(2)} m)${d.floodsAt > 0 ? ` from about ${tPlus(d.floodsAt)}` : ' from the start'} — not a refuge from then; routing already leaves it out`);
+  const p = d.power;
+  if (p && !p.far && p.exposure.status !== 'operational') {
+    const at = p.exposure.status === 'failed' ? p.exposure.failedAt : p.exposure.impairedAt;
+    parts.push(`its substation (${facilityName(p.exposure)}) ${p.exposure.status === 'failed' ? 'floods' : 'is impaired'}${Number.isFinite(at) ? ` at ${tPlus(at)}` : ''} — expect no grid power there (approximate service area); check it has backup power`);
+  }
+  if (!parts.length) return p ? `stays dry; its substation (${facilityName(p.exposure)}) keeps working${p.far ? ' (far away: may be served from elsewhere)' : ''}` : 'stays dry; no substation mapped near it';
+  return parts.join('; ');
 }
 
 const tPlus = (s: number) => {
@@ -175,7 +237,13 @@ export function siteDependencies(site: { lon: number; lat: number; gx: number; g
     const what = r.kind === 'hospital' ? 'hospital' : 'fire station';
     if (!r.reachable) flags.push(`Nearest ${what} unreachable by road at the peak${Number.isFinite(r.cutAt) ? ` (the last route was cut at ${tPlus(r.cutAt)})` : ''}.`);
   }
-  return { utilities, hospital, fire, flags, utilityDays, utilityDaysFrom };
+  const shelters = ctx.shelters?.length ? shelterDependencies(ctx.shelters, { fields: ctx.fields, exposures: ctx.exposures, grid: ctx.grid }) : [];
+  for (const s of shelters) {
+    if (Number.isFinite(s.floodsAt)) flags.push(`Shelter ${s.name} floods itself${s.floodsAt > 0 ? ` from about ${tPlus(s.floodsAt)}` : ''} — evacuees cannot use it after that.`);
+    const p = s.power;
+    if (p && !p.far && p.exposure.status === 'failed' && !Number.isFinite(s.floodsAt)) flags.push(`Shelter ${s.name} stays dry but its substation (${facilityName(p.exposure)}) floods${Number.isFinite(p.exposure.failedAt) ? ` at ${tPlus(p.exposure.failedAt)}` : ''} — no grid power there.`);
+  }
+  return { utilities, hospital, fire, flags, utilityDays, utilityDaysFrom, shelters };
 }
 
 export function facilityName(e: FacilityExposure): string {

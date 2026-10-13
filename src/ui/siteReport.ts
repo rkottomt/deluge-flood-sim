@@ -23,6 +23,8 @@ import {
   fmtMinutes,
   formatReturnPeriod,
   RAIN_LADDER_CAVEATS,
+  fmtMin,
+  type EgressTiming,
   type FfeRecommendation,
   type SiteMitigation,
   type SiteRun,
@@ -218,7 +220,9 @@ export const SITE_METHOD_NOTES: ReadonlyArray<{ title: string; text: string }> =
       'run’s accumulators: a cell carries its peak depth from the moment water first reached it (15 cm). Roads close at ' +
       `${ROAD_FLOODED_DEPTH_M} m; bridges over water present at the start stay open. The moment the last route closes is found by bisection over the ` +
       'arrival times, so it is exact for that rebuilt flood and an EARLY estimate for the real one (a road is closed as soon as water arrives on a stretch ' +
-      'that later got deep). Whether the site is still cut off at the end of the run comes from the depth on screen at the end.',
+      'that later got deep). Whether the site is still cut off at the end of the run comes from the depth on screen at the end. A car must leave by the ' +
+      'latest safe departure: each shelter’s closure (its last road cut, or the shelter itself under 0.3 m) minus the drive there. Who has left by then ' +
+      'and how long the queue at the exit takes: see “Leaving by road”.',
   },
   {
     title: 'The sweep',
@@ -250,7 +254,7 @@ export const SITE_LIMITATIONS: readonly string[] = [
   'A river stage is held at the domain edges and raised at a limited rate; real crests last hours to days, so wet durations here are lower bounds.',
   'Pittsburgh and Nashville are regulated rivers: historic crests before the flood-control reservoirs (1936 at Pittsburgh) would crest lower today.',
   'Return periods are inputs. Where none is published here, the EAL rests on yours; with one or two points it is a rough bracket, not a figure.',
-  'Road egress uses road centrelines and the shelters on the map; it ignores traffic and closures for other reasons. Evacuation on foot walks the same road centrelines (no footways in the data) and ignores crowding on the street.',
+  'Road egress uses road centrelines and the shelters on the map, and closures for flooding only (no debris on bridges, no police closures). Departures follow a published average curve and the cars queue at one bottleneck with assumed lane counts; other evacuating traffic is not counted, so the clearance time is a lower bound. Evacuation on foot walks the same road centrelines (no footways in the data) and ignores crowding on the street.',
   'Infrastructure dependencies are approximate: the nearest substation stands in for the real feeder, and a facility OpenStreetMap does not map is missing.',
   'Damage curves (JRC 2017) and unit costs are screening values with a ±1σ band that understates the real uncertainty.',
   'Indicative only — not engineering advice, not a flood determination, not an appraisal.',
@@ -279,6 +283,16 @@ export interface SiteReportSite {
   climate?: ClimateComparison | null;
   /** Extra sections after "The flood on screen" (evacuation on foot, infrastructure dependencies — evacPeople.ts). */
   extra?: HTMLElement[];
+  /** Leaving by road for one run of this site (evacPeople.ts timing): the egress timeline's share-out and clearance columns. */
+  timing?: (run: SiteRun) => EgressTiming | null;
+}
+
+/** Egress timeline columns from the departure curve and the queue: share out before the window ends, clearance vs window. */
+export function timingCells(t: EgressTiming | null | undefined): [string, string] {
+  if (!t || !t.known) return ['—', '—'];
+  const share = t.windowS === Infinity ? 'route stays open' : t.windowS <= 0 ? '0 % (closes before the alert)' : `${Math.round(t.shareOut * 100)} %`;
+  const win = t.windowS === Infinity ? 'open' : fmtMin(Math.max(0, t.windowS));
+  return [share, `${fmtMin(t.clearanceS)} vs ${win}`];
 }
 
 export interface SiteReportInput {
@@ -336,7 +350,7 @@ export function buildSiteReport(i: SiteReportInput): HTMLElement {
       parts.push(
         h('h3', null, 'Egress timeline'),
         simpleTable(
-          ['Level', 'Route before the flood', 'Last route closes', 'Water reaches the site', 'End of run'],
+          ['Level', 'Route before the flood', 'Last route closes', 'Water reaches the site', 'End of run', ...(s.timing ? ['Occupants out before it closes', 'Clearance vs window'] : [])],
           s.sweep.rows.map((row) => {
             const e = row.run.egress;
             const r = row.run.result;
@@ -346,6 +360,7 @@ export function buildSiteReport(i: SiteReportInput): HTMLElement {
               e?.known && e.openAtStart ? (e.openAtPeak ? `stays open (to ${e.peakShelter || 'a shelter'})` : formatClock(e.lastRouteClosesAt)) : '—',
               r?.reached ? formatClock(r.firstWet) : 'stays dry',
               e?.cutAtEnd == null ? '—' : e.cutAtEnd ? (e.cutOffAtLeastS >= 60 ? `still cut off (≥ ${fmtMinutes(e.cutOffAtLeastS)})` : 'still cut off') : 'a route is open again',
+              ...(s.timing ? timingCells(s.timing(row.run)) : []),
             ];
           }),
           'dl-rep-table dl-rep-wide',

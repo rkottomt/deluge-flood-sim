@@ -22,6 +22,7 @@ import type { AccessIndex } from './access';
 import { curveForOccupancy, OCCUPANCY_PROFILES, storeyHeightFor, type Occupancy } from './value';
 import { bcr, ealRange, mitigationCost, upv, DISCOUNT_RATE_FEMA, DISCOUNT_RATE_LOW, USEFUL_LIFE_WALL_YEARS, type LossPoint, type MitigationType } from './eal';
 import { analyzeEgress, type EgressResult, type EgressRouter, type FloodTimeline } from './egress';
+import { clearanceSentence, shareOutSentence, type EgressTiming } from './egressTiming';
 import { openCells } from './footprints';
 import { assessAsset, sampleCells, DAMAGE_MIN_DEPTH, type AssetSpec, type CellSample } from './impact';
 import { assessSite, type PortfolioResult } from './portfolio';
@@ -656,7 +657,7 @@ export function egressClause(run: SiteRun): string {
  * The verdict, as sentences that each carry their number. No score: what reaches the site, from which level; whether
  * the planned floor stays dry; when the way out closes against when the water arrives; and the EAL with what it rests on.
  */
-export function siteVerdict(siteName: string, sum: SweepSummary, money: (v: number) => string): string[] {
+export function siteVerdict(siteName: string, sum: SweepSummary, money: (v: number) => string, timingOf?: (run: SiteRun) => EgressTiming | null): string[] {
   const out: string[] = [];
   const rows = sum.rows;
   if (!rows.length) return ['No levels have been run yet.'];
@@ -683,6 +684,13 @@ export function siteVerdict(siteName: string, sum: SweepSummary, money: (v: numb
   } else {
     const anyKnown = rows.some((r) => r.run.egress?.known);
     out.push(anyKnown ? `A dry road route to a shelter stays open at every level run (up to the ${levelName(top)}).` : `Egress was not assessed: ${egressClause(top.run)}.`);
+  }
+  // Who actually gets out: the departure curve and the queue at the exit, at the first level that cuts the route
+  // (or the highest level when none does).
+  const timed = sum.firstCutOff ?? top;
+  const t = timingOf?.(timed.run);
+  if (t?.known) {
+    out.push(`At the ${levelName(timed)}: ${shareOutSentence(t).replace(/^No /, 'no ')} ${clearanceSentence(t)}`);
   }
   const lossNoRp = rows.filter((r) => r.level.returnPeriod == null && (r.run.result?.loss ?? 0) > 0);
   if (sum.eal && sum.eal.high === 0) {

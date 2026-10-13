@@ -1260,6 +1260,8 @@ const FLOWS = [
       }));
       check(r, 'two-level sweep completes', done && /^Done: 2 levels/.test(out.status), `${out.status.slice(0, 90)} (${num(sweepS, 1)} s wall)`);
       check(r, 'sweep table has both levels and a verdict', out.rows >= 2 && out.verdict.length >= 3, `${out.rows} rows; ${out.verdict[0] ?? ''}`);
+      const timed = out.verdict.find((v) => /occupants out before the last route closes|no route to a shelter closes during the run/.test(v ?? '')) ?? '';
+      check(r, 'the verdict says who gets out by road: share out, clearance vs route window', /Clearance time .+ vs (route window|a route window)/.test(timed), timed.slice(0, 200));
       check(r, 'the user’s scenario is put back (stage, play state, sources)', JSON.stringify(out.state) === JSON.stringify(before), `${JSON.stringify(before)} → ${JSON.stringify(out.state)}`);
       r.metrics.sweepSeconds = sweepS;
       r.metrics.verdict = out.verdict;
@@ -1275,7 +1277,7 @@ const FLOWS = [
       const file = path.join(OUT, '15-site-assessment.html');
       await dl.saveAs(file);
       const html = fs.readFileSync(file, 'utf8');
-      const has = ['site assessment', 'Verdict', 'Sweep', 'Expected annual loss', 'Egress timeline', 'Recommendations (indicative)', 'Limitations', 'NWS minor flood', 'FEMA 1 % (100-yr)', 'ASCE 24-14', 'Freeboard', 'BCR 7 %'];
+      const has = ['site assessment', 'Verdict', 'Sweep', 'Expected annual loss', 'Egress timeline', 'Occupants out before it closes', 'Clearance vs window', 'Recommendations (indicative)', 'Limitations', 'NWS minor flood', 'FEMA 1 % (100-yr)', 'ASCE 24-14', 'Freeboard', 'BCR 7 %'];
       const missing = has.filter((s) => !html.includes(s));
       check(r, 'site assessment report renders every section', missing.length === 0, missing.length ? `missing: ${missing.join(', ')}` : `${(html.length / 1024).toFixed(0)} KB`);
       check(r, 'report carries no script', !/<script/i.test(html), 'no <script>');
@@ -2750,6 +2752,102 @@ const FLOWS = [
       const hs = await assessSite('houston');
       r.metrics.houstonSite = hs;
       check(r, 'Houston site: walking evacuation and dependencies assessed', hs.people.length >= 2 && /reach safety on foot/.test(hs.people.join(' ')) && hs.deps.some((d) => /^Power:/.test(d)), `${hs.people.join(' / ').slice(0, 240)} · ${hs.deps.slice(0, 2).join(' / ').slice(0, 160)}`);
+      await D(() => {
+        for (const b of document.querySelectorAll('.dl-site-remove')) b.click();
+      });
+      await D((p) => window.__deluge.loadPreset(p), PRESET);
+      await calm();
+    },
+  },
+  {
+    id: 50,
+    name: 'Leaving by road: departure curve after the alert and the queue at the exit — share out before the last route closes, clearance vs window, shelters as dependencies',
+    timeoutMs: 300_000,
+    async run(r) {
+      await D((p) => window.__deluge.loadPreset(p), 'pittsburgh');
+      await calm();
+      const crest = await crestOffset();
+      await D((o) => window.__deluge.setStageOffset(o), crest.offset);
+      await runFor(1800);
+      // A pin on the North Shore demo parcel A (between the stadiums).
+      await D(() => {
+        for (const b of document.querySelectorAll('.dl-site-remove')) b.click();
+      });
+      const g = await D((p) => window.__deluge.geoToGrid(p.lon, p.lat), { lon: -80.0124, lat: 40.446 });
+      await D((p) => {
+        const d = window.__deluge;
+        d.setCamera({ target: { gx: p.gx, gy: p.gy, elevation: d.sampleAt(p.gx, p.gy).ground }, distance: 1600, yaw: 0, pitch: Math.PI / 2 - 0.01 });
+      }, g);
+      await D(() => window.__deluge.waitFrames(4));
+      await D(() => {
+        const sec = document.querySelector('[data-section="site"]');
+        if (sec && !sec.classList.contains('dl-open')) sec.querySelector('.dl-sec-head')?.click();
+      });
+      await D(() => window.__deluge.selectTool('site'));
+      const box = await page.locator('#deluge-canvas').boundingBox();
+      await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+      await page.waitForFunction(() => document.querySelectorAll('.dl-site-item').length === 1, null, { timeout: 5000 });
+      await D(() => window.__deluge.selectTool('orbit'));
+      await page.click('[data-section="site"] button:has-text("Assess this run")');
+      await page.waitForFunction(() => /occupants out before|No route to a shelter closes|Not assessed/.test(document.querySelector('[data-site="road"]')?.textContent ?? ''), null, { timeout: 60_000 });
+      // The card re-renders (the extras block fills in after the card is on screen): wait for a filled road block.
+      const read = async () => {
+        await page.waitForFunction(() => (document.querySelector('[data-road="share"]')?.textContent ?? '') !== '' && (document.querySelector('[data-site="deps"]')?.textContent ?? '') !== '', null, { timeout: 30_000 });
+        await page.waitForFunction(() => !/loading facilities/.test(document.querySelector('[data-site="deps"]')?.textContent ?? ''), null, { timeout: 30_000 }).catch(() => {});
+        return readNow();
+      };
+      const readNow = () =>
+        D(() => ({
+          share: document.querySelector('[data-road="share"]')?.textContent ?? '',
+          clearance: document.querySelector('[data-road="clearance"]')?.textContent ?? '',
+          block: document.querySelector('[data-site="road"]')?.textContent ?? '',
+          caveats: [...document.querySelectorAll('[data-road="caveats"] li')].map((li) => li.textContent ?? ''),
+          shelters: [...document.querySelectorAll('[data-site="deps"] dt')].filter((dt) => /^Shelter /.test(dt.textContent ?? '')).map((dt) => `${dt.textContent}: ${dt.nextElementSibling?.textContent ?? ''}`),
+        }));
+      const at0 = await read();
+      r.metrics.alertAtT0 = at0;
+      check(
+        r,
+        'road block: share of occupants out before the last route closes, with the p10–p90 departure band',
+        /^(\d+|< 1|> 99) % of occupants out before the last route closes \(departures p10–p90 \d+ min–\d+ h \d+ min after the alert, “Unprepared, threat seen as likely”\)/.test(at0.share) || /^No route to a shelter closes/.test(at0.share),
+        at0.share.slice(0, 220),
+      );
+      check(r, 'road block: clearance time vs route window, cars through the bottleneck', /^Clearance time .+ vs (route window .+|a route window that stays open through the run): [\d,]+ cars \([\d,]+ occupants ÷ 1\.18\) through .+ cars\/h/.test(at0.clearance), at0.clearance.slice(0, 220));
+      check(r, 'plain-language caveats: published curve, other traffic, the time-lapse rise', at0.caveats.some((c) => /Sorensen & Mileti 2015b/.test(c)) && at0.caveats.some((c) => /lower bound/.test(c)) && at0.caveats.some((c) => /time-lapsed/.test(c)), `${at0.caveats.length} caveats`);
+      check(r, 'shelters listed as dependencies (own flooding, substation)', at0.shelters.length > 0 && at0.shelters.every((s) => /stays dry|floods itself|substation/.test(s)), at0.shelters.slice(0, 3).join(' / ').slice(0, 260));
+      // The alert 3 h before the run: a longer window, more people out.
+      await page.fill('[data-site="extras"] [data-people="alert"]', '-180');
+      await page.dispatchEvent('[data-site="extras"] [data-people="alert"]', 'change');
+      await page.waitForFunction((before) => (document.querySelector('[data-road="share"]')?.textContent ?? '') !== before, at0.share, { timeout: 30_000 });
+      const early = await read();
+      r.metrics.alertAtTminus180 = early;
+      const pctOf = (s) => {
+        const m = /^(\d+|< 1|> 99) %/.exec(s);
+        return !m ? NaN : m[1] === '< 1' ? 0.5 : m[1] === '> 99' ? 99.5 : Number(m[1]);
+      };
+      check(r, 'an alert 3 h before the run lets more occupants out', pctOf(early.share) > pctOf(at0.share) || /^No route/.test(early.share), `${at0.share.slice(0, 40)} → ${early.share.slice(0, 40)}`);
+      // The prepared curve and two exit lanes: faster departures, a shorter clearance.
+      await page.selectOption('[data-road="curve"]', 'good-likely');
+      await page.waitForFunction(() => /Prepared, threat seen as likely/.test(document.querySelector('[data-road="share"]')?.textContent ?? ''), null, { timeout: 30_000 });
+      const prepared = await read();
+      r.metrics.prepared = prepared;
+      const minutes = (s) => {
+        const m = /^Clearance time (?:(\d+) h (\d+) min|(\d+) min)/.exec(s);
+        return !m ? NaN : m[3] ? Number(m[3]) : Number(m[1]) * 60 + Number(m[2]);
+      };
+      check(r, 'the prepared curve clears sooner than the default one', minutes(prepared.clearance) < minutes(early.clearance), `${minutes(early.clearance)} → ${minutes(prepared.clearance)} min`);
+      await D(() => document.querySelector('[data-site="road"]')?.scrollIntoView({ block: 'start' }));
+      await sleep(400);
+      const sp = path.join(OUT, '50-road-block.png');
+      await page.locator('.dl-panel').screenshot({ path: sp });
+      console.log(`  [shot] ${path.relative(ROOT, sp)}`);
+      const [dl] = await Promise.all([page.waitForEvent('download', { timeout: 20_000 }), page.click('[data-site="report-html"]')]);
+      const file = path.join(OUT, '50-site-assessment.html');
+      await dl.saveAs(file);
+      const html = fs.readFileSync(file, 'utf8');
+      const has = ['Leaving by road', 'Out before the last route closes', 'Clearance vs route window', 'Sorensen &amp; Mileti', 'saturation flow', 'Shelter '];
+      const missing = has.filter((s) => !html.includes(s));
+      check(r, 'report: leaving-by-road section, its method and the shelters', missing.length === 0 && !/<script/i.test(html), missing.length ? `missing: ${missing.join(', ')}` : `${(html.length / 1024).toFixed(0)} KB`);
       await D(() => {
         for (const b of document.querySelectorAll('.dl-site-remove')) b.click();
       });

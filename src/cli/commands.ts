@@ -32,11 +32,14 @@ import {
   type ForcingState,
   type MemberResult,
   type SiteOccupancy,
+  type SiteRun,
   type SiteSpec,
   type SweepLevelInfo,
   type SweepRow,
 } from '../loss';
 import { egressClause, newSite } from '../loss/site';
+import { clearanceSentence, shareOutSentence, timingForRun, type TimingOverrides } from '../loss/egressTiming';
+import { DEPARTURE_CURVES, type DepartureCurveId } from '../routing/departure';
 import { demPerturbation } from '../sim/demNoise';
 import { createRouter } from '../routing';
 import { COMMANDS, EXIT, flag, num, str, type ParsedOptions } from './args';
@@ -644,6 +647,25 @@ export function siteFromOptions(o: ParsedOptions): SiteSpec {
   return spec;
 }
 
+/** Leaving by road: the site's occupants, alert, departure curve, persons per car and exit lanes (null = the default). */
+export function timingFromOptions(o: ParsedOptions): TimingOverrides {
+  const within = (name: string, lo: number, hi: number, integer = false): number | null => {
+    const v = num(o, name);
+    if (v === undefined) return null;
+    if (!(v >= lo && v <= hi) || (integer && !Number.isInteger(v))) throw new UsageError(`--${name} must be ${integer ? 'a whole number ' : ''}between ${lo} and ${hi}`);
+    return v;
+  };
+  const dep = str(o, 'departure');
+  if (dep !== undefined && !Object.hasOwn(DEPARTURE_CURVES, dep)) throw new UsageError(`--departure must be one of ${Object.keys(DEPARTURE_CURVES).join(', ')}`);
+  return {
+    occupants: within('occupants', 1, 100000, true),
+    alertMin: within('alert-min', -1440, 1440),
+    departure: dep as DepartureCurveId | undefined,
+    personsPerCar: within('persons-per-car', 1, 10),
+    exitLanes: within('exit-lanes', 1, 12, true),
+  };
+}
+
 /** --rp x0.5=10,x1=100 */
 export function parseRp(text: string | undefined): Map<string, number> {
   const out = new Map<string, number>();
@@ -690,6 +712,8 @@ export function planSite(o: ParsedOptions, presetId: string, scenario: TerrainDa
 
 export async function siteCommand(env: CliEnv, o: ParsedOptions): Promise<number> {
   const spec = siteFromOptions(o);
+  const timingOver = timingFromOptions(o);
+  const timingOf = (run: SiteRun) => timingForRun(run, 0, timingOver);
   const sweep = flag(o, 'sweep');
   if (sweep && (str(o, 'scenario') !== undefined || num(o, 'stage-ft') !== undefined)) throw new UsageError('--sweep runs the ladder of levels itself: drop --scenario / --stage-ft (use --levels to pick levels)');
   const rp = parseRp(str(o, 'rp'));
@@ -738,8 +762,10 @@ export async function siteCommand(env: CliEnv, o: ParsedOptions): Promise<number
       env.log.info(`Site check: ${p.presetId} · ${p.durationS / 60} simulated min on ${gpu}`);
       const c = await runCase(p.scene, () => setScenario(p.scene, base), p.durationS, env.log, 'simulate', p.resolved.rainStopsAtS);
       const run = assessSiteForRun(spec, { fields: c.fields, terrain: t, presetId: p.presetId, ground: p.scene.ground(), router, shelters, endDepth: c.snapshot?.depth.slice() ?? null });
-      report.run = siteRunJson(run);
+      const timing = timingOf(run);
+      report.run = siteRunJson(run, timing);
       report.egressSummary = egressClause(run);
+      if (timing?.known) report.egressTimingSummary = [shareOutSentence(timing), clearanceSentence(timing)];
       report.timing = runJson(p, gpu, (performance.now() - t0) / 1000, 1);
     } else {
       const st = p.scene.state.scenario?.stage ?? null;
@@ -790,7 +816,7 @@ export async function siteCommand(env: CliEnv, o: ParsedOptions): Promise<number
         sources: [...new Set(todo.map((l) => l.source).filter(Boolean))].map((k) => ({ key: k, text: ladder.rungs.find((l) => l.source === k)?.sourceText ?? '' })),
         caveats: kind === 'rain' ? [...RAIN_LADDER_CAVEATS] : coastal ? [...SURGE_LADDER_CAVEATS] : [],
       };
-      report.sweep = siteSweepReport(spec, rows, { designId: str(o, 'design') ?? null, freeboardM: freeboardFt !== undefined ? freeboardFt * FT : undefined, country: region.costCountry });
+      report.sweep = siteSweepReport(spec, rows, { designId: str(o, 'design') ?? null, freeboardM: freeboardFt !== undefined ? freeboardFt * FT : undefined, country: region.costCountry, timing: timingOf });
       report.timing = runJson(p, gpu, (performance.now() - t0) / 1000, todo.length);
     }
     report.caveat = 'Indicative screening, not engineering advice: bare-earth terrain, no drains, one simulated event per level.';
@@ -798,7 +824,8 @@ export async function siteCommand(env: CliEnv, o: ParsedOptions): Promise<number
     env.write(out, toJson(report));
     if (out !== '-') {
       const sw = report.sweep as ReturnType<typeof siteSweepReport> | undefined;
-      env.stdout(`${sw ? sw.verdict.join('\n') : String(report.egressSummary)}\nwrote ${out}\n`);
+      const ts = report.egressTimingSummary as string[] | undefined;
+      env.stdout(`${sw ? sw.verdict.join('\n') : [String(report.egressSummary), ...(ts ?? [])].join('\n')}\nwrote ${out}\n`);
     }
     return EXIT.ok;
   } finally {

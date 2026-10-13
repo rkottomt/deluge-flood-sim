@@ -33,6 +33,7 @@ import {
   type SweepLevelInfo,
   type SweepRow,
 } from '../../src/loss/site';
+import { egressTiming } from '../../src/loss/egressTiming';
 
 const NX = 64;
 const NY = 64;
@@ -299,6 +300,14 @@ test('verdict: plain sentences with their numbers; no score; EAL caveats', () =>
   assert.match(text, /Expected annual loss \$\d+ – \$\d+/);
   assert.match(text, /some of them your input/);
   assert.doesNotMatch(text, /score/i);
+  // With departure timing: who is out when the route closes, and clearance against the window, at that level.
+  rows[2].run.egress = { ...rows[2].run.egress!, lastSafeDepartureAt: 1800, lastSafeShelter: 'A', routeClassMeters: [0, 900, 0, 0] };
+  const instant = { id: 'custom' as const, label: 'instant', a: 1, bMin: 1 / 60, maxShare: 1, source: 'test' };
+  const timed = siteVerdict('Lot 4', summarizeSweep(rows), money, (run) =>
+    egressTiming(run.egress, { occupants: 590, occupantsBasis: 'test', personsPerVehicle: 1.18, personsPerVehicleBasis: 'test', exitLanes: 1, curve: instant, alertTime: 0 }),
+  );
+  assert.match(timed.join(' '), /At the rp100 \(35\.0 ft\): 50 % of occupants out before the last route closes .*Clearance time 60 min vs route window 30 min: 500 cars/);
+  assert.equal(timed.length, v.length + 1);
   // A site that stays dry everywhere.
   const dry = siteVerdict('', summarizeSweep(rows.slice(0, 1)), money);
   assert.match(dry[0], /The site stays dry at every level run, up to the minor/);
