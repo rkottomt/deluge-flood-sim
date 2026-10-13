@@ -327,8 +327,8 @@ async function buildAndServe(distDir, port, logFile) {
   if (code !== 0) throw new Error(`vite build failed (exit ${code}); see ${logFile}`);
   console.log('ok');
   if (await portOpen(port)) throw new Error(`port ${port} is already in use — pass --port=<free port>`);
-  // `detached` puts the server in its own process group: `npx` forks the real vite process, so killing the npx
-  // pid alone leaves a preview server holding the port for the next run. killTree() kills the group.
+  // `detached` puts the server in its own process group, so killTree() takes down anything it spawned and no
+  // preview server is left holding the port for the next run.
   const server = spawn(process.execPath, [VITE_BIN, 'preview', '--outDir', distDir, '--port', String(port), '--strictPort'], {
     cwd: ROOT,
     stdio: ['ignore', 'pipe', 'pipe'],
