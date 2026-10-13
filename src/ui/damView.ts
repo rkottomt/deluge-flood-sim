@@ -18,7 +18,7 @@ import { makeGeoToGrid, squareDomain } from '../data/geo';
 import { BREACH_METHODS, BREACH_MODES, damScenario, DRY_DAM_NOTE, sunnyDayPossible, type BreachMethod, type BreachMode, type DamScenario } from '../dams/breachModel';
 import { damById, loadNidIndex, searchDams, type NidDam, type NidIndex } from '../dams/nidIndex';
 import { areaCentreForDam, downstreamBearing, readDownstream, type DownstreamReading } from '../dams/placement';
-import { damBreachScenario, type DamBreachSpec } from '../dams/scenario';
+import { damBreachScenario, withoutDamText, type DamBreachSpec } from '../dams/scenario';
 import { bridgeFor, postNotice } from './bridge';
 import { h, setText, type UIContext } from './dom';
 import { fmtNum } from './format';
@@ -278,7 +278,7 @@ export function createDamView(ctx: UIContext, deps: { panel: Pick<Panel, 'reveal
     const base = store.get().scenario;
     if (!t || !at || !base) return;
     // A previous breach on this map is replaced, not stacked.
-    const clean = { ...base, sources: base.sources.filter((x) => x.id !== 'dam-breach'), damBreach: undefined };
+    const clean = { ...base, description: withoutDamText(base), sources: base.sources.filter((x) => x.id !== 'dam-breach'), damBreach: undefined };
     const out = damBreachScenario({ elevation: t.elevation, nx: t.nx, ny: t.ny, cellSize: t.cellSize }, clean, at, s);
     if (!out) {
       postNotice(store, { kind: 'warn', key: 'usecase', title: def.title, message: 'The dam is not on the loaded map.' });

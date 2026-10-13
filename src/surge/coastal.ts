@@ -45,6 +45,14 @@ export interface CoastalSurgeSpec {
   slr: TideGaugeSlr | null;
   /** Sea runs on the map edge that got a boundary. */
   seaRuns: number;
+  /** The sentences this set-up appended to the scenario's description (withoutSurgeText takes them out again). */
+  descriptionAdded?: string;
+}
+
+/** A scenario's description without the sentences a coastal set-up appended to it (coastalSetup). */
+export function withoutSurgeText(s: Pick<ScenarioPreset, 'description' | 'coastal'>): string {
+  const added = s.coastal?.descriptionAdded;
+  return added && s.description.endsWith(added) ? s.description.slice(0, s.description.length - added.length) : s.description;
 }
 
 export interface CoastalSetup {
@@ -219,10 +227,13 @@ export function coastalSetup(
     seaRuns: sources.length,
   };
   const keep = base.sources.filter((s) => s.type !== 'stage');
-  const description =
-    `${base.description} Coastal surge set-up: the sea boundary on ${sources.length} seaward edge run${sources.length === 1 ? '' : 's'} follows the ` +
+  const added =
+    ` Coastal surge set-up: the sea boundary on ${sources.length} seaward edge run${sources.length === 1 ? '' : 's'} follows the ` +
     `sea-level control (feet ${z.datum}; 0 offset = MHHW ${z.m.toFixed(2)} m), and Site check sweeps NOAA’s extreme water levels at ${station.name} ` +
     `(${spec.stationKm} km away): the 1 %-annual-chance still-water level is ${l100.elevation.toFixed(2)} m ${z.datum} (90 % CI ${spec.ci100[0].toFixed(2)}–${spec.ci100[1].toFixed(2)}).`;
+  spec.descriptionAdded = added;
+  // Built on the description without a previous set-up's sentences: a re-run replaces them, never stacks them.
+  const description = withoutSurgeText(base) + added;
   return {
     scenario: { ...base, description, sources: [...sources, ...keep], stage, coastal: spec },
     spec,

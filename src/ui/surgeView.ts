@@ -9,7 +9,7 @@
  */
 import { cleanPlaceLabel } from '../data/placeName';
 import { isLikelyUS, makeGeoToGrid } from '../data/geo';
-import { coastalSetup } from '../surge/coastal';
+import { coastalSetup, withoutSurgeText } from '../surge/coastal';
 import { loadSurgeTable, nearestStation, SURGE_LIMITS, type SurgeTable } from '../surge/stations';
 import { bridgeFor, postNotice } from './bridge';
 import { h, setText, type UIContext } from './dom';
@@ -151,7 +151,7 @@ export function createSurgeView(ctx: UIContext, deps: { panel: Pick<Panel, 'reve
     const base = store.get().scenario;
     if (!t || !base) return { ok: false, message: 'Load a scene first.' };
     // Re-installing on a coastal scenario starts from the area's own scenario sources, not the sea ones.
-    const res = coastalSetup({ elevation: t.elevation, nx: t.nx, ny: t.ny, cellSize: t.cellSize }, { ...base, coastal: undefined }, near.station, near.km);
+    const res = coastalSetup({ elevation: t.elevation, nx: t.nx, ny: t.ny, cellSize: t.cellSize }, { ...base, description: withoutSurgeText(base), coastal: undefined }, near.station, near.km);
     if ('error' in res) return { ok: false, message: res.error };
     store.set({ scenario: res.scenario });
     ctx.actions.restoreScenario();

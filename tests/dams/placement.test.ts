@@ -9,7 +9,7 @@ import type { HazardFields, ScenarioPreset } from '../../src/contracts';
 import { damScenario } from '../../src/dams/breachModel';
 import type { NidDam } from '../../src/dams/nidIndex';
 import { areaCentreForDam, descentPath, downstreamBearing, injectionCell, offsetLatLon, readDownstream } from '../../src/dams/placement';
-import { DAM_INFLOW_ID, damBreachScenario } from '../../src/dams/scenario';
+import { DAM_INFLOW_ID, damBreachScenario, withoutDamText } from '../../src/dams/scenario';
 import { climateForcing, scaleSources } from '../../src/climate/apply';
 import { hydrographVolume } from '../../src/sim/forcing';
 
@@ -142,4 +142,21 @@ test('the dam scenario: an inflow at the toe carrying exactly the breach volume,
   assert.equal(scaled.find((x) => x.id === DAM_INFLOW_ID), src);
   // Off the map: no scenario.
   assert.equal(damBreachScenario({ elevation: z, nx: n, ny: n, cellSize: 10 }, BASE, { gx: 500, gy: 30 }, s), null);
+});
+
+test('re-running a breach replaces its sentences in the description, never stacks them', () => {
+  const n = 128;
+  const z = valley(n);
+  const grid = { elevation: z, nx: n, ny: n, cellSize: 10 };
+  const first = damBreachScenario(grid, BASE, { gx: 64.5, gy: 30.5 }, damScenario(nidDam(), 'flood'))!;
+  // As the dam view does: the previous breach taken out, then the new one put in.
+  const clean = { ...first.scenario, description: withoutDamText(first.scenario), damBreach: undefined };
+  assert.equal(clean.description, BASE.description);
+  const again = damBreachScenario(grid, clean, { gx: 64.5, gy: 30.5 }, damScenario(nidDam(), 'sunny'))!;
+  assert.equal((again.scenario.description.match(/NID XX00001/g) ?? []).length, 1, again.scenario.description);
+  assert.match(again.scenario.description, /sunny-day/);
+  assert.ok(again.scenario.description.endsWith(BASE.description));
+  // Even handed the breached scenario itself, the builder starts from the base description.
+  const direct = damBreachScenario(grid, first.scenario, { gx: 64.5, gy: 30.5 }, damScenario(nidDam(), 'flood'))!;
+  assert.equal((direct.scenario.description.match(/NID XX00001/g) ?? []).length, 1);
 });
