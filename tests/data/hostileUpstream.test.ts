@@ -355,3 +355,41 @@ test('buildRoadNetwork drops vertices that do not project to a finite grid point
   const back = decodeRoads(encodeRoads(net));
   for (const v of back.nodes) assert.ok(Number.isFinite(v));
 });
+
+// ─── Dams and coastal surge: the same-origin files a mirror or a cache could still swap ─────────────────────────
+
+test('dam index: a gzip bomb, an oversized body and a hostile payload cost the dam search only', async () => {
+  const zlib = await import('node:zlib');
+  const { loadNidIndex, resetNidCache, NID_LIMITS } = await import('../../src/dams/nidIndex');
+  const serve = (body: Uint8Array) => (() => Promise.resolve(new Response(body as BodyInit, { headers: { 'content-type': 'application/octet-stream' } }))) as typeof fetch;
+  // 64 MB of zeros gzips to ~64 kB: the inflate stops at the 24 MB cap.
+  const bomb = new Uint8Array(zlib.gzipSync(Buffer.alloc(64 * MB), { level: 9 }));
+  resetNidCache();
+  const e1 = await withFetch(serve(bomb), () => loadNidIndex('https://example.test/dams/nid-index.bin').then(() => null, (e: Error) => e));
+  assert.match(String(e1?.message), /^Dam index: inflates past its size limit/);
+  // Over the download cap: refused while streaming.
+  resetNidCache();
+  const e2 = await withFetch(serve(new Uint8Array(NID_LIMITS.maxDownload + MB)), () => loadNidIndex('https://example.test/dams/nid-index.bin').then(() => null, (e: Error) => e));
+  assert.match(String(e2?.message), /more than 6 MB|Dam index/);
+  // Markup where the binary should be.
+  resetNidCache();
+  const e3 = await withFetch(serve(new TextEncoder().encode('DLNID001<script>window.__pwned=1</script>')), () => loadNidIndex('https://example.test/dams/nid-index.bin').then(() => null, (e: Error) => e));
+  assert.match(String(e3?.message), /^Dam index:/);
+  resetNidCache();
+});
+
+test('surge table: oversized, not JSON, or hostile — refused with a fixed message', async () => {
+  const { loadSurgeTable, resetSurgeCache, SURGE_LIMITS } = await import('../../src/surge/stations');
+  const serve = (body: string | Uint8Array) => (() => Promise.resolve(new Response(body as BodyInit, { headers: { 'content-type': 'application/json' } }))) as typeof fetch;
+  resetSurgeCache();
+  const e1 = await withFetch(serve(new Uint8Array(SURGE_LIMITS.maxBytes + 1024)), () => loadSurgeTable('https://example.test/surge/ewl-stations.json').then(() => null, (e: Error) => e));
+  assert.ok(e1 instanceof HttpError && e1.status === 413, String(e1));
+  resetSurgeCache();
+  const e2 = await withFetch(serve('<html><script>window.__pwned=1</script></html>'), () => loadSurgeTable('https://example.test/surge/ewl-stations.json').then(() => null, (e: Error) => e));
+  assert.equal(e2?.message, 'Surge table: not JSON');
+  resetSurgeCache();
+  const hostile = '{"format":"deluge-ewl-1","aeps":[0.99,0.5,0.1,0.02,0.01],"stations":[{"id":"1","name":"<img src=x onerror=alert(1)>"}]}';
+  const e3 = await withFetch(serve(hostile), () => loadSurgeTable('https://example.test/surge/ewl-stations.json').then(() => null, (e: Error) => e));
+  assert.equal(e3?.message, 'Surge table: no valid station');
+  resetSurgeCache();
+});
