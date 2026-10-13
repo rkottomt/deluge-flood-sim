@@ -4,7 +4,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { FT, US_SURVEY_FT, parseDatum, parseUnit, toMetres, toNavd88Metres } from '../../src/validation/datum';
+import { FT, numberField, US_SURVEY_FT, parseDatum, parseUnit, toMetres, toNavd88Metres } from '../../src/validation/datum';
 
 const close = (a: number | null, b: number, eps = 1e-9) => {
   assert.ok(a !== null && Math.abs(a - b) <= eps, `expected ${b}, got ${a}`);
@@ -56,4 +56,15 @@ test('datum and unit spellings from STN, NFHL and NWIS', () => {
   assert.equal(parseUnit('US Survey Feet'), 'usft');
   assert.equal(parseUnit('Meters'), 'm');
   assert.equal(parseUnit(''), null);
+});
+
+test('downloaded numeric fields: a blank is missing, not zero (a gauge datum of 0 ft would pass every check)', () => {
+  assert.ok(Number.isNaN(numberField('')));
+  assert.ok(Number.isNaN(numberField('   ')));
+  assert.ok(Number.isNaN(numberField(null)));
+  assert.ok(Number.isNaN(numberField(undefined)));
+  assert.ok(Number.isNaN(numberField('n/a')));
+  assert.equal(numberField('0'), 0);
+  assert.equal(numberField(' 712.4 '), 712.4);
+  assert.equal(numberField(-79.99), -79.99);
 });
