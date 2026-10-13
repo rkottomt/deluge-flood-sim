@@ -62,6 +62,8 @@ export const BREACH_MODES: Readonly<Record<BreachMode, { label: string; short: s
   flood: { label: 'Flood-induced failure (overtopping at maximum pool)', short: 'Flood-induced', k0: 1.3, sideSlope: 1.0, overtopping: true },
 };
 
+/** The largest documented failure in the breach databases the relations were fitted to (Teton 1976; Wahl 1998). */
+export const FITTED_RANGE = { volumeM3: 310e6, headM: 77.4 } as const;
 /** Hypsometric exponent when the NID gives no surface area [M]. */
 export const DEFAULT_HYPSOMETRY = 2.5;
 /** When the NID gives no normal storage, a sunny-day failure releases this share of the maximum storage [M]. */
@@ -282,6 +284,9 @@ export function damScenario(dam: NidDam, mode: BreachMode, method: BreachMethod 
       base = dam.maxDischargeCfs * CFS_M3S;
       assumptions.push(`The river’s flood passing the dam is taken as the NID maximum spillway discharge, ${Math.round(base).toLocaleString('en-US')} m³/s, under the breach wave.`);
     } else assumptions.push('No maximum discharge in the NID: the breach wave runs on a dry river (no flood base flow).');
+  }
+  if (V > FITTED_RANGE.volumeM3 || hw > FITTED_RANGE.headM) {
+    assumptions.push(`Larger than any failure the breach relations were fitted to (the largest is Teton 1976: ${FITTED_RANGE.volumeM3 / 1e6} million m³ behind ${FITTED_RANGE.headM} m of head): every number here is an extrapolation, and the relations disagree by an order of magnitude.`);
   }
   if (!EMBANKMENT_TYPES.has(dam.damType)) assumptions.push(`A ${dam.damType.toLowerCase()} dam: the breach relations were fitted mostly to earth and rockfill embankments, so these numbers are indicative only.`);
   const result = damBreach({

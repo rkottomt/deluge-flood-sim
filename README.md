@@ -19,6 +19,10 @@ Beyond rising water:
   wall or a raised floor would save), portfolio CSVs, expected annual loss and benefit–cost ratios.
 * **How sure it is.** Flood-probability maps from a GPU ensemble of perturbed runs, and **future climate** (2050 /
   2080 / 2100 rain, sea level and glacial-lake growth).
+* **Dam breaches and coastal surge, anywhere in the US.** Pick any of ~55,000 dams in the National Inventory of Dams,
+  breach it (sunny-day or flood-induced, Froehlich 2008) and watch the wave arrive down the valley; or put a coastal
+  site against NOAA's 1- to 100-year tide-gauge water levels, today and with 2022 sea-level rise.
+  [Dam breaches and coastal surge](#dam-breaches-and-coastal-surge) below.
 
 Built for SteelHacks, *No Wrapper* track: no language models anywhere in the product. How it works in depth:
 [ARCHITECTURE.md](ARCHITECTURE.md). Module contracts: [src/contracts.ts](src/contracts.ts). The business case — site
@@ -80,6 +84,9 @@ under *Scenario → Change*, and in [Ten scenarios, offline](#ten-scenarios-offl
 `?usecase=site|glacier|portfolio` opens one of the business use cases below, set up with its demo data;
 `?usecase=address&at=<lat>,<lon>` checks a site at that point (a 5 km live area, so it needs the internet; the link
 carries coordinates only — never an address or a name).
+`?usecase=dam&nid=<NID id>&breach=sunny|flood` breaches that dam on the valley below it (e.g. `nid=MI00549`, Edenville
+Dam); `?usecase=surge&at=<lat>,<lon>` sets a coastal site up against NOAA's extreme water levels (an 8 km live area).
+Both need the internet for the terrain; the dam index and the tide-station table ship with the app.
 `?story=nepal-2026|pittsburgh-1936|houston-harvey|sikkim-2023|chamoli-2021` plays a narrated story (also *Watch the
 story* in the Scenario section, and the stories row under Use cases): the camera, the simulation and a caption card
 with sourced facts move together beat by beat (`Space` pause, `←`/`→` previous/next, `Esc` exit). The stories are data
@@ -200,7 +207,7 @@ real event** — every band is a labelled assumption, members are equally weight
 one click: *check a site before you build* (Pittsburgh, two demo parcels in Site check — a North Shore lot and
 one on the higher ground of Allegheny Center), *glacier risk for hydropower* (Nepal 2026, the hazard chain and its
 early-warning designer), *portfolio exposure* (Houston under Harvey's rain, with a demo portfolio loaded into Impact
-& loss) and *check any US address* (above). The same dialog has a printable one-page brief of what the app computes for a business and where those
+& loss), *check any US address* (above), and *dam-breach inundation* and *coastal surge exposure* ([below](#dam-breaches-and-coastal-surge)). The same dialog has a printable one-page brief of what the app computes for a business and where those
 numbers stop. The demo portfolio, [public/demo/houston-portfolio.csv](public/demo/houston-portfolio.csv), is
 **fictional**: 19 made-up assets named "Demo …" and tagged `fictional-demo`, pinned to real building footprints with
 invented values (the CSV reader has no comment rows, so the note lives here). Worked numbers from all three:
@@ -210,6 +217,74 @@ On the 1936 crest (30 simulated minutes, depth-only fallback) the panel books ab
 buildings reached and **$5.5 B** (±1σ curve range $3.8–7.0 B); the one-click levee avoids about $1.0 B of it. These
 are screening numbers for one simulated event on bare-earth terrain: not a flood study, not an insurance valuation,
 not a catastrophe model, and the real uncertainty is wider than the band (values, terrain, missing drains).
+
+## Dam breaches and coastal surge
+
+Two more use cases (top bar → **Use cases**), each on a live area anywhere in the US, each with its data baked into the
+app's own origin for the same reason as Atlas 14 — the upstream service either cannot be called from a page or need
+not be — so neither adds an endpoint to the CSP.
+
+**Dam-breach inundation** (`?usecase=dam&nid=<NID id>`). Dam owners must map what a failure would flood (FEMA P-946,
+state dam-safety rules, Emergency Action Plans); downstream owners want to know when the wave arrives. Search any of
+**55,276 dams** from the USACE **National Inventory of Dams** by name, NID id or distance from the map — every dam of at
+least 1,000 acre-ft, or 6 m high over 50 acre-ft (`public/dams/nid-index.bin`, 1.32 MB gzip; the NID API sends no
+CORS headers, so [`scripts/bake-nid.ts`](scripts/bake-nid.ts) bakes its public GeoPackage export). Pick one and a
+scenario:
+
+* **Sunny-day** — the normal pool fails by piping; **flood-induced** — the maximum pool overtops, with the NID's
+  maximum spillway discharge flowing underneath the wave.
+* **Breach**: Froehlich 2008 average width and formation time from the released volume and the dam height; the
+  outflow from the hazard chain's weir-flow ODE (`src/hazard/breach.ts`) with the breach growing linearly to that
+  width over that time and the reservoir drawing down by a storage curve fitted to the NID's own area and storage —
+  or, as a second method, a gamma hydrograph with Froehlich 2016's peak. MacDonald & Langridge-Monopolis 1984,
+  Froehlich 1995 and Froehlich 2016 peaks are shown beside it as the band. **Teton 1976** is the anchor test
+  (`tests/dams/breachModel.test.ts`): width 168 m vs 151 observed, formation 1.14 h vs 1.25 h, peak 79,000 m³/s
+  (regression) or 98,000–107,000 (parametric) vs **65,120** observed — the parametric breach (Fread's weir, no
+  tailwater) is conservative by about half, which is the side an inundation screen should err on, and the band says so.
+* **On the map**: Deluge first reads a 64 × 64 elevation probe around the dam to see which way the valley falls, then
+  loads the live area (12 km by default) with the dam near its upstream edge, and sends the hydrograph in as an
+  **inflow at the toe of the dam** — the lowest ground within a few dam-heights of the NID point — delivering exactly
+  its volume (`src/sim/forcing.ts`, as the glacier chain does). Not a reservoir behind a wall: 3DEP is hydro-flattened,
+  so over a reservoir it holds the water surface, not the lake bed, and a lake "filled" on it would hold almost none of
+  the NID storage (the procedural sandbox can breach a real wall because it owns its terrain). The Arrival view comes
+  on, and **Read arrivals** gives arrival time and peak depth at 0.5–12 km along the steepest-descent path below the
+  dam. Site check, Impact & loss and evacuation work on it as on any scene; the climate layer never scales the wave.
+
+Edenville Dam, Michigan (NID MI00549; it failed in May 2020), flood-induced, against the real services (e2e flow 25,
+GTX 1660 Ti): the card gives 81.7 million m³ behind 17.4 m, a breach 134 m wide forming over 2.9 h, a modelled peak of
+**11,700 m³/s** after 170 min (the relations: 4,500–6,800; the reservoir is wide and shallow, so its head holds up);
+the valley loaded in 11–16 s; in the first 90 simulated minutes (16 s of wall time) the wave reached 0.5 / 1 / 2 / 3 /
+5 / 8 km below the dam at 3 / 6 / 13 / 25 / 56 / 76 min, 9.0–3.9 m deep in the channel (river included). No measured
+outflow for Edenville is quoted here. Honest limits, in the panel: the reservoir is the NID's storage and area, not a
+survey; spillways, gates, outlet works and downstream dams are not modelled; the relations were fitted mostly to
+earth and rockfill dams (a concrete dam is flagged as indicative), and a dam larger than Teton is flagged as an
+extrapolation. Screening for planning, not an EAP inundation map.
+
+**Coastal surge exposure** (`?usecase=surge&at=<lat>,<lon>`). For a coastal developer or lender the question is how
+often the sea reaches the site. A **surge return-period ladder** in Site check, like the Atlas 14 rain ladder: the
+**NOAA CO-OPS Extreme Water Levels** at the nearest long-term tide gauge — the annual exceedance probability levels
+(99 %, 50 %, 10 %, 2 %, 1 %, i.e. 1- to 100-year) of a GEV fit to the gauge's annual maxima — put on the map's datum
+with the station's MHHW above NAVD88. [`scripts/bake-surge.ts`](scripts/bake-surge.ts) baked 125 stations, with their
+datums and NOAA 2022 sea-level-rise scenarios, into `public/surge/ewl-stations.json` (38.5 kB; the CO-OPS APIs do allow
+CORS, but a 38 kB table works offline and adds no endpoint). NOAA's SLOSH MOMs were the other candidate and were not
+used: they are per hurricane category (no annual chance, so no EAL), and the public maps are binned depths above
+ground rather than water levels. The set-up loads 8 km around the point, finds the **seaward edges** — water the
+loader pre-filled near sea level that reaches the map edge — puts the sea boundary on them at MHHW (other edge
+boundaries are dropped, so the rivers don't rise with the sea), drops a site, and ticks the five levels (90 simulated
+minutes each by default: the sea has to cross the low ground). Return periods are NOAA's, so the sweep ends in an EAL;
+**Today vs future** adds NOAA's 2022 Intermediate-Low / Intermediate rise at the same gauge (the climate layer reads
+it from the scenario). *Use this map* does the same on any live area already on screen.
+
+Fort Myers is the check: station 8725520 reproduces the Fort Myers preset's hand-transcribed ladder to the centimetre
+(1 % level 2.05 m NAVD88, 90 % CI 1.47–3.47) and its sea-level-rise record equals the climate layer's. At **Fort Myers
+Beach** (26.4515, −81.9506, a slab-on-grade building), against the real services (e2e flow 26): the nearest analysed
+gauge is Fort Myers, 23 km up the Caloosahatchee; the site is dry to the 50-year level and takes 0.25 m at the 1 %
+level (6.7 ft NAVD88), its last road out closes 2 minutes before the water arrives, and the EAL is **$6,090–$18 k a
+year**; under 2050 SSP5-8.5 (NOAA Intermediate, +0.32 m at the gauge) the same sweep gives **$51 k–$76 k** (×4–5,
+a small level change on flat ground). Hurricane Ian put 12.92 ft (station datum, 2.29 m NAVD88) on that gauge and far more on the
+beach — which is the honest caveat: one gauge, possibly in a different bay, stands for the whole map, and the levels
+are still water (tide + surge + gauge-felt setup), with no wave run-up. Stations with no NAVD88 tie (Hawaii, the
+islands, much of Alaska) fall back to MSL and say so.
 
 ## Glacier hazards
 
@@ -619,6 +694,14 @@ return period. Its deep link reads only `at=<lat>,<lon>` through a strict number
 from the link reaches the page, and the app never writes the typed address into the address bar.
 `npm run test:security` covers both (SPOOF-ADDRESS-*, XSS-ADDRESS-GEOCODER, CAP-ATLAS14-*).
 
+*Dam breaches and coastal surge* add no endpoint either: the dam index and the tide-station table are same-origin
+files, decoded under the same rules (download and inflate caps, an exact-length header, bounded counts, every record
+or station range-checked and dropped rather than guessed, names stripped of control, bidi and markup characters), and
+the one extra request — a 64 × 64 3DEP probe below the dam — goes to the elevation host already in the policy. The
+links read `nid=` (an NID id pattern), `breach=` / `method=` (fixed words) and `at=` (numbers) only. Tests assert
+that the NID and CO-OPS hosts stay out of the CSP and the desktop allowlist; the suite adds SPOOF-DAM-NID,
+SPOOF-SURGE-AT, CAP-NID-* and CAP-SURGE-*.
+
 **Accepted risk, stated on purpose:** a copy hosted on GitHub Pages can be framed by any other origin. Pages cannot
 send a `Content-Security-Policy` header and `frame-ancestors` is ignored in a `<meta>` tag, so there is no way to
 forbid it from a static host. The impact is limited to what a framed copy could do: there is nothing to click-jack
@@ -658,6 +741,13 @@ a simulation. `Deluge.app` serves the same build with `frame-ancestors 'none'` a
   stationary (historical) climate. A site that floods from a river needs a river ladder (presets) or your own return
   periods; the Atlas 14 values are read at the map centre from a 1/12° resampling (within a few per cent of NOAA's
   point values), and western Washington and Oregon have none.
+* **Dam breaches are regressions on an NID reservoir.** Froehlich 2008 breach geometry, a storage curve fitted to two
+  NID numbers, no spillways, gates or downstream dams, and the wave entering at the toe as a discharge (the DEM holds
+  the reservoir's surface, not its bed). On Teton 1976 the default method overshoots the observed peak by ~50 %
+  (conservative); published relations for one dam disagree by 2× or more.
+* **The surge ladder is still water at one gauge.** NOAA's extreme water levels at the nearest analysed tide station
+  (up to 120 km away, perhaps in another bay), held on the seaward edges of the map: no wave run-up, no sea-floor
+  bathymetry, no seawalls unless drawn, stationary unless Today vs future adds NOAA's sea-level rise.
 
 ## Data and attribution
 
@@ -677,6 +767,14 @@ Rain return periods (Site check's rain ladder): **NOAA Atlas 14** precipitation-
 domain ("no restrictions apply"; NOAA asks for acknowledgement, which every site report carries), resampled into
 `public/atlas14/` by `scripts/bake-atlas14.ts` — provenance in
 [public/atlas14/SOURCES.txt](public/atlas14/SOURCES.txt).
+
+Dams: the **National Inventory of Dams** (U.S. Army Corps of Engineers; public fields of the national export),
+baked into `public/dams/` by `scripts/bake-nid.ts` — provenance in [public/dams/SOURCES.txt](public/dams/SOURCES.txt).
+Coastal water levels: **NOAA CO-OPS Extreme Water Levels**, tidal datums and the NOAA 2022 sea-level-rise scenarios
+(Sweet et al. 2022) at 125 tide stations, public domain, baked into `public/surge/` by `scripts/bake-surge.ts` —
+[public/surge/SOURCES.txt](public/surge/SOURCES.txt). Breach relations: Froehlich 2008 (*J. Water Resour. Plann.
+Manage.* 134:217), Froehlich 2016 (*J. Hydraul. Eng.* 142:04015059), Froehlich 1995, MacDonald & Langridge-Monopolis
+1984; Teton 1976 data from Wahl 1998 (USBR DSO-98-004).
 
 Live areas and the location picker's basemap fetch **Esri World Imagery** at runtime (© Esri, Vantor, Earthstar
 Geographics, and the GIS User Community; Esri's terms apply). Fallbacks: **Mapzen Terrarium** elevation tiles (AWS Open

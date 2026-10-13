@@ -254,7 +254,7 @@ export const SURGE_SWEEP_MINUTES = 90;
 export const SURGE_LADDER_CAVEATS: readonly string[] = [
   'Still-water level only: NOAA’s Extreme Water Levels are what the tide gauge recorded (tide + surge + the wave setup the gauge feels), not wave run-up or the waves riding on the surge, which add metres on an open coast.',
   'One station for the whole map: the nearest long-term NOAA tide gauge, which may be tens of kilometres away and in a different bay — surge varies strongly along a coast and up estuaries.',
-  'The level is held on the seaward edges of the map and floods inland over the simulated time; a real surge lasts hours and its peak minutes, so low ground far inland can come out wetter here than in a short peak.',
+  'The level is held on the seaward edges of the map and floods inland over the simulated time; a real surge lasts hours and its peak minutes, so low ground far inland can come out wetter here than in a short peak. There is no sea-floor bathymetry (open water is the elevation model’s flat water surface, burned a few metres deep), so the surge crosses wide bays more slowly than it would: give each level enough simulated time (90 min by default).',
   'Bare-earth terrain: seawalls, levees, flood gates, buildings and storm drains are not in the elevation model unless you draw them.',
   'NOAA’s levels are stationary (fitted to the gauge record as if sea level did not rise). Today vs future adds NOAA’s 2022 sea-level-rise scenario at the same gauge.',
 ];

@@ -53,6 +53,8 @@ Ranked by fit with what the product does today, and by how directly the question
 | 2 | **Lenders, insurers, MGAs, asset managers** | Portfolio exposure, accumulation, event response; the lender's or insurer's question about one asset | **Impact & loss** with a portfolio CSV: per-asset depth, speed, hazard class, loss range, business interruption, insured loss after deductible and limit | 3–4 (they own cat models; they buy event views, new regions and explainability) |
 | 3 | **Hydropower and mountain infrastructure** (owners, IFC PS4 lenders, insurers with GLOF sub-limits) | How much warning each plant gets; where a sensor pays; what the headworks see | **Hazard chain + Early warning**: a lake outburst or avalanche routed down the valley, front times at each plant, lead time per sensor design, best sensor site, ensemble p10 | **5 — the wedge**: no mainstream vendor offers interactive GLOF routing |
 | 4 | **Municipalities, counties and their engineers** | A benefit–cost analysis for a FEMA HMA / BRIC / FMA application; visuals for a public meeting | Before/after loss with a drawn wall, wall cost, BCR at 7 % and 3.1 %, who gets wetter | 4–5 (BRIC was court-restored; a $1 B NOFO closed July 2026 [S]) |
+| 5 | **Dam owners and their dam-safety engineers; emergency managers below them** | Breach inundation maps for an Emergency Action Plan (FEMA P-946; state dam-safety rules, which require EAPs for high-hazard dams), the first screen before a consultant's study, and the tabletop exercise | **Dam-breach inundation**: any of ~55,000 NID dams, sunny-day or flood-induced, Froehlich 2008 breach and hydrograph with the published peak band, the wave on the real valley, arrival times and depths downstream, then Site check / Impact & loss on what it reaches | 4 (a screen, not the stamped EAP map; the owner of a high-hazard dam still needs the engineer — Deluge makes that study's scope and the tabletop exercise cheaper) |
+| 6 | **Coastal developers, lenders and insurers** | How often the sea reaches this parcel, today and in 2050 | **Coastal surge exposure**: the nearest NOAA tide gauge's 1- to 100-year still-water levels on the site, egress, EAL, and the same ladder with NOAA 2022 sea-level rise | 4 (still water at one gauge, no waves: a screen next to the FIRM's VE/AE zones, not instead of them) |
 
 Why lead with segment 1: the decision is concrete and near-term (buy the parcel or not, set the floor height), a
 single seat can use the answer the same week, and the competing alternative is a consultant study, not a data
@@ -233,6 +235,39 @@ hurricane surge is in it (both flooded Meyerland, repeatedly); there is no run-o
 storm drains; and Atlas 14 is stationary — the same ladder under 2050 rain is one click (*Today vs future*). It is a
 pluvial screen that ships an EAL anywhere in the US, not a substitute for the FIRM.
 
+### 4.5 Dam owner: what an Edenville-type failure sends down the valley (`?usecase=dam&nid=MI00549&breach=flood`)
+
+The National Inventory of Dams lists 92,625 dams, 16,972 of them high-hazard — a failure would probably cost a life
+(the October 2026 national export; the baked index keeps 12,786 of those among its 55,276 dams above the size
+threshold). Their owners need breach inundation maps for an Emergency Action Plan, and the emergency
+managers below them need arrival times. Today that is a consultant's HEC-RAS study per dam. Deluge gives the screen
+in a minute: pick the dam, pick sunny-day or flood-induced, and the breach runs on the real valley.
+
+Edenville Dam (Michigan, NID MI00549, failed 19 May 2020 [S]), flood-induced, run on this branch against the real
+services on a GTX 1660 Ti (e2e flow 25): 81.7 million m³ behind 17.4 m; Froehlich 2008 breach 134 m wide forming over
+2.9 h; modelled peak **11,700 m³/s** at 170 min, against 4,500–6,800 m³/s from the published relations (the card shows
+all of them); the 12 km valley loaded in 11–16 s, and 90 simulated minutes took 16 s. The readout after those 90
+minutes: the wave reached 0.5, 1, 2, 3, 5 and 8 km below the dam at **3, 6, 13, 25, 56 and 76 minutes**, 9.0 to 3.9 m
+deep in the channel. A sunny-day failure of the same dam (normal pool, 44.4 million m³) peaks at 6,300 m³/s.
+
+*What this is not:* an EAP inundation map. The reservoir is two NID numbers, not a survey; there are no spillways,
+gates or downstream dams (Sanford Dam, below Edenville, also failed in 2020); the parametric breach overshoots Teton
+1976 by ~50 % (§8). It is the screen that tells an owner which dams in a portfolio need the study first, and gives the
+county a first arrival-time table for its tabletop exercise.
+
+### 4.6 Coastal developer: Fort Myers Beach against NOAA's tide-gauge water levels (`?usecase=surge&at=26.4515,-81.9506`)
+
+The coastal analogue of §4.4. Run against the real services (e2e flow 26), an 8 km area around a ground-floor retail
+site on Estero Island: the nearest NOAA gauge with an extreme-water-level analysis is Fort Myers (8725520), 23 km up
+the Caloosahatchee; its 1-, 2-, 10-, 50- and 100-year still-water levels are 1.1 / 1.9 / 3.3 / 5.4 / 6.7 ft NAVD88; the
+site is dry to the 50-year level and takes 0.25 m at the 100-year, its last road out closes 2 minutes before the
+water arrives, and the **EAL is $6,090–$18 k a year**; *Today vs future* under 2050 SSP5-8.5 (NOAA Intermediate, +0.32 m at the gauge) gives
+**$51 k–$76 k**. The five levels took 146 s.
+
+*What this is not:* Hurricane Ian. Ian put 7.5 ft NAVD88 on the Fort Myers gauge and far more on the open beach; the
+gauge statistic is still water up a river, with no waves, and the nearest gauge stands for the whole map. The panel
+says so with every result. For the beach the honest read is a floor: the FIRM's VE zone and wave run-up come on top.
+
 ## 5. Pricing hypotheses
 
 Hypotheses to test with design partners, not a price list ([business-case.md §E.5](docs/research/business-case.md#e5-pricing-tiers-hypotheses-to-test)).
@@ -331,6 +366,11 @@ Say these before a customer finds them; the app says them in its panels and repo
   labelled as such (§4.1). Anywhere in the US the NOAA Atlas 14 rain ladder gives a sourced EAL — but for surface-water
   flooding only: rain on the map, rivers held level, no surge, no drains, a stationary climate (§4.4); and none in
   western Washington and Oregon, which Atlas 14 does not cover.
+* **Dam breaches are screening regressions.** Froehlich 2008 breach geometry on a reservoir described by two NID
+  numbers, no hydraulic structures, the wave entering at the toe; the default (parametric) peak is ~50 % above Teton
+  1976's observed one, and published relations for one dam spread 2× or more (§4.5). Not an EAP inundation map.
+* **The surge ladder is still water at one gauge.** NOAA's extreme water levels at the nearest analysed tide station,
+  which may be tens of kilometres away and up a river; no waves or run-up, no sea-floor bathymetry (§4.6).
 * **One run at a time** until the ensemble mode lands. §4.1 shows a result tipping on the fast-water threshold
   between runs. The ±1σ ranges shown are the damage-curve spread only.
 * **Screening-grade losses.** Global JRC depth–damage curves, values from footprint area × storeys × a national unit
@@ -349,7 +389,7 @@ The full list, with numbers, is in [README.md → Known limitations](README.md#k
 
 ## 9. Try it
 
-In the app: **Use cases** in the top bar (or *For business* in the Try-it strip) opens the four set-ups and the
+In the app: **Use cases** in the top bar (or *For business* in the Try-it strip) opens the six set-ups and the
 one-page *What Deluge answers for your business* brief, which prints. Or link straight to one:
 
 * `?usecase=site` — Pittsburgh with the two demo parcels in Site check (they are handed over as a `?sites=` value and
@@ -358,10 +398,13 @@ one-page *What Deluge answers for your business* brief, which prints. Or link st
 * `?usecase=portfolio` — Houston with the fictional demo portfolio loaded into Impact & loss
 * `?usecase=address&at=29.6892,-95.4640` — check a site at that point (Meyerland, §4.4): a 5 km live area, the
   site, and the NOAA Atlas 14 rain ladder ready to sweep (needs the internet; the link carries coordinates only)
+* `?usecase=dam&nid=MI00549&breach=flood` — Edenville Dam breached flood-induced on the valley below it (§4.5); any
+  NID id works, and the card without `nid=` searches the index
+* `?usecase=surge&at=26.4515,-81.9506` — Fort Myers Beach against NOAA's tide-gauge water levels (§4.6)
 
 ![The Use cases dialog: three cards, and the business brief behind the button at the bottom](docs/business/use-cases.jpg)
 
-The value is matched exactly against those four words, and `at=` must be two plain decimals inside the US; anything else is ignored with a fixed message. The demo
+The value is matched exactly against those six words, `at=` must be two plain decimals inside the US, and `nid=` an NID id; anything else is ignored with a fixed message. The demo
 portfolio is a plain CSV in [public/demo/](public/demo/); load your own under *Impact & loss → Load sites / portfolio
 CSV*, with the schema in [business-case.md §E.1](docs/research/business-case.md#e1-asset-portfolio-csv-schema-parsed-client-side-nothing-uploaded).
 It is read in the tab and never uploaded.

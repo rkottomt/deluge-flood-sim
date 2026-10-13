@@ -127,6 +127,12 @@ test('an NID dam with fields missing says what it assumed', () => {
   assert.ok(damScenario(d, 'flood').assumptions.some((a) => /No maximum discharge/.test(a)));
 });
 
+test('a dam bigger than any documented failure says its numbers are an extrapolation', () => {
+  const big = dam({ id: 'CA00035', name: 'Oroville Dam', heightM: 234.7, hydraulicHeightM: 228, storageAcFt: 3_540_000, normalStorageAcFt: 3_540_000, surfaceAreaAc: 15_800 });
+  assert.ok(damScenario(big, 'sunny').assumptions.some((a) => /extrapolation/.test(a)));
+  assert.ok(!damScenario(dam(), 'flood').assumptions.some((a) => /extrapolation/.test(a)));
+});
+
 test('reservoir shape from the NID: p = A·h/V at normal pool, clamped to [1, 4]', () => {
   const { p, fromNid } = hypsometryFor(dam(), 17.4);
   assert.ok(fromNid);
