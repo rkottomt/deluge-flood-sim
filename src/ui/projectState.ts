@@ -7,7 +7,7 @@
  * nothing from their insides and they need nothing from it.
  */
 import type { AppActions, AppState, LiveAreaRequest, SimParams, Store, TerrainData, WaterSource } from '../contracts';
-import { DEFAULT_SIM_PARAMS } from '../contracts';
+import { CLIMATE_TODAY } from '../climate/scenarios';
 import { gridToGeo } from '../data/geo';
 import { cleanPlaceLabel } from '../data/placeName';
 import { isPresetId } from '../data/presets';
@@ -44,28 +44,53 @@ export function projectHooksFor(store: Store): ProjectHooks {
   return h;
 }
 
-/** SimParams a project carries: the user-facing ones, plus any numeric / boolean parameter a later solver adds. */
-const SIM_SKIP = new Set(['stabilityMode', 'cfl', 'maxSubstepsPerFrame']);
+/**
+ * The SimParams a project carries, by name and type — an explicit list, so a parameter the defaults leave out (the
+ * optional land-surface switches) is carried too, and the solver's internal tunables (cfl, maxSubstepsPerFrame,
+ * stabilityMode) never are. `optional` keys are absent by default (absent = off, or a ×1 scale); a project without
+ * one puts it back to absent rather than keeping whatever the screen had.
+ */
+const SIM_CARRIED = {
+  manningN: { type: 'number', optional: false },
+  rainRate: { type: 'number', optional: false },
+  infiltrationRate: { type: 'number', optional: false },
+  timeScale: { type: 'number', optional: false },
+  boundary: { type: 'boundary', optional: false },
+  drainageScale: { type: 'number', optional: true },
+  buildingObstacles: { type: 'boolean', optional: true },
+  roughnessMap: { type: 'boolean', optional: true },
+  drainage: { type: 'boolean', optional: true },
+} as const satisfies Partial<Record<keyof SimParams, { type: 'number' | 'boolean' | 'boundary'; optional: boolean }>>;
+
+type CarriedKey = keyof typeof SIM_CARRIED;
+const CARRIED_KEYS = Object.keys(SIM_CARRIED) as CarriedKey[];
+
+function carriedValue(k: CarriedKey, v: unknown): number | boolean | 'open' | 'wall' | undefined {
+  const t = SIM_CARRIED[k].type;
+  if (t === 'number') return typeof v === 'number' && Number.isFinite(v) ? v : undefined;
+  if (t === 'boolean') return typeof v === 'boolean' ? v : undefined;
+  return v === 'open' || v === 'wall' ? v : undefined;
+}
 
 export function simForProject(sim: SimParams): Record<string, number | string | boolean> {
   const out: Record<string, number | string | boolean> = {};
-  for (const [k, v] of Object.entries(sim)) {
-    if (SIM_SKIP.has(k)) continue;
-    if (typeof v === 'number' && Number.isFinite(v)) out[k] = v;
-    else if (typeof v === 'boolean') out[k] = v;
-    else if (k === 'boundary' && (v === 'open' || v === 'wall')) out[k] = v;
+  for (const k of CARRIED_KEYS) {
+    const v = carriedValue(k, sim[k]);
+    if (v !== undefined) out[k] = v;
   }
   return out;
 }
 
-/** Merge a project's SimParams into the app's: only keys the running app has, with the same type. */
+/**
+ * Merge a project's SimParams into the app's: the carried keys with their own type. A required key the project lacks
+ * (or has with the wrong type) keeps the app's value; an optional one goes back to absent (its default).
+ */
 export function mergeSim(current: SimParams, saved: Record<string, number | string | boolean>): SimParams {
-  const next = { ...current } as unknown as Record<string, unknown>;
-  const defaults = DEFAULT_SIM_PARAMS as unknown as Record<string, unknown>;
-  for (const [k, v] of Object.entries(saved)) {
-    if (SIM_SKIP.has(k) || !Object.prototype.hasOwnProperty.call(defaults, k)) continue;
-    if (typeof defaults[k] !== typeof v) continue;
-    next[k] = v;
+  const next: Record<string, unknown> = { ...current };
+  for (const k of CARRIED_KEYS) {
+    const v = Object.prototype.hasOwnProperty.call(saved, k) ? carriedValue(k, saved[k]) : undefined;
+    if (v !== undefined) next[k] = v;
+    else if (SIM_CARRIED[k].optional) delete next[k];
   }
   return next as unknown as SimParams;
 }
@@ -188,12 +213,18 @@ function pickChain(o: { volumeFactor?: number; erosionRate?: number; cv?: number
   return out;
 }
 
-/** Is `scene` the scene on screen? */
+/** Is `scene` the scene on screen? Not while another is loading (it is about to replace the one on screen). */
 export function sceneMatches(s: AppState, t: TerrainData | null, scene: ProjectScene): boolean {
+  if (s.loading) return false;
   if (scene.kind === 'preset') return s.presetId === scene.id && !!t;
   if (s.presetId || !t) return false;
   const c = gridToGeo(t, t.nx / 2, t.ny / 2);
   return Math.abs(c.lat - scene.lat) < 2e-4 && Math.abs(c.lon - scene.lon) < 2e-4 && Math.abs(t.nx * t.cellSize - scene.sizeM) < 2 && t.nx === scene.resolution;
+}
+
+/** Do a project's grid coordinates refer to this terrain's grid? (A project without a grid is taken to.) */
+export function gridMatches(g: ProjectFile['grid'], t: TerrainData): boolean {
+  return !g || (g.nx === t.nx && g.ny === t.ny && Math.abs(g.cellSize - t.cellSize) <= 1e-3 * t.cellSize);
 }
 
 export interface ApplyDeps {
@@ -214,6 +245,8 @@ export async function applyProject(p: ProjectFile, deps: ApplyDeps): Promise<{ o
   const bridge = bridgeFor(store);
   const notes: string[] = [];
   if (headlessBusy(store)) return { ok: false, notes: ['A sweep, ensemble or comparison is running: open the project when it has finished.'] };
+  // A scene still loading would replace whatever is applied now: wait for it first.
+  if (store.get().loading) await deps.waitForScene();
   let t = bridge.scene?.getTerrain() ?? null;
   if (!sceneMatches(store.get(), t, p.scene)) {
     if (p.scene.kind === 'preset') {
@@ -233,8 +266,8 @@ export async function applyProject(p: ProjectFile, deps: ApplyDeps): Promise<{ o
   }
   const solver = bridge.scene?.getSolver() ?? null;
   if (!t || !solver) return { ok: false, notes: ['The simulation is not ready yet; try again in a moment.'] };
-  const sameGrid = !p.grid || (p.grid.nx === t.nx && p.grid.ny === t.ny && Math.abs(p.grid.cellSize - t.cellSize) <= 1e-3 * t.cellSize);
-  if (!sameGrid) notes.push('The project was saved on a different grid of this scene: its walls, terrain edits, designs, sources, storms, shelters and camera were not applied.');
+  const sameGrid = gridMatches(p.grid, t);
+  if (!sameGrid) notes.push('The project was saved on a different grid of this scene: its walls, terrain edits, designs (and their cached results), sources, storms, shelters and camera were not applied.');
 
   // Scenario: one store update, so the stage bases are re-derived from levels that already include the offset.
   const s0 = store.get();
@@ -243,11 +276,15 @@ export async function applyProject(p: ProjectFile, deps: ApplyDeps): Promise<{ o
     stageOffset: sc.stageOffset,
     sim: mergeSim(s0.sim, sc.sim),
     ...(sameGrid ? { sources: sc.sources.map((x) => ({ ...x })), storms: sc.storms.map((x) => ({ ...x })), shelters: sc.shelters.map((x) => ({ ...x })), evacStart: sc.evacStart } : {}),
-    ...(sc.climate ? { climate: { ...sc.climate } } : {}),
+    // A project without a climate is today's climate, not whatever the screen had (a capture always writes one).
+    climate: sc.climate ? { ...sc.climate } : { ...CLIMATE_TODAY },
   });
-  if (sc.chain && bridge.chain && bridge.chainControl) {
-    const { inflow, mode, ...overrides } = sc.chain;
-    if (Object.keys(overrides).length || mode) bridge.chainControl.run({ overrides, ...(mode ? { mode } : {}) });
+  // Chain presets: the project's what-if, or none (the chain as published) — never the screen's leftover one.
+  if (bridge.chain && bridge.chainControl) {
+    const { inflow, mode, ...overrides } = sc.chain ?? { inflow: 'chain' as const };
+    const want = { overrides: pickChain(overrides), ...(mode ? { mode } : {}) };
+    const cur = bridge.chain.whatIf;
+    if (JSON.stringify(pickChain(cur.overrides)) !== JSON.stringify(want.overrides) || (cur.mode ?? null) !== (want.mode ?? null)) bridge.chainControl.run(want);
     if (inflow !== bridge.chain.inflow) bridge.chainControl.setInflow(inflow);
   }
 
@@ -266,11 +303,14 @@ export async function applyProject(p: ProjectFile, deps: ApplyDeps): Promise<{ o
   reg.replace(p.sites.map(siteFromProject));
   const h = projectHooksFor(store);
   if (p.siteCheck) await h.siteCheck?.applySettings(p.siteCheck);
+  // The scene may have changed while Site check settled: the rest is in this scene's coordinates.
+  if ((bridge.scene?.getTerrain() ?? null) !== t) return { ok: false, notes: [...notes, 'The scene changed while the project was opening; its designs, view and camera were not applied.'] };
   if (p.ensemble) h.ensemble?.applySettings(p.ensemble);
   if (p.portfolio) {
     if (h.portfolio) h.portfolio.load(p.portfolio.name, p.portfolio.csv);
   }
-  h.designs?.set(sameGrid ? p.designs : [], p.comparison);
+  // Designs and their cached results belong to the grid they were drawn on: neither is kept on another.
+  h.designs?.set(sameGrid ? p.designs : [], sameGrid ? p.comparison : null);
 
   // View and camera.
   if (p.view) {
