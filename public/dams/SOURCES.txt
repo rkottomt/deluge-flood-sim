@@ -1,0 +1,32 @@
+U.S. dam index — source and terms
+=================================
+
+nid-index.bin   55,276 dams of the U.S. National Inventory of Dams: id, name, state, location, NID height, hydraulic height,
+                NID (maximum) and normal storage, surface area, maximum discharge, length, year completed, hazard
+                potential, primary owner type and primary dam type. Gzip-compressed binary (format: src/dams/nidIndex.ts),
+                1.32 MB (3.45 MB uncompressed).
+
+SOURCE          National Inventory of Dams (NID), U.S. Army Corps of Engineers, with the Federal Emergency Management
+                Agency and the state and federal dam-safety agencies that report to it. National export, GeoPackage, public
+                fields: https://nid.sec.usace.army.mil/api/nation/gpkg (downloaded October 2026; 92,625 records).
+
+TERMS           The NID's public fields are public information published by USACE for download; some fields (for example
+                condition assessments of certain federal dams, Emergency Action Plan details and inundation maps) are
+                restricted and are not in the public export, nor here. Cite "U.S. Army Corps of Engineers, National
+                Inventory of Dams". The index is a convenience copy: the NID itself is authoritative and updated
+                continuously.
+
+WHAT WAS KEPT   Dams with NID storage >= 1,000 acre-ft, or NID height >= 6 m (19.7 ft) with storage >= 50 acre-ft:
+                55,887 records. Structures that share one NID id (a reservoir's main dam and its saddle dams) are folded
+                into the tallest (609 folded), giving 55,278; the app's decoder refuses 2 more (one with no height, one
+                with an implausible storage), leaving 55,276. Units are converted on use (ft -> m, acre-ft -> m3,
+                ft3/s -> m3/s).
+
+HOW IT WAS MADE scripts/bake-nid.ts (Node 22.13+, reads the GeoPackage with node:sqlite):
+                    node --import tsx scripts/bake-nid.ts --download --cache=<dir>
+                    node --import tsx scripts/bake-nid.ts --cache=<dir>
+
+WHY NOT LIVE    The NID API answers a browser page with no Access-Control-Allow-Origin header (checked October 2026: a
+                GET with an Origin header returns 200 with Access-Control-Allow-Credentials but no allowed origin, and the
+                CSV export returns 403), so a page cannot read it. The baked copy also keeps the content-security policy
+                free of a new endpoint and works offline.
