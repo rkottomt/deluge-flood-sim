@@ -77,7 +77,9 @@ URL options: `?preset=pittsburgh|johnstown|ellicott|asheville|nashville|houston|
 under *Scenario → Change*, and in [Ten scenarios, offline](#ten-scenarios-offline) below), or any US area with
 `?live=<lat>,<lon>,<km>`
 (e.g. `?live=29.95,-90.07,6` for New Orleans; this needs the internet for USGS, Esri and Census TIGERweb).
-`?usecase=site|glacier|portfolio` opens one of the business use cases below, set up with its demo data.
+`?usecase=site|glacier|portfolio` opens one of the business use cases below, set up with its demo data;
+`?usecase=address&at=<lat>,<lon>` checks a site at that point (a 5 km live area, so it needs the internet; the link
+carries coordinates only — never an address or a name).
 
 ## Try this (30 seconds)
 
@@ -133,6 +135,34 @@ periods are only filled in where published; the rest are the user's input and la
 1 % level (35.4 ft) and 4.5 m at the 1936 crest, and loses its last dry route to a shelter as the water arrives; the
 indicative floor is 1.28 m above grade. Indicative screening, not engineering advice.
 
+**Any US address.** *Check an address* (in Site check, or the fourth use-case card) takes a street address — through
+the same Nominatim geocoder as the location picker, or a typed `lat, lon` — loads a 5 km live area centred on it
+(USGS 3DEP, Esri imagery, Census roads), drops a site on the point, and opens Site check on a **rain return-period
+ladder from NOAA Atlas 14**: the 1-hour rain intensity at 2, 10, 25, 100 and 500 years at the map centre, each level
+rained uniformly over the whole map for one hour and then left to run off (120 simulated minutes per level by
+default). The return periods are NOAA's, so the sweep ends in an expected annual loss with no input from the user.
+At Houston City Hall that ladder reads 57 / 82 / 98 / 123 / 162 mm/h (NOAA's PFDS gives the same five numbers for
+that point); the five levels ran in 265 s on a GTX 1660 Ti. Why 1 hour: a live area is 1–20 km across, and the small
+urban catchments inside one respond in well under an hour — the regime where the 1-hour intensity is the design rain.
+Read it for what it is: **rain only** (live areas hold their rivers at a fixed level — there is no river inflow or
+storm surge in this ladder, so it is surface-water flooding, not the Buffalo Bayou or a hurricane surge), uniform
+rain over the map with no run-on from outside it, no storm drains, and **stationary** — Atlas 14 is fitted to the
+historical record; Today vs future (*Weather & rivers → Future climate*) scales the same ladder's rain for 2050–2100.
+The same ladder is offered on any US preset (it is the default where the scenario is rain-led, e.g. Houston), and the
+picker under *Event ladder* switches between it, a river or tide ladder, and the forcing multipliers.
+
+*Where the numbers come from.* NOAA's Precipitation Frequency Data Server answers point queries
+(`hdsc.nws.noaa.gov/cgi-bin/new/cgi_readH5.py`) but sends no CORS headers (checked October 2026: none on a GET with an
+`Origin`, HTTP 500 on a preflight), so a page cannot call it — and the CSP stays without it. Instead
+[`scripts/bake-atlas14.ts`](scripts/bake-atlas14.ts) resamples NOAA's own Atlas 14 GIS grids (30″, partial-duration
+series, 60-minute duration, Volumes 1–4 and 6–12) to 1/12° over CONUS (1/24° Hawaii and Puerto Rico, 1/6° Alaska) into
+one 0.73 MB gzip file served from the app's own origin, `public/atlas14/pf60m-pds.bin`; at eleven test points across
+every volume it is within 3.4 % of the PFDS point answer (the PFDS answers are kept as test fixtures). Coverage is
+Atlas 14's: not western Washington or Oregon (still NOAA Atlas 2), where the app says so and offers no rain ladder.
+The PDS recurrence intervals are converted to annual chance for the EAL with Langbein's relation, AEP = 1 − e^(−1/ARI),
+so "100-yr" is booked at 1 in 100.5 years and "2-yr" at 1 in 2.5. NOAA Atlas 15 will supersede Atlas 14, but as of
+October 2026 only a Montana pilot is out (CONUS published estimates "no earlier than September 2027").
+
 Every headless run (sweep levels, ensemble members, today-vs-future pairs) runs **exactly** the simulated time asked
 — the solver lands on it with a short last substep instead of running on until a readback catches up (600 s used to
 end anywhere in 614–706 s) — and repeats agree: the hazard maxima are sampled every 5 simulated seconds rather than
@@ -161,11 +191,11 @@ real event** — every band is a labelled assumption, members are equally weight
 (drains, buildings, bathymetry) is the same in every member, so the real uncertainty is wider. Details:
 [ARCHITECTURE.md §3.10](ARCHITECTURE.md#310-ensembles-flood-probability-under-stated-input-uncertainty).
 
-**Use cases** (top bar, or *For business* in the Try-it strip; `?usecase=` links) set the three business questions
-up in one click: *check a site before you build* (Pittsburgh, two demo parcels in Site check — a North Shore lot and
+**Use cases** (top bar, or *For business* in the Try-it strip; `?usecase=` links) set the business questions up in
+one click: *check a site before you build* (Pittsburgh, two demo parcels in Site check — a North Shore lot and
 one on the higher ground of Allegheny Center), *glacier risk for hydropower* (Nepal 2026, the hazard chain and its
-early-warning designer) and *portfolio exposure* (Houston under Harvey's rain, with a demo portfolio loaded into Impact
-& loss). The same dialog has a printable one-page brief of what the app computes for a business and where those
+early-warning designer), *portfolio exposure* (Houston under Harvey's rain, with a demo portfolio loaded into Impact
+& loss) and *check any US address* (above). The same dialog has a printable one-page brief of what the app computes for a business and where those
 numbers stop. The demo portfolio, [public/demo/houston-portfolio.csv](public/demo/houston-portfolio.csv), is
 **fictional**: 19 made-up assets named "Demo …" and tagged `fictional-demo`, pinned to real building footprints with
 invented values (the CSV reader has no comment rows, so the note lives here). Worked numbers from all three:
@@ -510,6 +540,14 @@ leave nothing behind (localStorage, IndexedDB, service workers, cache storage an
 are cleared before the window opens) and that a packaged build refuses to start if its command line asks it to
 drop TLS validation or the sandbox.
 
+*Check an address* adds no endpoint: addresses go to the Nominatim search the picker already uses (one capped,
+rate-limited call, results validated and shown as text), NOAA Atlas 14 is a same-origin file (`'self'`), and its
+decoder trusts nothing — a 4 MB download cap, an 8 MB cap on what the gzip layer may inflate to (a gzip bomb stops
+there), an exact-length binary header with bounded counts, and every cell range-checked and required to rise with
+return period. Its deep link reads only `at=<lat>,<lon>` through a strict number pattern inside US coverage; no text
+from the link reaches the page, and the app never writes the typed address into the address bar.
+`npm run test:security` covers both (SPOOF-ADDRESS-*, XSS-ADDRESS-GEOCODER, CAP-ATLAS14-*).
+
 **Accepted risk, stated on purpose:** a copy hosted on GitHub Pages can be framed by any other origin. Pages cannot
 send a `Content-Security-Policy` header and `frame-ancestors` is ignored in a `<meta>` tag, so there is no way to
 forbid it from a static host. The impact is limited to what a framed copy could do: there is nothing to click-jack
@@ -544,6 +582,11 @@ a simulation. `Deluge.app` serves the same build with `frame-ancestors 'none'` a
 * **Boundaries.** River stages are imposed where rivers cross the domain edge, with a small head that keeps the
   rivers flowing downstream; discharges at the 1936 crest are lower than the historic record.
 * **Coverage.** Live areas are US-only at full quality (USGS 3DEP); elsewhere the coarse Terrarium fallback is used.
+* **The rain ladder is pluvial only.** The NOAA Atlas 14 ladder rains a uniform 1-hour storm on the map with the rivers
+  held at their normal level: no river flood, no surge, no run-on from outside the map, no storm drains, and a
+  stationary (historical) climate. A site that floods from a river needs a river ladder (presets) or your own return
+  periods; the Atlas 14 values are read at the map centre from a 1/12° resampling (within a few per cent of NOAA's
+  point values), and western Washington and Oregon have none.
 
 ## Data and attribution
 
@@ -557,6 +600,12 @@ that forbids redistribution (details, per city, in [public/presets/SOURCES.txt](
 * Flood stages and historic crests: NOAA National Weather Service (gauges PTTP1, Nashville) and USGS annual peak-flow
   records (French Broad at Asheville 03451500, Swannanoa at Biltmore 03451000, Cumberland at Nashville 03431500,
   Buffalo Bayou at Houston 08074000, Boulder Creek 06730200, Stonycreek 03040000, Patapsco 01589000)
+
+Rain return periods (Site check's rain ladder): **NOAA Atlas 14** precipitation-frequency estimates, Volumes 1–4 and
+6–12 (NOAA / National Weather Service, Office of Water Prediction, Hydrometeorological Design Studies Center), public
+domain ("no restrictions apply"; NOAA asks for acknowledgement, which every site report carries), resampled into
+`public/atlas14/` by `scripts/bake-atlas14.ts` — provenance in
+[public/atlas14/SOURCES.txt](public/atlas14/SOURCES.txt).
 
 Live areas and the location picker's basemap fetch **Esri World Imagery** at runtime (© Esri, Vantor, Earthstar
 Geographics, and the GIS User Community; Esri's terms apply). Fallbacks: **Mapzen Terrarium** elevation tiles (AWS Open

@@ -49,7 +49,7 @@ Ranked by fit with what the product does today, and by how directly the question
 
 | # | Segment | The job | What Deluge gives them today | Fit |
 |---|---|---|---|---|
-| 1 | **Developers, site-selection and corporate real estate** (and the lenders who finance them) | Acquisition due diligence: depth at the planned floor, egress, a defensible floor level, what protection costs | **Site check**: a parcel swept through NWS / FEMA / historic levels → depth, arrival, egress closure, loss, EAL, indicative finished floor, mitigation BCR, printable assessment | **5** |
+| 1 | **Developers, site-selection and corporate real estate** (and the lenders who finance them) | Acquisition due diligence: depth at the planned floor, egress, a defensible floor level, what protection costs | **Site check**: a parcel swept through NWS / FEMA / historic levels — or, at any US address, NOAA Atlas 14 rain return periods — → depth, arrival, egress closure, loss, EAL, indicative finished floor, mitigation BCR, printable assessment | **5** |
 | 2 | **Lenders, insurers, MGAs, asset managers** | Portfolio exposure, accumulation, event response; the lender's or insurer's question about one asset | **Impact & loss** with a portfolio CSV: per-asset depth, speed, hazard class, loss range, business interruption, insured loss after deductible and limit | 3–4 (they own cat models; they buy event views, new regions and explainability) |
 | 3 | **Hydropower and mountain infrastructure** (owners, IFC PS4 lenders, insurers with GLOF sub-limits) | How much warning each plant gets; where a sensor pays; what the headworks see | **Hazard chain + Early warning**: a lake outburst or avalanche routed down the valley, front times at each plant, lead time per sensor design, best sensor site, ensemble p10 | **5 — the wedge**: no mainstream vendor offers interactive GLOF routing |
 | 4 | **Municipalities, counties and their engineers** | A benefit–cost analysis for a FEMA HMA / BRIC / FMA application; visuals for a public meeting | Before/after loss with a drawn wall, wall cost, BCR at 7 % and 3.1 %, who gets wetter | 4–5 (BRIC was court-restored; a $1 B NOFO closed July 2026 [S]) |
@@ -209,6 +209,30 @@ alert (+19 min at Rasuwagadhi, +30 min at the best site, for Betrawati) is the m
 
 ![The Early warning designer on the Nepal 2026 scene after Suggest best site: a lead-time chip per town and plant, and the valley timeline](docs/business/glacier-warning.jpg)
 
+### 4.4 Developer, anywhere: any US address against NOAA Atlas 14 rain (`?usecase=address&at=<lat>,<lon>`)
+
+§4.1 needs a city with a researched river ladder. Most acquisitions are not in one. **Check an address** takes a
+street address (geocoded by Nominatim), loads a 5 km live area around it from USGS 3DEP, Esri imagery and Census
+roads, drops a site on the point, and sweeps it through the **NOAA Atlas 14** 1-hour rain at 2, 10, 25, 100 and 500
+years — published return periods, so the expected annual loss needs nothing from the user. Run on this branch on a
+GTX 1660 Ti in October 2026 against the real services (e2e flow 21; default building: a 3-storey office, value from
+floor area, first floor 0.3 m):
+
+| Address | Atlas 14 1-hour rain, 2 / 10 / 25 / 100 / 500-yr | What the sweep says | EAL |
+|---|---|---|---|
+| 901 Bagby St, Houston (City Hall) | 57 / 82 / 98 / 123 / 162 mm/h | dry at every level, route to a shelter open | **$0** |
+| 4900 Beechnut St, Houston (Meyerland) | 57 / 82 / 98 / 122 / 160 mm/h | wet from the 10-yr rain (0.18 m at grade; 0.35 m at 100-yr, 0.46 m at 500-yr); water above the planned floor only at 500-yr (0.16 m, $873 k); **the last dry route out closes at the 2-yr storm** (T+25 min) and stays cut ≥ 1 h 35 min | **$3.5 k – $5.2 k / yr** |
+
+Loading the area and setting the site up took about 16 s at City Hall; the five levels (120 simulated minutes each) took 265–333 s. NOAA's own point service
+gives the same five numbers for City Hall. The read-out a developer takes from Meyerland is not the EAL — it is that
+the parcel becomes an island in an ordinary storm long before the building is at risk, which a floor elevation does
+not fix.
+
+*What this is not:* rain only. The rivers are held at their normal level, so neither Brays Bayou overtopping nor a
+hurricane surge is in it (both flooded Meyerland, repeatedly); there is no run-on from outside the 5 km map and no
+storm drains; and Atlas 14 is stationary — the same ladder under 2050 rain is one click (*Today vs future*). It is a
+pluvial screen that ships an EAL anywhere in the US, not a substitute for the FIRM.
+
 ## 5. Pricing hypotheses
 
 Hypotheses to test with design partners, not a price list ([business-case.md §E.5](docs/research/business-case.md#e5-pricing-tiers-hypotheses-to-test)).
@@ -248,9 +272,10 @@ value rather than by compute.
 
 * **Ensemble mode (in progress):** many runs over terrain bias, roughness, inflow and timing, giving p10 / p50 / p90 on
   every site and portfolio number and an exceedance probability rather than one run.
-* **Return periods that are not the user's guess:** import FEMA FIS profiles and NOAA Atlas 14 rainfall
-  frequencies for any area, so the sweep's EAL stands on published probabilities everywhere, not only on three
-  rivers.
+* **Return periods that are not the user's guess, beyond rain:** NOAA Atlas 14 now gives every US address a sourced
+  rain ladder (§4.4); next, FEMA FIS profiles and USGS StreamStats peak flows for river ladders on live areas (which
+  today hold their rivers at a fixed level), longer design storms for larger catchments, and Atlas 15 once NOAA
+  publishes it.
 * **A FEMA-BCA appendix** that lists the BCA Toolkit inputs (useful life, discount rate, damages before / after per
   return period) for an engineer to transcribe.
 * **Headless batch / API:** the same solver on a server GPU for portfolios of thousands and for parametric trigger
@@ -267,9 +292,11 @@ Say these before a customer finds them; the app says them in its panels and repo
 * **Bare-earth terrain.** Buildings, bridge decks, culverts and storm drains are not in the elevation model; water
   flows through blocks and under viaducts, and embankments pond rain behind them. River channels are burned to a
   nominal depth (3DEP has no bathymetry).
-* **Return periods are mostly uncalibrated.** The site sweep only has published return periods for some levels in
-  Pittsburgh, Nashville and Fort Myers; elsewhere probabilities are the user's input and labelled as such, and without
-  them there is no expected annual loss. §4.1 shows what that means in practice.
+* **River return periods are mostly uncalibrated.** The site sweep has published river or tide return periods only
+  for some levels in Pittsburgh, Nashville and Fort Myers; elsewhere river probabilities are the user's input and
+  labelled as such (§4.1). Anywhere in the US the NOAA Atlas 14 rain ladder gives a sourced EAL — but for surface-water
+  flooding only: rain on the map, rivers held level, no surge, no drains, a stationary climate (§4.4); and none in
+  western Washington and Oregon, which Atlas 14 does not cover.
 * **One run at a time** until the ensemble mode lands. §4.1 shows a result tipping on the fast-water threshold
   between runs. The ±1σ ranges shown are the damage-curve spread only.
 * **Screening-grade losses.** Global JRC depth–damage curves, values from footprint area × storeys × a national unit
@@ -288,17 +315,19 @@ The full list, with numbers, is in [README.md → Known limitations](README.md#k
 
 ## 9. Try it
 
-In the app: **Use cases** in the top bar (or *For business* in the Try-it strip) opens the three set-ups and the
+In the app: **Use cases** in the top bar (or *For business* in the Try-it strip) opens the four set-ups and the
 one-page *What Deluge answers for your business* brief, which prints. Or link straight to one:
 
 * `?usecase=site` — Pittsburgh with the two demo parcels in Site check (they are handed over as a `?sites=` value and
   read by the same strict decoder as any shared link; your own `?sites=` link takes precedence)
 * `?usecase=glacier` — Nepal 2026 with the hazard chain and the Early warning designer
 * `?usecase=portfolio` — Houston with the fictional demo portfolio loaded into Impact & loss
+* `?usecase=address&at=29.6892,-95.4640` — check a site at that point (Meyerland, §4.4): a 5 km live area, the
+  site, and the NOAA Atlas 14 rain ladder ready to sweep (needs the internet; the link carries coordinates only)
 
 ![The Use cases dialog: three cards, and the business brief behind the button at the bottom](docs/business/use-cases.jpg)
 
-The value is matched exactly against those three words; anything else is ignored with a fixed message. The demo
+The value is matched exactly against those four words, and `at=` must be two plain decimals inside the US; anything else is ignored with a fixed message. The demo
 portfolio is a plain CSV in [public/demo/](public/demo/); load your own under *Impact & loss → Load sites / portfolio
 CSV*, with the schema in [business-case.md §E.1](docs/research/business-case.md#e1-asset-portfolio-csv-schema-parsed-client-side-nothing-uploaded).
 It is read in the tab and never uploaded.
