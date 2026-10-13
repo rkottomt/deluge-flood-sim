@@ -22,6 +22,7 @@ import { ProbeSampler } from './probe';
 import { RunForScheduler } from './runFor';
 import { SceneManager, SupersededLoadError, type Scene } from './scene';
 import { SimSync } from './simSync';
+import { LandSurfaceSync } from './landSurface';
 import { StageLevels } from './stage';
 import { StageRamp } from './stageRamp';
 import { createStore } from './store';
@@ -79,6 +80,8 @@ export class App {
   /** The future-climate layer on the solver's forcing (see climate.ts; the store keeps today's forcing). */
   readonly climate: ClimateLayer;
   readonly sim: SimSync;
+  /** Building obstacles, the roughness map and storm drains → the solver (see landSurface.ts). */
+  readonly land: LandSurfaceSync;
   /** Stage raises lift the water in the river channels at once (see crest.ts). */
   readonly crest: CrestFill;
   readonly driver: FrameDriver;
@@ -161,6 +164,9 @@ export class App {
       onRouteInputsChanged: () => this.evac.recomputeRoute(),
       getClimate: () => this.climate.get(),
     });
+    this.land = new LandSurfaceSync(this.store, () => this.scenes?.scene ?? null, (err) =>
+      this.errors.report('sim', `land surface failed: ${errorMessage(err)}`, err),
+    );
     this.crest = new CrestFill({
       store: this.store,
       errors: this.errors,
@@ -243,6 +249,7 @@ export class App {
         this.evac.reset();
         this.protection.reset();
         this.chain.onSceneCleared();
+        this.land.onSceneCleared();
       },
       onSceneReady: (scene) => this.onSceneReady(scene),
     });
@@ -263,6 +270,7 @@ export class App {
     this.probe.install();
     this.climate.install();
     this.sim.install();
+    this.land.install();
     // A stage raise asked for while a scene loaded (a climate picked mid-load: Fort Myers' sea-level rise) was dropped
     // by the crest fill, and onSceneReady reset it: lift the channels to the applied stage once loading clears, so
     // the start does not depend on whether the climate came before or after the load.
@@ -736,6 +744,7 @@ export class App {
     this.stagePushed = this.stageRamp.applied;
     this.publishStage(performance.now());
     this.sim.pushAll();
+    this.land.onSceneReady(scene);
     this.crest.onSceneChanged();
     this.crest.prewarm();
     this.evac.reset();

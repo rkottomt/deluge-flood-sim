@@ -154,8 +154,9 @@ let stampGen = 0;
  * The cells to sample for a footprint when building obstacles block flow (HazardFields.blocked): the solver keeps water
  * out of a blocked cell, so the depth against a building is read in the open cells around it — the street, the yard —
  * not on its footprint. Unblocked cells of `cells[start, end)` are kept as they are; the blocked ones are replaced by
- * the open cells of the first ring of 8-neighbours around them, searching up to OPEN_RING_MAX rings out through other
- * blocked cells when the first ring is closed. Returns null when no cell of the range is blocked (sample it as is).
+ * the open cells sharing an edge with them (the cells against the walls; diagonal cells are not), searching up to
+ * OPEN_RING_MAX rings out through other blocked cells when the first ring is closed (a terrace house open only front
+ * and back reads those). Returns null when no cell of the range is blocked (sample it as is).
  */
 export function openCells(
   cells: ArrayLike<number>,
@@ -199,7 +200,7 @@ export function openCells(
         if (jj < 0 || jj >= ny) continue;
         for (let di = -1; di <= 1; di++) {
           const ii = i + di;
-          if ((di === 0 && dj === 0) || ii < 0 || ii >= nx) continue;
+          if ((di === 0) === (dj === 0) || ii < 0 || ii >= nx) continue; // edge neighbours only
           const m = jj * nx + ii;
           if (s[m] === g) continue;
           s[m] = g;

@@ -281,7 +281,7 @@ function blockedMask(set: BuildingSet): Uint8Array {
   return m;
 }
 
-test('openCells: a blocked footprint reads the ring of open cells around it, through neighbours when walled in', () => {
+test('openCells: a blocked footprint reads the open cells against its walls, through neighbours when walled in', () => {
   // A 2×2-cell house alone, and a terrace of three touching ones (the middle one is open only front and back).
   const set = buildings([
     [10, 10, 12, 12, 'house', 6],
@@ -292,11 +292,11 @@ test('openCells: a blocked footprint reads the ring of open cells around it, thr
   const blocked = blockedMask(set);
   const fp = rasterizeFootprints(set, NX, NY, CELL);
   const alone = openCells(fp.cells, fp.offsets[0], fp.offsets[1], blocked, NX, NY)!;
-  assert.equal(alone.length, 12, 'the 8-neighbour ring of a 2×2 block is 12 cells');
+  assert.equal(alone.length, 8, 'the cells against the walls of a 2×2 block');
   for (const c of alone) assert.equal(blocked[c], 0);
   const middle = openCells(fp.cells, fp.offsets[2], fp.offsets[3], blocked, NX, NY)!;
-  // Rows 19 and 22 over columns 21–24 (its own 2 columns and one diagonal on each side).
-  assert.equal(middle.length, 8);
+  // Front and back only: rows 19 and 22 over its own columns 22–23.
+  assert.equal(middle.length, 4);
   for (const c of middle) assert.equal(blocked[c], 0);
   // A footprint with no blocked cell is sampled as is.
   assert.equal(openCells(fp.cells, fp.offsets[0], fp.offsets[1], new Uint8Array(NX * NY), NX, NY), null);
@@ -315,7 +315,7 @@ test('with obstacles the street depth against the walls is booked, not the dry f
   const wet = sampleCells({ ...f, blocked }, fp.cells, fp.offsets[0], fp.offsets[1]);
   assert.ok(Math.abs(wet.maxDepth - 0.9) < 1e-6, `perimeter depth ${wet.maxDepth}`);
   assert.equal(wet.firstWet, 400);
-  assert.equal(wet.sampled, 20, 'the 20-cell ring around a 4×4 block');
+  assert.equal(wet.sampled, 16, 'the 16 cells against the walls of a 4×4 block');
   const report = computeBuildingImpacts({ ...f, blocked }, set, fp, { region: US });
   assert.equal(report.summary.reached, 1);
   assert.ok(report.summary.loss > 0);

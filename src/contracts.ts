@@ -355,6 +355,14 @@ export interface SimParams {
    * drainCapacity; 1 = the land-cover table's design capacity). Absent = 1. No effect without a drain layer.
    */
   drainageScale?: number;
+  /**
+   * Extension, read by the app (src/app/landSurface.ts), not by the solver: which land-surface layers the app builds
+   * for the solver from the scene's data — building footprints as obstacles, the land-cover roughness map, storm
+   * drains. Absent = off. A scene without the data (live areas have no land cover) keeps that layer off.
+   */
+  buildingObstacles?: boolean;
+  roughnessMap?: boolean;
+  drainage?: boolean;
 }
 
 /**
@@ -376,6 +384,18 @@ export interface LandSurface {
   roughness?: Float32Array | null;
   /** Storm-drain capacity per cell, mm/hr of water depth removed while water stands there (× SimParams.drainageScale). */
   drainCapacity?: Float32Array | null;
+}
+
+/** The land-surface data a scene has, whether or not its layers are switched on (AppState.landSurface). */
+export interface LandSurfaceStatus {
+  /** Building footprints in the scene, and the grid cells they would block (0 = none: no footprint data). */
+  buildings: number;
+  obstacleCells: number;
+  /** Land-cover product, e.g. "NLCD 2021", or null (live areas, the sandbox). */
+  landCover: string | null;
+  /** Cells with storm drains, and the design rainfall their capacity comes from (mm/hr; 0 = no drain data). */
+  drainCells: number;
+  designRainMmHr: number;
 }
 
 export const DEFAULT_SIM_PARAMS: SimParams = {
@@ -985,6 +1005,11 @@ export interface AppState {
   scenario: ScenarioPreset | null;
   /** Terrain metadata for UI unit conversions (null before load). */
   grid: { nx: number; ny: number; cellSize: number } | null;
+  /**
+   * EXTENSION: what land-surface data the current scene has (src/app/landSurface.ts), for the Advanced panel's honest
+   * text. Absent or null before a scene loads.
+   */
+  landSurface?: LandSurfaceStatus | null;
   stats: SimStats | null;
   stepInfo: StepInfo | null;
   fps: number;
