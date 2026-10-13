@@ -38,6 +38,7 @@ import {
   type ProjectView,
   type SiteCheckSettings,
 } from './format';
+import { editsCost } from './edits';
 
 export interface ReadOptions {
   /** The project came from a ?project= link: names are dropped (someone else's text), no portfolio, no cached results. */
@@ -56,6 +57,7 @@ export const PROJECT_ERRORS = {
   notProject: 'The file is not a Deluge project (its "format" is missing or different).',
   newer: 'The project was saved by a newer version of Deluge (a later format version) and cannot be read here.',
   invalid: 'The project file is damaged or was edited by hand: a required part did not pass the checks.',
+  tooHeavy: 'The project’s walls and terrain edits cover more of the map than Deluge replays when opening a project (a link carries far less than a file), so it was refused.',
 } as const;
 
 const FORBIDDEN_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
@@ -227,14 +229,27 @@ function readGrid(v: unknown): ProjectFile['grid'] {
   return { nx: int(own(o, 'nx'), [16, 8192]), ny: int(own(o, 'ny'), [16, 8192]), cellSize: num(own(o, 'cellSize'), [0.05, 1000]) };
 }
 
-function readEdits(v: unknown): ProjectEdit[] {
+/** What bounds an edit set: the project's grid (radii and the cell count are clipped to it) and the cell budget. */
+interface EditBounds {
+  grid: { nx: number; ny: number };
+  maxCells: number;
+}
+
+function editBounds(grid: ProjectFile['grid'], opts: ReadOptions): EditBounds {
+  const side = PROJECT_LIMITS.maxRadiusCells;
+  return { grid: grid ? { nx: grid.nx, ny: grid.ny } : { nx: side, ny: side }, maxCells: opts.fromLink ? PROJECT_LIMITS.maxLinkBrushCells : PROJECT_LIMITS.maxBrushCells };
+}
+
+function readEdits(v: unknown, bounds: EditBounds): ProjectEdit[] {
   const a = arr(v, PROJECT_LIMITS.maxEdits);
   const out: ProjectEdit[] = [];
   let points = 0;
+  // No brush needs a radius past the grid's longer side (Clear walls uses exactly that): a larger one is clamped.
+  const maxR = Math.max(bounds.grid.nx, bounds.grid.ny);
   for (const e of a) {
     const o = obj(e);
     const op = oneOf(own(o, 'op'), ['wall', 'erase', 'terrain'] as const);
-    const r = num(own(o, 'r'), RANGES.radiusCells);
+    const r = Math.min(maxR, num(own(o, 'r'), RANGES.radiusCells));
     if (op === 'wall') {
       const pts = arr(own(o, 'pts'), PROJECT_LIMITS.maxWallPoints * 2).map((x) => num(x, RANGES.grid));
       if (pts.length < 2 || pts.length % 2 !== 0) fail();
@@ -252,6 +267,7 @@ function readEdits(v: unknown): ProjectEdit[] {
       out.push({ op, at: pair(own(o, 'at'), RANGES.grid), r, d: num(own(o, 'd'), RANGES.terrainDelta) });
     }
   }
+  if (editsCost(out, bounds.grid).cells > bounds.maxCells) throw new Invalid(PROJECT_ERRORS.tooHeavy);
   return out;
 }
 
@@ -463,7 +479,7 @@ function readCost(v: unknown): DesignCost {
 
 const DESIGN_IDS = ['A', 'B', 'C'] as const;
 
-function readDesigns(v: unknown, opts: ReadOptions, warnings: string[]): DesignSpec[] {
+function readDesigns(v: unknown, opts: ReadOptions, bounds: EditBounds, warnings: string[]): DesignSpec[] {
   const a = arr(v, PROJECT_LIMITS.maxDesigns);
   const out: DesignSpec[] = [];
   for (const d of a) {
@@ -472,10 +488,10 @@ function readDesigns(v: unknown, opts: ReadOptions, warnings: string[]): DesignS
       const did = oneOf(own(o, 'id'), DESIGN_IDS);
       if (out.some((x) => x.id === did)) fail();
       const name = opts.fromLink ? '' : text(own(o, 'name'), PROJECT_LIMITS.designNameChars);
-      out.push({ id: did, name: name || `Design ${did}`, edits: readEdits(own(o, 'edits') ?? []), cost: readCost(own(o, 'cost')) });
+      out.push({ id: did, name: name || `Design ${did}`, edits: readEdits(own(o, 'edits') ?? [], bounds), cost: readCost(own(o, 'cost')) });
     } catch (err) {
       if (!(err instanceof Invalid)) throw err;
-      warnings.push('A design in the project could not be read and was skipped.');
+      warnings.push(err.message === PROJECT_ERRORS.tooHeavy ? 'A design in the project edits more of the map than Deluge replays when opening a project and was skipped.' : 'A design in the project could not be read and was skipped.');
     }
   }
   return out;
@@ -495,7 +511,8 @@ function readComparison(v: unknown): ComparisonSummary {
   });
   const n = levels.length;
   const losses = (x: unknown) => {
-    const a = arr(x, PROJECT_LIMITS.maxLevels).map((y) => num(y, RANGES.money));
+    // null: no value at that level (a scene without buildings has no loss model).
+    const a = arr(x, PROJECT_LIMITS.maxLevels).map((y) => optNum(y, RANGES.money));
     return a.length === n ? a : fail();
   };
   const b = obj(own(o, 'baseline'));
@@ -573,28 +590,31 @@ function build(value: unknown, opts: ReadOptions): ReadResult {
     }
     if (sitesRaw.length > SITE_LIMITS.maxSites) warnings.push(`Only the first ${SITE_LIMITS.maxSites} sites of the project were read.`);
     if (badSites) warnings.push(`${badSites} site${badSites === 1 ? '' : 's'} in the project could not be read and ${badSites === 1 ? 'was' : 'were'} skipped.`);
+    const grid = own(o, 'grid') == null ? null : readGrid(own(o, 'grid'));
+    const bounds = editBounds(grid, opts);
     const project: ProjectFile = {
       format: PROJECT_FORMAT,
       version: PROJECT_VERSION,
       name: opts.fromLink ? '' : text(own(o, 'name'), PROJECT_LIMITS.nameChars),
       savedAt: text(own(o, 'savedAt'), 40),
       scene: readScene(own(o, 'scene'), opts),
-      grid: own(o, 'grid') == null ? null : readGrid(own(o, 'grid')),
+      grid,
       scenario: readScenario(own(o, 'scenario'), opts, warnings),
-      edits: readEdits(own(o, 'edits') ?? []),
+      edits: readEdits(own(o, 'edits') ?? [], bounds),
       sites,
       siteCheck: optional(own(o, 'siteCheck'), readSiteCheck, warnings, 'Site check settings'),
       ensemble: optional(own(o, 'ensemble'), readEnsemble, warnings, 'ensemble settings'),
       portfolio: opts.fromLink ? null : optional(own(o, 'portfolio'), readPortfolio, warnings, 'portfolio rows'),
       camera: optional(own(o, 'camera'), readCamera, warnings, 'camera settings'),
       view: optional(own(o, 'view'), readView, warnings, 'view settings'),
-      designs: own(o, 'designs') == null ? [] : readDesigns(own(o, 'designs'), opts, warnings),
+      designs: own(o, 'designs') == null ? [] : readDesigns(own(o, 'designs'), opts, bounds, warnings),
       comparison: opts.fromLink ? null : optional(own(o, 'comparison'), readComparison, warnings, 'cached comparison results'),
     };
     if (opts.fromLink && (own(o, 'portfolio') != null || own(o, 'comparison') != null)) warnings.push('A shared link never carries a portfolio or cached results; those parts were ignored.');
     return { ok: true, project, warnings };
   } catch (err) {
-    if (err instanceof Invalid) return { ok: false, error: PROJECT_ERRORS.invalid };
+    // Invalid carries one of the fixed PROJECT_ERRORS sentences, never text from the file.
+    if (err instanceof Invalid) return { ok: false, error: err.message };
     throw err;
   }
 }

@@ -9,8 +9,8 @@
  * so the swaps do not overwrite the user's own edits, which are replayed afterwards.
  */
 import type { BrushOp, FloodSolver, Store } from '../contracts';
-import { brushOpValid } from '../sim/brush';
-import { PROJECT_LIMITS, type ProjectEdit } from './format';
+import { brushOpValid, brushRect } from '../sim/brush';
+import { PROJECT_LIMITS, RANGES, type ProjectEdit } from './format';
 
 const POS_Q = 1000; // positions to 0.001 cell
 const H_Q = 1000; // heights to 1 mm
@@ -49,7 +49,8 @@ export function appendOp(edits: ProjectEdit[], op: BrushOp, grid: { nx: number; 
     const ay = q(op.ay, POS_Q);
     const bx = q(op.bx, POS_Q);
     const by = q(op.by, POS_Q);
-    const hh = q(Math.max(0, op.height), H_Q);
+    // Inside the reader's range, or the saved file would not open (the wall tool keeps to 0.5–10 m anyway).
+    const hh = q(Math.min(RANGES.wallHeight[1], Math.max(0, op.height)), H_Q);
     const r = q(op.radius, POS_Q);
     const last = edits[edits.length - 1];
     if (last && last.op === 'wall' && last.r === r && last.pts.length < PROJECT_LIMITS.maxWallPoints * 2) {
@@ -78,13 +79,37 @@ export function appendOp(edits: ProjectEdit[], op: BrushOp, grid: { nx: number; 
   // terrain
   const at: [number, number] = [q(op.gx, POS_Q), q(op.gy, POS_Q)];
   const r = q(op.radius, POS_Q);
+  const [lo, hi] = RANGES.terrainDelta;
   const last = edits[edits.length - 1];
-  if (last && last.op === 'terrain' && last.r === r && last.at[0] === at[0] && last.at[1] === at[1]) {
+  // Merged digging on one spot stays inside the reader's range: past it, the next stroke starts a new entry (a dig
+  // held for minutes would otherwise save a file that does not open).
+  if (last && last.op === 'terrain' && last.r === r && last.at[0] === at[0] && last.at[1] === at[1] && last.d + op.delta >= lo && last.d + op.delta <= hi) {
     last.d = q(last.d + op.delta, D_Q);
     return true;
   }
-  edits.push({ op: 'terrain', at, r, d: q(op.delta, D_Q) });
+  edits.push({ op: 'terrain', at, r, d: q(Math.min(hi, Math.max(lo, op.delta)), D_Q) });
   return true;
+}
+
+/** Cells one brush op touches on an nx × ny grid (its rectangle clipped to the grid: what the CPU mirror visits). */
+export function opCells(op: BrushOp, grid: { nx: number; ny: number }): number {
+  const r = brushRect(op, grid.nx, grid.ny);
+  return r ? r.w * r.h : 0;
+}
+
+/**
+ * What replaying an edit list costs: wall and dig points (PROJECT_LIMITS.maxEditPoints) and grid cells visited
+ * (maxBrushCells). The reader and the edit log count alike, so a log the app records is a log it can open.
+ */
+export function editsCost(edits: readonly ProjectEdit[], grid: { nx: number; ny: number }): { points: number; cells: number } {
+  let points = 0;
+  let cells = 0;
+  for (const e of edits) {
+    if (e.op === 'wall') points += e.pts.length / 2;
+    else if (e.op === 'terrain') points++;
+  }
+  for (const op of expandEdits(edits)) cells += opCells(op, grid);
+  return { points, cells };
 }
 
 /** Compact a sequence of brush ops (water ops are dropped). */
@@ -171,6 +196,9 @@ export class EditLog {
   private suspendDepth = 0;
   /** The log hit PROJECT_LIMITS.maxEdits and stopped recording: a saved project would miss later edits. */
   overflow = false;
+  /** Wall and dig points, and grid cells replaying the log visits (editsCost, kept up to date as ops arrive). */
+  private points = 0;
+  private cells = 0;
   private readonly fns = new Set<Listener>();
 
   get edits(): readonly ProjectEdit[] {
@@ -203,16 +231,48 @@ export class EditLog {
     this.grid = solver ? { nx: solver.nx, ny: solver.ny } : null;
     this.list = [];
     this.overflow = false;
+    this.points = 0;
+    this.cells = 0;
     this.emit();
   }
 
+  /**
+   * Record one op. Past any budget the reader enforces (entries, points, cells — format.ts PROJECT_LIMITS) the op is
+   * refused and `overflow` set (the op is still on the map; the panel says the log is full and a save says so), so a
+   * saved project always opens again.
+   */
   record(op: BrushOp): void {
-    if (this.suspended) return;
-    if (this.list.length >= PROJECT_LIMITS.maxEdits) {
-      this.overflow = true;
+    if (this.suspended || !brushOpValid(op) || op.kind === 'water') return;
+    const cells = this.grid ? opCells(op, this.grid) : 0;
+    // The most an op can add: two points (a new wall polyline) or one (a new dig spot).
+    const pts = op.kind === 'wall' ? 2 : op.kind === 'terrain' ? 1 : 0;
+    if (this.list.length >= PROJECT_LIMITS.maxEdits || this.points + pts > PROJECT_LIMITS.maxEditPoints || this.cells + cells > PROJECT_LIMITS.maxBrushCells) {
+      if (!this.overflow) {
+        this.overflow = true;
+        this.emit();
+      }
       return;
     }
-    if (appendOp(this.list, op, this.grid)) this.emit();
+    const n = this.list.length;
+    if (!appendOp(this.list, op, this.grid)) return;
+    if (op.kind === 'eraseWall' && this.grid && erasesAll(op, this.grid.nx, this.grid.ny)) this.recount();
+    else if (this.list.length !== n) {
+      // A new entry.
+      this.points += pts;
+      this.cells += cells;
+    } else if (op.kind === 'wall') {
+      // One more corner of the last polyline (a merged dig adds nothing: same spot, same rectangle).
+      this.points += 1;
+      this.cells += cells;
+    }
+    this.emit();
+  }
+
+  /** Points and cells of the whole log, from scratch (after Clear walls drops entries). */
+  private recount(): void {
+    const c = this.grid ? editsCost(this.list, this.grid) : { points: 0, cells: 0 };
+    this.points = c.points;
+    this.cells = c.cells;
   }
 
   /** The terrain was reset (walls and digging gone). */
@@ -220,6 +280,8 @@ export class EditLog {
     if (this.suspended) return;
     this.list = [];
     this.overflow = false;
+    this.points = 0;
+    this.cells = 0;
     this.emit();
   }
 

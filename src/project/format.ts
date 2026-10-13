@@ -74,6 +74,18 @@ export const PROJECT_LIMITS = {
   /** Points of one wall polyline, and in all walls of one edit set. */
   maxWallPoints: 4096,
   maxEditPoints: 60_000,
+  /**
+   * Grid cells the brush ops of one edit set touch, summed op by op over each op's rectangle clipped to the grid
+   * (src/sim/brush.ts brushRect — the CPU mirror visits every one of them on replay, ~27 ns a cell at 1024²). It bounds
+   * how long opening a project can take: 5,000 map-sized digs fit in a 1.4 kB link and would otherwise freeze the tab
+   * for minutes, on load and again in every design comparison. A file may carry a long working session (~15 s of
+   * replay at worst); a link — someone else's text, applied on load — stays under a second. The edit log stops
+   * recording past the file budget (src/project/edits.ts), so what the app saves, it can open.
+   */
+  maxBrushCells: 500_000_000,
+  maxLinkBrushCells: 20_000_000,
+  /** Largest edit radius, cells, when the file has no grid (the largest grid side the reader accepts). */
+  maxRadiusCells: 8192,
   maxSources: 64,
   maxStorms: 64,
   maxShelters: 64,
@@ -205,11 +217,12 @@ export interface ComparisonSummary {
   ladder: LadderKind | 'current';
   durationS: number;
   levels: Array<{ id: string; label: string; returnPeriod: number | null; rpFrom: 'source' | 'user' | null }>;
-  baseline: { loss: number[]; eal: number | null };
+  /** Loss per level, USD; null = no value (a scene without buildings has no loss model), shown as "—". */
+  baseline: { loss: Array<number | null>; eal: number | null };
   designs: Array<{
     id: string;
     name: string;
-    loss: number[];
+    loss: Array<number | null>;
     eal: number | null;
     deltaEal: number | null;
     costUsd: number;

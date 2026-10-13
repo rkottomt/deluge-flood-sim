@@ -287,16 +287,18 @@ export function compareDesigns(levels: readonly CompareLevel[], baseline: readon
 /** The numbers a project keeps (format.ts ComparisonSummary). */
 export function comparisonSummary(c: ComparisonResult, ladder: LadderKind | 'current', durationS: number, at = new Date()): ComparisonSummary {
   const fin = (v: number | null) => (v != null && Number.isFinite(v) ? v : null);
+  // A loss that is not a number (no buildings in the scene: NaN) is kept as an explicit null, not JSON's silent one.
+  const lossOf = (v: number) => (Number.isFinite(v) ? Math.max(0, v) : null);
   return {
     generatedAt: at.toISOString(),
     ladder,
     durationS,
     levels: c.levels.map((l) => ({ id: l.id, label: l.label, returnPeriod: l.returnPeriod, rpFrom: l.rpFrom })),
-    baseline: { loss: c.baseline.loss.map((v) => Math.max(0, v)), eal: fin(c.baseline.eal) },
+    baseline: { loss: c.baseline.loss.map(lossOf), eal: fin(c.baseline.eal) },
     designs: c.designs.map((d) => ({
       id: d.id,
       name: d.name,
-      loss: d.loss.map((v) => Math.max(0, v)),
+      loss: d.loss.map(lossOf),
       eal: fin(d.eal),
       deltaEal: fin(d.deltaEal),
       costUsd: Math.max(0, d.cost.capex),
