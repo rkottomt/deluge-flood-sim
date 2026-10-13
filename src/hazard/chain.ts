@@ -23,6 +23,7 @@ import {
   EROSION_RATE_TRIGGERED,
   LAKE_HYPSOMETRY,
   ROUTING_DX,
+  ROUTING_T_MAX,
 } from './defaults';
 import { damHeight, directFlow, impulseWave, overtopping, runout, type ImpulseWave, type Runout } from './mass';
 import { meltFromTrigger } from './melt';
@@ -108,7 +109,7 @@ export interface ChainRunResult extends ChainResult {
   /** Front arrival and peak at the domain entry (also the ensemble's subject). */
   entryFront: number;
   entryPeak: number;
-  routing: { steps: number; nodeSteps: number; ms: number; tEnd: number; capped: number; uPeak: number; massBalance: MassBalance; dx: number };
+  routing: { steps: number; nodeSteps: number; ms: number; tEnd: number; timedOut: boolean; capped: number; uPeak: number; massBalance: MassBalance; dx: number };
   /** Front arrival along the profile (src/hazard/frontProfile.ts runChainWithProfile; absent from a plain runChain). */
   frontProfile?: FrontProfile;
 }
@@ -291,6 +292,16 @@ export function runChain(spec: HazardChainSpec, file: ChainFile, overrides: Chai
     stations.push({ name: st.name, s: st.s, kind: st.kind, tFront: o.tFront, tPeak: o.tPeak, qPeak: o.qPeak, stageMax: o.stageMax, cv: o.cv, rise: o.rise, qBase: p.qBase });
   });
 
+  // Say why a flood has no front at the map edge rather than leave a bare NaN: the routing's time limit (it counts
+  // from the first outflow, so a slow-filling dam is routed in full) or a flood that dies out before the edge.
+  if (src.info.flood && r.timedOut) {
+    const lim = ov.routing?.tMax ?? ROUTING_T_MAX;
+    src.info.notes.push(`warning: the routing stopped at its ${lim >= 3600 ? `${Math.round(lim / 3600)} h` : `${Math.round(lim / 60)} min`} limit after the first outflow, before the flood had passed — later arrivals and the recession are cut off`);
+  }
+  if (src.info.flood && !Number.isFinite(entryFront)) {
+    src.info.notes.push(r.timedOut ? 'the flood had not reached the map edge when the routing stopped' : 'the flood attenuated to the river’s own fluctuation before the map edge: no front arrives there');
+  }
+
   const entry = Array.from(r.entry.t, (t, i) => ({ t, q: r.entry.q[i] }));
   let leadTime: Record<string, number> | undefined;
   if (spec.alertTime !== undefined && Number.isFinite(spec.alertTime)) {
@@ -307,7 +318,7 @@ export function runChain(spec: HazardChainSpec, file: ChainFile, overrides: Chai
     entryCv: Array.from(r.entry.cv),
     entryFront,
     entryPeak,
-    routing: { steps: r.steps, nodeSteps: r.nodeSteps, ms: r.ms, tEnd: r.tEnd, capped: r.capped, uPeak: r.uPeak, massBalance: r.massBalance, dx: ov.routeDx ?? ROUTING_DX },
+    routing: { steps: r.steps, nodeSteps: r.nodeSteps, ms: r.ms, tEnd: r.tEnd, timedOut: r.timedOut, capped: r.capped, uPeak: r.uPeak, massBalance: r.massBalance, dx: ov.routeDx ?? ROUTING_DX },
   };
 }
 

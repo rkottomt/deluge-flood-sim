@@ -138,6 +138,28 @@ test('massIntoRiver: direct flow carries its sediment; a transient dam fills, th
   assert.ok(t.sourceInfo.flood);
 });
 
+test('transient dam: the routing limit counts from the breach, not t = 0 — a two-day fill still reaches the map edge', () => {
+  const file = valley();
+  const mid: ChainFile = { ...file, stations: [{ s: 12000, name: 'Impact', kind: 'source', lat: 0, lon: 0 }, ...file.stations.filter((s) => s.kind !== 'lake')] };
+  const dam: HazardChainSpec = {
+    ...breachSpec(),
+    trigger: { kind: 'massIntoRiver', mass: { volume: 2e6, iceFraction: 0.3, fallHeight: 1500, pathLength: 5000 }, mode: 'transientDam', damLength: 500, baseflow: 15 },
+  };
+  const t = runChain(dam, mid, { routeDx: 400 });
+  const fill = t.sourceInfo.dam!.fillTime;
+  assert.ok(fill > 24 * 3600, `the impoundment takes ${(fill / 3600).toFixed(1)} h to fill — longer than the 24 h limit`);
+  assert.ok(t.sourceInfo.flood);
+  assert.ok(Number.isFinite(t.entryFront) && t.entryFront > fill, `front at the map edge ${t.entryFront} s, after the fill`);
+  assert.ok(t.entryPeak > 1000, `the breach wave arrives (${t.entryPeak.toFixed(0)} m³/s)`);
+  assert.equal(t.routing.timedOut, false);
+  // A limit too short for the wave: said so, and the missing front is explained rather than a bare NaN.
+  const cut = runChain(dam, mid, { routeDx: 400, routing: { tMax: 600 } });
+  assert.equal(cut.routing.timedOut, true);
+  assert.ok(Number.isNaN(cut.entryFront));
+  assert.ok(cut.sourceInfo.notes.some((n) => /warning: the routing stopped at its 10 min limit/.test(n)), cut.sourceInfo.notes.join(' | '));
+  assert.ok(cut.sourceInfo.notes.some((n) => /had not reached the map edge/.test(n)));
+});
+
 test('mass movements: the avalanche’s own travel is on the clock — nothing leaves the impact before pathLength / travelSpeed', () => {
   const file = valley();
   const spec = (travelSpeed?: number): HazardChainSpec => ({

@@ -101,6 +101,22 @@ function rowsOf(view: ChainView, file: ChainFile): Row[] {
   return out;
 }
 
+/**
+ * The chart's time window [tA, tB], chain s: from 300 s before the earliest of the first outflow, the observed fronts
+ * and the modelled front at the map edge, to the entry wave's tail (or the routing's end), at least 10 min wide and
+ * past the last observation. Non-finite times are ignored — a flood with no front at the edge (the routing stopped
+ * first, or it died out: entryFront NaN) must not turn the whole window, and every path drawn on it, into NaN.
+ */
+export function chartWindow(o: { starts: readonly number[]; entryFront: number; tPeak: number; tEnd: number; obsFronts: readonly number[] }): [number, number] {
+  const early = [...o.starts, o.entryFront].filter(Number.isFinite);
+  const tA = early.length ? Math.max(0, Math.min(...early) - 300) : 0;
+  const tail = Number.isFinite(o.entryFront) && Number.isFinite(o.tPeak) ? o.tPeak + 1.5 * Math.max(600, o.tPeak - o.entryFront) : o.tEnd;
+  const obsLast = Math.max(-Infinity, ...o.obsFronts.filter(Number.isFinite));
+  const end = Math.min(Number.isFinite(o.tEnd) ? o.tEnd : Infinity, Number.isFinite(tail) ? tail : Infinity);
+  const tB = Math.max(tA + 600, Number.isFinite(end) ? end : tA + 600, obsLast + 300);
+  return [tA, tB];
+}
+
 export interface ChainTimeline {
   el: HTMLElement;
 }
@@ -296,12 +312,9 @@ export function createChainTimeline(ctx: UIContext): ChainTimeline {
     // Time window: from the first outflow (or the earliest observation on the profile) to the entry wave's tail.
     const onProfile = new Set(file.stations.map((s) => s.name));
     const obs = (v.spec.observations ?? []).filter((o) => onProfile.has(o.station));
-    const t0c = [firstFlow(v), ...obs.map((o) => o.tFront ?? NaN)].filter(Number.isFinite);
+    const obsFronts = obs.map((o) => o.tFront ?? NaN);
     const tPeak = res.entry.reduce((m, p) => (p.q > m.q ? p : m), res.entry[0] ?? { t: 0, q: 0 });
-    const tail = Number.isFinite(res.entryFront) ? tPeak.t + 1.5 * Math.max(600, tPeak.t - res.entryFront) : res.routing.tEnd;
-    const tA = Math.max(0, Math.min(...t0c, res.entryFront) - 300);
-    const obsLast = Math.max(-Infinity, ...obs.map((o) => o.tFront ?? -Infinity));
-    const tB = Math.max(tA + 600, Math.min(res.routing.tEnd, tail), obsLast + 300);
+    const [tA, tB] = chartWindow({ starts: [firstFlow(v), ...obsFronts], entryFront: res.entryFront, tPeak: tPeak.t, tEnd: res.routing.tEnd, obsFronts });
     const obsPeak = obs.reduce((m, o) => Math.max(m, o.qPeak ?? 0), 0);
     const yMax = Math.max(1, res.entryPeak, obsPeak) * 1.25;
     const x = (t: number) => box.x0 + ((t - tA) / (tB - tA)) * (box.x1 - box.x0);

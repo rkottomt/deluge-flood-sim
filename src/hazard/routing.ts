@@ -427,7 +427,7 @@ export interface RoutingOptions {
   entryDt?: number;
   /** Run exactly to this time (s after t = 0). Without it the run ends once the flood has drained past the outlet. */
   tEnd?: number;
-  /** Hard limit, s (default 24 h). */
+  /** Hard limit, s after the first inflow starts (default 24 h; from t = 0 without inflows). */
   tMax?: number;
   /** Baseflow-only spin-up before t = 0, s (default 1800; 0 = start from the normal-depth guess). */
   spinUp?: number;
@@ -495,6 +495,8 @@ export interface RoutingResult {
   /** Node updates actually performed after t = 0 (Σ active nodes over steps): the work, independent of the machine. */
   nodeSteps: number;
   tEnd: number;
+  /** Without tEnd: the run hit the tMax limit before the flood had passed (or drained) — the read-outs may be cut short. */
+  timedOut: boolean;
   dtMin: number;
   dtMean: number;
   /** Face updates that hit the speed cap (should be ~0: the cap is a safety net). */
@@ -1069,7 +1071,11 @@ export function route(file: ChainFile, opts: RoutingOptions): RoutingResult {
   const entryS = new Buf();
   const tMax = opts.tMax ?? ROUTING_T_MAX;
   const tFixed = opts.tEnd;
-  const tStop = tFixed ?? tMax;
+  // The limit counts from the first inflow, not from t = 0: a transient dam's breach is shifted by the hours its
+  // impoundment takes to fill (Series.start), and a limit from t = 0 could end the run before any flood water moved —
+  // a "flood" with no front anywhere. RoutingResult.timedOut says when the limit, not the flood passing, ended it.
+  const inflowStart = st.inflows.reduce((m, f) => Math.min(m, f.series.start), Infinity);
+  const tStop = tFixed ?? (Number.isFinite(inflowStart) ? Math.max(0, inflowStart) : 0) + tMax;
   let t = 0;
   let steps = 0;
   let nodeSteps = 0;
@@ -1216,6 +1222,7 @@ export function route(file: ChainFile, opts: RoutingOptions): RoutingResult {
     steps,
     nodeSteps,
     tEnd: t,
+    timedOut: tFixed === undefined && t >= tStop - 1e-9,
     dtMin: Number.isFinite(dtMin) ? dtMin : 0,
     dtMean: steps > 0 ? t / steps : 0,
     capped: st.capped,

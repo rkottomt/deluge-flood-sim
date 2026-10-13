@@ -23,6 +23,20 @@ const NB = ' ';
 
 // ─── Event clock ─────────────────────────────────────────────────────────────────────────────────
 
+test('timeline window: a flood with no front at the map edge (entryFront NaN) still gets a finite chart', async () => {
+  const { chartWindow } = await import('../../src/ui/chainTimeline');
+  // The usual case: 300 s before the first outflow, to the entry wave's tail.
+  assert.deepEqual(chartWindow({ starts: [1000], entryFront: 4000, tPeak: 5000, tEnd: 20000, obsFronts: [] }), [700, 5000 + 1.5 * 1000]);
+  // No front at the edge: the window runs from the outflow to the routing's end — not NaN.
+  const w = chartWindow({ starts: [1000, NaN], entryFront: NaN, tPeak: 0, tEnd: 90000, obsFronts: [NaN] });
+  assert.ok(w.every(Number.isFinite), JSON.stringify(w));
+  assert.deepEqual(w, [700, 90000]);
+  // Nothing finite at all: a 10-minute window at 0.
+  assert.deepEqual(chartWindow({ starts: [NaN], entryFront: NaN, tPeak: NaN, tEnd: NaN, obsFronts: [] }), [0, 600]);
+  // An observation after the modelled tail keeps the window open past it.
+  assert.equal(chartWindow({ starts: [0], entryFront: 100, tPeak: 200, tEnd: 5000, obsFronts: [9000] })[1], 9300);
+});
+
 test('event clock: ISO offsets are kept, so the clock reads in the event’s own zone', () => {
   const np = ct.parseEventClock('2026-08-26T08:37:00+05:45')!;
   assert.equal(np.offsetMin, 345);
