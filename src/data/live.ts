@@ -1,6 +1,6 @@
 /**
- * Live areas: load any US location on demand (USGS 3DEP DEM + Esri imagery + TIGERweb roads), auto-detect and
- * burn water bodies, and synthesize a generic scenario (shelters on high ground near roads; a stage control
+ * Live areas: load any US location on demand (USGS 3DEP DEM + Esri imagery + TIGERweb roads + NLCD land cover in the
+ * lower 48), auto-detect and burn water bodies, and synthesize a generic scenario (shelters on high ground near roads; a stage control
  * on the largest water body that leaves the domain, so "raise the river" works anywhere).
  *
  * The CPU-heavy conditioning (liveTerrain.ts) runs in a Web Worker when available: water detection starts as soon as

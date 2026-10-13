@@ -823,19 +823,26 @@ a simulation. `Deluge.app` serves the same build with `frame-ancestors 'none'` a
   behind I-376 in Pittsburgh's Saw Mill Run valley at 100 mm/hr; up to 14 m in a pit beside US 40 after an hour of
   Ellicott City's storm), which also sets the HUD's max depth. Buildings, a land-cover roughness map and storm drains
   are optional layers (Advanced → *Land surface*), **off by default**: run against the observed floods of
-  [docs/VALIDATION.md](docs/VALIDATION.md), none improves a like-for-like score (FEMA 1 % zones at Fort Myers, Nashville
-  and Pittsburgh, Ian's high-water marks) — buildings cost 0.4–2.1 CSI points, the roughness map 1.8–7.0
+  [docs/VALIDATION.md](docs/VALIDATION.md), none improves every like-for-like score (FEMA 1 % zones at Fort Myers,
+  Nashville and Pittsburgh, Ian's high-water marks, Helene's gauges) — buildings cost 0.4–2.1 CSI points, the
+  roughness map 1.8–7.0
   ([ARCHITECTURE.md §3.11](ARCHITECTURE.md#311-land-surface-buildings-as-obstacles-a-roughness-map-storm-drains)):
-  * *Buildings block flow* raises every footprint into the bed the water sees. On the 7.8 m grid it closes gaps between
-    houses narrower than a cell, and a roof's rain lands in the cells against its walls (real downspouts feed the
-    sewers), so under rain it puts water against many more buildings than bare earth does.
+  * *Buildings block flow* makes a cell 90 % or more under roofs a block and gives every partly covered cell an
+    integral porosity (its open share stores water; the open share of each face carries it), so side yards narrower
+    than a cell stay passable; roof rain goes down the downspouts — into the storm drains when they are on, onto the
+    ground beside the building when not. It brings Helene's Swannanoa gauge 0.7 m closer (−1.22 → −0.49 m) but loses
+    extent where it slows the water within the scenes' fixed hold, and blocks are watertight: at Nashville 651 cells
+    of FEMA's zone are pockets the buildings shut off and that stay dry, where a real flood would get in through
+    doors and courtyards.
   * *Land-cover roughness* takes Manning's n from NLCD 2021 (US) or ESA WorldCover 2021; the values are mid-range
     literature values, not calibrated, and they change loss through flow speed (Pittsburgh's crest loss −54 % with the
-    map alone).
+    map alone). Checked for misapplication (registration on the grid, rivers kept at the scenes' n): none found. Most
+    of its CSI loss is the fixed hold — with holds three times as long it shrinks to 0.6–1.2 points.
   * *Storm drains* remove standing water on developed land at the rate the sewers were designed for (runoff coefficient
     × NOAA Atlas 14's 2-year 1-hour rain): a spread-out sink, not a pipe network — no inlets, no pipe limits, and it
     keeps draining when a flooded river would back the outfalls up. Without them a 2-year storm floods ~100 km of
-    Houston's streets more than 30 cm deep; with them, ~7 km. US presets only; live areas have no land cover.
+    Houston's streets more than 30 cm deep; with them, ~7 km. US presets and live areas in the lower 48 (NLCD fetched
+    at load); live areas elsewhere have no land cover.
 * **Protected land is a still-water estimate.** The green "kept dry" land and its acres compare the water level held
   back by the walls with and without them; they ignore how long water leaking through a gap would take to fill the
   land behind it.

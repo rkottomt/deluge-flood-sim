@@ -7,7 +7,7 @@
  * The layers are computed here, on the CPU, once per scene and switch, and pushed whole: the solver only ever sees
  * "this layer, or none". The roughness map depends on the buildings switch — with buildings resolved, developed land
  * takes the open-ground n of its streets and lawns instead of the buildings-as-roughness value — so it is rebuilt when
- * either changes. A scene without the data keeps the layer off (live areas have no land cover).
+ * either changes. A scene without the data keeps the layer off (live areas outside the lower 48 have no land cover).
  */
 import type { FloodSolver, LandSurface, LandSurfaceStatus, SimParams, Store, TerrainData } from '../contracts';
 import { landSurfaceFromCover } from '../data/landcover';
