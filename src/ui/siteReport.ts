@@ -34,6 +34,7 @@ import { h } from './dom';
 import { fmtNum, formatClock, formatMoney } from './format';
 import { CITATIONS } from './impactMethods';
 import { climateCompareBlock, type ClimateComparison } from './siteClimate';
+import { SURGE_LADDER_CAVEATS, SURGE_SOURCE_KEY } from '../surge/stations';
 
 const FT = 0.3048;
 const num = (v: number, d = 0) => (Number.isFinite(v) ? fmtNum(v, d) : '—');
@@ -307,6 +308,7 @@ export function buildSiteReport(i: SiteReportInput): HTMLElement {
   if (i.sweep) {
     runRows.push(['Sweep', `${i.sweep.levels} level${i.sweep.levels === 1 ? '' : 's'}, ${fmtMinutes(i.sweep.durationS)} simulated each, ${i.sweep.ladder === 'stage' ? i.sweep.gaugeLabel : i.sweep.ladder === 'rain' ? 'NOAA Atlas 14 1-hour rain at the map centre, rain only' : 'scenario forcing × multiplier'}${i.sweep.cancelled ? ' — CANCELLED before the end; levels not run are missing' : ''}`]);
     if (i.sweep.ladder === 'rain') RAIN_LADDER_CAVEATS.forEach((c, k) => runRows.push([k === 0 ? 'Rain ladder caveats' : '', c]));
+    if (i.sweep.ladder === 'stage' && i.sweep.sourceKeys.includes(SURGE_SOURCE_KEY)) SURGE_LADDER_CAVEATS.forEach((c, k) => runRows.push([k === 0 ? 'Surge ladder caveats' : '', c]));
     runRows.push(['Sweep hazard data', i.sweep.source === 'gpu' ? 'solver accumulators' : 'depth snapshots after each minute of simulation (arrival times to the minute; no speeds)']);
   }
   if (runRows.length) sections.push(h('section', null, h('h2', null, 'Runs'), kvList(runRows)));

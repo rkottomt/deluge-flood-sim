@@ -25,6 +25,8 @@ import { printReport } from './impactReport';
 import { createModal, type Modal } from './modal';
 import type { Panel } from './panel';
 import { sitesFor } from './sites';
+import { createDamView } from './damView';
+import { createSurgeView } from './surgeView';
 import {
   ADDRESS_AREA_M,
   ADDRESS_PARAM,
@@ -43,7 +45,7 @@ import {
   type UseCaseId,
 } from './useCaseDefs';
 
-const CARD_ICONS: Record<UseCaseId, IconName> = { site: 'site', glacier: 'mountain', portfolio: 'database', address: 'location' };
+const CARD_ICONS: Record<UseCaseId, IconName> = { site: 'site', glacier: 'mountain', portfolio: 'database', address: 'location', dam: 'wall', surge: 'gauge' };
 /** A geocoder result as a site name: "1600 Smith Street" rather than a bare house number. */
 function addressLabel(c: GeoChoice): string {
   return /^\d[\w-]*$/.test(c.first) && c.rest[0] ? `${c.first} ${c.rest[0]}` : c.first;
@@ -64,7 +66,7 @@ export interface UseCases {
   open(view?: UseCaseView): void;
 }
 
-export type UseCaseView = 'cards' | 'brief' | 'address';
+export type UseCaseView = 'cards' | 'brief' | 'address' | 'dam' | 'surge';
 
 /** Base URL the app is served from (relative builds: './'). */
 function baseUrl(): string {
@@ -143,7 +145,7 @@ export function createUseCases(ctx: UIContext, deps: { panel: Pick<Panel, 'revea
           type: 'button',
           class: 'dl-uc-card',
           'data-usecase': u.id,
-          onclick: () => (u.id === 'address' ? openAddress() : void apply(u.id)),
+          onclick: () => (u.id === 'address' ? openAddress() : u.id === 'dam' ? openView('dam') : u.id === 'surge' ? openView('surge') : void apply(u.id)),
         },
         h('span', { class: 'dl-uc-card-icon', 'aria-hidden': 'true' }, icon(CARD_ICONS[u.id], 20)),
         h('span', { class: 'dl-uc-card-title' }, u.title),
@@ -194,6 +196,14 @@ export function createUseCases(ctx: UIContext, deps: { panel: Pick<Panel, 'revea
     addrResults,
   );
   let addrAbort: AbortController | null = null;
+  // Dam-breach and coastal-surge views (src/ui/damView.ts, src/ui/surgeView.ts).
+  const damView = createDamView(ctx, { panel: deps.panel, show: () => show('dam') });
+  const surgeView = createSurgeView(ctx, { panel: deps.panel, show: () => show('surge') });
+  function openView(v: 'dam' | 'surge') {
+    show(v);
+    ctx.setPanel('useCases', true);
+    (v === 'dam' ? damView : surgeView).focus();
+  }
   addrForm.addEventListener('submit', (e) => {
     e.preventDefault();
     void findAddress();
@@ -263,7 +273,7 @@ export function createUseCases(ctx: UIContext, deps: { panel: Pick<Panel, 'revea
     icon: 'briefcase',
     className: 'dl-uc',
     onRequestClose: () => ctx.setPanel('useCases', false),
-    body: [cardsView, briefView, addressView],
+    body: [cardsView, briefView, addressView, damView.el, surgeView.el],
     footer: h('footer', { class: 'dl-modal-foot' }, footNote, h('div', { class: 'dl-row' }, printBtn, toggleBtn)),
   });
 
@@ -272,6 +282,8 @@ export function createUseCases(ctx: UIContext, deps: { panel: Pick<Panel, 'revea
     cardsView.hidden = v !== 'cards';
     briefView.hidden = v !== 'brief';
     addressView.hidden = v !== 'address';
+    damView.el.hidden = v !== 'dam';
+    surgeView.el.hidden = v !== 'surge';
     printBtn.hidden = v !== 'brief';
     setText(toggleBtn, v === 'cards' ? 'What Deluge answers for your business' : 'Back to use cases');
     toggleClass(modal.dialog, 'dl-uc-brief-open', v === 'brief');
@@ -311,6 +323,8 @@ export function createUseCases(ctx: UIContext, deps: { panel: Pick<Panel, 'revea
       else openAddress();
       return;
     }
+    if (id === 'dam') return damView.apply();
+    if (id === 'surge') return surgeView.apply();
     if (busy) return;
     busy = true;
     ctx.setPanel('useCases', false);

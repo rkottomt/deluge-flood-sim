@@ -19,6 +19,9 @@ import {
   DEMO_SITES_PARAM,
   ADDRESS_AREA_M,
   ADDRESS_WARNING,
+  DAM_WARNING,
+  parseDamLink,
+  SURGE_AREA_M,
   formatAddressAt,
   parseAddressAt,
   parseUseCase,
@@ -32,7 +35,7 @@ const presetMeta = (id: string) => JSON.parse(readFileSync(new URL(`../../public
 const inside = (b: { west: number; east: number; south: number; north: number }, lat: number, lon: number) =>
   lon > b.west && lon < b.east && lat > b.south && lat < b.north;
 
-test('usecase: exactly the four ids are accepted', () => {
+test('usecase: exactly the six ids are accepted', () => {
   for (const id of USE_CASE_IDS) assert.deepEqual(parseUseCase(`?usecase=${id}`), { useCase: id, warnings: [] });
   assert.deepEqual(parseUseCase(''), { useCase: null, warnings: [] });
   assert.deepEqual(parseUseCase('?usecase='), { useCase: null, warnings: [] });
@@ -77,7 +80,7 @@ test('usecase: drives the startup scene ahead of ?preset= and ?live=', () => {
 test('usecase: every use case runs on a preset that exists (the address case on a live area)', () => {
   for (const u of USE_CASES) {
     assert.equal(useCaseById(u.id), u);
-    if (u.id === 'address') assert.equal(u.preset, null);
+    if (u.id === 'address' || u.id === 'dam' || u.id === 'surge') assert.equal(u.preset, null);
     else assert.equal(presetMeta(u.preset!).id, u.preset);
     assert.ok(u.title && u.blurb && u.howTo && u.who, `${u.id} has its text`);
   }
@@ -204,4 +207,33 @@ test('address: ?usecase=address&at= opens a 5 km live area on the point and take
   assert.equal(useCaseMatches('?usecase=address&at=29.7604,-95.3698', req), true);
   assert.equal(useCaseMatches('?usecase=address&at=29.8,-95.3698', req), false);
   assert.equal(useCaseMatches('?usecase=address&at=29.7604,-95.3698', { kind: 'preset', id: 'houston' }), false);
+});
+
+// ─── The dam and surge use cases ────────────────────────────────────────────────────────────────────────────────────
+
+test('dam link: nid= is a strict NID id, breach= and method= fixed words; nothing else is read', () => {
+  assert.deepEqual(parseDamLink('?usecase=dam&nid=CA00035&breach=flood'), { nid: 'CA00035', breach: 'flood', method: 'parametric', warnings: [] });
+  assert.deepEqual(parseDamLink('?usecase=dam&nid=MI00549&method=regression'), { nid: 'MI00549', breach: 'sunny', method: 'regression', warnings: [] });
+  for (const bad of ['?nid=ca00035', '?nid=CA00035%3Cb%3E', '?nid=<script>', '?nid=CA0003512345', '?nid=CA00035&breach=now', '?nid=CA00035&method=x']) {
+    const r = parseDamLink(bad);
+    assert.deepEqual(r.warnings, [DAM_WARNING], bad);
+    if (!/breach|method/.test(bad)) assert.equal(r.nid, null, bad);
+  }
+  assert.doesNotMatch(DAM_WARNING, /script|<|EVACUATE/);
+  // The dam case has no scene of its own: the link's ?live= area (written once the valley loaded), else the default.
+  assert.deepEqual(parseStartupRequest('?usecase=dam&nid=CA00035').request, { kind: 'preset', id: 'pittsburgh' });
+  assert.equal(parseStartupRequest('?usecase=dam&nid=CA00035&live=39.5,-121.5,12').request.kind, 'live');
+  assert.equal(useCaseMatches('?usecase=dam&nid=CA00035', { kind: 'live', req: { center: { lat: 39.5, lon: -121.5 }, sizeMeters: 12000, resolution: 1024 } }), true);
+  assert.equal(useCaseMatches('?usecase=dam&nid=CA00035', { kind: 'preset', id: 'pittsburgh' }), false);
+});
+
+test('surge link: ?usecase=surge&at= opens an 8 km live area on the point, numbers only', () => {
+  const r = parseStartupRequest('?usecase=surge&at=26.6406,-81.8723&name=EVACUATE%20NOW');
+  assert.deepEqual(r.request, { kind: 'live', req: { center: { lat: 26.6406, lon: -81.8723 }, sizeMeters: SURGE_AREA_M, resolution: 1024 } });
+  assert.deepEqual(r.warnings, []);
+  const bad = parseStartupRequest('?usecase=surge&at=<b>&preset=johnstown');
+  assert.deepEqual(bad.request, { kind: 'preset', id: 'johnstown' });
+  assert.deepEqual(bad.warnings, [ADDRESS_WARNING]);
+  assert.equal(useCaseMatches('?usecase=surge&at=26.6406,-81.8723', r.request), true);
+  assert.equal(useCaseMatches('?usecase=surge&at=26.6406,-81.8723', { kind: 'live', req: { center: { lat: 26.6406, lon: -81.8723 }, sizeMeters: ADDRESS_AREA_M, resolution: 1024 } }), false);
 });

@@ -77,7 +77,7 @@ export interface PathPoint extends GridPoint {
  */
 export function descentPath(elev: Float32Array, nx: number, ny: number, cellSize: number, start: GridPoint, maxLengthM: number, opts: { flatTol?: number; maxFlatCells?: number } = {}): PathPoint[] {
   const tol = opts.flatTol ?? 0.05;
-  const maxFlat = opts.maxFlatCells ?? 20000;
+  const maxFlat = opts.maxFlatCells ?? Math.max(20000, (nx * ny) >> 2);
   let i = Math.min(nx - 1, Math.max(0, Math.floor(start.gx)));
   let j = Math.min(ny - 1, Math.max(0, Math.floor(start.gy)));
   const visited = new Uint8Array(nx * ny);
@@ -113,8 +113,14 @@ export function descentPath(elev: Float32Array, nx: number, ny: number, cellSize
       if (i === 0 || j === 0 || i === nx - 1 || j === ny - 1) break;
       continue;
     }
-    // A flat or a shallow pit: breadth-first search for the nearest lower cell.
-    const route = escapeFlat(elev, nx, ny, i, j, z, tol, maxFlat, visited);
+    // A flat or a pit: breadth-first search for the nearest lower cell, first across the flat, then — as water would,
+    // by filling the depression until it spills — over rims up to 1, 3 and 8 m above the current cell (burned lakes and
+    // channels in a live area sit metres below their banks).
+    let route: number[] | null = null;
+    for (const t of [tol, 1, 3, 8]) {
+      route = escapeFlat(elev, nx, ny, i, j, z, Math.max(tol, t), maxFlat, visited);
+      if (route) break;
+    }
     if (!route) break;
     for (const k of route) push(k % nx, Math.floor(k / nx));
     if (i === 0 || j === 0 || i === nx - 1 || j === ny - 1) break;

@@ -87,6 +87,7 @@ import { selectTool } from './toolDefs';
 import { headlessBusy, runHeadless, saveScenario } from './headless';
 import { CLIMATE_TODAY, climateForcing, sweepComparable } from '../climate';
 import { climateCompareBlock, compareClimate, type ClimateSweepPair } from './siteClimate';
+import { SURGE_LADDER_CAVEATS, SURGE_SOURCE_KEY, SURGE_SWEEP_MINUTES } from '../surge/stations';
 
 const FT = 0.3048;
 /** Simulated minutes per sweep level, default and range. */
@@ -142,6 +143,8 @@ export interface SiteSection {
    * there is no Atlas 14 estimate for the map (outside coverage, or the grid could not be loaded) or a sweep is running.
    */
   useRainLadder(): Promise<boolean>;
+  /** Switch to the coastal-surge ladder of a scenario set up by src/surge (every level ticked). False when there is none. */
+  useSurgeLadder(): boolean;
   /** Press "Run sweep". */
   runSweep(): Promise<void>;
 }
@@ -372,7 +375,7 @@ export function createSiteSection(ctx: UIContext): SiteSection {
   function ladderOptions(): { kinds: LadderKind[]; auto: LadderKind } {
     const st = stageCtl();
     const s = store.get();
-    const researched = !!(st && ladderFor(s.presetId));
+    const researched = !!(st && ladderFor(s.presetId, s.scenario));
     const rainOk = rain.status === 'ok' && !!rain.point;
     const kinds: LadderKind[] = [...(st ? (['stage'] as const) : []), ...(rainOk ? (['rain'] as const) : []), 'scale'];
     // A researched river / tide ladder first; then, on a live area or a rain-led preset, the rain ladder.
@@ -382,12 +385,13 @@ export function createSiteSection(ctx: UIContext): SiteSection {
   }
 
   function defaultDuration(): number {
+    if (ladderKind === 'stage' && store.get().scenario?.coastal) return SURGE_SWEEP_MINUTES;
     return ladderKind === 'rain' ? RAIN_SWEEP_MINUTES : SWEEP_MINUTES_DEFAULT;
   }
 
   function buildLadder() {
     const st = stageCtl();
-    const ladder = ladderFor(store.get().presetId);
+    const ladder = ladderFor(store.get().presetId, store.get().scenario);
     const opts = ladderOptions();
     ladderKind = ladderChoice !== 'auto' && opts.kinds.includes(ladderChoice) ? ladderChoice : opts.auto;
     if (!durationTouched) {
@@ -659,9 +663,9 @@ export function createSiteSection(ctx: UIContext): SiteSection {
 
   function syncClimateBtn() {
     const s = store.get();
-    const c = sweepComparable(climateForcing(s.climate, s.presetId), ladderKind);
+    const c = sweepComparable(climateForcing(s.climate, s.presetId, s.scenario), ladderKind);
     climateBtn.disabled = sweeping || comparing || !c.ok;
-    climateBtn.dataset.tip = c.ok ? `Run the ticked levels under today’s forcing, then under ${climateForcing(s.climate, s.presetId).label}, and compare loss and EAL` : c.why;
+    climateBtn.dataset.tip = c.ok ? `Run the ticked levels under today’s forcing, then under ${climateForcing(s.climate, s.presetId, s.scenario).label}, and compare loss and EAL` : c.why;
   }
 
   /** The ladder twice: the climate layer off (today), then the user's selection; the user's selection is put back. */
@@ -669,7 +673,7 @@ export function createSiteSection(ctx: UIContext): SiteSection {
     if (sweeping || busy || comparing) return;
     const s0 = store.get();
     const sel = s0.climate ?? { ...CLIMATE_TODAY };
-    const f = climateForcing(sel, s0.presetId);
+    const f = climateForcing(sel, s0.presetId, s0.scenario);
     const ok = sweepComparable(f, ladderKind);
     if (!ok.ok) return setSweepStatus(ok.why, 'warn');
     const want = levels.filter((l) => l.on && !l.outOfRange).length;
@@ -847,13 +851,15 @@ export function createSiteSection(ctx: UIContext): SiteSection {
 
   function renderLadder() {
     const st = stageCtl();
-    const ladder = ladderFor(store.get().presetId);
+    const ladder = ladderFor(store.get().presetId, store.get().scenario);
     const t = getTerrain();
     const c = t ? mapCentre(t) : null;
     setText(
       sweepIntro,
       ladderKind === 'rain'
         ? `NOAA Atlas 14 rain at the map centre${c ? ` (${c.lat.toFixed(3)}, ${c.lon.toFixed(3)})` : ''}: each ticked level resets the water and rains that return period’s 1-hour intensity uniformly over the whole map for one hour, then lets it run off for the rest of the simulated time. Rain only — rivers stay at their normal level, inflows and storm cells are off. Return periods are NOAA’s, converted to annual chance.`
+        : ladderKind === 'stage' && st && store.get().scenario?.coastal
+          ? `${st.label}: each ticked level resets the water, raises the sea on the seaward edges of the map to NOAA’s still-water level for that annual chance and runs the chosen simulated time headless. Return periods are NOAA’s (1 / annual exceedance probability).`
         : ladderKind === 'stage' && st
           ? `${st.label}: each ticked level resets the water, raises the river to that gauge reading and runs the chosen simulated time headless${ladder ? '' : ' (this scenario has no researched ladder: the slider’s marks)'}. Return periods marked “source” are published; type one for any other level you know — it is labelled as your input.`
           : 'The ladder scales the scenario’s rain, storm cells and inflows. No return period is known for any multiplier — type one per level, or the sweep gives levels without an EAL.',
@@ -944,6 +950,9 @@ export function createSiteSection(ctx: UIContext): SiteSection {
     const parts: Array<HTMLElement | null> = [];
     if (stale) parts.push(h('p', { class: 'dl-impact-fine dl-warn' }, 'The site was edited after the sweep: these numbers are for the building as it was then. Run the sweep again.'));
     parts.push(h('div', { class: 'dl-site-verdict', 'data-site': 'verdict' }, ...d.verdict.map((v) => h('p', null, v))));
+    if (sweep.ladder === 'stage' && sweep.sourceKeys.includes(SURGE_SOURCE_KEY)) {
+      parts.push(h('details', { class: 'dl-impact-methods', 'data-site': 'surge-caveats' }, h('summary', null, 'What the surge ladder leaves out'), h('ul', { class: 'dl-impact-issues' }, ...SURGE_LADDER_CAVEATS.map((c) => h('li', null, c)))));
+    }
     if (sweep.ladder === 'rain') {
       parts.push(h('details', { class: 'dl-impact-methods', 'data-site': 'rain-caveats' }, h('summary', null, 'What the rain ladder leaves out'), h('ul', { class: 'dl-impact-issues' }, ...RAIN_LADDER_CAVEATS.map((c) => h('li', null, c)))));
     }
@@ -1052,7 +1061,17 @@ export function createSiteSection(ctx: UIContext): SiteSection {
     (s) => `${s.presetId}|${s.terrainName}`,
     () => ensureScene(getTerrain()),
   );
-  ctx.bind((s) => `${s.presetId}|${s.climate?.horizon}|${s.climate?.pathway}|${s.climate?.scaling}|${!!s.scenario?.stage}`, () => syncClimateBtn());
+  ctx.bind((s) => `${s.presetId}|${s.climate?.horizon}|${s.climate?.pathway}|${s.climate?.scaling}|${!!s.scenario?.stage}|${s.scenario?.coastal?.stationId ?? ''}`, () => syncClimateBtn());
+  // A live area turned into a coastal-surge scenario (src/surge) brings its own ladder: rebuild on the new scenario.
+  ctx.bind(
+    (s) => s.scenario?.coastal?.stationId ?? '',
+    () => {
+      if (sweeping) return;
+      ladderChoice = 'auto';
+      buildLadder();
+      render();
+    },
+  );
   ctx.bind(
     (s) => s.stats,
     () => {
@@ -1094,6 +1113,15 @@ export function createSiteSection(ctx: UIContext): SiteSection {
       buildLadder();
       render();
       return ladderKind === 'rain';
+    },
+    useSurgeLadder() {
+      ensureScene(getTerrain());
+      if (sweeping || !store.get().scenario?.coastal) return false;
+      ladderChoice = 'stage';
+      buildLadder();
+      for (const l of levels) l.on = !l.outOfRange;
+      render();
+      return ladderKind === 'stage';
     },
     runSweep: () => runSweep(),
   };
