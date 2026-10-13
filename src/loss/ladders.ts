@@ -193,3 +193,28 @@ export function rainLadder(point: { levels: ReadonlyArray<{ ari: number; mmPerHo
       source: 'noaa-atlas14' as const,
     }));
 }
+
+// ─── Which ladder ────────────────────────────────────────────────────────────────────────────────────────────────────
+
+/** stage: river / tide levels · scale: the scenario's forcing × multipliers · rain: NOAA Atlas 14 1-hour rain. */
+export type LadderKind = 'stage' | 'scale' | 'rain';
+
+/**
+ * The event ladders a scenario can run, and the one the Site check picks by itself ('auto'): a researched river or
+ * tide ladder (a preset's, or a coastal live area's tide-station levels) first; then, on a live area or a rain-led
+ * preset where NOAA Atlas 14 covers the map, the rain ladder; then the stage slider's marks; else the forcing
+ * multipliers. Shared by the panel (src/ui/siteCheck.ts) and the CLI (src/cli/scenario.ts), so `deluge site` sweeps
+ * what the app sweeps.
+ */
+export function ladderKinds(
+  presetId: string | null,
+  scenario: { stage?: unknown; rainRate?: number; coastal?: { ladder: readonly LadderLevel[] } | null } | null | undefined,
+  rainAvailable: boolean,
+): { kinds: LadderKind[]; auto: LadderKind } {
+  const st = !!scenario?.stage;
+  const researched = st && !!ladderFor(presetId, scenario);
+  const kinds: LadderKind[] = [...(st ? (['stage'] as const) : []), ...(rainAvailable ? (['rain'] as const) : []), 'scale'];
+  const rainLed = presetId === null || (scenario?.rainRate ?? 0) > 0;
+  const auto: LadderKind = researched ? 'stage' : rainAvailable && rainLed ? 'rain' : st ? 'stage' : 'scale';
+  return { kinds, auto };
+}

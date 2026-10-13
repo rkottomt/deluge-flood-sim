@@ -432,13 +432,18 @@ npx deluge run --preset houston --climate 2050:ssp585 --out results/houston-2050
 npx deluge portfolio --preset houston --csv public/demo/houston-portfolio.csv --minutes 60 --out results.csv
 npx deluge portfolio --preset houston --csv assets.csv --members 12 --seed 7 --out results.csv --summary summary.json
 npx deluge site --preset pittsburgh --at 40.4425,-80.0085 --use office --floors 3 --sweep --out report.json
+npx deluge site --preset houston --at 29.7725,-95.3837 --scenario a14-100   # NOAA Atlas 14 100-yr 1-hour rain
 npx deluge <command> --help                       # every option
 ```
 
 (`npm run deluge -- …` works too.) Scenario options are shared: `--minutes` (default 30, as in the app), `--stage-ft`
 (a gauge reading, as on the slider), `--rain` (mm/hr), `--scale k` (rain, storm cells and inflows × k), `--manning`,
-`--climate 2050|2080|2100:ssp245|ssp585[:cc|super10|super14]`, and `--scenario <level>` for a rung of the preset's Site
-check ladder (`rp100`, `record1936`, `x0.5` …).
+`--climate 2050|2080|2100:ssp245|ssp585[:cc|super10|super14]`, and `--scenario <level>` for a rung of one of the
+preset's Site check ladders (`rp100`, `record1936`, `a14-100`, `x0.5` …). The ladders are the app's, read from the same
+files: a researched river / tide ladder, the NOAA Atlas 14 rain ladder (`a14-2` … `a14-500`, 1-hour rain at the map
+centre from `public/atlas14/pf60m-pds.bin`, for presets Atlas 14 covers) and the forcing multipliers. An `a14-…` level
+is rain only, as in the app: rivers at normal level, inflows and storm cells off, the level's intensity for one hour,
+then run-off — 120 simulated minutes unless `--minutes` says otherwise.
 
 * **`run`** writes four GeoTIFFs and `summary.json`. The rasters are the solver's hazard fields
   (`FloodSolver.readHazardFields`), single band, in **EPSG:3857** with the tie point on the grid's outer north-west
@@ -452,8 +457,10 @@ check ladder (`rp100`, `record1936`, `x0.5` …).
   damage, loss with its ±1σ range, downtime, BI, insured loss, access road — plus an `outside` row for any asset off
   the map. `--members N` adds the Uncertainty panel's ensemble (Latin hypercube from `--seed`, the same bands, the
   terrain-error field): `ens_reached_members` ("floods in k of N"), depth and loss p10 / p50 / p90.
-* **`site`** is the Site check card: for the scenario, or with `--sweep` across the ladder the app ticks by default
-  (`--levels` to choose, `--rp x0.5=10,x1=100` for return periods the ladder lacks), with egress, EAL, the
+* **`site`** is the Site check card: for the scenario, or with `--sweep` across the ladder the app picks — a
+  researched river / tide ladder, else the Atlas 14 rain ladder on a rain-led preset (Houston, Boulder), else the
+  multipliers — and the levels it ticks by default (`--ladder stage|rain|scale` and `--levels` to choose,
+  `--rp x0.5=10,x1=100` for return periods the ladder lacks), with egress, EAL, the
   loss-exceedance points, the indicative finished-floor elevation, mitigation options with BCR and the verdict
   sentences.
 

@@ -28,8 +28,8 @@ export type ParsedOptions = Record<string, string | number | boolean | undefined
 
 const SCENARIO_OPTS: OptSpec[] = [
   { name: 'preset', kind: 'string', arg: '<id>', help: 'Scenario to run (see `deluge presets`). Required.' },
-  { name: 'minutes', kind: 'number', arg: '<min>', help: 'Simulated minutes per run (2–240; default 30, the app’s sweep and ensemble default).' },
-  { name: 'scenario', kind: 'string', arg: '<level>', help: 'A Site check ladder level by id: rp100, record1936, x0.5 … (see `deluge presets --levels`).' },
+  { name: 'minutes', kind: 'number', arg: '<min>', help: 'Simulated minutes per run (2–240; default 30, the app’s sweep and ensemble default — 120 for a NOAA Atlas 14 rain level: the 1-hour storm and an hour of run-off).' },
+  { name: 'scenario', kind: 'string', arg: '<level>', help: 'A Site check ladder level by id: rp100, record1936, a14-100 (NOAA Atlas 14 100-yr 1-hour rain, rain only), x0.5 … (see `deluge presets --levels`).' },
   { name: 'stage-ft', kind: 'number', arg: '<ft>', help: 'River / sea stage as a gauge reading in feet (presets with a stage control).' },
   { name: 'rain', kind: 'number', arg: '<mm/hr>', help: 'Global rain rate, mm/hr (replaces the preset’s).' },
   { name: 'scale', kind: 'number', arg: '<k>', help: 'Multiply rain, storm cells and inflows by k.' },
@@ -107,6 +107,7 @@ export const COMMANDS: Record<string, CommandSpec> = {
       { name: 'ffh', kind: 'number', arg: '<m>', help: 'Planned first-floor height above grade, m (default 0.3).' },
       { name: 'critical', kind: 'number', arg: '<m>', help: 'Critical equipment height above grade, m.' },
       { name: 'sweep', kind: 'boolean', help: 'Run the ladder of levels (the app’s ticked defaults) and add EAL, FFE, mitigation and the verdict.' },
+      { name: 'ladder', kind: 'string', arg: '<stage|rain|scale>', help: 'Which ladder to sweep (default: the one the app picks — a researched river / tide ladder, else NOAA Atlas 14 rain on a rain-led preset, else the forcing multipliers).' },
       { name: 'levels', kind: 'string', arg: '<ids|all>', help: 'Levels to sweep: comma-separated ids, or all (default: the app’s ticked ones).' },
       { name: 'rp', kind: 'string', arg: '<id=years,…>', help: 'Your return periods for levels without a published one (e.g. x0.5=10,x1=100).' },
       { name: 'design', kind: 'string', arg: '<id>', help: 'Design level for the FFE (default: the 1 % level, else the highest).' },
@@ -117,7 +118,9 @@ export const COMMANDS: Record<string, CommandSpec> = {
     examples: [
       'deluge site --preset pittsburgh --at 40.4425,-80.0085 --use office --floors 3 --sweep --out report.json',
       'deluge site --preset pittsburgh --at 40.4425,-80.0085 --stage-ft 46',
-      'deluge site --preset houston --at 29.7725,-95.3837 --use warehouse --floors 1 --sweep --rp x0.5=10,x1=100',
+      'deluge site --preset houston --at 29.7725,-95.3837 --use warehouse --floors 1 --sweep',
+      'deluge site --preset houston --at 29.7725,-95.3837 --use warehouse --floors 1 --sweep --ladder scale --rp x0.5=10,x1=100',
+      'deluge site --preset houston --at 29.7725,-95.3837 --scenario a14-100',
     ],
   },
 };

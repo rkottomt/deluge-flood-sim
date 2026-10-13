@@ -17,7 +17,7 @@
 import type { FloodSolver, HazardFields, StageControl, TerrainData, WaterSource } from '../contracts';
 import { computeInitialWater } from '../data/initialWater';
 import { makeGeoToGrid } from '../data/geo';
-import { loadAtlas14Grid, lookupAtlas14, type Atlas14Point } from '../data/atlas14';
+import { atlas14MayCover, loadAtlas14Grid, lookupAtlas14, type Atlas14Point } from '../data/atlas14';
 import { cleanPlaceLabel } from '../data/placeName';
 import {
   assessSiteRun,
@@ -31,7 +31,9 @@ import {
   formatReturnPeriod,
   freeboardFor,
   ladderFor,
+  ladderKinds,
   LADDER_SOURCES,
+  type LadderKind,
   mitigationOptions,
   OCCUPANCY_PROFILES,
   pickDesign,
@@ -119,8 +121,7 @@ interface LevelCfg {
   outOfRange: boolean;
 }
 
-/** stage: river / tide levels · scale: the scenario's forcing × multipliers · rain: NOAA Atlas 14 1-hour rain. */
-export type LadderKind = 'stage' | 'scale' | 'rain';
+export type { LadderKind } from '../loss/ladders';
 
 interface SweepState {
   levels: SweepLevelInfo[];
@@ -363,7 +364,7 @@ export function createSiteSection(ctx: UIContext): SiteSection {
     const t = terrainRef;
     if (!t || rain.for === t) return;
     const c = mapCentre(t);
-    if (!(c.lon < -60 && c.lat > 15)) {
+    if (!atlas14MayCover(c.lat, c.lon)) {
       rain = { for: t, status: 'none', point: null, ready: Promise.resolve(false) };
       return;
     }
@@ -390,15 +391,9 @@ export function createSiteSection(ctx: UIContext): SiteSection {
 
   /** Which ladders this scene can run, and which one 'auto' means. */
   function ladderOptions(): { kinds: LadderKind[]; auto: LadderKind } {
-    const st = stageCtl();
     const s = store.get();
-    const researched = !!(st && ladderFor(s.presetId, s.scenario));
-    const rainOk = rain.status === 'ok' && !!rain.point;
-    const kinds: LadderKind[] = [...(st ? (['stage'] as const) : []), ...(rainOk ? (['rain'] as const) : []), 'scale'];
-    // A researched river / tide ladder first; then, on a live area or a rain-led preset, the rain ladder.
-    const rainLed = s.presetId === null || (s.scenario?.rainRate ?? 0) > 0;
-    const auto: LadderKind = researched ? 'stage' : rainOk && rainLed ? 'rain' : st ? 'stage' : 'scale';
-    return { kinds, auto };
+    // The same choice as the CLI's (src/loss/ladders.ts ladderKinds).
+    return ladderKinds(s.presetId, s.scenario, rain.status === 'ok' && !!rain.point);
   }
 
   function defaultDuration(): number {
@@ -893,7 +888,7 @@ export function createSiteSection(ctx: UIContext): SiteSection {
     ladderSel.replaceChildren(...opts.kinds.map((k) => h('option', { value: k, selected: k === ladderKind }, names[k])));
     ladderSel.disabled = sweeping || comparing;
     ladderPick.hidden = opts.kinds.length < 2;
-    const usLike = !!c && c.lon < -60 && c.lat > 15;
+    const usLike = !!c && atlas14MayCover(c.lat, c.lon);
     setText(
       rainNote,
       rain.status === 'loading'
