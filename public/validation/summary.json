@@ -1,6 +1,6 @@
 {
  "version": 1,
- "generated": "2026-10-13T03:42:02.965Z",
+ "generated": "2026-10-13T03:42:53.559Z",
  "solver": "src/sim on nvidia turing nvidia-geforce-gtx-1660-ti D3D12 driver version 32.0.15.9595",
  "presets": {
   "pittsburgh": {
@@ -73,7 +73,7 @@
    "headline": {
     "label": "USGS high-water marks (25 sites)",
     "value": "bias +0.07 m · RMSE 0.14 m · 100 % within ±0.3 m",
-    "note": "Modelled peak water level minus the surveyed high-water mark, NAVD88, at the marks the model wets."
+    "note": "Modelled peak water level minus the surveyed high-water mark (NAVD88). The tide is set to the gauged peak, so this checks how the surge spreads over the city, not a surge forecast."
    },
    "metrics": {
     "fema.connected.csi": 0.8793,

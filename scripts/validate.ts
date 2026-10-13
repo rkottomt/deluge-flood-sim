@@ -237,7 +237,9 @@ export function summarise(r: PresetResult): ValidationSummaryEntry {
     headline = {
       label: `USGS high-water marks (${r.hwm.sites} sites)`,
       value: `bias ${sgn(s.bias)} m · RMSE ${fmt(s.rmse)} m · ${pct(s.within03)} within ±0.3 m${r.hwm.dry ? ` · ${r.hwm.dry} dry in the model` : ''}`,
-      note: 'Modelled peak water level minus the surveyed high-water mark, NAVD88, at the marks the model wets.',
+      note: r.runs.find((x) => x.id === r.hwm?.run)?.stageFt != null
+        ? 'Modelled peak water level minus the surveyed high-water mark (NAVD88). The tide is set to the gauged peak, so this checks how the surge spreads over the city, not a surge forecast.'
+        : 'Modelled peak water level minus the surveyed high-water mark, NAVD88, at the marks the model wets.',
     };
   }
   if (r.ems) {
@@ -589,7 +591,7 @@ async function main(): Promise<void> {
     }
   }
   summary.generated = new Date().toISOString();
-  summary.solver = `src/sim on ${gpuName}`;
+  if (!scoreOnly) summary.solver = `src/sim on ${gpuName}`;
   // Keep presets in a stable order.
   summary.presets = Object.fromEntries(Object.keys(PLANS).filter((k) => summary.presets[k]).map((k) => [k, summary.presets[k]]));
   fs.mkdirSync(OUT, { recursive: true });
