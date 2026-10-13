@@ -62,6 +62,11 @@ export interface DelugeRouteResult extends RouteResult {
   advice: string;
   /** 'blocked': the numbers behind `reason` — see RouteDiagnosis. null for 'ok' and 'none'. */
   diagnosis: RouteDiagnosis | null;
+  /**
+   * 'ok': metres of the route on each road class, indexed by CLASS_CODE (highway, major, minor, local) — what the
+   * capacity model needs to find the route's bottleneck (src/routing/bottleneck.ts). Absent otherwise.
+   */
+  classMeters?: number[];
 }
 
 /** The router returned by createRouter(): the contract plus a few optional extras for the app/debugging. */
@@ -521,17 +526,19 @@ class Router implements DelugeRouter {
     const eta = this.best;
     let meters = 0;
     let wetMeters = 0;
+    const classMeters = [0, 0, 0, 0];
     for (let p = 0; p < this.pieceCount; p++) {
       meters += this.pieceMeters[p];
       const e = this.pieceEdge[p];
       if (e >= 0 && this.statusCur[e] === STATUS_WET) wetMeters += this.pieceMeters[p];
+      if (e >= 0) classMeters[g.edgeClass[e]] += this.pieceMeters[p];
     }
 
     if (wetMeters < 1) wetMeters = 0; // less than a metre of wet road isn't worth a warning
     const via = this.mainStreetNames();
     let message = `${via.length ? `Via ${via.join(' → ')} to` : 'Route to'} ${shelter.name} — ${formatDistance(meters)}, ${formatDuration(eta)}`;
     if (wetMeters > 0) message += ` (${formatDistance(wetMeters)} through shallow water — drive slowly)`;
-    return { state: 'ok', polyline, lengthMeters: meters, etaSeconds: eta, shelter, message, reason: null, via, wetMeters, advice: '', diagnosis: null };
+    return { state: 'ok', polyline, lengthMeters: meters, etaSeconds: eta, shelter, message, reason: null, via, wetMeters, advice: '', diagnosis: null, classMeters };
   }
 
   /**

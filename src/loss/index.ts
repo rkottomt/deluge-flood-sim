@@ -39,6 +39,7 @@ export * from './csv';
 export * from './eal';
 export * from './fallback';
 export * from './egress';
+export * from './egressTiming';
 export * from './site';
 export * from './ladders';
 export * from './ensemble';

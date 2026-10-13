@@ -19,6 +19,11 @@
  * the right order but cannot say when a road REOPENS. Reopening is judged from the depth at the end of the run when
  * one is given (endDepth: the latest snapshot): still cut then → cut off for at least (end − closure).
  *
+ * The LATEST SAFE DEPARTURE is what a car leaving the site needs: per shelter, its closure (its last route cut, or
+ * the shelter itself under ≥ 0.3 m — the router skips a flooded shelter) minus the dry drive there, the latest over
+ * the shelters. A shelter that floods, or whose road goes under, before a car leaving later could reach it does not
+ * stretch the window. egressTiming.ts sets the occupants' departures and the queue at the exit against it.
+ *
  * Shelters are the scenario's / user's shelters (AppState.shelters). A route needs a road within the router's snap
  * radius of the site and of the shelter; without road data or shelters the answer is "unknown", never "safe".
  */
@@ -32,7 +37,7 @@ export interface EgressRouter {
   route(
     start: { gx: number; gy: number },
     shelters: Shelter[],
-  ): { state: 'ok' | 'blocked' | 'none'; polyline: Float32Array | null; lengthMeters: number; etaSeconds: number; shelter: Shelter | null; reason?: string | null };
+  ): { state: 'ok' | 'blocked' | 'none'; polyline: Float32Array | null; lengthMeters: number; etaSeconds: number; shelter: Shelter | null; reason?: string | null; classMeters?: number[] };
 }
 
 export interface EgressShelter {
@@ -77,6 +82,17 @@ export interface EgressResult {
   peakShelter: string;
   /** Router calls made (cost diagnostics). */
   routerCalls: number;
+  /**
+   * Latest moment a car can still leave and reach a shelter before the way to it closes, s since reset: per shelter,
+   * its closure minus its dry drive time, the latest over all shelters; +∞ when a route stays open through the peak,
+   * NaN when there was no route at all. A shelter that floods, or whose last road goes under, before a car leaving
+   * later could get there is not counted. (Optional so hand-built results stay valid; analyzeEgress always sets it.)
+   */
+  lastSafeDepartureAt?: number;
+  /** Shelter that sets lastSafeDepartureAt ('' when none). */
+  lastSafeShelter?: string;
+  /** Metres of the best dry route on each road class (router.ts classMeters, CLASS_CODE order); null when unknown. */
+  routeClassMeters?: number[] | null;
 }
 
 /** Arrival-ordered flood rebuild for one HazardFields (reused across sites and shelters). */
@@ -169,6 +185,9 @@ export function analyzeEgress(
     routeAtPeak: null,
     peakShelter: '',
     routerCalls: 0,
+    lastSafeDepartureAt: NaN,
+    lastSafeShelter: '',
+    routeClassMeters: null,
   };
   if (opts.hasRoads === false) {
     out.note = 'No road data for this area.';
@@ -197,6 +216,7 @@ export function analyzeEgress(
   out.known = true;
   out.openAtStart = isOpen(before);
   out.routeBefore = before.polyline ? before.polyline.slice() : null;
+  out.routeClassMeters = isOpen(before) && before.classMeters ? before.classMeters.slice() : null;
 
   const peak = ask(tl.count, list);
   out.openAtPeak = isOpen(peak);
@@ -229,6 +249,19 @@ export function analyzeEgress(
     }
     out.shelters.push(e);
   }
+
+  // The latest safe departure: a car leaving at t reaches shelter s at about t + its dry drive, so it must leave by
+  // the shelter's closure minus that drive (an early estimate, like the closure itself).
+  let lastSafe = -Infinity;
+  for (const e of out.shelters) {
+    if (!e.openAtStart) continue;
+    const t = e.openAtPeak ? Infinity : e.closesAt - (Number.isFinite(e.etaS) ? e.etaS : 0);
+    if (t > lastSafe) {
+      lastSafe = t;
+      out.lastSafeShelter = e.name;
+    }
+  }
+  out.lastSafeDepartureAt = lastSafe === -Infinity ? NaN : lastSafe;
 
   if (opts.endDepth && opts.endDepth.length === nx * ny && out.openAtStart && !out.openAtPeak) {
     router.updateFlood(opts.endDepth, nx, ny);
