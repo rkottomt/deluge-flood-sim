@@ -392,36 +392,70 @@ export function exceedance(count: number, members: number): number {
   return members > 0 ? Math.min(1, Math.max(0, count / members)) : NaN;
 }
 
-/** Per-asset tally across members (sites and portfolio assets). */
+/**
+ * Per-asset tally across members (sites and portfolio assets). The thresholds are the probability map's own
+ * (ENSEMBLE_THRESHOLDS, strictly deeper than — src/sim/ensemble.ts counts `d > T`), so "floods in 7 of 12 members"
+ * on an asset and the map's share under it count the same thing. (The loss model's REACHED_DEPTH test is ≥ 0.15 m;
+ * the two differ only for a depth of exactly 0.15 m.)
+ */
 export interface AssetTally {
   id: string;
   name: string;
   members: number;
-  /** Members in which the asset was reached (≥ 0.15 m) / took ≥ 0.5 m. */
+  /** Members in which the asset was reached (> 0.15 m) / took > 0.5 m. */
   reached: number;
   over50: number;
+  /** Members in which the asset was not assessed (outside the map: no cell to read), recorded as a NaN depth. */
+  outside: number;
   /** Max depth at the asset per member, m (0 dry, NaN outside the map). */
   depths: number[];
   losses: number[];
 }
 
 export function newTally(id: string, name: string): AssetTally {
-  return { id, name, members: 0, reached: 0, over50: 0, depths: [], losses: [] };
+  return { id, name, members: 0, reached: 0, over50: 0, outside: 0, depths: [], losses: [] };
 }
 
+/** One member's result for an asset. A non-finite depth means "not assessed" (outside the map), never "dry". */
 export function addToTally(t: AssetTally, depth: number, loss: number): void {
   t.members++;
-  const d = Number.isFinite(depth) ? depth : 0;
-  if (d >= ENSEMBLE_THRESHOLDS[0]) t.reached++;
-  if (d >= ENSEMBLE_THRESHOLDS[1]) t.over50++;
+  if (!Number.isFinite(depth)) t.outside++;
+  else {
+    if (depth > ENSEMBLE_THRESHOLDS[0]) t.reached++;
+    if (depth > ENSEMBLE_THRESHOLDS[1]) t.over50++;
+  }
   t.depths.push(depth);
   t.losses.push(loss);
 }
 
-/** "floods in 7 of 12 members" */
+/** "floods in 7 of 12 members"; "is outside the map" when no member could assess it. */
 export function tallySentence(t: AssetTally): string {
   if (!t.members) return '';
-  if (t.reached === 0) return `stays below 15 cm in all ${t.members} members`;
-  if (t.reached === t.members) return `floods (≥ 15 cm) in all ${t.members} members`;
-  return `floods (≥ 15 cm) in ${t.reached} of ${t.members} members`;
+  const n = t.members - t.outside;
+  if (n === 0) return 'is outside the map (not assessed)';
+  const tail = t.outside ? ` (not assessed in ${t.outside}: outside the map)` : '';
+  const of = t.outside ? `${n} assessed members` : `${n} members`;
+  if (t.reached === 0) return `stays at or below 15 cm in all ${of}${tail}`;
+  if (t.reached === n) return `floods (> 15 cm) in all ${of}${tail}`;
+  return `floods (> 15 cm) in ${t.reached} of ${of}${tail}`;
+}
+
+/**
+ * One member's portfolio results folded into the per-asset tallies (tallies[k] ↔ assets[k], the CSV order). The
+ * results are matched to the assets by IDENTITY (result.m.asset is the parsed asset object analyze() was given), not
+ * by position: assessPortfolio drops the assets it cannot assess (outside the map, no cell), so the k-th result is
+ * not the k-th asset once one is dropped. An asset with no result is recorded as not assessed (NaN depth) — "outside
+ * the map", never "dry".
+ */
+export function addPortfolioMember(
+  tallies: readonly AssetTally[],
+  assets: readonly object[],
+  results: ReadonlyArray<{ m: { asset: object }; depth: number; loss: number }>,
+): void {
+  const byAsset = new Map<object, { depth: number; loss: number }>();
+  for (const r of results) byAsset.set(r.m.asset, r);
+  tallies.forEach((t, k) => {
+    const r = byAsset.get(assets[k]);
+    addToTally(t, r ? r.depth : NaN, r ? r.loss : NaN);
+  });
 }

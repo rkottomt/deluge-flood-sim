@@ -12,6 +12,7 @@ import {
   DEM_SIGMA_M,
   demSourceOf,
   ENSEMBLE_PER_CELL,
+  ENSEMBLE_THRESHOLDS,
   ensembleCellUpdate,
   exceedance,
   floodedArea,
@@ -171,14 +172,29 @@ test('aggregation: p10/p50/p90, flooded area, the cell tally and per-asset sente
   assert.ok(Number.isNaN(exceedance(1, 0)));
 
   const t = newTally('a', 'Office');
-  for (const d of [0, 0.2, 0.6, NaN]) addToTally(t, d, 0);
-  assert.equal(t.members, 4);
+  for (const d of [0, 0.2, 0.6]) addToTally(t, d, 0);
+  assert.equal(t.members, 3);
   assert.equal(t.reached, 2);
   assert.equal(t.over50, 1);
-  assert.equal(tallySentence(t), 'floods (≥ 15 cm) in 2 of 4 members');
+  assert.equal(tallySentence(t), 'floods (> 15 cm) in 2 of 3 members');
   const dry = newTally('b', 'Dry');
   addToTally(dry, 0, 0);
-  assert.match(tallySentence(dry), /below 15 cm in all 1/);
+  assert.match(tallySentence(dry), /below 15 cm in all 1 members/);
+  // The same strict thresholds as the map's cells: exactly 0.15 m / 0.5 m is not "over" on either.
+  const edge = newTally('e', 'Edge');
+  addToTally(edge, ENSEMBLE_THRESHOLDS[0], 0);
+  addToTally(edge, ENSEMBLE_THRESHOLDS[1], 0);
+  const cell = new Float32Array(ENSEMBLE_PER_CELL);
+  ensembleCellUpdate(cell, 0, ENSEMBLE_THRESHOLDS[0]);
+  ensembleCellUpdate(cell, 0, ENSEMBLE_THRESHOLDS[1]);
+  assert.deepEqual([edge.reached, edge.over50], [cell[0], cell[1]], 'asset tally and cell tally agree at the thresholds');
+  // Not assessed (outside the map) is never "dry".
+  const off = newTally('o', 'Off the map');
+  for (let k = 0; k < 3; k++) addToTally(off, NaN, NaN);
+  assert.equal(off.outside, 3);
+  assert.equal(tallySentence(off), 'is outside the map (not assessed)');
+  addToTally(t, NaN, NaN);
+  assert.equal(tallySentence(t), 'floods (> 15 cm) in 2 of 3 assessed members (not assessed in 1: outside the map)');
 });
 
 test('DEM source and σ come from the attribution line', () => {

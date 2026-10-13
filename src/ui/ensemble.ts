@@ -17,6 +17,7 @@ import type { FloodSolver, TerrainData } from '../contracts';
 import { computeInitialWater } from '../data/initialWater';
 import { makeGeoToGrid } from '../data/geo';
 import {
+  addPortfolioMember,
   addToTally,
   analyze,
   assessSiteRun,
@@ -215,17 +216,21 @@ export function createEnsembleSection(ctx: UIContext): EnsembleSection {
     const params = sampleMembers(n, ranges, seed, chain);
     const base: ForcingState = { sources: s0.sources, storms: s0.storms, rainRate: s0.sim.rainRate, stageOffset: s0.stageOffset, manningN: s0.sim.manningN };
     const stage = s0.scenario?.stage ?? null;
-    const demOn = ranges.demSigmaM > 0 && typeof solver.setBedPerturbation === 'function';
+    let demOn = ranges.demSigmaM > 0 && typeof solver.setBedPerturbation === 'function';
     let initialDepth: Float32Array | null = null;
-    // The ground before any member perturbs it (the user's own edits included): the noise keeps banks above the water on it.
-    const ground0 = demOn ? solver.getGroundCPU().slice() : null;
+    let demNote = '';
     if (demOn) {
+      // The wet mask keeps the noise off the rivers and lakes the run starts with. Without it the field would move
+      // the river bed itself (and banks under the river's level spill it at t = 0), so no mask → no terrain band.
       try {
         initialDepth = computeInitialWater(terrain, s0.scenario);
-      } catch {
-        initialDepth = null;
+      } catch (err) {
+        demOn = false;
+        demNote = ` Terrain error not perturbed: the starting rivers could not be mapped (${err instanceof Error ? err.message : 'error'}).`;
       }
     }
+    // The ground before any member perturbs it (the user's own edits included): the noise keeps banks above the water on it.
+    const ground0 = demOn ? solver.getGroundCPU().slice() : null;
     const debrisFlow = !!s0.presetId && DEBRIS_FLOW_PRESETS.has(s0.presetId);
     const region = regionForBounds(terrain.bounds);
     const toGrid = makeGeoToGrid(terrain);
@@ -315,9 +320,8 @@ export function createEnsembleSection(ctx: UIContext): EnsembleSection {
           const r = assessSiteRun(sp, fields, { region, grid: { nx: terrain.nx, ny: terrain.ny, cellSize: terrain.cellSize }, toGrid, ground, heightProfile: region.iso === 'NP' ? 'nepal' : 'us', debrisFlow });
           addToTally(view.sites.get(sp.id)!, r.result ? r.result.depth : NaN, r.result ? r.result.loss : NaN);
         }
-        // Portfolio assets, in CSV order (assessPortfolio keeps it).
-        const pr = a.portfolio?.results ?? [];
-        view.assets.forEach((t, k) => addToTally(t, pr[k] ? pr[k].depth : NaN, pr[k] ? pr[k].loss : NaN));
+        // Portfolio assets, matched to their results by identity: assessPortfolio drops the ones off the map.
+        if (portfolio) addPortfolioMember(view.assets, portfolio, a.portfolio?.results ?? []);
         row.lossMs = performance.now() - tl;
         view.rows.push(row);
         view.summary = summarizeMembers(view.rows);
@@ -343,9 +347,9 @@ export function createEnsembleSection(ctx: UIContext): EnsembleSection {
     }
     const rate = view.rows.length / Math.max(1e-6, out.seconds / 60);
     const timing = view.rows.length ? ` ${fmtNum(rate, 1)} members/min; readback ${fmtNum(avg(view.rows.map((r) => r.readMs)))} ms, loss ${fmtNum(avg(view.rows.map((r) => r.lossMs)))} ms per member${demOn ? `, terrain field ${fmtNum(demMs / Math.max(1, view.rows.length))} ms` : ''}.` : '';
-    if (out.error) setStatus(`Stopped: ${out.error}. ${view.rows.length} of ${n} members kept. Your scenario was restored (the water restarts from its beginning).${timing}`, 'warn');
-    else if (out.cancelled) setStatus(`Cancelled after ${view.rows.length} of ${n} members (${fmtNum(out.seconds, 0)} s). Your scenario was restored; the water restarts from its beginning.${timing}`, 'warn');
-    else setStatus(`Done: ${n} members in ${fmtNum(out.seconds, 0)} s. Your scenario was restored; the water restarts from its beginning.${timing}`);
+    if (out.error) setStatus(`Stopped: ${out.error}. ${view.rows.length} of ${n} members kept. Your scenario was restored (the water restarts from its beginning).${timing}${demNote}`, 'warn');
+    else if (out.cancelled) setStatus(`Cancelled after ${view.rows.length} of ${n} members (${fmtNum(out.seconds, 0)} s). Your scenario was restored; the water restarts from its beginning.${timing}${demNote}`, 'warn');
+    else setStatus(`Done: ${n} members in ${fmtNum(out.seconds, 0)} s. Your scenario was restored; the water restarts from its beginning.${timing}${demNote}`);
     render();
   }
 
@@ -386,7 +390,10 @@ export function createEnsembleSection(ctx: UIContext): EnsembleSection {
       const rows = tallies.slice(0, ASSET_ROWS).map(({ kind, t }) => {
         const d = t.depths.filter((x) => Number.isFinite(x));
         const p50 = d.length ? band(d)[1] : NaN;
-        return [`${kind}: ${t.name}`, `${t.reached} of ${t.members}`, `${t.over50} of ${t.members}`, Number.isFinite(p50) ? `${fmtNum(p50, 2)} m` : '—'];
+        // Off the map: not assessed, so neither "0 of N" (that reads as dry) nor a depth.
+        const n = t.members - t.outside;
+        if (n === 0) return [`${kind}: ${t.name}`, 'outside the map', '—', '—'];
+        return [`${kind}: ${t.name}`, `${t.reached} of ${n}`, `${t.over50} of ${n}`, Number.isFinite(p50) ? `${fmtNum(p50, 2)} m` : '—'];
       });
       parts.push(h('div', { class: 'dl-impact-table dl-ens-assets', 'data-ens': 'assets' }, simpleTable(['', '> 15 cm in', '> 50 cm in', 'Depth p50'], rows, '')));
       if (tallies.length > ASSET_ROWS) parts.push(h('p', { class: 'dl-impact-fine' }, `${tallies.length - ASSET_ROWS} more not listed.`));

@@ -283,3 +283,80 @@ test('assessment: given values win, foreign currencies stay out of the USD total
   assert.equal(back.rows.length, 3);
   assert.equal(back.rows[0][0], 'dc');
 });
+
+test('decimal-comma files (; or tab delimited): commas are decimal marks, never thousands separators', () => {
+  // Comma files keep the thousands-comma reading.
+  assert.equal(parseNumber('2,500'), 2500);
+  assert.equal(parseNumber('2,500', ','), 2500);
+  // A ';' or tab file is a decimal-comma locale's: '2,500' is two and a half.
+  for (const d of [';', '\t'] as const) {
+    assert.equal(parseNumber('2,500', d), 2.5);
+    assert.equal(parseNumber('-0,75', d), -0.75);
+    assert.equal(parseNumber('1.250.000,5', d), 1250000.5, 'dots group thousands when a decimal comma is there');
+    assert.equal(parseNumber('12.5', d), 12.5, 'a lone decimal point still reads as one');
+    assert.equal(parseNumber('3', d), 3);
+    for (const junk of ['1,2,3', '1.2,3.4', '12abc', '$100']) assert.ok(Number.isNaN(parseNumber(junk, d)), `${junk} with ${JSON.stringify(d)}`);
+  }
+  const p = parsePortfolio(['asset_id;lat;lon;replacement_value;first_floor_height_m', 'A;40,0088;-79,9985;2,500;0,3', 'B;40.0088;-79.9985;1.250.000,5;'].join('\n'));
+  assert.deepEqual(p.warnings, []);
+  assert.equal(p.assets[0].lat, 40.0088);
+  assert.equal(p.assets[0].lon, -79.9985);
+  assert.equal(p.assets[0].replacementValue, 2.5);
+  assert.equal(p.assets[0].firstFloorHeight, 0.3);
+  assert.equal(p.assets[1].replacementValue, 1250000.5);
+});
+
+test('totals: unknown (NaN, shown "—") when no asset was valued, not $0', () => {
+  const B = set();
+  const fp = rasterizeFootprints(B, NX, NY, CELL);
+  const n = NX * NY;
+  const f: HazardFields = {
+    nx: NX,
+    ny: NY,
+    simTime: 7200,
+    maxDepth: new Float32Array(n).fill(1),
+    maxSpeed: new Float32Array(n).fill(0.5),
+    maxDV: new Float32Array(n).fill(0.5),
+    firstWet: new Float32Array(n).fill(900),
+    wetSeconds: new Float32Array(n).fill(3600),
+  };
+  const ctx = { region: regionAt(-80, 40), set: B, fp, alertTime: 0 };
+  // Every asset off the map: nothing assessed.
+  const off = parsePortfolio(['asset_id,lat,lon', 'x,41,-79', 'y,42,-78'].join('\n'));
+  const s1 = assessPortfolio(matchAssets(off.assets, B, fp, terrain, toGrid), f, ctx).summary;
+  assert.equal(s1.outside, 2);
+  for (const k of ['loss', 'lossLo', 'lossHi', 'bi', 'insured'] as const) assert.ok(Number.isNaN(s1[k]), `${k} with nothing assessed`);
+  // Only assets in another currency: none of them enters the USD totals.
+  const eur = parsePortfolio(['asset_id,lat,lon,replacement_value,currency', 'e,40.0088,-79.9985,1000000,EUR'].join('\n'));
+  const s2 = assessPortfolio(matchAssets(eur.assets, B, fp, terrain, toGrid), f, ctx).summary;
+  assert.equal(s2.otherCurrency, 1);
+  assert.ok(Number.isNaN(s2.loss));
+  // A valued asset that stays dry is a real $0; BI and insured loss stay unknown without revenue / policy terms.
+  const dry: HazardFields = { ...f, maxDepth: new Float32Array(n), firstWet: new Float32Array(n).fill(-1), wetSeconds: new Float32Array(n) };
+  const usd = parsePortfolio(['asset_id,lat,lon,replacement_value', 'u,40.0088,-79.9985,1000000'].join('\n'));
+  const s3 = assessPortfolio(matchAssets(usd.assets, B, fp, terrain, toGrid), dry, ctx).summary;
+  assert.equal(s3.loss, 0);
+  assert.ok(Number.isNaN(s3.bi) && Number.isNaN(s3.insured));
+});
+
+test('ensemble tallies follow each asset, not its position, when assessPortfolio drops an off-map asset', async () => {
+  const { addPortfolioMember, newTally, tallySentence } = await import('../../src/loss/ensemble');
+  const B = set();
+  const fp = rasterizeFootprints(B, NX, NY, CELL);
+  const n = NX * NY;
+  // Deep water over the east building only (grid x ≥ 32): 'east' floods, 'west' stays dry.
+  const maxDepth = new Float32Array(n);
+  for (let j = 0; j < NY; j++) for (let i = 32; i < NX; i++) maxDepth[j * NX + i] = 1.2;
+  const f: HazardFields = { nx: NX, ny: NY, simTime: 3600, maxDepth, maxSpeed: new Float32Array(n), maxDV: new Float32Array(n), firstWet: new Float32Array(n).fill(600), wetSeconds: new Float32Array(n) };
+  const p = parsePortfolio(['asset_id,lat,lon', 'west,40.0088,-79.9985', 'off,41,-79', 'east,40.0068,-79.9958'].join('\n'));
+  const { results } = assessPortfolio(matchAssets(p.assets, B, fp, terrain, toGrid), f, { region: regionAt(-80, 40), set: B, fp });
+  assert.equal(results.length, 2, 'the off-map asset has no result');
+  const tallies = p.assets.map((a) => newTally(a.id, a.name || a.id));
+  addPortfolioMember(tallies, p.assets, results);
+  addPortfolioMember(tallies, p.assets, results);
+  const [west, off, east] = tallies;
+  assert.deepEqual([west.reached, off.reached, east.reached], [0, 0, 2]);
+  assert.match(tallySentence(west), /stays at or below 15 cm in all 2 members/);
+  assert.equal(tallySentence(off), 'is outside the map (not assessed)', 'off the map, not dry');
+  assert.match(tallySentence(east), /floods \(> 15 cm\) in all 2 members/);
+});

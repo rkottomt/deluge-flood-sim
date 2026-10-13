@@ -114,12 +114,22 @@ function normHeader(h: string): string {
   return ALIASES[k] ?? k;
 }
 
-/** A plain decimal (optionally with thousands commas, a leading + or −, an exponent). null for empty, NaN for junk. */
-export function parseNumber(s: string | undefined): number | null {
+/**
+ * A plain decimal (optionally with thousands commas, a leading + or −, an exponent). null for empty, NaN for junk.
+ *
+ * `delimiter` is the file's (src/loss/csv.ts detects it from the header). A ';' or tab file is what a spreadsheet in a
+ * decimal-comma locale writes (its comma is taken), so there a comma is the DECIMAL mark — "2,500" is 2.5, never 2500 —
+ * and dots group thousands only beside a decimal comma ("1.250.000,5"); a lone dot ("12.5") still reads as a decimal
+ * point, since many such files are written with dot decimals. A comma file keeps the thousands-comma reading.
+ */
+export function parseNumber(s: string | undefined, delimiter: ',' | ';' | '\t' = ','): number | null {
   if (s === undefined) return null;
   let t = s.trim();
   if (t === '') return null;
-  if (/^[+-]?\d{1,3}(,\d{3})+(\.\d+)?$/.test(t)) t = t.replace(/,/g, '');
+  if (delimiter !== ',') {
+    if (/^[+-]?\d{1,3}(\.\d{3})+,\d+$/.test(t)) t = t.replace(/\./g, '').replace(',', '.');
+    else if (/^[+-]?\d+,\d+([eE][+-]?\d+)?$/.test(t)) t = t.replace(',', '.');
+  } else if (/^[+-]?\d{1,3}(,\d{3})+(\.\d+)?$/.test(t)) t = t.replace(/,/g, '');
   if (!/^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$/.test(t)) return NaN;
   const v = Number(t);
   return Number.isFinite(v) ? v : NaN;
@@ -194,7 +204,7 @@ export function parsePortfolio(text: string): PortfolioParse {
       return i === undefined ? undefined : cells[i];
     };
     const num = (k: string, lo = -Infinity, hi = Infinity): number | null => {
-      const v = parseNumber(get(k));
+      const v = parseNumber(get(k), table.delimiter);
       if (v === null) return null;
       if (Number.isNaN(v) || v < lo || v > hi) {
         note(out.warnings, row, `${k} is not a valid number${Number.isFinite(lo) || Number.isFinite(hi) ? ` in range` : ''}; ignored.`);
@@ -427,7 +437,11 @@ export interface PortfolioSummary {
   outside: number;
   reached: number;
   destroyed: number;
-  /** Totals in the region's currency (USD); assets in another currency are summed separately below. */
+  /**
+   * Totals in the region's currency (USD); assets in another currency are summed separately below. NaN (shown "—")
+   * when no asset contributed one — nothing assessed, or nothing valued in USD — so an unknown total never reads $0.
+   * bi / insured likewise sum only the assets with revenue / policy terms, and are NaN when none has them.
+   */
   loss: number;
   lossLo: number;
   lossHi: number;
@@ -457,6 +471,9 @@ export function assessPortfolio(
   const results: PortfolioResult[] = [];
   const sum: PortfolioSummary = { assets: matched.length, outside: 0, reached: 0, destroyed: 0, loss: 0, lossLo: 0, lossHi: 0, bi: 0, insured: 0, unvalued: 0, otherCurrency: 0, earliest: null };
   const profile = ctx.heightProfile ?? 'us';
+  let nLoss = 0;
+  let nBi = 0;
+  let nInsured = 0;
   for (const m of matched) {
     const a = m.asset;
     if (m.match === 'outside' || m.cells.length === 0) {
@@ -512,13 +529,17 @@ export function assessPortfolio(
       sum.loss += r.loss;
       sum.lossLo += r.lossLo;
       sum.lossHi += r.lossHi;
-      if (Number.isFinite(r.biLoss)) sum.bi += r.biLoss;
-      if (Number.isFinite(r.insuredLoss)) sum.insured += r.insuredLoss;
+      nLoss++;
+      if (Number.isFinite(r.biLoss)) ((sum.bi += r.biLoss), nBi++);
+      if (Number.isFinite(r.insuredLoss)) ((sum.insured += r.insuredLoss), nInsured++);
     }
     if (r.reached && r.firstWet > 0 && (!sum.earliest || r.firstWet < sum.earliest.firstWet)) {
       sum.earliest = { id: a.id, firstWet: r.firstWet, leadTime: r.leadTime };
     }
   }
+  if (!nLoss) sum.loss = sum.lossLo = sum.lossHi = NaN;
+  if (!nBi) sum.bi = NaN;
+  if (!nInsured) sum.insured = NaN;
   return { results, summary: sum };
 }
 
