@@ -420,7 +420,8 @@ A_i^{n+1} = A_i^n + dt/Δx·(Q_{i−½} − Q_{i+½}) + q_lat·dt      (tributar
 
 Cross-sections: at every node, a perpendicular transect ±600 m sampled from Copernicus GLO-30, converted to
 stage–width–area–perimeter tables (0–60 m above thalweg, 0.5 m steps). Manning n: 0.05 (bouldery mountain river,
-clear water), × (1 + 0.0538 e^{6.0896 Cv}) for debris (D.1). DEM pits along the thalweg: carve monotone (the bake
+clear water), × (1 + 0.0538 e^{6.0896 Cv}) for debris (D.1); optionally, per preset, Ferguson's (2007) variable-power
+law on the bed's D84 instead of a constant n (§G.9, second pass — Nepal and Chamoli use it). DEM pits along the thalweg: carve monotone (the bake
 already burns rivers). Reservoirs/barrages (Tapovan, Teesta-III, Trishuli-3A…): add as weir nodes with storage
 (crest elevation + spillway width) — they matter (Tapovan slowed Chamoli from 16 to 12 m/s).
 
@@ -642,6 +643,71 @@ velocity at n = 0.05 is ~15 m/s), while the reports imply ~20 m/s from Rasuwagad
 speed of the avalanche-born debris flow itself (OPRI). Lowering n to 0.035 would close much of the gap and is
 exactly the fudge this calibration refused; what would justify it is a flood-stage resistance law or surveyed gorge
 sections. Chungthang is within its band.
+
+**Bed resistance: Ferguson's variable-power equation (second pass, October 2026).** The flood-stage resistance law
+the residual above asked for, implemented and tested; the result is a modest gain, not a fix.
+
+* *Law.* Ferguson (2007), "Flow resistance equations for gravel- and boulder-bed streams", WRR 43, W05427,
+  doi:10.1029/2006WR005422: U/u* = √(8/f) = a1·a2·(R/D84) / √(a1² + a2²·(R/D84)^{5/3}), a1 = 6.5, a2 = 2.5 — his
+  compromise coefficients for absolute and relative velocity error on 376 field measurements, calibrated on R/D84
+  (restated by Ferguson & Recking 2025, WRR, doi:10.1029/2024WR038852; Rickenmann & Recking 2011, WRR 47, W07538,
+  doi:10.1029/2010WR009793, found the VPE the least biased of the published laws; a refit of 6.1 / 2.4 is in ESurf
+  9:379, 2021) [V for the form and the coefficients via those secondary sources; the 2007 PDF itself was not
+  retrievable]. Deep limb: U/u* → a1·(R/D84)^{1/6}, i.e. Manning–Strickler with n = D84^{1/6}/(a1·√g); shallow limb:
+  U/u* → a2·R/D84 (roughness layer).
+* *Implementation* (src/hazard/resistance.ts, routing.ts; HazardChainSpec.routing.resistance, additive — absent means
+  Manning bit for bit). The VPE enters the router as its equivalent n_eq(R) = R^{1/6}/(√g·U/u*), so the friction
+  term g·n_eq²·|Q|/(A·R^{4/3}) = Cf·|Q|/(A·R) with Cf = (u*/U)²: the existing semi-implicit denominator, a positive
+  coefficient that can only slow the flow. n_eq is tabulated per node on the geometry's depth grid (one extra
+  interpolation per face), used for the outlet and the baseflow normal depth too; the dispersive factor for Cv
+  multiplies it as it multiplied n. Tests (tests/hazard/resistance.test.ts): the curve at sample R/D84, both limbs,
+  the VPE normal depth of a prismatic channel, and bounded / positive / deterministic / exactly conservative runs on
+  5, 10, 20 and 30 % beds, dry and wet.
+* *D84.* No surveyed D84 for the Bhote Koshi / Trishuli, Lachen Chu or Rishiganga was found (Huber et al. 2020, ESurf
+  8:769, survey 4.5–30 m flood boulders in the Trishuli and Sunkoshi channels but give no bed grain-size
+  distribution). 0.5 m — the middle of the 0.3–1 m range for boulder-bed mountain rivers — is an ASSUMPTION [H]
+  (src/hazard/defaults.ts VPE_D84_HIMALAYA), chosen before the comparison and the same for every preset; the table
+  below shows what 0.2–1 m would have given, so the sensitivity is on the record rather than tuned away.
+* *What it can and cannot do.* At high submergence the VPE IS a Manning–Strickler law: over a 0.5 m bed n_eq ≈ 0.047
+  at R = 5 m and 0.044 at 15 m — 6–12 % less resistance than n = 0.05, so 6–12 % more speed at the same slope and
+  depth. It raises resistance at shallow depth (n_eq > 0.1 below R ≈ 0.5 m), which slows the thin leading edge and
+  the baseflow. It cannot close a 60 % timing gap.
+
+Median member (the baked deterministic run), front in minutes after the collapse / peak in m³/s; sensitivity runs
+are the same member with only D84 changed:
+
+| Station | Manning n 0.05 | VPE D84 0.2 m | 0.3 m | **0.5 m** | 1.0 m | observed |
+|---|---|---|---|---|---|---|
+| Nepal, Rasuwagadhi front | 17.6 | 16.1 | 16.4 | **16.9** | 17.9 | ~3 (NDRRMA), ~7 (CCTV) |
+| Nepal, Syafrubesi gauge front | 34.4 | 30.1 | 31.0 | **32.3** | 35.0 | ≤ 13 |
+| Nepal, Betrawati front | 75.5 | 63.0 | 65.7 | **69.7** | 77.5 | 43 (NDRRMA), ~23 (OPRI) |
+| Chungthang front | 108.5 | 90.7 | 95.5 | 103.3 | 120.0 | ~137 |
+| Chungthang peak | 9,829 | 10,837 | 10,532 | 9,957 | 8,624 | 7,355–14,673 |
+| Chamoli, Raini peak | 10,435 | 11,712 | 11,535 | **10,882** | 9,727 | 8,200–14,200 |
+| Chamoli, Tapovan barrage front | 22.3 | 18.8 | 19.6 | **20.9** | 23.6 | ~15 (seismic) |
+| Chamoli, below Tapovan peak | 5,365 | 7,389 | 6,712 | **5,917** | 4,752 | 2,900–4,900 |
+| Chamoli, Joshimath front | 38.7 | 31.7 | 33.4 | **36.0** | 41.8 | ~27 (derived from 10 m/s) |
+
+Ensembles with the adopted laws (p10–p90): Betrawati 58–83 min (was 63–90), Syafrubesi 29–37 (30–40), Rasuwagadhi
+16–19 (16–20); Tapovan barrage 18–25 (19–27). The 30 m/s routing speed cap binds on 0.34 % of node updates in the
+Nepal run with the VPE (0.17 % with Manning), 0.16 % (0.07 %) at Chamoli — still a safety net, not the clock.
+
+*Decision, per preset.*
+* **Nepal: adopted.** Every station moves toward its observation (Betrawati +76 % → +62 % late of NDRRMA's 43 min);
+  the peak at the map edge rises 11,446 → 12,173 m³/s (no measured peak to compare). The SMS-lead story in
+  BUSINESS.md was recomputed (Betrawati front 09:52 → 09:46).
+* **Chamoli: adopted, with a cost stated.** The one timed observation improves (Tapovan barrage +49 % → +39 % late),
+  the Raini peak stays inside the reconstruction, the derived Joshimath time improves — but the peak below Tapovan
+  rises from 9 % to 21 % above the top of its reconstructed band. That miss is attenuation the profile cannot make
+  (no barrage structure, no deposition at Tapovan), not the bed law.
+* **Chungthang: NOT adopted — Manning n 0.05 stays.** The model is already early there (−21 %); the VPE at the same
+  0.5 m makes it earlier (−24 %, a ratio of 0.756 against the regression test's 0.75 floor). A 1 m bed would bring it
+  to −12 %, but choosing the Lachen Chu's D84 by its arrival time is the tuning this calibration refuses. The two
+  biases (Nepal and Chamoli late, Chungthang early) cannot both be resistance: one law that speeds the first two must
+  speed the third. The likelier culprits are elsewhere — the sources (the Nepal avalanche's own debris-flow speed of
+  ~40–50 m/s above Rasuwagadhi, which no water-routing law gives; the South Lhonak breach hydrograph) and the 30 m DEM
+  sections — and this per-preset choice is a statement of where the model stands, not a finding that the Lachen Chu
+  is rougher.
 
 ---------------------------------------------------------------------------------------------------------------------
 

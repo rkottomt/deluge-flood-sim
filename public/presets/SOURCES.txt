@@ -229,8 +229,9 @@ sources accessed 19-20 September 2026. The full research trail is artifacts/nepa
                      measured hydrograph"; chain-result.json carries that run's fronts, peaks, bands and lead times.
                      It replaced 11,100 m3/s held for 30 minutes (the volume divided by half an hour - arithmetic, not
                      a peak; WaterSource.stopAfter, still asserted in tests/sim). The 2-D clock is now the event's (t =
-                     0 five minutes before the modelled front reaches the edge); the model's front at Betrawati is ~75 %
-                     LATER than the reported 09:20, and the text says so - research spec §G.9 has the diagnosis.
+                     0 five minutes before the modelled front reaches the edge); the model's front at Betrawati is ~60 %
+                     LATER than the reported 09:20 (70 min against 43; 75 min before the routing took Ferguson's
+                     boulder-bed resistance law, below), and the text says so - research spec §G.9 has the diagnosis.
                    * Trishuli at Betrawati, DHM station 447 (dhm.gov.np/hydrology/hms-Single/52): warning level 4.1 m,
                      danger level 5.0 m, last reading 3.55 m at 09:20 before the station was destroyed. There is no
                      measured peak level or discharge here, and none is shown.
@@ -307,6 +308,12 @@ sources accessed 19-20 September 2026. The full research trail is artifacts/nepa
                  surface and the sections miss the conveyance below it. Sections: DEM transects perpendicular to the
                  river through the thalweg, every 15 m out to 1,500 m a side or until the ground stands 150 m above the
                  bed; stage table 0-60 m above the bed (area, top width, wetted perimeter). Manning n 0.05 throughout.
+                 BED RESISTANCE (since October 2026): the Nepal routing does not use that n. meta.json
+                 scenario.hazardChain.routing selects Ferguson's variable-power equation (Ferguson 2007, Water
+                 Resources Research 43, W05427, doi:10.1029/2006WR005422; a1 = 6.5, a2 = 2.5) on a bed D84 of 0.5 m -
+                 THIS BAKE'S ASSUMPTION (no surveyed D84 for these rivers was found; middle of the 0.3-1 m taken for
+                 boulder-bed mountain rivers; not fitted to the arrival times). At flood depths it equals n ~ 0.044-
+                 0.047; it moved the Betrawati front from 75 to 70 min (observed 43). Research spec §G.9.
                  Profile: 63.8 km, 639 nodes, from 2,879 m to 560 m; 233 kB.
                  s = 0 is where the Lhende's bed on this DEM first falls below 2,900 m, the elevation at which the
                  YAE/KU rapid report has the avalanche reaching the river. The impact point itself was not located in
@@ -421,7 +428,10 @@ licences, same caveats, and every one of them is in the on-screen scenario text.
                  the spec's trigger-driven 100 m/h, final depth 40 m (the spec's assumed value for this lake). Voellmy
                  debris-flood rheology and a 25 m/s cap. Observations: the failure, wave and release (Sattar et al.
                  2025), arrival at Chungthang ~00:30 (8,200 s), the modelled 7,355 m3/s peak with its published range,
-                 and the gauged 8,252 m3/s at Gazoldoba (beyond the profile, and the note says so).
+                 and the gauged 8,252 m3/s at Gazoldoba (beyond the profile, and the note says so). Bed resistance:
+                 Manning n 0.05, NOT the Ferguson (2007) law Nepal and Chamoli use - with the same assumed 0.5 m D84
+                 it moves the Chungthang front from 109 to 103 min, further early of the ~137 min observed, so it was
+                 not adopted here (research spec §G.9).
 
 Chamoli - Raini-Tapovan, Dhauliganga Valley (the `chamoli` preset). Sources and terms
 -------------------------------------------------------------------------------------
@@ -509,16 +519,20 @@ same licences, same caveats, every one of them in the on-screen scenario text. W
                  winter baseflow. Rheology: O'Brien-Julien quadratic, Cv 0.45, material Glenwood 1 (the fluid end of
                  O'Brien & Julien 1988's table), K 2,285; 25 m/s cap. The stiff end (Aspen Pit 1) and Voellmy mu 0.05
                  both STALL on the Dhauliganga's 2.3 % bed (measured on the GPU; mu 0.05 exceeds the slope outright).
-                 The avalanche's own travel (3.7 km) uses the chain's default 50 m/s. Observations: the failure, the
+                 The avalanche's own travel (3.7 km) uses the chain's default 50 m/s. Bed resistance of the 1-D
+                 routing: Ferguson's (2007) variable-power law on an assumed 0.5 m D84, as for Nepal (the file's
+                 Manning n 0.05 is not used; research spec §G.9). Observations: the failure, the
                  reconstructed discharges at Raini and below Tapovan (band centres shown, bands in the notes), the
                  ~15 min seismic arrival at Tapovan, and the 10 m/s mean to Joshimath (a derived figure, no time).
 
   chain-result.json  The baked chain run (scripts/bake-chain-result.ts): the 9-member ensemble's median member
                  (source Cv 0.2: 4.9 Mm3 of melt water, 6.2 Mm3 of flow, peak 13,900 m3/s at the source) routed down
-                 the profile. MODEL against PUBLISHED: peak ~10,400 m3/s at Raini (published mean 8,200-14,200),
-                 ~5,400 m3/s below Tapovan (2,900-4,900 - the model is ~10 % high), front at the Tapovan barrage
-                 ~22 min after the collapse (band 19-27) against ~15 min observed - the model is LATE by a third, and
-                 the scenario text says so. Raini -> Joshimath 24 min (published mean ~10 m/s over 16 km, ~27 min).
+                 the profile. MODEL against PUBLISHED: peak ~10,900 m3/s at Raini (published mean 8,200-14,200),
+                 ~5,900 m3/s below Tapovan (2,900-4,900 - the model is ~20 % above the top of the band), front at the
+                 Tapovan barrage ~21 min after the collapse (band 18-25) against ~15 min observed - the model is LATE
+                 by about 40 %, and the scenario text says so. Raini -> Joshimath 22 min (published mean ~10 m/s over
+                 16 km, ~27 min). Before the Ferguson resistance law (October 2026): 10,400 / 5,400 m3/s, 22 min
+                 (band 19-27), Raini -> Joshimath 24 min.
 
 Place names used for shelters and camera framing are ordinary geographic names; no third-party place database is
 redistributed here. For the Nepal preset the two shelter names are read out of the OSM extracts listed above, and
