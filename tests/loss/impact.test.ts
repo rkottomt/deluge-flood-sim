@@ -14,6 +14,7 @@ import {
   buildingAccess,
   computeBuildingImpacts,
   footprintIndex,
+  openCells,
   rasterizeFootprints,
   regionAt,
   sampleCells,
@@ -268,4 +269,54 @@ test('analyze() through a mocked solver.readHazardFields, and the depth-only fal
   acc.feed(snap(0), NX, NY, 5);
   assert.equal(acc.fields()!.maxDepth[NX + 1], 0);
   assert.equal(acc.startedAt, 5);
+});
+
+// ── Buildings as obstacles (HazardFields.blocked) ──────────────────────────────────────────────────────────────────────
+
+/** What the solver blocks: every cell whose centre is inside a footprint (the same rasterisation rule). */
+function blockedMask(set: BuildingSet): Uint8Array {
+  const fp = rasterizeFootprints(set, NX, NY, CELL);
+  const m = new Uint8Array(NX * NY);
+  for (let q = 0; q < fp.cells.length; q++) m[fp.cells[q]] = 1;
+  return m;
+}
+
+test('openCells: a blocked footprint reads the ring of open cells around it, through neighbours when walled in', () => {
+  // A 2×2-cell house alone, and a terrace of three touching ones (the middle one is open only front and back).
+  const set = buildings([
+    [10, 10, 12, 12, 'house', 6],
+    [20, 20, 22, 22, 'house', 6],
+    [22, 20, 24, 22, 'house', 6],
+    [24, 20, 26, 22, 'house', 6],
+  ]);
+  const blocked = blockedMask(set);
+  const fp = rasterizeFootprints(set, NX, NY, CELL);
+  const alone = openCells(fp.cells, fp.offsets[0], fp.offsets[1], blocked, NX, NY)!;
+  assert.equal(alone.length, 12, 'the 8-neighbour ring of a 2×2 block is 12 cells');
+  for (const c of alone) assert.equal(blocked[c], 0);
+  const middle = openCells(fp.cells, fp.offsets[2], fp.offsets[3], blocked, NX, NY)!;
+  // Rows 19 and 22 over columns 21–24 (its own 2 columns and one diagonal on each side).
+  assert.equal(middle.length, 8);
+  for (const c of middle) assert.equal(blocked[c], 0);
+  // A footprint with no blocked cell is sampled as is.
+  assert.equal(openCells(fp.cells, fp.offsets[0], fp.offsets[1], new Uint8Array(NX * NY), NX, NY), null);
+  // Walled in deeper than OPEN_RING_MAX rings: nothing to read.
+  assert.deepEqual(openCells([20 * NX + 20], 0, 1, new Uint8Array(NX * NY).fill(1), NX, NY), []);
+});
+
+test('with obstacles the street depth against the walls is booked, not the dry footprint', () => {
+  const set = buildings([[10, 10, 14, 14, 'house', 6]]);
+  const blocked = blockedMask(set);
+  // 0.9 m in the street along the west wall only; the footprint itself is dry (the solver keeps water out of it).
+  const f = fields((i, j) => (!blocked[j * NX + i] && i === 9 && j >= 9 && j <= 14 ? { d: 0.9, v: 0.5, fw: 400 } : {}));
+  const fp = rasterizeFootprints(set, NX, NY, CELL);
+  const dry = sampleCells(f, fp.cells, fp.offsets[0], fp.offsets[1]);
+  assert.equal(dry.maxDepth, 0, 'without the mask the footprint reads dry');
+  const wet = sampleCells({ ...f, blocked }, fp.cells, fp.offsets[0], fp.offsets[1]);
+  assert.ok(Math.abs(wet.maxDepth - 0.9) < 1e-6, `perimeter depth ${wet.maxDepth}`);
+  assert.equal(wet.firstWet, 400);
+  assert.equal(wet.sampled, 20, 'the 20-cell ring around a 4×4 block');
+  const report = computeBuildingImpacts({ ...f, blocked }, set, fp, { region: US });
+  assert.equal(report.summary.reached, 1);
+  assert.ok(report.summary.loss > 0);
 });

@@ -140,3 +140,79 @@ export function ringCells(ring: ArrayLike<number>, nx: number, ny: number): numb
   };
   return Array.from(rasterizeFootprints(set, nx, ny, 1).cells);
 }
+
+/**
+ * Rings searched outward from a blocked footprint for open cells to sample: a building walled in by its neighbours
+ * (a terrace, a city block mapped as touching footprints) reads the open ground up to this many cells away.
+ */
+export const OPEN_RING_MAX = 3;
+
+let stamp: Uint32Array | null = null;
+let stampGen = 0;
+
+/**
+ * The cells to sample for a footprint when building obstacles block flow (HazardFields.blocked): the solver keeps water
+ * out of a blocked cell, so the depth against a building is read in the open cells around it — the street, the yard —
+ * not on its footprint. Unblocked cells of `cells[start, end)` are kept as they are; the blocked ones are replaced by
+ * the open cells of the first ring of 8-neighbours around them, searching up to OPEN_RING_MAX rings out through other
+ * blocked cells when the first ring is closed. Returns null when no cell of the range is blocked (sample it as is).
+ */
+export function openCells(
+  cells: ArrayLike<number>,
+  start: number,
+  end: number,
+  blocked: Uint8Array,
+  nx: number,
+  ny: number,
+): number[] | null {
+  let any = false;
+  for (let q = start; q < end; q++) if (blocked[cells[q]]) { any = true; break; }
+  if (!any) return null;
+  const N = nx * ny;
+  if (!stamp || stamp.length !== N) {
+    stamp = new Uint32Array(N);
+    stampGen = 0;
+  }
+  if (++stampGen === 0xffffffff) {
+    stamp.fill(0);
+    stampGen = 1;
+  }
+  const s = stamp;
+  const g = stampGen;
+  const out: number[] = [];
+  let frontier: number[] = [];
+  for (let q = start; q < end; q++) {
+    const c = cells[q];
+    if (s[c] === g) continue;
+    s[c] = g;
+    if (blocked[c]) frontier.push(c);
+    else out.push(c);
+  }
+  for (let ring = 1; ring <= OPEN_RING_MAX && frontier.length; ring++) {
+    const next: number[] = [];
+    let found = 0;
+    for (const c of frontier) {
+      const i = c % nx;
+      const j = (c - i) / nx;
+      for (let dj = -1; dj <= 1; dj++) {
+        const jj = j + dj;
+        if (jj < 0 || jj >= ny) continue;
+        for (let di = -1; di <= 1; di++) {
+          const ii = i + di;
+          if ((di === 0 && dj === 0) || ii < 0 || ii >= nx) continue;
+          const m = jj * nx + ii;
+          if (s[m] === g) continue;
+          s[m] = g;
+          if (blocked[m]) next.push(m);
+          else {
+            out.push(m);
+            found++;
+          }
+        }
+      }
+    }
+    if (found > 0) break;
+    frontier = next;
+  }
+  return out;
+}

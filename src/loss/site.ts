@@ -22,6 +22,7 @@ import type { AccessIndex } from './access';
 import { curveForOccupancy, OCCUPANCY_PROFILES, storeyHeightFor, type Occupancy } from './value';
 import { bcr, ealRange, mitigationCost, upv, DISCOUNT_RATE_FEMA, DISCOUNT_RATE_LOW, USEFUL_LIFE_WALL_YEARS, type LossPoint, type MitigationType } from './eal';
 import { analyzeEgress, type EgressResult, type EgressRouter, type FloodTimeline } from './egress';
+import { openCells } from './footprints';
 import { assessAsset, sampleCells, DAMAGE_MIN_DEPTH, type AssetSpec, type CellSample } from './impact';
 import { assessSite, type PortfolioResult } from './portfolio';
 import type { Curve } from './curves';
@@ -242,7 +243,11 @@ export function assessSiteRun(spec: SiteSpec, fields: HazardFields, ctx: SiteRun
   for (const c of cells) {
     const g = ctx.ground[c];
     if (g < grade) grade = g;
-    if (fields.firstWet[c] !== 0 && fields.maxDepth[c] > 0.01) wse = Math.max(wse, g + fields.maxDepth[c]);
+  }
+  // The water surface is read where water can stand: around the walls when buildings are obstacles (as sampleCells does).
+  const wet = (fields.blocked && openCells(cells, 0, cells.length, fields.blocked, fields.nx, fields.ny)) || cells;
+  for (const c of wet) {
+    if (fields.firstWet[c] !== 0 && fields.maxDepth[c] > 0.01) wse = Math.max(wse, ctx.ground[c] + fields.maxDepth[c]);
   }
   run.grade = Number.isFinite(grade) ? grade : NaN;
   run.wse = Number.isFinite(wse) ? wse : NaN;

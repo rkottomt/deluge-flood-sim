@@ -7,15 +7,17 @@
  * fills its ground floor. Cells that were already wet at reset (rivers, lakes: firstWet = 0) are left out, so a
  * riverside building whose footprint clips the channel is not booked the river's depth.
  *
- * The terrain is bare earth: the solver lets water flow THROUGH buildings, so the depth on a footprint is the depth
- * the street would have there, and the speed is open-ground speed where real flow would split around the walls.
- * Both are what the loss curves and hazard classes are usually fed in screening studies, and both are stated.
+ * On bare-earth terrain the solver lets water flow THROUGH buildings, so the depth on a footprint is the depth the
+ * street would have there, and the speed is open-ground speed where real flow would split around the walls. Both are
+ * what the loss curves and hazard classes are usually fed in screening studies, and both are stated. With buildings as
+ * obstacles (FloodSolver.setLandSurface, HazardFields.blocked) no water stands in a footprint: the footprint's blocked
+ * cells are replaced by the open cells around it (footprints.ts openCells), i.e. the depth and speed against its walls.
  */
 import type { BuildingSet, HazardFields } from '../contracts';
 import { BUILDING_KINDS, HEIGHT_SOURCES, type HeightProfile } from '../data/buildings';
 import { ACCESS_CUT, ACCESS_NO_ROAD, type AccessIndex, type AccessInfo, type AccessResult } from './access';
 import type { Curve } from './curves';
-import type { FootprintIndex } from './footprints';
+import { openCells, type FootprintIndex } from './footprints';
 import {
   ACCESS_CLEARING_DAYS,
   aidrClass,
@@ -100,6 +102,15 @@ export function quantile(v: Float64Array, q: number): number {
 }
 
 export function sampleCells(f: HazardFields, cells: ArrayLike<number>, start = 0, end = cells.length): CellSample {
+  // Buildings as obstacles: water never stands in a blocked footprint, so read the open cells around it (footprints.ts).
+  if (f.blocked) {
+    const open = openCells(cells, start, end, f.blocked, f.nx, f.ny);
+    if (open) {
+      cells = open;
+      start = 0;
+      end = open.length;
+    }
+  }
   const s: CellSample = { sampled: 0, reachedCells: 0, maxDepth: 0, maxSpeed: 0, maxDV: 0, structSpeed: 0, structDV: 0, firstWet: -1, wetSeconds: 0 };
   let speedNaN = false;
   const speeds = new Float64Array(Math.max(0, end - start));
