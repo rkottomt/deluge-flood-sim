@@ -35,26 +35,33 @@ test('Froehlich 2008 breach parameters for Teton 1976 land near the observed bre
   assert.ok(Math.abs(froehlich2008Width(TETON.V, TETON.hb, true) / B - 1.3) < 1e-9);
 });
 
-test('Teton: the published peak relations bracket the observed 65,000 m³/s; the two hydrograph methods bound it from above', () => {
+test('Teton: the band brackets the observed 65,000 m³/s; the central case is low by a third, the routed Froehlich 2008 breach high by half', () => {
   const mac = macDonald1984Peak(TETON.V, TETON.hw);
   const f16 = froehlich2016Peak(TETON.V, TETON.hw, TETON.hb, froehlich2008Width(TETON.V, TETON.hb, false), false);
   assert.ok(mac < TETON.peak && TETON.peak < f16, `MacDonald ${mac} < 65,120 < Froehlich 2016 ${f16}`);
-  const para = damBreach({ volumeM3: TETON.V, headM: TETON.hw, breachHeightM: TETON.hb, overtopping: false, hypsometry: 2 });
-  const reg = damBreach({ volumeM3: TETON.V, headM: TETON.hw, breachHeightM: TETON.hb, overtopping: false, method: 'regression' });
-  // Froehlich 2016 in a gamma shape: +22 %. The parametric breach (Fread's weir, no tailwater): +51 % at p = 2 —
-  // conservative, as stated in the module and the README. Both within the factor-of-two scatter of the relations.
-  assert.ok(Math.abs(reg.peak / TETON.peak - 1.22) < 0.03, `regression peak ${reg.peak}`);
+  const para = damBreach({ volumeM3: TETON.V, headM: TETON.hw, breachHeightM: TETON.hb, overtopping: false, hypsometry: 2, method: 'parametric' });
+  const central = damBreach({ volumeM3: TETON.V, headM: TETON.hw, breachHeightM: TETON.hb, overtopping: false });
+  assert.equal(central.method, 'central');
+  // The parametric breach (Fread's weir, no tailwater): +51 % at p = 2 — the old default, conservative.
   assert.ok(para.peak / TETON.peak > 1.3 && para.peak / TETON.peak < 1.7, `parametric peak ${para.peak}`);
-  // The parametric peak comes as the breach completes, near the formation time.
   assert.ok(Math.abs(para.tPeak - para.formationTimeS) < 0.1 * para.formationTimeS, `peak at ${para.tPeak} s vs t_f ${para.formationTimeS} s`);
-  for (const r of [para, reg]) {
-    assert.ok(r.peak > mac && r.peak < 2 * TETON.peak);
-    assert.equal(r.relations.length, 3);
-  }
+  // The central case (Froehlich 1995's regression in a gamma shape): 43,000 m³/s, 0.66 of the observed peak.
+  assert.equal(central.band.central.id, 'froehlich1995');
+  assert.ok(Math.abs(central.peak / TETON.peak - 0.66) < 0.03, `central peak ${central.peak}`);
+  assert.ok(Math.abs(central.peak / central.band.central.peak - 1) < 2e-3);
+  // The band across the eight relations holds the observed peak.
+  assert.equal(central.relations.length, 8);
+  assert.ok(central.band.low.peak < TETON.peak && TETON.peak < central.band.high.peak, `${central.band.low.peak}–${central.band.high.peak}`);
+  const low = damBreach({ volumeM3: TETON.V, headM: TETON.hw, breachHeightM: TETON.hb, overtopping: false, method: 'low' });
+  const high = damBreach({ volumeM3: TETON.V, headM: TETON.hw, breachHeightM: TETON.hb, overtopping: false, method: 'high' });
+  assert.ok(Math.abs(low.peak / central.band.low.peak - 1) < 2e-3 && Math.abs(high.peak / central.band.high.peak - 1) < 2e-3);
+  assert.ok(low.peak < central.peak && central.peak < high.peak);
+  // The same water, sooner or later.
+  assert.ok(Math.abs(low.breachVolume / high.breachVolume - 1) < 1e-9);
 });
 
 test('the hydrograph handed to the solver delivers exactly the released volume (no base flow)', () => {
-  for (const method of ['parametric', 'regression'] as const) {
+  for (const method of ['parametric', 'central', 'low', 'high'] as const) {
     const r = damBreach({ volumeM3: 8.2e7, headM: 17, breachHeightM: 17.4, overtopping: true, hypsometry: 2.2, method });
     const pts = r.hydrograph;
     assert.ok(pts.length > 100 && pts.length < 600, `${pts.length} points`);

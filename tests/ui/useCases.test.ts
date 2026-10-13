@@ -212,8 +212,10 @@ test('address: ?usecase=address&at= opens a 5 km live area on the point and take
 // ─── The dam and surge use cases ────────────────────────────────────────────────────────────────────────────────────
 
 test('dam link: nid= is a strict NID id, breach= and method= fixed words; nothing else is read', () => {
-  assert.deepEqual(parseDamLink('?usecase=dam&nid=CA00035&breach=flood'), { nid: 'CA00035', breach: 'flood', method: 'parametric', warnings: [] });
-  assert.deepEqual(parseDamLink('?usecase=dam&nid=MI00549&method=regression'), { nid: 'MI00549', breach: 'sunny', method: 'regression', warnings: [] });
+  assert.deepEqual(parseDamLink('?usecase=dam&nid=CA00035&breach=flood'), { nid: 'CA00035', breach: 'flood', method: 'central', warnings: [] });
+  for (const m of ['central', 'low', 'high', 'parametric'] as const) assert.deepEqual(parseDamLink(`?nid=MI00549&method=${m}`), { nid: 'MI00549', breach: 'sunny', method: m, warnings: [] });
+  // A link made before the band (method=regression, a single regression's peak) opens the central case.
+  assert.deepEqual(parseDamLink('?usecase=dam&nid=MI00549&method=regression'), { nid: 'MI00549', breach: 'sunny', method: 'central', warnings: [] });
   for (const bad of ['?nid=ca00035', '?nid=CA00035%3Cb%3E', '?nid=<script>', '?nid=CA0003512345', '?nid=CA00035&breach=now', '?nid=CA00035&method=x']) {
     const r = parseDamLink(bad);
     assert.deepEqual(r.warnings, [DAM_WARNING], bad);
