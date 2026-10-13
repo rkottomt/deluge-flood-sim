@@ -44,6 +44,7 @@ import { bridgeFor } from './bridge';
 import { sitesFor } from './sites';
 import { createChainSection } from './chainPanel';
 import { createClimateBlock, createClimateNote } from './climatePanel';
+import { createValidationBlock } from './validationBlock';
 
 export interface Panel {
   el: HTMLElement;
@@ -226,6 +227,7 @@ export function createPanel(ctx: UIContext): Panel {
       presetBlock,
       storyWrap,
       h('div', { class: 'dl-row dl-story-row' }, storyMore, h('span', { class: 'dl-flex' }), restoreBtn),
+      createValidationBlock(ctx),
       pickBtn,
     ],
     { id: 'scenario' },

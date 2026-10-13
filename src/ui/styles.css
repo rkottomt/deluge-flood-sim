@@ -6217,3 +6217,43 @@ select.dl-num-input {
     grid-template-columns: 1fr;
   }
 }
+
+/* Scenario section: "Checked against the real flood" (src/ui/validationBlock.ts). */
+.dl-validation {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--dl-text-2);
+}
+.dl-validation[hidden],
+.dl-validation-value[hidden] {
+  display: none;
+}
+.dl-validation-title {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--dl-text-3);
+}
+.dl-validation-label {
+  margin-top: 3px;
+  color: var(--dl-text);
+}
+.dl-validation-value {
+  margin-top: 2px;
+  font-weight: 650;
+  color: var(--dl-text);
+  font-variant-numeric: tabular-nums;
+}
+.dl-validation-note {
+  margin-top: 3px;
+}
+.dl-validation-link {
+  display: inline-block;
+  margin-top: 4px;
+  color: var(--dl-accent-2);
+}
