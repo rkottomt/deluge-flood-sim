@@ -32,6 +32,7 @@ import { createProtectionWorker } from './protectionWorkerClient';
 import { parseStartupRequest, writeSceneToUrl, type SceneRequest } from './url';
 import { keepScreenAwake, type ScreenWakeLock } from './wakeLock';
 import { isUnreachableFailure } from '../data/net';
+import { editLogFor, installEditRecorder } from '../project/edits';
 
 export type LoadOutcome = 'ok' | 'failed' | 'superseded';
 
@@ -243,6 +244,7 @@ export class App {
         this.evac.reset();
         this.protection.reset();
         this.chain.onSceneCleared();
+        editLogFor(this.store).attach(null);
       },
       onSceneReady: (scene) => this.onSceneReady(scene),
     });
@@ -732,6 +734,8 @@ export class App {
   }
 
   private onSceneReady(scene: Scene): void {
+    // Walls, erases and digging on this scene are logged for saved projects and design comparison (src/project).
+    installEditRecorder(this.store, scene.solver);
     this.stageRamp.jump(this.store.get().stageOffset);
     this.stagePushed = this.stageRamp.applied;
     this.publishStage(performance.now());
