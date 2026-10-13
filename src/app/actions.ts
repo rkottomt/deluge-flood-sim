@@ -3,6 +3,8 @@ import { listPresets } from '../data';
 import type { App } from './App';
 import { errorMessage } from './errors';
 import { cloneScenarioLists } from './stage';
+import { postNotice } from '../ui/bridge';
+import { headlessBusy } from '../ui/headless';
 
 /** AppActions: the imperative operations the UI (and the debug API) can invoke. */
 export function createActions(app: App): AppActions {
@@ -59,6 +61,12 @@ export function createActions(app: App): AppActions {
     resetAll: () => resetWater({ resetTerrain: true }),
 
     clearWalls() {
+      // A headless batch owns the map while it runs (it puts the user's walls back from the edit log at the end): a
+      // clear now would hit one of its cases and be undone, so it waits (src/ui/tools.ts editsBlocked, likewise).
+      if (headlessBusy(store)) {
+        postNotice(store, { kind: 'info', key: 'edit-busy', title: 'Map editing paused', message: 'A sweep, ensemble or design comparison is running: clear the walls when it has finished.' });
+        return;
+      }
       // One capsule covering the whole domain erases every barrier (GPU + CPU mirror) in a single op.
       app.withSolver('clearWalls', (solver) => {
         const { nx, ny } = solver;

@@ -2409,6 +2409,12 @@ const FLOWS = [
       });
       const t0 = Date.now();
       await page.click('[data-compare="run"]');
+      // Mid-run, Clear walls waits (the run owns the map and puts the user's walls back from the edit log).
+      await sleep(300);
+      const midRun = await D(() => {
+        window.__deluge.actions.clearWalls();
+        return document.querySelector('.dl-notice.dl-show')?.textContent ?? '';
+      });
       const done = await page
         .waitForFunction(() => /^(Done|Comparison stopped|Cancelled)/.test(document.querySelector('[data-compare="status"]')?.textContent ?? ''), null, { timeout: 800_000 })
         .then(() => true, () => false);
@@ -2453,6 +2459,8 @@ const FLOWS = [
       await dl2.saveAs(file2);
       const saved2 = JSON.parse(fs.readFileSync(file2, 'utf8'));
       check(r, 'a saved project carries the comparison summary', saved2.comparison?.designs?.length === 2 && saved2.comparison.levels.length === 2, saved2.comparison ? `${saved2.comparison.designs.map((d) => `${d.name}: BCR7 ${d.bcr7 == null ? '—' : d.bcr7.toFixed(2)}`).join('; ')}` : 'none');
+      const walls2 = saved2.edits.filter((e) => e.op === 'wall').length;
+      check(r, 'Clear walls during the comparison waits, and the edit log still matches the walls on the map', /Map editing paused/.test(midRun) && walls2 === 1, `notice: ${midRun.slice(0, 60) || '(none)'}; ${walls2} wall(s) in the saved log`);
 
       // Share link: small enough, and it opens the walls and the site in a fresh tab.
       await page.click('[data-project="share"]');

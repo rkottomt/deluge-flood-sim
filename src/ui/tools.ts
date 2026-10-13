@@ -29,6 +29,7 @@ import { checkWall, effectiveStageOffset, scanWalls, stageLevelOf, stageSurface,
 import { formatStageFt } from './format';
 import { stageFt } from './scales';
 import { sitesFor } from './sites';
+import { headlessBusy } from './headless';
 import { SITE_LIMITS } from '../loss/site';
 
 /** Max inflow + stage sources and storm cells the solver supports (MAX_SOURCES / MAX_STORMS in src/sim/constants.ts). */
@@ -301,16 +302,30 @@ export function createToolController(canvas: HTMLCanvasElement, deps: ToolContro
     transientDirty = true;
   }
 
+  /**
+   * While a sweep, an ensemble or a design comparison runs headless it owns the map: it swaps edit sets in and out and
+   * puts the user's walls back at the end from the edit log. An edit made meanwhile would land in one of its cases and
+   * then be lost (or desync the log), so walls, erasing, digging and water wait — with a brief notice.
+   */
+  function editsBlocked(): boolean {
+    if (!headlessBusy(store)) return false;
+    bridge.notify({ kind: 'info', key: 'edit-busy', title: 'Map editing paused', message: 'A sweep, ensemble or design comparison is running: walls, digging and water wait until it finishes.' });
+    return true;
+  }
+
   // ─── wall ─────────────────────────────────────────────────────────────────────────────────────
   function commitWall(pts: number[]) {
+    if (editsBlocked()) return;
     const solver = deps.getSolver();
     const g = gridInfo();
     if (!solver || !g || pts.length < 2) return;
     const s = state();
     const radius = wallRadiusCells(s, g.cellSize);
+    // The tool's height range (AppState.wallHeight contract), whatever set the store.
+    const height = Math.min(WALL_MAX, Math.max(WALL_MIN, s.wallHeight));
     const simple = simplifyPolyline(pts, 0.35);
     if (simple.length === 2) {
-      solver.applyBrush({ kind: 'wall', ax: simple[0], ay: simple[1], bx: simple[0], by: simple[1], radius, height: s.wallHeight });
+      solver.applyBrush({ kind: 'wall', ax: simple[0], ay: simple[1], bx: simple[0], by: simple[1], radius, height });
     } else {
       for (let k = 0; k + 3 < simple.length; k += 2) {
         solver.applyBrush({
@@ -320,7 +335,7 @@ export function createToolController(canvas: HTMLCanvasElement, deps: ToolContro
           bx: simple[k + 2],
           by: simple[k + 3],
           radius,
-          height: s.wallHeight,
+          height,
         });
       }
     }
@@ -331,6 +346,7 @@ export function createToolController(canvas: HTMLCanvasElement, deps: ToolContro
 
   /** Walls raised by code (e.g. the one-click demo levee), watched exactly like drawn ones. */
   function buildWalls(segments: WallSegment[], radiusCells?: number) {
+    if (editsBlocked()) return;
     const solver = deps.getSolver();
     const g = gridInfo();
     if (!solver || !g || !segments.length) return;
@@ -618,6 +634,7 @@ export function createToolController(canvas: HTMLCanvasElement, deps: ToolContro
     if (e.button !== 0) return;
     const tool = state().tool;
     if (tool === 'orbit' || tool === 'probe') return;
+    if ((tool === 'wall' || tool === 'eraseWall' || tool === 'dig' || tool === 'water') && editsBlocked()) return;
     const g = gridInfo();
     if (!g) return;
     const hit = pickAt(pointer.x, pointer.y);
@@ -660,7 +677,7 @@ export function createToolController(canvas: HTMLCanvasElement, deps: ToolContro
   }
 
   function eraseTo(hit: PickResult) {
-    if (gesture.kind !== 'erase') return;
+    if (gesture.kind !== 'erase' || editsBlocked()) return;
     const solver = deps.getSolver();
     const g = gridInfo();
     if (!solver || !g) return;
@@ -925,7 +942,7 @@ export function createToolController(canvas: HTMLCanvasElement, deps: ToolContro
     checkWalls(t);
 
     // Held brushes.
-    if (gesture.kind === 'hold' && hover && dt > 0) {
+    if (gesture.kind === 'hold' && hover && dt > 0 && !editsBlocked()) {
       const solver = deps.getSolver();
       const g = gridInfo();
       if (solver && g) {

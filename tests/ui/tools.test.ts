@@ -311,3 +311,68 @@ test('the wall card verdict and the overtopping notice come from the same scan',
   off();
   ctl.destroy();
 });
+
+test('while a headless batch runs, walls, erasing, digging, water and Clear walls wait (with a notice)', async () => {
+  const { runHeadless } = await import('../../src/ui/headless');
+  const { createActions } = await import('../../src/app/actions');
+  const { store, ops, canvas, ctl } = setup({ tool: 'wall', brushRadius: 40, wallHeight: 3 });
+  const notices: Notice[] = [];
+  const off = bridgeFor(store).onNotice((n) => notices.push(n));
+  // Hold a batch open: its single case waits until released.
+  let release!: () => void;
+  const gate = new Promise<void>((r) => (release = r));
+  const terrain = {} as never;
+  const run = runHeadless({
+    store,
+    actions: { resetWater: () => {} } as never,
+    sim: { runFor: async () => {}, simClock: () => 60, setRenderHold: () => {} },
+    terrain,
+    getTerrain: () => terrain,
+    cases: [{ apply: () => gate }],
+    durationS: 60,
+    chunkS: 60,
+    cancelled: () => false,
+    collect: async () => {},
+  });
+  const stroke = () => {
+    canvas.dispatchEvent(pointer('pointerdown', 100, 100));
+    canvas.dispatchEvent(pointer('pointermove', 200, 100));
+    canvas.dispatchEvent(pointer('pointerup', 200, 100));
+  };
+  stroke();
+  for (const tool of ['dig', 'water'] as const) {
+    store.set({ tool });
+    canvas.dispatchEvent(pointer('pointerenter', 200, 200));
+    canvas.dispatchEvent(pointer('pointerdown', 200, 200));
+    ctl.update(1 / 60);
+    canvas.dispatchEvent(pointer('pointerup', 200, 200));
+  }
+  store.set({ tool: 'eraseWall' });
+  stroke();
+  bridgeFor(store).scene?.buildWalls?.([{ ax: 1, ay: 1, bx: 5, by: 1, height: 2 }]);
+  let cleared = 0;
+  const actions = createActions({ store, withSolver: () => void cleared++, requestRender: () => {} } as never);
+  actions.clearWalls();
+  assert.equal(ops.length, 0, 'no brush op reached the solver');
+  assert.equal(cleared, 0, 'Clear walls waited');
+  assert.ok(notices.some((n) => n.key === 'edit-busy'), 'the user is told why');
+  release();
+  await run;
+  // Afterwards everything works again.
+  store.set({ tool: 'wall' });
+  stroke();
+  assert.ok(ops.length > 0);
+  actions.clearWalls();
+  assert.equal(cleared, 1);
+  off();
+  ctl.destroy();
+});
+
+test('a wall height outside the tool’s range is clamped when the wall is drawn', () => {
+  const { ops, canvas, ctl } = setup({ tool: 'wall', brushRadius: 40, wallHeight: 80 });
+  canvas.dispatchEvent(pointer('pointerdown', 100, 100));
+  canvas.dispatchEvent(pointer('pointermove', 200, 100));
+  canvas.dispatchEvent(pointer('pointerup', 200, 100));
+  assert.ok(ops.length > 0 && ops.every((o) => o.kind === 'wall' && o.height === 10));
+  ctl.destroy();
+});

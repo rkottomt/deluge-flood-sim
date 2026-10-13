@@ -420,6 +420,10 @@ export function createCompareSection(ctx: UIContext): CompareSection {
     progress.hidden = false;
     progress.value = 0;
     render();
+    // The log is suspended for the whole run, not only around the swaps: the run owns the map until it has put the
+    // user's walls back (cleanup), so nothing it — or anything else — does meanwhile can rewrite the user's log. (The
+    // brush tools and Clear walls wait while a batch runs: tools.ts editsBlocked.)
+    log.suspend();
     const out = await runHeadless({
       store,
       actions,
@@ -495,18 +499,25 @@ export function createCompareSection(ctx: UIContext): CompareSection {
         }
         onMap = -2;
       },
-    });
+    }).finally(() => log.resume());
     running = false;
     runBtn.disabled = false;
     cancelBtn.hidden = true;
     progress.hidden = true;
+    // Another scene came on screen while the last case finished (or after it): its results belong to the old one, and
+    // the section has already let go of that scene's designs (ensureScene). Nothing is labelled with the new scene.
+    if (getTerrain() !== terrain) {
+      setStatus('Comparison stopped: the scene changed during the run, so its results were discarded.', 'warn');
+      render();
+      return;
+    }
     const complete = (arr: LevelRun[]) => todo.every((_, i) => !!arr[i]);
     const doneDesigns = runDesigns.filter((d) => complete(runs.get(d.id)!));
     if (complete(baseRuns) && doneDesigns.length) {
       const cl: CompareLevel[] = todo.map((l) => ({ id: l.id, label: l.label, returnPeriod: l.sourceRp ?? l.userRp, rpFrom: l.sourceRp != null ? 'source' : l.userRp != null ? 'user' : null }));
       const inputs: DesignInput[] = doneDesigns.map((d) => ({ id: d.id, name: d.name, cost: resolveCost(d.cost, d.edits, terrain.cellSize, country, raster.get(d.id) ?? null), levels: runs.get(d.id)! }));
       const result = compareDesigns(cl, baseRuns, inputs);
-      outcome = { result, ladder: kind, ladderLabel: ladderName(kind), durationS: dur, thumbs, designs: doneDesigns, cellSize: terrain.cellSize, terrainName: store.get().terrainName, cancelled: out.cancelled };
+      outcome = { result, ladder: kind, ladderLabel: ladderName(kind), durationS: dur, thumbs, designs: doneDesigns, cellSize: terrain.cellSize, terrainName: terrain.name, cancelled: out.cancelled };
       summary = comparisonSummary(result, kind, dur);
       mapLevel = cl.length - 1;
     }
@@ -638,7 +649,7 @@ export function createCompareSection(ctx: UIContext): CompareSection {
     const el = report();
     if (!el) return;
     const name = safeFilename(`deluge-design-comparison-${store.get().presetId ?? 'area'}`);
-    downloadText(reportHtmlDocument(el, `Deluge design comparison — ${store.get().terrainName}`, COMPARE_REPORT_CSS), `${name}.html`, 'text/html');
+    downloadText(reportHtmlDocument(el, `Deluge design comparison — ${outcome?.terrainName ?? store.get().terrainName}`, COMPARE_REPORT_CSS), `${name}.html`, 'text/html');
   }
 
   // ─── Wiring ─────────────────────────────────────────────────────────────────────────────────────────────────
