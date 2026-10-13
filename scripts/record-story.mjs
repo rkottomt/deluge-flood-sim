@@ -12,7 +12,7 @@
  *
  * How: it builds the RELEASED bundle (plain `vite build`, no debug API — the recording is exactly what a visitor sees),
  * serves it with `vite preview` in this process, and opens `?story=<id>` in headless Chromium on the real GPU with every
- * external host blocked (the stories are offline). It captures the page through the DevTools screencast (JPEG frames
+ * external host blocked (the stories are offline; a dam story's valley is a live area, see NETWORK_IDS). It captures the page through the DevTools screencast (JPEG frames
  * with timestamps), restarts the story from its first beat once the capture runs (← on beat 1 replays it), waits for
  * the card to say the story has finished, and resamples the frames to a constant frame rate:
  * artifacts/stories/work/<id>/frame-00001.jpg … — the same JPEG-sequence layout submission/video/tools/encode-h264
@@ -42,11 +42,18 @@ const HEIGHT = Number(args.height ?? 1080);
 const FPS = Number(args.fps ?? 30);
 const CRF = Number(args.crf ?? 18);
 /** Story ids, read from the registry's sources so this script needs no TypeScript loader. */
-const ALL_IDS = fs
+const SOURCES = fs
   .readdirSync(path.join(ROOT, 'src', 'story', 'stories'))
   .filter((f) => f.endsWith('.ts'))
-  .map((f) => /\bid:\s*'([a-z0-9-]+)'/.exec(fs.readFileSync(path.join(ROOT, 'src', 'story', 'stories', f), 'utf8'))?.[1])
-  .filter(Boolean);
+  .map((f) => fs.readFileSync(path.join(ROOT, 'src', 'story', 'stories', f), 'utf8'));
+const idOf = (src) => /\bid:\s*'([a-z0-9-]+)'/.exec(src)?.[1];
+const ALL_IDS = SOURCES.map(idOf).filter(Boolean);
+/**
+ * Stories whose scene is a dam breach (`dam: { nid: … }` instead of a preset) load the valley below the dam as a live
+ * area, so they need the internet for USGS 3DEP, imagery and roads, like the dam-breach use case: those are recorded
+ * with the network allowed (--offline blocks it for them too). Every other story stays offline.
+ */
+const NETWORK_IDS = new Set(SOURCES.filter((src) => /\bdam:\s*\{\s*nid:/.test(src)).map(idOf).filter(Boolean));
 const IDS = args.all ? ALL_IDS : [String(args.story ?? 'nepal-2026')];
 for (const id of IDS) if (!ALL_IDS.includes(id)) throw new Error(`unknown story "${id}" (have: ${ALL_IDS.join(', ')})`);
 /** Longest a story may take before the recording gives up, ms (every wait at its cap, plus slack). */
@@ -136,7 +143,10 @@ function writeConstantRate(frames, dir) {
 async function recordOne(baseUrl, id) {
   const context = await browser.newContext({ viewport: { width: WIDTH, height: HEIGHT }, deviceScaleFactor: 1 });
   const blocked = [];
+  const online = NETWORK_IDS.has(id) && !args.offline;
+  if (online) console.log(`[record] ${id} breaches a dam on a live area: the network is allowed for this one`);
   await context.route((u) => !isLocal(u.href), (route) => {
+    if (online) return route.continue();
     blocked.push(route.request().url());
     return route.abort('internetdisconnected');
   });

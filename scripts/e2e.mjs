@@ -2140,9 +2140,15 @@ const FLOWS = [
       // 3. The entry points: "Watch the story" in the Scenario section, and the stories row in Use cases.
       const entry = await D(() => ({
         watch: !!document.querySelector('.dl-nar-watch:not([hidden])'),
-        chips: [...document.querySelectorAll('.dl-uc .dl-nar-chip')].map((b) => b.getAttribute('data-story')),
+        chips: [...document.querySelectorAll('.dl-uc .dl-nar-chip')].map((b) => `${b.getAttribute('data-story-group')}:${b.getAttribute('data-story')}`),
+        watchTip: document.querySelector('.dl-nar-watch')?.getAttribute('data-tip') ?? '',
       }));
-      check(r, 'entry points: Watch the story (Scenario) and five stories under Use cases', entry.watch && entry.chips.length === 5 && entry.chips.includes('nepal-2026'), entry.chips.join(', '));
+      check(
+        r,
+        'entry points: Watch the story (Scenario, the 1936 event) and eight stories under Use cases, the three decisions first',
+        entry.watch && /What a wall would have saved/.test(entry.watchTip) && entry.chips.length === 8 && entry.chips.slice(0, 3).join() === 'business:site-decision,business:levee-bca,business:dam-upstream' && entry.chips.includes('event:nepal-2026'),
+        entry.chips.join(', '),
+      );
 
       // 4. The whole story at 1/20 pace (waits capped at 30 s so a slow GPU cannot stall the flow).
       await D(() => window.__deluge.setPaused(false));
@@ -3086,7 +3092,196 @@ const FLOWS = [
       await shot('55-validation-block');
     },
   },
+  {
+    id: 60,
+    name: 'Business story “Should we build here?”: the demo parcels swept, verdict, egress, floor level, the pick; Esc puts the user’s sites back',
+    timeoutMs: 600_000,
+    resetsPage: true,
+    async run(r, ctx) {
+      // The user's own scene first: one site of theirs from a ?sites= link, a wall and a raised river. The story swaps the
+      // demo parcels in, sweeps them, and must leave all of it as it was.
+      await page.goto(new URL('?preset=pittsburgh&sites=v1:40.4405,-79.996~office~4~~~~~My%20own%20lot', ctx.baseUrl).href, { waitUntil: 'domcontentloaded' });
+      await waitReady(120_000);
+      await D(() => {
+        const d = window.__deluge;
+        d.getSolver().applyBrush({ kind: 'wall', ax: 100, ay: 100, bx: 140, by: 100, radius: 2, height: 3 });
+        d.setStageOffset(1.5);
+      });
+      const pre = await userScene();
+      check(r, 'the user’s own scene: their site, a wall, the river raised', pre.sites.join() === 'My own lot' && pre.walls > 0 && pre.stage > 1, JSON.stringify(pre));
+      const out = await playStory(r, 'site-decision', ['brief', 'sweep', 'a-verdict', 'a-egress', 'a-eal', 'a-floor', 'b-verdict', 'pick', 'limits'], { shots: ['a-verdict', 'pick'] });
+      const cap = (id) => out.seen.get(id)?.caption ?? '';
+      const during = out.seen.get('a-verdict');
+      check(r, 'the demo parcels replace the user’s site while the story plays, and the sweep has run', during?.sites?.join(' | ') === 'Demo parcel A (North Shore) | Demo parcel B (Allegheny Center)' && /in \d+ s\./.test(during?.sweepStatus ?? ''), `${during?.sites?.join(' | ')} · ${during?.sweepStatus?.slice(0, 80)}`);
+      check(r, 'Parcel A’s verdict is the panel’s own sentences, read live', /^Parcel A, in the panel’s own words: (Water reaches Demo parcel A \(North Shore\) at the .+ m at the lowest grade\.|Demo parcel A \(North Shore\) stays dry)/.test(cap('a-verdict')), cap('a-verdict').slice(0, 200));
+      check(r, 'egress, EAL and the two floor levels are filled in from the sweep', /route|access|Egress/.test(cap('a-egress')) && /Expected annual loss|No expected annual loss/.test(cap('a-eal')) && /Designed to the FEMA 1 % level, the floor is .*(m above grade|m above the lowest grade).*Designed for the worst level that reaches it, the floor is \d/.test(cap('a-floor')), `${cap('a-egress').slice(0, 90)} | ${cap('a-eal').slice(0, 60)} | ${cap('a-floor').slice(0, 160)}`);
+      check(r, 'the pick: B is dry where A is not', /B is dry at the 1936 record crest \(46\.0 ft\); A takes \d+\.\d m at the lowest grade/.test(cap('pick')), cap('pick').slice(0, 220));
+      await D(() => document.getElementById('ui-root').__delugeUI.story.stop());
+      await sleep(600);
+      const post = await userScene();
+      check(r, 'Esc / close: the user’s site, wall, river and view are back', JSON.stringify({ ...post, walls: 0 }) === JSON.stringify({ ...pre, walls: 0 }) && Math.abs(post.walls - pre.walls) <= 2, `before ${JSON.stringify(pre)} · after ${JSON.stringify(post)}`);
+      // Esc in the middle of the sweep: the sweep is cancelled, and the user's state comes back once it has stopped.
+      await D(() => document.getElementById('ui-root').__delugeUI.story.play('site-decision', { pace: 0.05, maxWaitCapMs: 30_000 }));
+      const inSweep = await page
+        .waitForFunction(() => /Level \d+ of \d+/.test(document.querySelector('[data-site="sweep-status"]')?.textContent ?? ''), null, { timeout: 60_000 })
+        .then(() => true, () => false);
+      await page.keyboard.press('Escape');
+      const stopped = await page
+        .waitForFunction(() => /^(Cancelled|Done|Sweep stopped)/.test(document.querySelector('[data-site="sweep-status"]')?.textContent ?? ''), null, { timeout: 120_000 })
+        .then(() => true, () => false);
+      await sleep(800);
+      const mid = await userScene();
+      const status = await D(() => document.querySelector('[data-site="sweep-status"]')?.textContent ?? '');
+      check(r, 'Esc mid-sweep cancels it and still puts the user’s site, wall, river and view back', inSweep && stopped && /^Cancelled/.test(status) && JSON.stringify({ ...mid, walls: 0 }) === JSON.stringify({ ...pre, walls: 0 }) && Math.abs(mid.walls - pre.walls) <= 2, `${status.slice(0, 60)} · after ${JSON.stringify(mid)}`);
+      await page.goto(ctx.appUrl, { waitUntil: 'domcontentloaded' });
+      await waitReady(120_000);
+    },
+  },
+  {
+    id: 61,
+    name: 'Business story “Is the levee worth it?”: the levee compared headless, BCR with its range, break-even; Esc puts the user’s designs and walls back',
+    timeoutMs: 600_000,
+    resetsPage: true,
+    async run(r, ctx) {
+      await page.goto(new URL('?preset=pittsburgh', ctx.baseUrl).href, { waitUntil: 'domcontentloaded' });
+      await waitReady(120_000);
+      // The user's own design work: a short wall of theirs, captured as their Design A, and the river raised a little.
+      await D(() => {
+        const d = window.__deluge;
+        d.getSolver().applyBrush({ kind: 'wall', ax: 100, ay: 100, bx: 140, by: 100, radius: 2, height: 3 });
+        d.setStageOffset(1.5);
+        const sec = document.querySelector('[data-section="designs"]');
+        if (sec && !sec.classList.contains('dl-open')) sec.querySelector('.dl-sec-head')?.click();
+      });
+      await page.click('[data-compare="capture"]');
+      const userDesign = () => D(() => document.querySelector('[data-design-id="A"]')?.textContent ?? '');
+      const mine = await userDesign();
+      const pre = await userScene();
+      check(r, 'the user’s own scene: their wall captured as Design A, the river raised', pre.designs === 'A' && pre.walls > 0 && pre.stage > 1, `${JSON.stringify(pre)} · ${mine.slice(0, 60)}`);
+      const out = await playStory(r, 'levee-bca', ['question', 'build', 'compare', 'benefit', 'bcr', 'breakeven', 'limits'], { shots: ['bcr'] });
+      const cap = (id) => out.seen.get(id)?.caption ?? '';
+      const during = out.seen.get('bcr');
+      check(r, 'the comparison ran the wall as the only design, against the baseline', during?.designs === 'A' && /^Done: baseline \+ 1 design × 2 levels/.test(during?.compareStatus ?? ''), `${during?.designs} · ${during?.compareStatus?.slice(0, 90)}`);
+      check(r, 'avoided EAL and cost come from the comparison', /avoids \$[\d.]+\s?[kMB]? a year \(\$.+\) in expected annual loss/.test(cap('benefit')) && /unit rates: \$[\d.]+\s?[kMB]? \(unit-cost estimate/.test(cap('benefit')), cap('benefit').slice(0, 220));
+      check(r, 'the BCR is never alone: central, range and verdict, at 7 % over 50 years', /At 7 % over 50 yr \(FEMA standard\), the BCR is \d+\.\d\d, with a range of \d+\.\d\d( – \d+\.\d\d)?\. The panel’s verdict: (Pays|Uncertain|Does not pay|Makes)/.test(cap('bcr')), cap('bcr').slice(0, 220));
+      check(r, 'break-even cost against the estimate', /still pay at the central estimate: \$[\d.]+\s?[kMB]?, against an estimate of \$/.test(cap('breakeven')), cap('breakeven').slice(0, 160));
+      await D(() => document.getElementById('ui-root').__delugeUI.story.stop());
+      await sleep(600);
+      const post = await userScene();
+      const theirs = await userDesign();
+      check(r, 'the story’s design was the levee, not the user’s wall', during?.designText !== mine && /2\.\d+ km/.test(during?.designText ?? ''), `${(during?.designText ?? '').slice(0, 60)} vs ${mine.slice(0, 60)}`);
+      check(r, 'Esc / close: the user’s own Design A, walls, river and view are back', theirs === mine && JSON.stringify({ ...post, walls: 0 }) === JSON.stringify({ ...pre, walls: 0 }) && Math.abs(post.walls - pre.walls) <= 2, `before ${JSON.stringify(pre)} · after ${JSON.stringify(post)}`);
+      await page.goto(ctx.appUrl, { waitUntil: 'domcontentloaded' });
+      await waitReady(120_000);
+    },
+  },
+  {
+    id: 62,
+    name: 'Business story “A dam upstream”: ?story= link breaches Edenville on its valley, band, wave, arrivals, the county (fixtures)',
+    timeoutMs: 600_000,
+    resetsPage: true,
+    async run(r, ctx) {
+      // Hermetic, as flow 26: USGS 3DEP answered by the synthetic valley below Edenville Dam's NID point.
+      const intercepted = [];
+      await page.route((u) => !isLocalUrl(u.href), (route) => damFixtures(route, intercepted, EDENVILLE));
+      try {
+        await page.goto(new URL('?story=dam-upstream', ctx.baseUrl).href, { waitUntil: 'domcontentloaded' });
+        await waitReady(120_000);
+        const started = await page
+          .waitForFunction(() => document.querySelector('.dl-nar[data-story="dam-upstream"]:not([hidden])') && window.__deluge.getScenario()?.damBreach?.nidId === 'MI00549', null, { timeout: 240_000 })
+          .then(() => true, () => false);
+        const s0 = await D(() => ({ preset: window.__deluge.getState().presetId, mode: window.__deluge.getScenario()?.damBreach?.mode ?? null, url: location.search }));
+        check(r, '?story=dam-upstream loads the valley below Edenville Dam, breaches it flood-induced and starts the story', started && s0.preset === null && s0.mode === 'flood' && /story=dam-upstream/.test(s0.url), JSON.stringify(s0));
+        await D(() => document.getElementById('ui-root').__delugeUI.story.stop());
+        await sleep(300);
+        // The whole story at 1/20 pace, on the area already loaded (the player keeps it rather than loading it again).
+        const out = await playStory(r, 'dam-upstream', ['dam', 'band', 'wave', 'arrivals', 'county', 'limits'], { shots: ['arrivals'], pace: 0.2 });
+        const cap = (id) => out.seen.get(id)?.caption ?? '';
+        check(r, 'the dam’s NID numbers and the band of eight relations are read live', /^Edenville Dam \(NID MI00549\) held [\d,]+ acre-ft/.test(cap('dam')) && /peak outflow at [\d,]+ m³\/s – [\d,]+ m³\/s for this dam\. The map runs the central case, [\d,]+ m³\/s \(Froehlich 1995/.test(cap('band')), `${cap('dam').slice(0, 90)} | ${cap('band').slice(0, 200)}`);
+        check(r, 'arrival times downstream, each with its spread across the band', /at 1 km in (\d+ min|[\d.]+ h) \(.+ across the band\)/.test(cap('arrivals')) && !/\{/.test(cap('arrivals')), cap('arrivals').slice(0, 260));
+        check(r, 'what to tell the county is filled in', /For the county: water at 2 km in (\d+ min|[\d.]+ h|not yet)/.test(cap('county')), cap('county').slice(0, 200));
+        const loads = await D(() => window.__deluge.getState().terrainName);
+        await page.keyboard.press('Escape');
+        await sleep(300);
+        const after = await D(() => ({ visible: !!document.querySelector('.dl-nar:not([hidden])'), terrain: window.__deluge.getState().terrainName, breach: window.__deluge.getScenario()?.damBreach?.nidId ?? null, url: location.search }));
+        check(r, 'Esc leaves the story on the dam’s valley (the scene it loaded), ?story= dropped', !after.visible && after.terrain === loads && after.breach === 'MI00549' && !/story=/.test(after.url), JSON.stringify(after));
+        r.metrics.intercepted = intercepted.slice(0, 12);
+      } finally {
+        await page.unrouteAll({ behavior: 'ignoreErrors' }).catch(() => {});
+        await page.goto(ctx.appUrl, { waitUntil: 'domcontentloaded' });
+        await waitReady(120_000);
+      }
+    },
+  },
 ];
+
+/** Flows 60–62: the user's own state the business stories must put back (sites, designs, walls, river, view). */
+async function userScene() {
+  return D(() => {
+    const d = window.__deluge;
+    const s = d.getState();
+    return {
+      sites: [...document.querySelectorAll('.dl-site-item .dl-impact-name')].map((e) => e.textContent),
+      designs: [...document.querySelectorAll('[data-design-id]')].map((e) => e.getAttribute('data-design-id')).join(),
+      stage: s.stageOffset,
+      rain: s.sim.rainRate,
+      timeScale: s.sim.timeScale,
+      view: s.render.waterMode,
+      walls: d.getSolver()?.getBarrierCPU().reduce((n, v) => n + (v > 0.2 ? 1 : 0), 0) ?? -1,
+    };
+  });
+}
+
+/**
+ * Flows 60–62: play a story from the debug handle at 1/20 of its reading time (or `pace`; waits capped at 30 s), sampling the
+ * card and the panels on every beat; checks that every beat played in order, the story finished and no caption kept a
+ * raw {token}.
+ */
+async function playStory(r, id, order, { shots = [], pace = 0.05 } = {}) {
+  const sample = () =>
+    D(() => {
+      const ui = document.getElementById('ui-root')?.__delugeUI;
+      return {
+        ...(ui?.story?.debugState() ?? {}),
+        dataState: document.querySelector('.dl-nar')?.getAttribute('data-state') ?? null,
+        sites: [...document.querySelectorAll('.dl-site-item .dl-impact-name')].map((e) => e.textContent),
+        sweepStatus: [...document.querySelectorAll('.dl-impact-status')].map((e) => e.textContent).find((t) => /^Done: \d+ level/.test(t ?? '')) ?? '',
+        designs: [...document.querySelectorAll('[data-design-id]')].map((e) => e.getAttribute('data-design-id')).join(),
+        designText: document.querySelector('[data-design-id="A"]')?.textContent ?? '',
+        compareStatus: document.querySelector('[data-compare="status"]')?.textContent ?? '',
+      };
+    });
+  const ok = await D(([sid, p]) => document.getElementById('ui-root').__delugeUI.story.play(sid, { pace: p, maxWaitCapMs: 30_000 }), [id, pace]);
+  check(r, `${id} plays from the debug handle`, ok === true, String(ok));
+  const seen = new Map();
+  const t0 = Date.now();
+  let last = null;
+  let prev = null;
+  const logBeat = (b) => b && console.log(`  · ${b.at.toFixed(1)} s beat ${b.beatId}: ${b.caption.slice(0, 120)}`);
+  while (Date.now() - t0 < 420_000) {
+    last = await sample();
+    // Each beat keeps its latest sample while it is on screen (a sweep or a comparison runs inside a beat's actions,
+    // and the live tokens refresh), so what is recorded is what the viewer last read.
+    if (last.beatId && !last.finished) {
+      const first = !seen.has(last.beatId);
+      seen.set(last.beatId, { ...last, at: first ? (Date.now() - t0) / 1000 : seen.get(last.beatId).at });
+      if (first) {
+        logBeat(prev && seen.get(prev));
+        prev = last.beatId;
+        if (shots.includes(last.beatId)) await shot(`${r.id}-story-${last.beatId}`);
+      }
+    }
+    if (last.finished) break;
+    await sleep(120);
+  }
+  logBeat(prev && seen.get(prev));
+  const played = [...seen.keys()];
+  r.metrics.storyBeats = [...seen.values()].map((b) => ({ beat: b.beatId, at: b.at, timedOut: b.timedOut, caption: b.caption }));
+  check(r, 'every beat played, in order, and the story finished', !!last?.finished && played.join() === order.join() && last.dataState === 'finished', `${played.join(' → ')} in ${((Date.now() - t0) / 1000).toFixed(0)} s`);
+  const captions = [...seen.values()].map((b) => b.caption);
+  check(r, 'captions resolved: no raw {token} left on screen', captions.every((t) => t && !/\{[a-z]+(:[^}]*)?\}/.test(t)), captions.map((t) => t.slice(0, 40)).join(' | '));
+  return { seen, last };
+}
 
 
 // ─── Dam breach and coastal surge helpers (flows 23–26) ─────────────────────────────────────────────────────────
