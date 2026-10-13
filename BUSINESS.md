@@ -84,9 +84,11 @@ model. It sits at the moment *before* the decision, when someone needs to try op
    kilometres down a valley in a worker, drives the 2-D flood at the map edge, and gives every town, bridge and
    power plant a front time. Drop a sensor on the valley profile, and every place's lead time updates; the optimiser
    finds the best single site.
-5. **Ensemble probability (in progress).** The glacier chain already runs a 27-member ensemble and shows p10 front
-   times. An ensemble mode for the 2-D flood, putting a spread on every site and portfolio number, is being built now;
-   until it lands, each Site check and Impact number is one run (see [§8](#8-honest-limitations)).
+5. **Ensemble probability.** The Uncertainty section runs the 2-D flood as a Latin-hypercube ensemble (12 members by
+   default) with inflow, rain, river stage, Manning's n and the elevation model perturbed. It gives a flood-probability
+   map, p10 / p50 / p90 of flooded area and loss, and "floods in 7 of 12 members" on every Site check site and
+   portfolio asset; the glacier chain runs its own 27-member ensemble for p10 front times. The spread is sensitivity to
+   stated input bands, not a calibrated probability, and the panel says so (see [§8](#8-honest-limitations)).
 6. **Nothing leaves the laptop.** Portfolios and sites are parsed in the tab; the app has no backend, and its
    Content-Security-Policy would block an upload. The same static bundle can be hosted on a customer's intranet.
 7. **Built to be checked.** Open, cited damage curves (JRC 2017), hazard classes (AIDR, FD2321), named constants with
@@ -141,8 +143,8 @@ the record flood, and the only protection that pays is a higher floor.**
 the fast-water threshold and the loss was booked as total, **$49.5 M (100 %)** instead of $7.5 M; with the same
 500-year assumption the EAL is then **$198 k – $297 k per year** instead of $30 k – $45 k (the screenshot below is one
 of those runs). The depth, the egress time and the parcel comparison did not change. A result that tips on a
-threshold like this is exactly what the ensemble mode in progress is for; until then a report quoting one run should
-be read as one run.
+threshold like this is exactly what the Uncertainty ensemble is for: run it on the scene and the Site check card
+reports how many members flood the parcel and the p10 / p50 / p90 depth, instead of quoting one run.
 
 ![Site check after the sweep: Parcel A outlined on the North Shore with the 1936 crest on the map; the verdict, the level table and the loss-exceedance chart in the panel](docs/business/site-check.jpg)
 
@@ -338,8 +340,8 @@ container on the customer's GPU host, which answers the data-residency question 
 
 ## 7. Roadmap
 
-* **Ensemble mode (in progress):** many runs over terrain bias, roughness, inflow and timing, giving p10 / p50 / p90 on
-  every site and portfolio number and an exceedance probability rather than one run.
+* **Ensembles that are calibrated, not just sensitive:** the Uncertainty ensemble (§3) perturbs inputs over stated
+  bands with equal weights; next, weight members against observed floods so the share becomes a probability.
 * **Return periods that are not the user's guess, beyond rain:** NOAA Atlas 14 now gives every US address a sourced
   rain ladder (§4.4); next, FEMA FIS profiles and USGS StreamStats peak flows for river ladders on live areas (which
   today hold their rivers at a fixed level), longer design storms for larger catchments, and Atlas 15 once NOAA
@@ -350,16 +352,17 @@ container on the customer's GPU host, which answers the data-residency question 
   next, the HTTP job API around it ([docs/api.md](docs/api.md)) on server GPUs for portfolios of thousands, and
   parametric trigger design on top (what fraction of insured sites is wet when the gauge reads X; basis risk).
 * **Watch mode:** ingest forecasts (NWS, GloFAS), re-run, and tell asset owners their lead time.
-* **Terrain that knows about buildings and drains:** building footprints as obstacles, culverts and a simple storm
-  sewer sink.
-* **Enterprise plumbing:** SSO, private deployments, saved projects.
+* **Land surface that earns its place:** building footprints, a land-cover roughness map and storm drains exist as
+  optional layers but stay off until they beat bare earth on the validation floods; culverts and a pipe network next.
+* **Enterprise plumbing:** SSO and private deployments (saved projects and share links are in).
 
 ## 8. Honest limitations
 
 Say these before a customer finds them; the app says them in its panels and reports too.
 
-* **Bare-earth terrain.** Buildings, bridge decks, culverts and storm drains are not in the elevation model; water
-  flows through blocks and under viaducts, and embankments pond rain behind them. River channels are burned to a
+* **Bare-earth terrain by default.** Bridge decks and culverts are not in the elevation model, so water flows under
+  viaducts and embankments pond rain behind them. Buildings, land-cover roughness and storm drains are optional layers,
+  off by default because none yet beats bare earth on the validation floods. River channels are burned to a
   nominal depth (3DEP has no bathymetry).
 * **River return periods are mostly uncalibrated.** The site sweep has published river or tide return periods only
   for some levels in Pittsburgh, Nashville and Fort Myers; elsewhere river probabilities are the user's input and
@@ -371,8 +374,9 @@ Say these before a customer finds them; the app says them in its panels and repo
   1976's observed one, and published relations for one dam spread 2× or more (§4.5). Not an EAP inundation map.
 * **The surge ladder is still water at one gauge.** NOAA's extreme water levels at the nearest analysed tide station,
   which may be tens of kilometres away and up a river; no waves or run-up, no sea-floor bathymetry (§4.6).
-* **One run at a time** until the ensemble mode lands. §4.1 shows a result tipping on the fast-water threshold
-  between runs. The ±1σ ranges shown are the damage-curve spread only.
+* **The ensemble is sensitivity, not probability.** Its members perturb inputs over stated bands with equal weights;
+  "floods in 7 of 12 members" is not a calibrated chance of the real event. Without it, a Site check is one run, and
+  §4.1 shows a result tipping on the fast-water threshold between runs. The ±1σ ranges are the damage-curve spread only.
 * **Screening-grade losses.** Global JRC depth–damage curves, values from footprint area × storeys × a national unit
   cost where the user gives none, and a documented heuristic for downtime. Not an insurance valuation, an engineering
   design or a catastrophe model.
