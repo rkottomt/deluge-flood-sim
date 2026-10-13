@@ -269,6 +269,57 @@ report (return periods stay today's). Both runs of a level are exactly as long a
 climate, not run length. Forcing-scaled, not downscaled projections; method, sources and gaps in
 [docs/research/climate-scenarios.md](docs/research/climate-scenarios.md), code in [`src/climate`](src/climate).
 
+## Saved projects and design comparison
+
+**Project** (panel section) saves everything on screen as a `<name>.deluge.json` file and opens it again: the scene (a
+preset id, or the live-area request that reloads the same grid), your scenario changes (river stage, rain, Manning n
+and the other user-facing solver parameters, sources, storm cells, shelters, the evacuation start, future climate, a
+glacier chain's what-if), the walls, levees and digging, the Site check sites and sweep settings, the ensemble
+settings, the designs below, camera and water view — and, only when ticked, the portfolio CSV (it may be sensitive)
+and the last comparison's numbers. **Share link** puts a small project into the address bar as `?project=` (gzip +
+base64url, at most 6,000 characters — a levee, a site and two designs on Pittsburgh is ~2,200); a larger one says so
+and asks for the file. Links never carry names or a portfolio.
+
+The format is versioned (`"format": "deluge-project", "version": 1`) and documented field by field in
+[src/project/format.ts](src/project/format.ts). Walls are kept as their **edit log** — each drawn wall or levee is one
+polyline with a height per segment, followed by erases and dig / raise strokes in order — because the solver builds
+its barrier raster from capsule brush ops with a soft edge that cannot be turned back into ops; replaying the log
+rebuilds the same barrier (`tests/project`). Reading is strict: size, nesting and value-count caps, `__proto__` /
+`constructor` / `prototype` keys refused, every number range-checked, every enum from its list, every string cleaned
+and only ever written as text, unknown keys ignored, and fixed error sentences that never echo the file.
+
+**Compare designs** (panel section) puts 2–3 mitigation designs side by side. Capture the walls on the map as Design
+A (the one-click levee, or anything drawn), **Clear walls**, draw Design B, capture it, then **Compare**: the baseline
+(no walls) and every design run the chosen ladder — the Site check river / tide ladder, the NOAA Atlas 14 rain ladder,
+forcing multipliers, or the scenario on screen — headless, with the designs swapped in by replaying their logs and
+your own walls put back afterwards. Per design: loss per level, EAL, ΔEAL against the baseline, cost (the eal.ts unit
+costs per metre × height^1.3 summed along the drawn segments, by type, or your own figure and O&M), NPV and BCR over
+50 years at 7 % and 3.1 %, buildings protected, and **who gets wetter** — buildings newly reached or more than 10 cm
+deeper, land newly flooded or deeper — with a map of the change in max depth per design. It exports as a print / HTML
+report and travels in the project file.
+
+Pittsburgh, the one-click North Shore levee against its upstream half (a shorter wall, 1.1 km at the same crest), on
+FEMA's 1 % level and the 1936 crest (500-yr typed as the user's return period), 30 simulated minutes per level — six
+runs in 43 s here:
+
+| | Baseline | One-click levee | Shorter wall |
+| --- | --- | --- | --- |
+| Loss, FEMA 1 % / 1936 crest | $793 M / $12.5 B | $742 M / $10.7 B | $793 M / $12.0 B |
+| EAL · ΔEAL | $78.2 M | $66.9 M · **$11.3 M/yr** | $75.1 M · $3.0 M/yr |
+| Cost (floodwall unit costs) | | $190 M (2,415 m × 7.2 m) | $106 M (1,133 m × 8.3 m) |
+| NPV 7 % · 3.1 % | | −$34 M · +$95 M | −$64 M · −$30 M |
+| BCR 7 % · 3.1 % | | 0.82 · **1.50** | 0.39 · 0.72 |
+| Buildings protected · newly reached · deeper | | 87 · 0 · 6 | 11 · 2 · 25 |
+| Land newly flooded or deeper | | 35 acres | 78 acres |
+
+The shorter wall costs more than half as much and buys a quarter of the benefit, and it pushes more water onto its
+neighbours than the full levee does. Screening numbers on bare-earth terrain, like everything above.
+
+**Autosave** (off by default, under Project → Privacy) is the one thing in Deluge that writes to browser storage:
+when switched on it keeps the project (never the portfolio) in this browser's localStorage and offers it back next
+time; switching it off deletes the copy. The desktop app clears storage each time it starts, so there it lasts until
+you quit, and it blocks downloads by design (Save says so; Share link still works).
+
 ## Batch / API
 
 The same simulator without the browser, for portfolios, sweeps and scheduled jobs: `deluge` is a Node CLI
@@ -451,6 +502,7 @@ every ~300 ms, never blocking: stats reduction pass ─▶ mapAsync ─▶ HUD +
 | [`src/routing`](src/routing) | road graph, flood status per edge, travel-time Dijkstra |
 | [`src/loss`](src/loss) | impact & loss: damage curves, values, hazard classes, access loss, sites/portfolio CSV, EAL/BCR, site check (egress timing, event ladders, FFE, verdict), ensemble sampling and aggregation (pure, no DOM) |
 | [`src/climate`](src/climate) | future-climate tables (AR6 warming, rain scaling, NOAA sea level, lake growth) and the forcing transforms (pure, no DOM) |
+| [`src/project`](src/project) | saved projects: the `.deluge.json` format, its strict reader, the terrain edit log, `?project=` links, opt-in autosave, design-comparison arithmetic (pure, no DOM) |
 | [`src/ui`](src/ui) | panels, tools, HUD, How it works, location picker |
 | [`src/app`](src/app) | scene loading, store → solver sync, stage ramp, protected-land analysis, frame pacing, screen wake lock, debug API (`window.__deluge`, dev and flagged builds only) |
 
@@ -600,7 +652,8 @@ them in the real-data Pittsburgh test.
 
 ## Security
 
-No accounts, no backend, no analytics and nothing stored: the app is static files plus the seven public data
+No accounts, no backend, no analytics and nothing stored (unless you switch on project autosave, which is off by
+default and deletes its copy when switched off): the app is static files plus the seven public data
 endpoints it fetches terrain, imagery, roads and place names from. A released build contains no automation surface
 (`window.__deluge` is compiled out), and its Content-Security-Policy is `default-src 'none'` with `script-src 'self'`
 — no `unsafe-inline`, no `unsafe-eval` — restricting `connect-src` to exactly those seven endpoints
@@ -618,6 +671,12 @@ there), an exact-length binary header with bounded counts, and every cell range-
 return period. Its deep link reads only `at=<lat>,<lon>` through a strict number pattern inside US coverage; no text
 from the link reaches the page, and the app never writes the typed address into the address bar.
 `npm run test:security` covers both (SPOOF-ADDRESS-*, XSS-ADDRESS-GEOCODER, CAP-ATLAS14-*).
+
+*Saved projects* add no endpoint either: a project file is generated and read in the tab, and a `?project=` link is
+someone else's text when it arrives, so it is decoded with a 6,000-character cap, a 256 KB cap on what its gzip may
+inflate to, and the same strict reader as a file — and none of its names (project, designs, sites, shelters, source
+labels) reach the page: the app names those itself. `npm run test:security` covers it (SPOOF-PROJECT-LINK,
+XSS-PROJECT-LINK, SPOOF-PROJECT-POLLUTE, CAP-PROJECT-LINK-BOMB, PROJECT-FILE-HOSTILE).
 
 **Accepted risk, stated on purpose:** a copy hosted on GitHub Pages can be framed by any other origin. Pages cannot
 send a `Content-Security-Policy` header and `frame-ancestors` is ignored in a `<meta>` tag, so there is no way to
