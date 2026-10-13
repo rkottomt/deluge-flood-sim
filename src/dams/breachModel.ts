@@ -41,13 +41,18 @@
  * 79,000 m³/s on Teton (+22 %), the relation fitted to the largest set of documented embankment failures. Both are
  * offered; the spread between them is part of the answer.
  *
+ * DRY DAMS. A normal storage of 0 in the NID (isDryDam: flood-control detention dams, tailings and debris basins) means
+ * no permanent pool: nothing to release on a sunny day, so there is no sunny-day failure — asking for one gives the
+ * flood-induced failure (the only way such a dam fails with water behind it) and says so. That is not the
+ * unreported case (null), which keeps the NORMAL_STORAGE_FALLBACK guess.
+ *
  * HONEST LIMITS (shown with every run): the reservoir is the NID's storage and area, not a bathymetric survey; there are
  * no spillways, gates or outlet works in the model; the relations were fitted mostly to embankment (earth / rockfill)
  * dams — for concrete and masonry dams they are indicative only; and the NID height is used as the breach height.
  */
 import { gammaHydrograph, PEAK_RELATIONS, weirErosionBreach } from '../hazard/breach';
 import type { HydrographPoint } from '../contracts';
-import { ACRE_FT_M3, ACRE_M2, CFS_M3S, EMBANKMENT_TYPES, type NidDam } from './nidIndex';
+import { ACRE_FT_M3, ACRE_M2, CFS_M3S, EMBANKMENT_TYPES, isDryDam, type NidDam } from './nidIndex';
 
 export const G = 9.81;
 export type BreachMode = 'sunny' | 'flood';
@@ -247,12 +252,17 @@ export const DAM_BREACH_CAVEATS: readonly string[] = [
   'Screening for emergency planning, not an inundation map for an Emergency Action Plan: those need a licensed engineer’s breach study and model.',
 ];
 
-/** p = A·h/V at normal pool, with h itself from p (a fixed point; converges in a few steps). */
+/**
+ * p = A·h/V at normal pool, with h itself from p (a fixed point; converges in a few steps). A dry dam has no normal
+ * pool, so its surface area can only describe the pool it does hold — the maximum one (and likewise when the normal
+ * storage is not reported).
+ */
 export function hypsometryFor(dam: NidDam, hwMax: number): { p: number; fromNid: boolean } {
   const A = dam.surfaceAreaAc ? dam.surfaceAreaAc * ACRE_M2 : null;
   if (!A || !(hwMax > 0)) return { p: DEFAULT_HYPSOMETRY, fromNid: false };
   const Vmax = dam.storageAcFt * ACRE_FT_M3;
-  const Vn = (dam.normalStorageAcFt && dam.normalStorageAcFt <= dam.storageAcFt ? dam.normalStorageAcFt : dam.storageAcFt) * ACRE_FT_M3;
+  const normal = dam.normalStorageAcFt;
+  const Vn = (normal !== null && normal > 0 && normal <= dam.storageAcFt ? normal : dam.storageAcFt) * ACRE_FT_M3;
   let p = DEFAULT_HYPSOMETRY;
   for (let i = 0; i < 30; i++) {
     const hn = hwMax * Math.pow(Vn / Vmax, 1 / p);
@@ -261,10 +271,20 @@ export function hypsometryFor(dam: NidDam, hwMax: number): { p: number; fromNid:
   return { p, fromNid: true };
 }
 
-/** Build a breach scenario for an NID dam. */
-export function damScenario(dam: NidDam, mode: BreachMode, method: BreachMethod = 'parametric'): DamScenario {
-  const m = BREACH_MODES[mode];
+/** Whether the NID lets a sunny-day failure be built for this dam (not for a dry dam: see DRY DAMS above). */
+export function sunnyDayPossible(dam: NidDam): boolean {
+  return !isDryDam(dam);
+}
+
+/** Why a dry dam has no sunny-day failure (shown in the dam view and in the scenario's assumptions). */
+export const DRY_DAM_NOTE = 'A dry dam: the NID gives its normal storage as 0 (a flood-control detention dam, or a tailings or debris basin) — it holds no pool on a sunny day, so there is no sunny-day failure. The flood-induced failure is shown.';
+
+/** Build a breach scenario for an NID dam. A sunny-day request for a dry dam gives the flood-induced failure. */
+export function damScenario(dam: NidDam, asked: BreachMode, method: BreachMethod = 'parametric'): DamScenario {
   const assumptions: string[] = [];
+  const mode: BreachMode = asked === 'sunny' && !sunnyDayPossible(dam) ? 'flood' : asked;
+  if (mode !== asked) assumptions.push(DRY_DAM_NOTE);
+  const m = BREACH_MODES[mode];
   const hwMax = Math.min(dam.heightM, dam.hydraulicHeightM ?? dam.heightM);
   if (dam.hydraulicHeightM === null) assumptions.push(`No hydraulic height in the NID: the reservoir at its maximum is taken to stand at the full NID height (${dam.heightM.toFixed(1)} m).`);
   const hyp = hypsometryFor(dam, hwMax);
@@ -273,7 +293,7 @@ export function damScenario(dam: NidDam, mode: BreachMode, method: BreachMethod 
   let V = Vmax;
   let hw = hwMax;
   if (mode === 'sunny') {
-    const normal = dam.normalStorageAcFt && dam.normalStorageAcFt <= dam.storageAcFt ? dam.normalStorageAcFt : null;
+    const normal = dam.normalStorageAcFt !== null && dam.normalStorageAcFt > 0 && dam.normalStorageAcFt <= dam.storageAcFt ? dam.normalStorageAcFt : null;
     if (normal === null) assumptions.push(`No normal storage in the NID: a sunny-day failure releases ${Math.round(NORMAL_STORAGE_FALLBACK * 100)} % of the maximum storage.`);
     V = (normal ?? NORMAL_STORAGE_FALLBACK * dam.storageAcFt) * ACRE_FT_M3;
     hw = hwMax * Math.pow(V / Vmax, 1 / hyp.p);

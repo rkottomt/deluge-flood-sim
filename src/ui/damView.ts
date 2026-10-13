@@ -15,7 +15,7 @@
 import type { TerrainData } from '../contracts';
 import { fetchDEM } from '../data/dem';
 import { makeGeoToGrid, squareDomain } from '../data/geo';
-import { BREACH_METHODS, BREACH_MODES, damScenario, type BreachMethod, type BreachMode, type DamScenario } from '../dams/breachModel';
+import { BREACH_METHODS, BREACH_MODES, damScenario, DRY_DAM_NOTE, sunnyDayPossible, type BreachMethod, type BreachMode, type DamScenario } from '../dams/breachModel';
 import { damById, loadNidIndex, searchDams, type NidDam, type NidIndex } from '../dams/nidIndex';
 import { areaCentreForDam, downstreamBearing, readDownstream, type DownstreamReading } from '../dams/placement';
 import { damBreachScenario, type DamBreachSpec } from '../dams/scenario';
@@ -155,8 +155,8 @@ export function createDamView(ctx: UIContext, deps: { panel: Pick<Panel, 'reveal
     detail.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' });
   }
 
-  function radio<T extends string>(name: string, value: T, current: T, label: string, set: (v: T) => void): HTMLElement {
-    const r = h('input', { type: 'radio', name, value, checked: value === current, 'data-dam': `${name}-${value}` });
+  function radio<T extends string>(name: string, value: T, current: T, label: string, set: (v: T) => void, disabled = false): HTMLElement {
+    const r = h('input', { type: 'radio', name, value, checked: value === current, disabled, 'data-dam': `${name}-${value}` });
     r.addEventListener('change', () => {
       if (r.checked) {
         set(value);
@@ -172,6 +172,8 @@ export function createDamView(ctx: UIContext, deps: { panel: Pick<Panel, 'reveal
     if (!d) return;
     const s = damScenario(d, mode, method);
     const r = s.result;
+    // The dry-dam note sits under the scenario choice instead.
+    const notes = s.assumptions.filter((a) => a !== DRY_DAM_NOTE);
     const sizeSel = h('select', { class: 'dl-select', 'aria-label': 'Area size', 'data-dam': 'size' }, ...DAM_AREA_CHOICES_M.map((m) => h('option', { value: String(m), selected: m === sizeM }, `${m / 1000} km`)));
     sizeSel.addEventListener('change', () => (sizeM = Number(sizeSel.value) || DAM_AREA_M));
     const go = h('button', { type: 'button', class: 'dl-btn dl-btn-primary', 'data-dam': 'breach', onclick: () => void breach(d, mode, method, sizeM) }, icon('play', 14), h('span', null, 'Load the valley and breach'));
@@ -187,10 +189,17 @@ export function createDamView(ctx: UIContext, deps: { panel: Pick<Panel, 'reveal
     detail.replaceChildren(
       h('h3', { class: 'dl-dam-name' }, d.name),
       h('p', { class: 'dl-uc-addr-status' }, `${damLine(d)} · ${d.damType}${d.year ? `, ${d.year}` : ''} · owner: ${d.owner}`),
-      h('div', { class: 'dl-dam-choices', role: 'radiogroup', 'aria-label': 'Breach scenario' }, radio('dam-mode', 'sunny', mode, BREACH_MODES.sunny.label, (v) => (mode = v)), radio('dam-mode', 'flood', mode, BREACH_MODES.flood.label, (v) => (mode = v))),
+      // A dry dam (NID normal storage 0) has no sunny-day failure: the choice is shown, greyed, with the reason.
+      h(
+        'div',
+        { class: 'dl-dam-choices', role: 'radiogroup', 'aria-label': 'Breach scenario' },
+        radio('dam-mode', 'sunny', s.mode, BREACH_MODES.sunny.label, (v) => (mode = v), !sunnyDayPossible(d)),
+        radio('dam-mode', 'flood', s.mode, BREACH_MODES.flood.label, (v) => (mode = v)),
+      ),
+      sunnyDayPossible(d) ? h('span') : h('p', { class: 'dl-uc-addr-status', 'data-dam': 'dry' }, DRY_DAM_NOTE),
       h('div', { class: 'dl-dam-choices', role: 'radiogroup', 'aria-label': 'Hydrograph method' }, radio('dam-method', 'parametric', method, BREACH_METHODS.parametric, (v) => (method = v)), radio('dam-method', 'regression', method, BREACH_METHODS.regression, (v) => (method = v))),
       h('table', { class: 'dl-site-table dl-dam-table', 'data-dam': 'params' }, h('tbody', null, ...rows.map(([k, v]) => h('tr', null, h('th', null, k), h('td', null, v))))),
-      s.assumptions.length ? h('ul', { class: 'dl-impact-issues', 'data-dam': 'assumptions' }, ...s.assumptions.map((a) => h('li', null, a))) : h('span'),
+      notes.length ? h('ul', { class: 'dl-impact-issues', 'data-dam': 'assumptions' }, ...notes.map((a) => h('li', null, a))) : h('span'),
       h('details', { class: 'dl-impact-methods', 'data-dam': 'caveats' }, h('summary', null, 'What this leaves out'), h('ul', { class: 'dl-impact-issues' }, ...s.caveats.map((c) => h('li', null, c)))),
       h('div', { class: 'dl-row dl-dam-go' }, h('label', { class: 'dl-num-field' }, h('span', { class: 'dl-num-label' }, 'Area'), sizeSel), go),
     );
@@ -205,12 +214,12 @@ export function createDamView(ctx: UIContext, deps: { panel: Pick<Panel, 'reveal
     return gx >= m && gy >= m && gx < t.nx - m && gy < t.ny - m ? { gx, gy } : null;
   }
 
-  function writeLink(dam: NidDam): void {
+  function writeLink(dam: NidDam, breachMode: BreachMode): void {
     try {
       const url = new URL(window.location.href);
       url.searchParams.set(USE_CASE_PARAM, 'dam');
       url.searchParams.set(DAM_PARAM, dam.id);
-      url.searchParams.set(BREACH_PARAM, mode);
+      url.searchParams.set(BREACH_PARAM, breachMode);
       if (method !== 'parametric') url.searchParams.set(METHOD_PARAM, method);
       else url.searchParams.delete(METHOD_PARAM);
       url.search = url.search.replace(/%2C/gi, ',');
@@ -282,7 +291,7 @@ export function createDamView(ctx: UIContext, deps: { panel: Pick<Panel, 'reveal
     const sim = store.get().sim;
     store.set({ paused: false, sim: { ...sim, timeScale: Math.max(sim.timeScale, DAM_TIME_SCALE) } });
     last = { spec: out.spec, terrain: t };
-    writeLink(dam);
+    writeLink(dam, s.mode);
     renderReadout(null);
     const camera = bridge.scene?.getCamera?.() ?? null;
     try {

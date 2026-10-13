@@ -21,7 +21,8 @@
  *     id        8 bytes ASCII, NUL-padded ([A-Z0-9], 5–8 characters)
  *     lat, lon  i32 × 1e-5 degrees
  *     height    u16 NID height, 0.1 m          hydraulic  u16 hydraulic height, 0.1 m (0 = not reported)
- *     storage   u32 NID storage, 0.1 acre-ft   normal     u32 normal storage, 0.1 acre-ft (NO_VALUE = not reported)
+ *     storage   u32 NID storage, 0.1 acre-ft   normal     u32 normal storage, 0.1 acre-ft (NO_VALUE = not reported,
+ *                                              0 = reported as zero: a dry dam with no permanent pool — isDryDam)
  *     area      u32 surface area, 0.1 acre (NO_VALUE)   discharge u32 max discharge, ft³/s (NO_VALUE)
  *     length    u32 dam length, ft (NO_VALUE)  year u16 (0 = unknown)
  *     hazard, owner, type, state   u8 codes into HAZARDS / OWNERS / DAM_TYPES / STATES
@@ -85,7 +86,7 @@ export interface NidDam {
   hydraulicHeightM: number | null;
   /** NID storage (the maximum storage), acre-ft. */
   storageAcFt: number;
-  /** Normal storage, acre-ft; null when not reported. */
+  /** Normal storage, acre-ft; null when not reported; 0 for a dry dam (no permanent pool — isDryDam). */
   normalStorageAcFt: number | null;
   /** Surface area at normal pool, acres; null when not reported. */
   surfaceAreaAc: number | null;
@@ -103,6 +104,14 @@ export interface NidIndex {
   dams: NidDam[];
   /** Records the decoder refused (out of range), for the bake's report and the tests. */
   dropped: number;
+}
+
+/**
+ * A dry dam: the NID reports its normal storage as zero — a flood-control detention dam, or a tailings or debris basin,
+ * that holds no permanent pool and stores water only while a flood passes. Not the same as "not reported" (null).
+ */
+export function isDryDam(dam: Pick<NidDam, 'normalStorageAcFt'>): boolean {
+  return dam.normalStorageAcFt === 0;
 }
 
 /** Letters, digits; 5–8 of them. NID ids are two-letter state codes and digits (e.g. CA00035). */
