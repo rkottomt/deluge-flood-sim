@@ -568,25 +568,48 @@ treatment Schubert & Sanders found least accurate. Drains do nothing to a river 
 largest single change (−25 % flooded area, −40 % flooded road in Harvey's hour), and buildings concentrate each
 roof's runoff into the cells against its walls.
 
-**Defaults.** None is validated against an observed flood here, so each stays off:
+**Against the observed floods.** The same layers through the runs and scores of [docs/VALIDATION.md](docs/VALIDATION.md)
+(`npx tsx scripts/validation/landsurface.ts`; with buildings blocked, a footprint cell is scored at the water surface
+of its wettest open neighbour, the level a mark on its wall would record):
 
-* *Drains* are the best supported: without them the model floods 102 km of Houston's streets more than 30 cm deep in a
-  2-year storm, which the sewers are built to carry; with them, 7 km. But the shipped rain scenario is Harvey's worst
-  hour, three times the design intensity with the bayou in flood at its outfalls, when real sewers surcharge — a sink
-  at full design capacity then under-floods (−25 % area, −21 % loss), the non-conservative direction for a screening
-  tool. Recommended on for studies of ordinary storms.
-* *Buildings* are the right physics for flow paths, and exact, but on a 7.8 m grid they close sub-cell gaps between
-  houses, and under rain each roof's runoff lands in the one cell against its wall: a 2-year storm in Pittsburgh then
-  puts 15 cm against 10,206 buildings, 11 times as many as bare earth (4,793 against 463 with the drains on) — real
-  roofs drain into the sewers through their downspouts, which the model does not connect. A few roofs lower than the
-  hillside or embankment beside them also fill like pits (up to 1.6 m on a handful of Pittsburgh cells in that storm).
-  The crest loss rises 16 % through faster street flow, a change the loss model's fast-water thresholds (set on
-  bare-earth speeds) were not tuned for.
-* *The roughness map* is uncalibrated: it moves the crest loss by −54 % (bare) or +14 % (with buildings) through flow
-  speed alone, and nothing here says which is closer to the real flood.
+| Scene and observation | none (today) | buildings | roughness | buildings + roughness | drains | all three |
+| --- | --- | --- | --- | --- | --- | --- |
+| Fort Myers, Ian high-water marks: bias / RMSE | +0.07 / 0.14 m | +0.07 / 0.14 m | +0.01 / 0.17 m | +0.06 / 0.14 m | | |
+| Fort Myers, FEMA 1 % zone at the 1 % stillwater: CSI | **87.9 %** | 86.6 % | 80.9 % | 86.7 % | | |
+| Nashville, FEMA 1 % zone: CSI / 1 % profile bias | **82.3 %** / +0.26 m | 80.2 % / +0.27 m | 79.3 % / +0.24 m | 79.6 % / +0.28 m | | |
+| Pittsburgh, FEMA 1 % zone: CSI / 1 % profile bias | **60.9 %** / −0.38 m | 60.5 % / −0.38 m | 59.1 % / −0.40 m | 60.9 % / −0.38 m | | |
+| Asheville, Helene gauge peaks: French Broad / Swannanoa | −1.44 / −1.22 m | −1.45 / −1.27 m | −1.69 / +0.00 m | −1.45 / −1.02 m | | |
+| Houston, Harvey marks (not like-for-like: 1 h of a 4-day event): bias / RMSE | −1.85 / 2.56 m | −1.01 / 2.40 m | −1.87 / 2.44 m | | −1.89 / 2.61 m | −1.07 / 2.48 m |
 
-What would settle it: USGS high-water marks or a mapped extent for one of the presets' events (Harvey, Helene, Ian),
-run with each combination.
+Mass error ≤ 6·10⁻⁸ in every run. Where the comparison is like-for-like — the measured stillwater or FEMA's own 1 %
+level imposed, then extent and marks scored — no layer improves the fit: buildings cost 0.4–2.1 CSI points, the
+roughness map 1.8–7.0 (its slower floodplain flow leaves the 1 % zone's fringe dry at Fort Myers), and the combination
+lands 0–2.7 points below bare earth. The Helene gauges, set by how much discharge the valley carries, move both
+ways under the roughness map (Swannanoa from −1.22 m to 0.00, French Broad from −1.44 to −1.69 m), which says the
+error there is the burned channel and the inflow, not the floodplain n. Houston's marks record four days of Harvey;
+an hour of its rain cannot be scored against them, and buildings bring its mean 0.8 m closer only because they pile
+the same rain onto less ground.
+
+**Defaults.** On that evidence, all three stay off:
+
+* *Buildings* are the right physics for flow paths, and exact, but they do not improve any like-for-like score, and on
+  a 7.8 m grid they close sub-cell gaps between houses; under rain each roof's runoff lands in the one cell against
+  its wall: a 2-year storm in Pittsburgh then puts 15 cm against 10,206 buildings, 11 times as many as bare earth
+  (4,793 against 463 with the drains on) — real roofs drain into the sewers through their downspouts, which the model
+  does not connect. A few roofs lower than the hillside or embankment beside them also fill like pits (up to 1.6 m on
+  a handful of Pittsburgh cells in that storm). The crest loss rises 16 % through faster street flow, a change the loss
+  model's fast-water thresholds (set on bare-earth speeds) were not tuned for.
+* *The roughness map* makes every like-for-like score worse and moves the crest loss by −54 % (bare) or +14 % (with
+  buildings) through flow speed alone. The literature values need calibrating per city before they belong in a default.
+* *Drains* are the best supported physically: without them the model floods 102 km of Houston's streets more than
+  30 cm deep in a 2-year storm, which the sewers are built to carry; with them, 7 km. But no observation here tests a
+  storm of that size, and the shipped rain scenario is Harvey's worst hour — three times the design intensity, with the
+  bayou in flood at the outfalls — when real sewers surcharge: a sink at full design capacity then under-floods
+  (−25 % area, −21 % loss), the non-conservative direction for a screening tool. Recommended on for studies of
+  ordinary storms.
+
+What would change this: a city's calibrated n by land-cover class; roofs connected to the drains; observed extents of a
+design-size rain event.
 
 ## 4. Rivers, stages and crests
 

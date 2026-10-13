@@ -23,7 +23,7 @@ import { StageLevels, stageOffsetForFeet } from '../../src/app/stage';
 import { computeInitialWater } from '../../src/data/initialWater';
 import { decodeElevation, type PresetMeta } from '../../src/data/presets';
 import { footprintRadius } from '../../src/sim/forcing';
-import type { SimParams, SimStats } from '../../src/contracts';
+import type { LandSurface, SimParams, SimStats } from '../../src/contracts';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
@@ -39,6 +39,8 @@ export interface RunDef {
   stageLevel?: number;
   /** Sensitivity runs only: solver parameters to override (e.g. Manning's n). The validation runs use none. */
   params?: Partial<SimParams>;
+  /** Sensitivity runs only: land-surface layers (FloodSolver.setLandSurface; scripts/validation/landsurface.ts). */
+  landSurface?: LandSurface;
 }
 
 export interface PresetData {
@@ -108,6 +110,7 @@ export async function runScenario(
   );
   try {
     solver.setInitialWater(p.initialWater);
+    if (run.landSurface) solver.setLandSurface(run.landSurface);
     // src/app/scene.ts applyScenarioRheology (not imported: scene.ts pulls in the browser-only loaders).
     const chain = sc.hazardChain;
     if (chain?.rheology) solver.setRheology(chain.rheology, chain.solver);

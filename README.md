@@ -648,8 +648,10 @@ a simulation. `Deluge.app` serves the same build with `frame-ancestors 'none'` a
   road and highway embankments dam small creeks: under heavy rain water ponds several metres deep behind them (8.5 m
   behind I-376 in Pittsburgh's Saw Mill Run valley at 100 mm/hr; up to 14 m in a pit beside US 40 after an hour of
   Ellicott City's storm), which also sets the HUD's max depth. Buildings, a land-cover roughness map and storm drains
-  are optional layers (Advanced → *Land surface*), **off by default** because none has been checked against an observed
-  flood here ([ARCHITECTURE.md §3.11](ARCHITECTURE.md#311-land-surface-buildings-as-obstacles-a-roughness-map-storm-drains)):
+  are optional layers (Advanced → *Land surface*), **off by default**: run against the observed floods of
+  [docs/VALIDATION.md](docs/VALIDATION.md), none improves a like-for-like score (FEMA 1 % zones at Fort Myers, Nashville
+  and Pittsburgh, Ian's high-water marks) — buildings cost 0.4–2.1 CSI points, the roughness map 1.8–7.0
+  ([ARCHITECTURE.md §3.11](ARCHITECTURE.md#311-land-surface-buildings-as-obstacles-a-roughness-map-storm-drains)):
   * *Buildings block flow* raises every footprint into the bed the water sees. On the 7.8 m grid it closes gaps between
     houses narrower than a cell, and a roof's rain lands in the cells against its walls (real downspouts feed the
     sewers), so under rain it puts water against many more buildings than bare earth does.
