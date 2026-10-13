@@ -273,6 +273,30 @@ async function tripwires(page) {
 }
 
 /** Fulfil a route with a body, optionally gzipped and/or with a forged Content-Length. */
+/** A flat 20 m elevation tile as the 3DEP exportImage call returns it: little-endian, uncompressed float32 TIFF. */
+function flatTiff(size) {
+  const [w, h] = String(size ?? '64,64').split(',').map((v) => Math.max(2, Math.min(2048, Number(v) || 64)));
+  const entries = [[256, 4, w], [257, 4, h], [258, 3, 32], [259, 3, 1], [262, 3, 1], [273, 4, 0], [277, 3, 1], [278, 4, h], [279, 4, w * h * 4], [284, 3, 1], [339, 3, 3]];
+  const ifd = 2 + entries.length * 12 + 4;
+  const dataOff = 8 + ifd + ((4 - ((8 + ifd) % 4)) % 4);
+  entries[5][2] = dataOff;
+  const buf = Buffer.alloc(dataOff + w * h * 4);
+  buf.write('II', 0, 'latin1');
+  buf.writeUInt16LE(42, 2);
+  buf.writeUInt32LE(8, 4);
+  buf.writeUInt16LE(entries.length, 8);
+  entries.forEach(([tag, type, value], i) => {
+    const o = 10 + i * 12;
+    buf.writeUInt16LE(tag, o);
+    buf.writeUInt16LE(type, o + 2);
+    buf.writeUInt32LE(1, o + 4);
+    if (type === 3) buf.writeUInt16LE(value, o + 8);
+    else buf.writeUInt32LE(value, o + 8);
+  });
+  for (let k = 0; k < w * h; k++) buf.writeFloatLE(20, dataOff + k * 4);
+  return buf;
+}
+
 function fulfilJSON(route, obj, opts = {}) {
   const text = typeof obj === 'string' ? obj : JSON.stringify(obj);
   const headers = { 'content-type': 'application/json', 'access-control-allow-origin': '*' };
@@ -621,6 +645,46 @@ try {
       flow.typed ? (ok ? 'pass' : 'fail') : ok ? 'pending' : 'fail',
       flow.typed ? (ok ? `${choices} results rendered as text, window.__pwned unset` : JSON.stringify(t)) : 'address search not reachable — case not exercised',
       { ...flow, choices, ...t },
+    );
+    await page.close();
+  }
+
+  if (shouldRun('PRIVACY-ADDRESS-SHARE')) {
+    // "Check an address" promises that links carry the coordinates, never the address. The site it drops is named
+    // after the street address on screen; its Share link (?sites=) must leave that name out. Nominatim answers with a
+    // street address, 3DEP with a flat 5 km tile (a tiny float32 TIFF); every other host is refused, as offline.
+    const page = await newPage(browser, {
+      'nominatim.openstreetmap.org': (route) => fulfilJSON(route, [{ place_id: 1, display_name: '1600, Smith Street, Downtown, Houston, Harris County, Texas, 77002, United States', lat: '29.7604', lon: '-95.3698', class: 'place', type: 'house' }]),
+      'elevation.nationalmap.gov': (route, url) =>
+        /\/exportImage/.test(url)
+          ? route.fulfill({ status: 200, headers: { 'content-type': 'image/tiff', 'access-control-allow-origin': '*' }, body: flatTiff(new URL(url).searchParams.get('size')) })
+          : fulfilJSON(route, {}),
+    });
+    await page.goto(`${baseUrl}?preset=pittsburgh`, { waitUntil: 'load', timeout: 120000 });
+    await waitForApp(page);
+    const flow = await addressSearchFlow(page, '1600 Smith St, Houston');
+    let link = null;
+    let siteName = '';
+    if (flow.typed && (await page.locator('[data-uc="address-choice"]').count())) {
+      await page.click('[data-uc="address-choice"]');
+      const placed = await page.waitForSelector('.dl-site-item', { timeout: 180000 }).then(() => true, () => false);
+      if (placed) {
+        siteName = (await page.locator('.dl-site-item').first().textContent()) ?? '';
+        await page.click('[data-site="share-link"]').catch(() => {});
+        await page.waitForTimeout(500);
+        link = await page.evaluate(() => new URLSearchParams(location.search).get('sites'));
+      }
+    }
+    const leaked = link !== null && /smith|1600/i.test(link);
+    // Only a site named after the address on screen, and a link actually written, prove the case.
+    const exercised = link !== null && /Smith/i.test(siteName);
+    record(
+      'PRIVACY-ADDRESS-SHARE',
+      'SEC-01',
+      'the Share link of an address-check site carries its coordinates, never the street address',
+      leaked ? 'fail' : exercised ? 'pass' : 'pending',
+      leaked ? `?sites= carries the address: ${link}` : exercised ? `site “${siteName.trim().slice(0, 40)}” shared as ${link}` : `flow not completed (${JSON.stringify(flow)}, link ${link})`,
+      { ...flow, link, siteName },
     );
     await page.close();
   }

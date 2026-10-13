@@ -12,6 +12,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { TerrainData } from '../contracts';
+import { ATLAS14_MAX_DOWNLOAD, decodeAtlas14Grid, gunzipCapped, type Atlas14Grid } from '../data/atlas14';
 import { listPresets, loadPreset, setPresetBaseUrl, type PresetMeta } from '../data/presets';
 
 /** public/presets of this checkout (overridable with DELUGE_PRESETS_DIR, e.g. for a packaged install). */
@@ -66,6 +67,24 @@ export function readPresetMeta(id: string): PresetMeta | null {
 export function readPresetJson(id: string, file: string): unknown {
   if (!/^[a-z0-9][a-z0-9._-]{0,63}\.json$/i.test(file) || file.includes('..')) throw new Error(`not a baked file name: ${file}`);
   return JSON.parse(fs.readFileSync(path.join(presetsDir(), id, file), 'utf8'));
+}
+
+/**
+ * The app's NOAA Atlas 14 grid (public/atlas14/pf60m-pds.bin, next to public/presets), through the app's own capped
+ * gunzip and strict decoder — the rain ladder the CLI builds is the one the Site check builds. Read once per process.
+ */
+let atlas14: Promise<Atlas14Grid> | null = null;
+export function loadAtlas14FromDisk(): Promise<Atlas14Grid> {
+  atlas14 ??= (async () => {
+    const file = path.join(path.dirname(presetsDir()), 'atlas14', 'pf60m-pds.bin');
+    const buf = await fs.promises.readFile(file);
+    if (buf.byteLength > ATLAS14_MAX_DOWNLOAD) throw new Error('Atlas 14 grid: file too large');
+    return decodeAtlas14Grid(await gunzipCapped(new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength)));
+  })().catch((e) => {
+    atlas14 = null;
+    throw e;
+  });
+  return atlas14;
 }
 
 /** Load a preset with the app's loader, from disk. */

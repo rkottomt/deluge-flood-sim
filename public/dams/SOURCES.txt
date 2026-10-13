@@ -20,7 +20,8 @@ WHAT WAS KEPT   Dams with NID storage >= 1,000 acre-ft, or NID height >= 6 m (19
                 55,887 records. Structures that share one NID id (a reservoir's main dam and its saddle dams) are folded
                 into the tallest (609 folded), giving 55,278; the app's decoder refuses 2 more (one with no height, one
                 with an implausible storage), leaving 55,276. Units are converted on use (ft -> m, acre-ft -> m3,
-                ft3/s -> m3/s).
+                ft3/s -> m3/s). A normal storage the NID reports as 0 is kept as 0 (1,128 dry dams: flood-control
+                detention dams, tailings and debris basins with no permanent pool), apart from "not reported".
 
 HOW IT WAS MADE scripts/bake-nid.ts (Node 22.13+, reads the GeoPackage with node:sqlite):
                     node --import tsx scripts/bake-nid.ts --download --cache=<dir>

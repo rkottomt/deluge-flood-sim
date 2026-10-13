@@ -127,6 +127,21 @@ test('an NID dam with fields missing says what it assumed', () => {
   assert.ok(damScenario(d, 'flood').assumptions.some((a) => /No maximum discharge/.test(a)));
 });
 
+test('a dry dam (NID normal storage 0) has no sunny-day failure: it holds no pool on a sunny day', () => {
+  const d = dam({ normalStorageAcFt: 0, name: 'Red Rock Detention Dam' });
+  const s = damScenario(d, 'sunny');
+  // Not the 50 %-of-maximum fallback for an unreported normal storage, and not the "No normal storage" note.
+  assert.equal(s.mode, 'flood');
+  assert.ok(Math.abs(s.volumeM3 - 66200 * 1233.48183754752) < 1);
+  assert.ok(!s.assumptions.some((a) => /No normal storage/.test(a)), s.assumptions.join(' | '));
+  assert.ok(s.assumptions.some((a) => /dry dam/i.test(a) && /no sunny-day/i.test(a)), s.assumptions.join(' | '));
+  // Flood-induced is unchanged, and the reservoir shape is read at the only pool it has (maximum).
+  const f = damScenario(d, 'flood');
+  assert.equal(f.mode, 'flood');
+  assert.ok(Math.abs(f.volumeM3 - s.volumeM3) < 1e-6);
+  assert.ok(hypsometryFor(d, 17.4).fromNid);
+});
+
 test('a dam bigger than any documented failure says its numbers are an extrapolation', () => {
   const big = dam({ id: 'CA00035', name: 'Oroville Dam', heightM: 234.7, hydraulicHeightM: 228, storageAcFt: 3_540_000, normalStorageAcFt: 3_540_000, surfaceAreaAc: 15_800 });
   assert.ok(damScenario(big, 'sunny').assumptions.some((a) => /extrapolation/.test(a)));

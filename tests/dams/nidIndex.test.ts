@@ -9,7 +9,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
-import { cleanDamName, damById, decodeNidIndex, encodeNidIndex, NID_RECORD_BYTES, searchDams, type NidDam } from '../../src/dams/nidIndex';
+import { cleanDamName, damById, decodeNidIndex, encodeNidIndex, isDryDam, NID_RECORD_BYTES, searchDams, type NidDam } from '../../src/dams/nidIndex';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const FILE = path.join(ROOT, 'public', 'dams', 'nid-index.bin');
@@ -65,6 +65,17 @@ test('the baked index holds the dams it should, with their NID numbers', () => {
   assert.ok(eden && eden.name === 'Edenville Dam' && eden.maxDischargeCfs === 21070 && eden.normalStorageAcFt === 36000);
 });
 
+test('the baked index keeps a reported normal storage of 0 (dry dams), apart from "not reported"', () => {
+  // Red Rock Detention Dam, Las Vegas: a flood-control detention basin, NID normal storage 0 (October 2026 export).
+  const red = damById(real.index, 'NV10406');
+  assert.ok(red, 'Red Rock Detention Dam');
+  assert.equal(red.normalStorageAcFt, 0);
+  assert.ok(isDryDam(red));
+  const dry = real.index.dams.filter(isDryDam).length;
+  assert.ok(dry > 1000, `${dry} dry dams`);
+  assert.ok(real.index.dams.some((d) => d.normalStorageAcFt === null), 'some dams still report no normal storage');
+});
+
 test('search: by name, by id, and near a point', () => {
   const byName = searchDams(real.index, { text: 'oroville' });
   assert.equal(byName[0].dam.id, 'CA00035');
@@ -89,6 +100,10 @@ test('encode → decode round-trips every field', () => {
   assert.equal(b.normalStorageAcFt, null);
   assert.equal(b.year, null);
   assert.equal(b.damType, 'Arch');
+  // 0 is a value (a dry dam), not "not reported".
+  const z = decodeNidIndex(encodeNidIndex([dam({ normalStorageAcFt: 0 })])).dams[0];
+  assert.equal(z.normalStorageAcFt, 0);
+  assert.ok(isDryDam(z) && !isDryDam(b) && !isDryDam(back.dams[0]));
 });
 
 test('hostile index files: wrong magic, short, a lying header, too many records, broken names → refused', () => {

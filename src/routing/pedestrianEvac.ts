@@ -29,8 +29,33 @@
  *
  * Pure: no DOM.
  */
+import type { HazardFields } from '../contracts';
+import { openCells } from '../loss/footprints';
 import type { Occupancy, StructuralState } from '../loss/value';
-import type { WalkNetwork, WalkSeed } from './pedestrian';
+import { unsafeForWalking, type WalkNetwork, type WalkSeed } from './pedestrian';
+
+/**
+ * When a site's own surroundings turn unsafe for people walking out (s; +∞ never): the median over its cells — half
+ * the exits gone. With buildings as obstacles (HazardFields.blocked) the footprint itself stays dry, so the cells
+ * against its walls are read instead (footprints.ts openCells, as site.ts and impact.ts do). Water present at reset is
+ * skipped; unsafe water with no arrival time (firstWet −1) counts from the end of the run and is flagged `untimed`
+ * (walkHazard's UNTIMED rule) — never from T+0.
+ */
+export function siteExitUnsafeAt(footprint: readonly number[], f: HazardFields): { t: number; untimed: boolean } {
+  const cells = (f.blocked && openCells(footprint, 0, footprint.length, f.blocked, f.nx, f.ny)) || footprint;
+  if (!cells.length) return { t: Infinity, untimed: false };
+  const ts: Array<{ t: number; untimed: boolean }> = [];
+  for (const c of cells) {
+    const fw = f.firstWet[c];
+    if (fw === 0) continue;
+    if (!unsafeForWalking(f.maxDepth[c], f.maxSpeed[c], f.maxDV[c])) continue;
+    ts.push(fw > 0 ? { t: fw, untimed: false } : { t: f.simTime, untimed: true });
+  }
+  const half = Math.ceil(cells.length / 2);
+  if (ts.length < half) return { t: Infinity, untimed: false };
+  ts.sort((a, b) => a.t - b.t);
+  return ts[half - 1];
+}
 
 export type WalkGroupId = 'able' | 'older' | 'impaired';
 
@@ -157,6 +182,8 @@ export interface PeopleEvacInput {
   alertTime: number;
   /** When the building's own surroundings turn unsafe for people (nobody leaves after), s; +∞ if never. */
   exitUnsafeAt: number;
+  /** exitUnsafeAt is the end-of-run fallback for water with no arrival time (siteExitUnsafeAt). */
+  exitUntimed?: boolean;
   /** For vertical evacuation. */
   building: { floors: number; firstFloorHeight: number; storeyHeight: number; maxDepth: number; collapseShare: number; state: StructuralState } | null;
 }
@@ -202,6 +229,9 @@ export interface PeopleEvacResult {
   horizon: number;
   alertTime: number;
   speedsKnown: boolean;
+  /** Streets (and the exits, when `exitUntimed`) unsafe only through water with no arrival time: closed from the end of the run. */
+  untimedUnsafe: number;
+  exitUntimed: boolean;
 }
 
 /**
@@ -228,6 +258,8 @@ export function analyzePeopleEvac(net: WalkNetwork, start: { gx: number; gy: num
     horizon: hz?.simTime ?? 0,
     alertTime: input.alertTime,
     speedsKnown: hz?.speedsKnown ?? false,
+    untimedUnsafe: hz?.untimedUnsafe ?? 0,
+    exitUntimed: !!input.exitUntimed && Number.isFinite(input.exitUnsafeAt),
   };
   if (!hz) {
     out.note = 'No flood read yet.';
@@ -287,7 +319,8 @@ export function analyzePeopleEvac(net: WalkNetwork, start: { gx: number; gy: num
       if (!r.ok) continue;
       const rt = net.route(start.gx, start.gy, r.node);
       const shelter = net.refugeLabel(r.node);
-      out.route = { ...rt, refuge: shelter || (net.streetAt(r.node) ? `high ground on ${net.streetAt(r.node)}` : 'high ground'), refugeKind: shelter ? 'shelter' : 'high-ground', via: net.mainStreet(r.node), cut: false };
+      // Found only departing at T+0: the walk was open before the alert and closed by the first-out moment — cut.
+      out.route = { ...rt, refuge: shelter || (net.streetAt(r.node) ? `high ground on ${net.streetAt(r.node)}` : 'high ground'), refugeKind: shelter ? 'shelter' : 'high-ground', via: net.mainStreet(r.node), cut: t !== t1 };
       break;
     }
     if (out.route) break;
@@ -330,6 +363,10 @@ export function peopleEvacSentences(r: PeopleEvacResult): string[] {
   out.push(`With the alert at ${tPlus(r.alertTime)}, ${r.reach.toLocaleString('en-US')} of ${r.occupants.toLocaleString('en-US')} reach safety on foot.`);
   const v = r.vertical;
   if (v) out.push(`Vertical evacuation feasible: ${v.feasible ? 'yes' : 'no'} — ${v.reason}.`);
+  if (r.untimedUnsafe > 0 || r.exitUntimed) {
+    const what = [r.exitUntimed ? 'the site’s exits' : '', r.untimedUnsafe > 0 ? `${r.untimedUnsafe} street segment${r.untimedUnsafe === 1 ? '' : 's'}` : ''].filter(Boolean).join(' and ');
+    out.push(`Untimed: ${what} turn unsafe only through thin, fast water that never stood 15 cm deep, so it has no arrival time — counted as unsafe from the end of the run (${tPlus(r.horizon)}).`);
+  }
   return out;
 }
 

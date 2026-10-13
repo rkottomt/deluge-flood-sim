@@ -15,7 +15,7 @@ import { climateForcing } from '../../src/climate/apply';
 import { TIDE_GAUGE_SLR } from '../../src/climate/scenarios';
 import { eal } from '../../src/loss/eal';
 import { ladderFor, PRESET_LADDERS } from '../../src/loss/ladders';
-import { coastalSetup, seaMask, stationSlr, surgeLadder } from '../../src/surge/coastal';
+import { coastalSetup, seaMask, stationSlr, surgeLadder, withoutSurgeText } from '../../src/surge/coastal';
 import { encodeSurgeTable, mhhwOnDem, nearestStation, parseSurgeTable, SURGE_AEPS, SURGE_LIMITS, surgeLevels, type SurgeStation } from '../../src/surge/stations';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -130,6 +130,22 @@ test('coastal set-up: pre-filled water at sea level is the sea; a lake at 12 m r
   // Inland with no sea at all: a reason, not a scenario.
   const inland = coastalSetup({ elevation: new Float32Array(n * n).fill(30), nx: n, ny: n, cellSize: 60 }, LIVE, s, 50);
   assert.ok('error' in inland && /No sea reaches the edge/.test(inland.error));
+});
+
+test('re-running the coastal set-up replaces its sentences in the description, never stacks them', () => {
+  const s = TABLE.stations.find((x) => x.id === '8725520')!;
+  const n = 128;
+  const grid = { elevation: coast(n), nx: n, ny: n, cellSize: 60 };
+  const first = coastalSetup(grid, LIVE, s, 3.2);
+  assert.ok(!('error' in first));
+  // As the surge view does: the previous set-up taken out, then the new one put in.
+  const again = coastalSetup(grid, { ...first.scenario, description: withoutSurgeText(first.scenario), coastal: undefined }, s, 3.2);
+  assert.ok(!('error' in again));
+  assert.equal((again.scenario.description.match(/Coastal surge set-up/g) ?? []).length, 1, again.scenario.description);
+  assert.ok(again.scenario.description.startsWith(LIVE.description));
+  // Handed the coastal scenario itself, the builder still starts from the area's own description.
+  const direct = coastalSetup(grid, first.scenario, s, 3.2);
+  assert.ok(!('error' in direct) && (direct.scenario.description.match(/Coastal surge set-up/g) ?? []).length === 1);
 });
 
 test('the surge ladder ends in an expected annual loss from NOAA’s return periods alone', () => {

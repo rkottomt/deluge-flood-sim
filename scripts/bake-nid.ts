@@ -48,6 +48,10 @@ async function download(): Promise<void> {
 
 const num = (v: unknown): number => (v === null || v === undefined || v === '' ? NaN : Number(v));
 const orNull = (v: number): number | null => (Number.isFinite(v) && v > 0 ? v : null);
+// Normal storage keeps a reported 0: it is a value, not a gap — a dry dam (a flood-control detention dam, a tailings
+// or debris basin) that holds no permanent pool. ~2,800 NID records say so; folding them into "not reported" gave
+// them a sunny-day breach of half the maximum storage (src/dams/breachModel.ts damScenario).
+const orNullKeepZero = (v: number): number | null => (Number.isFinite(v) && v >= 0 ? v : null);
 
 async function bake(): Promise<void> {
   const { DatabaseSync } = await import('node:sqlite');
@@ -92,7 +96,7 @@ async function bake(): Promise<void> {
       heightM,
       hydraulicHeightM: orNull(num(r.hydraulicHeight) * FT_M),
       storageAcFt: storage,
-      normalStorageAcFt: orNull(num(r.normalStorage)),
+      normalStorageAcFt: orNullKeepZero(num(r.normalStorage)),
       surfaceAreaAc: orNull(num(r.surfaceArea)),
       maxDischargeCfs: orNull(num(r.maxDischarge)),
       lengthFt: orNull(num(r.damLength)),

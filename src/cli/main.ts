@@ -18,7 +18,7 @@ import { HANDLERS, type CliEnv } from './commands';
 import { finishGpu, getGpu, gpuErrors, NoGpuError } from './gpu';
 import { HeadlessScene } from './headless';
 import { createLog, writeOutput } from './io';
-import { availablePresetIds, loadPresetFromDisk, readPresetJson, readPresetMeta } from './presetFiles';
+import { availablePresetIds, loadAtlas14FromDisk, loadPresetFromDisk, readPresetJson, readPresetMeta } from './presetFiles';
 import { UsageError } from './scenario';
 
 function version(): string {
@@ -74,6 +74,7 @@ export async function main(argv: readonly string[]): Promise<number> {
     presetIds: availablePresetIds,
     presetMeta: readPresetMeta,
     loadTerrain: loadPresetFromDisk,
+    loadAtlas14: loadAtlas14FromDisk,
     async openScene(terrain, presetId, o) {
       const gpu = await getGpu();
       return HeadlessScene.create(gpu.device, terrain, { presetId, climate: o.climate, appCadence: o.appCadence, readPresetJson: (file) => readPresetJson(presetId, file) });

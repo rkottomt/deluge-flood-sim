@@ -44,9 +44,11 @@ import { COMMANDS, parseOptions } from '../../src/cli/args';
 import { HANDLERS, type CliEnv, type SceneLike } from '../../src/cli/commands';
 import type { ForcingPatch } from '../../src/cli/headless';
 import { createLog } from '../../src/cli/io';
-import { availablePresetIds, loadPresetFromDisk, readPresetMeta } from '../../src/cli/presetFiles';
+import { availablePresetIds, loadAtlas14FromDisk, loadPresetFromDisk, readPresetMeta } from '../../src/cli/presetFiles';
 import { geotiffBytes, hazardLayers } from '../../src/cli/rasters';
 import { buildLadder, parseClimate, resolveForcing, UsageError } from '../../src/cli/scenario';
+import { lookupAtlas14, type Atlas14Point } from '../../src/data/atlas14';
+import { ladderKinds, RAIN_DESIGN_DURATION_S, rainLadder } from '../../src/loss/ladders';
 
 const FT = 0.3048;
 const DEMO_CSV = path.resolve(import.meta.dirname, '../../public/demo/houston-portfolio.csv');
@@ -87,6 +89,8 @@ class FakeScene implements SceneLike {
   readonly initialWater: Float32Array;
   /** The stage offset of every case run (to check what a sweep asked for). */
   readonly ran: Array<{ stageOffset: number; rainRate: number; simTime: number }> = [];
+  /** Every runFor call: how long, under which rain (to check the 1-hour storm of a rain level stops on the hour). */
+  readonly segments: Array<{ seconds: number; rainRate: number; inflows: number; storms: number }> = [];
   private clock = 0;
 
   constructor(
@@ -112,6 +116,7 @@ class FakeScene implements SceneLike {
     this.clock = 0;
   }
   async runFor(seconds: number): Promise<void> {
+    this.segments.push({ seconds, rainRate: this.state.sim.rainRate, inflows: this.state.sources.filter((x) => x.type === 'inflow').length, storms: this.state.storms.length });
     this.clock += seconds;
     this.frames++;
   }
@@ -137,6 +142,7 @@ function env(files: Map<string, string | ArrayBuffer | Uint8Array>, out: string[
     version: 'test',
     presetIds: availablePresetIds,
     presetMeta: readPresetMeta,
+    loadAtlas14: loadAtlas14FromDisk,
     async loadTerrain(id) {
       const t = terrains.get(id) ?? (await loadPresetFromDisk(id));
       terrains.set(id, t);
@@ -317,13 +323,104 @@ test('scenario flags → forcing: gauge feet, ladder levels, multipliers, rain; 
   assert.throws(() => parseClimate('2040:ssp585'), /horizon/);
 });
 
+/** NOAA Atlas 14 at a preset's map centre — where the Site check reads it (siteCheck.ts mapCentre). */
+async function rainFor(id: string): Promise<Atlas14Point | null> {
+  const b = readPresetMeta(id)!.bounds;
+  return lookupAtlas14(await loadAtlas14FromDisk(), (b.north + b.south) / 2, (b.east + b.west) / 2);
+}
+
 test('ladders: the Site check panel’s — researched stage ladders, else × multipliers with × 0.5 and × 1 ticked', () => {
   const pit = readPresetMeta('pittsburgh')!.scenario;
-  const l = buildLadder('pittsburgh', pit.stage);
-  assert.deepEqual(l.map((r) => r.id), ladderFor('pittsburgh')!.map((r) => r.id));
-  assert.ok(l.every((r) => r.on && !r.outOfRange));
+  const l = buildLadder('pittsburgh', pit);
+  assert.equal(l.kind, 'stage');
+  assert.deepEqual(l.rungs.map((r) => r.id), ladderFor('pittsburgh')!.map((r) => r.id));
+  assert.ok(l.rungs.every((r) => r.on && !r.outOfRange));
   const h = buildLadder('houston', null);
-  assert.deepEqual(h.filter((r) => r.on).map((r) => r.id), ['x0.5', 'x1']);
+  assert.equal(h.kind, 'scale');
+  assert.deepEqual(h.rungs.filter((r) => r.on).map((r) => r.id), ['x0.5', 'x1']);
+});
+
+test('ladders: a rain-led preset under NOAA Atlas 14 gets the app’s rain ladder (a14-2 … a14-500), chosen as the app chooses', async () => {
+  const hou = readPresetMeta('houston')!.scenario;
+  const rain = await rainFor('houston');
+  assert.ok(rain, 'Houston is inside Atlas 14');
+  const l = buildLadder('houston', hou, { rain });
+  // The panel's choice and the panel's rungs (siteCheck.ts ladderOptions / buildLadder).
+  assert.equal(l.kind, ladderKinds('houston', hou, true).auto);
+  assert.equal(l.kind, 'rain');
+  const app = rainLadder(rain);
+  assert.deepEqual(l.rungs.map((r) => [r.id, r.mmPerHour, r.sourceRp, r.on]), app.map((a) => [a.id, a.mmPerHour, a.returnPeriod, true]));
+  assert.deepEqual(l.rungs.map((r) => r.id), ['a14-2', 'a14-10', 'a14-25', 'a14-100', 'a14-500']);
+  assert.ok(l.rungs.every((r) => r.source === 'noaa-atlas14' && /Atlas 14/.test(r.sourceText)));
+  assert.deepEqual(l.kinds, ['rain', 'scale']);
+  // The multipliers are still there by name; a researched stage ladder still wins on a river preset.
+  assert.equal(buildLadder('houston', hou, { rain, kind: 'scale' }).kind, 'scale');
+  assert.throws(() => buildLadder('houston', hou, { kind: 'stage' }), /--ladder stage: not available/);
+  const pit = readPresetMeta('pittsburgh')!.scenario;
+  assert.equal(buildLadder('pittsburgh', pit, { rain: await rainFor('pittsburgh') }).kind, 'stage');
+  // A preset with no rain of its own (Asheville: an inflow) keeps the multipliers by default, as the app does.
+  const ash = readPresetMeta('asheville')!.scenario;
+  const a = buildLadder('asheville', ash, { rain: await rainFor('asheville') });
+  assert.equal(a.kind, 'scale');
+  assert.ok(a.kinds.includes('rain'));
+});
+
+test('--scenario a14-100: rain only, the level’s 1-hour intensity, stopping after the hour', async () => {
+  const hou = readPresetMeta('houston')!.scenario;
+  const rain = await rainFor('houston');
+  const f = resolveForcing('houston', hou, { level: 'a14-100' }, { rain });
+  const want = rainLadder(rain!).find((l) => l.id === 'a14-100')!;
+  assert.equal(f.rainRate, want.mmPerHour);
+  assert.equal(f.stageOffset, 0);
+  assert.equal(f.storms.length, 0);
+  assert.ok(!f.sources.some((s) => s.type === 'inflow'));
+  assert.equal(f.rainStopsAtS, RAIN_DESIGN_DURATION_S);
+  assert.equal(f.level?.id, 'a14-100');
+  // --rain replaces the intensity and then rains for the whole run, as --rain always does.
+  assert.equal(resolveForcing('houston', hou, { level: 'a14-100', rain: 50 }, { rain }).rainStopsAtS, null);
+  // A rung of a ladder that is not the default one is still found by id.
+  assert.equal(resolveForcing('houston', hou, { level: 'x0.5' }, { rain }).rainRate, 173 * 0.5);
+  // Outside Atlas 14 (or not looked up): no such level, and the error says why.
+  assert.throws(() => resolveForcing('houston', hou, { level: 'a14-100' }), /no level "a14-100".*Atlas 14 does not cover/);
+
+  const { code, files, scene } = await cli(['site', '--preset', 'houston', '--at', '29.7725,-95.3837', '--scenario', 'a14-100', '--out', 'a14.json']);
+  assert.equal(code, 0);
+  // 120 simulated minutes by default (the app's rain sweep): 60 of rain, 60 of run-off.
+  assert.deepEqual(scene.segments.map((g) => [g.seconds, g.rainRate, g.inflows, g.storms]), [
+    [3600, want.mmPerHour, 0, 0],
+    [3600, 0, 0, 0],
+  ]);
+  const report = JSON.parse(String(files.get('a14.json')));
+  assert.equal(report.scenario.level.id, 'a14-100');
+  assert.equal(report.scenario.level.rainMmHr, want.mmPerHour);
+  assert.equal(report.scenario.simulatedMinutes, 120);
+});
+
+test('site --sweep on a rain-led preset sweeps the Atlas 14 rain ladder, as the Site check does', async () => {
+  const rain = await rainFor('houston');
+  const app = rainLadder(rain!);
+  const { code, files, scene } = await cli(['site', '--preset', 'houston', '--at', '29.7725,-95.3837', '--use', 'warehouse', '--floors', '1', '--sweep', '--out', 'rain.json']);
+  assert.equal(code, 0);
+  const report = JSON.parse(String(files.get('rain.json')));
+  assert.equal(report.ladder.kind, 'rain');
+  assert.ok(report.ladder.caveats.length > 0 && report.ladder.sources.some((x: { key: string }) => x.key === 'noaa-atlas14'));
+  // Every level: its intensity with inflows and storm cells off for an hour, then an hour of run-off.
+  assert.deepEqual(
+    scene.segments.map((g) => [g.seconds, g.rainRate, g.inflows, g.storms]),
+    app.flatMap((a) => [
+      [3600, a.mmPerHour, 0, 0],
+      [3600, 0, 0, 0],
+    ]),
+  );
+  assert.deepEqual(
+    report.sweep.levels.map((l: { level: { id: string; rainMmHr: number; returnPeriodFrom: string } }) => [l.level.id, l.level.rainMmHr, l.level.returnPeriodFrom]),
+    app.map((a) => [a.id, a.mmPerHour, 'source']),
+  );
+  // --ladder scale gives the multipliers back; --ladder without --sweep is a usage error.
+  const s2 = await cli(['site', '--preset', 'houston', '--at', '29.7725,-95.3837', '--sweep', '--ladder', 'scale', '--minutes', '2', '--out', 'scale.json']);
+  assert.equal(JSON.parse(String(s2.files.get('scale.json'))).ladder.kind, 'scale');
+  await assert.rejects(cli(['site', '--preset', 'houston', '--at', '29.7725,-95.3837', '--ladder', 'rain']), (e: unknown) => e instanceof UsageError && /--ladder/.test(e.message));
+  await assert.rejects(cli(['site', '--preset', 'houston', '--at', '29.7725,-95.3837', '--sweep', '--ladder', 'tide']), (e: unknown) => e instanceof UsageError && /--ladder must be/.test(e.message));
 });
 
 test('GeoTIFF: EPSG:3857, the grid’s outer corners, row 0 north, nodata, values intact', async () => {

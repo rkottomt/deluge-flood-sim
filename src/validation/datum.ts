@@ -16,6 +16,18 @@ export const US_SURVEY_FT = 1200 / 3937;
 export type LengthUnit = 'ft' | 'usft' | 'm';
 export type VerticalDatum = 'NAVD88' | 'NGVD29' | 'GAUGE' | 'EGM2008' | 'UNKNOWN';
 
+/**
+ * A numeric field of a downloaded record (USGS RDB, ArcGIS attributes): a blank, null or non-numeric value is NaN —
+ * not 0, which is what Number('') and Number(null) give, and which would pass as a gauge datum, a coordinate or a
+ * BFE of zero.
+ */
+export function numberField(v: unknown): number {
+  if (v === null || v === undefined) return NaN;
+  if (typeof v === 'number') return v;
+  const s = String(v).trim();
+  return s === '' ? NaN : Number(s);
+}
+
 export function toMetres(value: number, unit: LengthUnit): number {
   if (unit === 'm') return value;
   if (unit === 'usft') return value * US_SURVEY_FT;

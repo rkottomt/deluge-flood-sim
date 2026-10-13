@@ -37,6 +37,10 @@
   gap: 6px;
   cursor: pointer;
 }
+.dl-dam-choice:has(input:disabled) {
+  cursor: default;
+  opacity: 0.55;
+}
 .dl-dam-table {
   width: 100%;
   margin: 8px 0;

@@ -15,6 +15,8 @@ import { descentPath, injectionCell, injectionRadiusM, type GridPoint, type Path
 
 /** What a dam-breach scenario carries (ScenarioPreset.damBreach). */
 export interface DamBreachSpec {
+  /** The sentences this breach put in front of the scenario's description (withoutDamText takes them out again). */
+  descriptionAdded?: string;
   nidId: string;
   name: string;
   mode: BreachMode;
@@ -92,9 +94,17 @@ export function damBreachScenario(
   };
   const others = base.sources.filter((x) => x.id !== DAM_INFLOW_ID);
   const peakText = Math.round(r.peak).toLocaleString('en-US');
-  const description =
+  const added =
     `${s.dam.name} (NID ${s.dam.id}, ${s.dam.heightM.toFixed(0)} m, ${Math.round(s.dam.storageAcFt).toLocaleString('en-US')} acre-ft): ${BREACH_MODES[s.mode].label.toLowerCase()}. ` +
     `The modelled breach outflow peaks at ${peakText} m³/s ${Math.round(r.tPeak / 60)} min after the breach starts and releases ${(r.breachVolume / 1e6).toFixed(1)} million m³; ` +
-    `it enters the map at the toe of the dam. ${base.description}`;
-  return { scenario: { ...base, description, sources: [source, ...others], damBreach: spec }, source, spec };
+    `it enters the map at the toe of the dam. `;
+  spec.descriptionAdded = added;
+  // Built on the description without a previous breach's sentences: a re-run replaces them, never stacks them.
+  return { scenario: { ...base, description: added + withoutDamText(base), sources: [source, ...others], damBreach: spec }, source, spec };
+}
+
+/** A scenario's description without the sentences a dam breach added to it (damBreachScenario). */
+export function withoutDamText(s: Pick<ScenarioPreset, 'description' | 'damBreach'>): string {
+  const added = s.damBreach?.descriptionAdded;
+  return added && s.description.startsWith(added) ? s.description.slice(added.length) : s.description;
 }

@@ -767,6 +767,8 @@ class DelugeRenderer implements DelugeRendererAPI {
         { binding: 5, resource: wetTex.createView() },
         { binding: 6, resource: cellTex.createView() },
         { binding: 7, resource: vtxBedTex.createView() },
+        // Building obstacles (solver extension; read only when in force): the bed texture stands in without them.
+        { binding: 8, resource: ((solver as FloodSolver & { obstacleTexture?: GPUTexture }).obstacleTexture ?? solver.bedTexture).createView() },
       ],
     });
 

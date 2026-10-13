@@ -62,7 +62,7 @@ components:
       description: The CLI's shared scenario options. Unset fields keep the preset's own forcing.
       properties:
         minutes: { type: number, minimum: 2, maximum: 240, default: 30, description: Simulated minutes per run }
-        level: { type: string, description: 'A Site check ladder level id (rp100, record1936, x0.5 …) — CLI --scenario' }
+        level: { type: string, description: 'A Site check ladder level id (rp100, record1936, a14-100, x0.5 …) — CLI --scenario' }
         stageFt: { type: number, description: River or sea stage as a gauge reading in feet (presets with a stage) }
         rainMmHr: { type: number, minimum: 0, maximum: 1000 }
         scale: { type: number, minimum: 0, description: 'Rain, storm cells and inflows × scale' }
@@ -124,6 +124,7 @@ components:
           type: object
           description: Present = run the ladder (CLI --sweep); absent = one run of the scenario.
           properties:
+            ladder: { type: string, enum: [stage, rain, scale], description: 'CLI --ladder; default the ladder the app picks' }
             levels: { type: array, items: { type: string }, description: Level ids; default the app's ticked levels }
             returnPeriods: { type: object, additionalProperties: { type: number }, description: '{ "x0.5": 10, "x1": 100 }' }
             design: { type: string }

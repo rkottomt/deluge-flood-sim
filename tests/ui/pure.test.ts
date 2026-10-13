@@ -223,3 +223,16 @@ test('substeps per frame read as a steady average, never a stray 0 while the sol
   assert.equal(f.formatSubsteps(12.4), '12');
   assert.equal(f.formatSubsteps(NaN), f.formatSubsteps(NaN)); // whatever bad() prints, consistently
 });
+
+test('evacuation on foot is re-worked when a shelter is added, moved or removed (they are refuges)', async () => {
+  const { extrasKey } = await import('../../src/ui/evacPeople');
+  const { newSite } = await import('../../src/loss/site');
+  const spec = newSite('s1', -80, 40.44);
+  const params = { occupants: null, olderPct: null, impairedPct: null, exitWidthM: null, preMovementMin: 10, alertMin: null };
+  const key = (shelters: Array<{ name: string; gx: number; gy: number }>) => extrasKey(spec, 1800, 0, params, 'ok', shelters);
+  const none = key([]);
+  const one = key([{ name: 'School gym', gx: 10, gy: 20 }]);
+  assert.notEqual(none, one);
+  assert.notEqual(one, key([{ name: 'School gym', gx: 11, gy: 20 }]));
+  assert.equal(one, key([{ name: 'School gym', gx: 10, gy: 20 }]));
+});

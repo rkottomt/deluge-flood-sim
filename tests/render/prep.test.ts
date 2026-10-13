@@ -13,11 +13,11 @@ after(finishGpuTests);
 
 const N = 64;
 
-/** Read a texture (r32float, rgba32float, rgba16float or rgba8unorm) back as float32 channels. */
+/** Read a texture (r32float, rg32float, rgba32float, rgba16float or rgba8unorm) back as float32 channels. */
 async function readTexture(device: GPUDevice, tex: GPUTexture, w: number, h: number, mip = 0): Promise<Float32Array> {
   const half = tex.format === 'rgba16float';
   const unorm8 = tex.format === 'rgba8unorm';
-  const channels = tex.format === 'r32float' ? 1 : 4;
+  const channels = tex.format === 'r32float' ? 1 : tex.format === 'rg32float' ? 2 : 4;
   const bpc = unorm8 ? 1 : half ? 2 : 4;
   const bpp = channels * bpc;
   const bytesPerRow = Math.ceil((w * bpp) / 256) * 256;
@@ -162,6 +162,7 @@ test('prep: water surface, shoreline extension, walls and wet pyramid', async ()
         { binding: 5, resource: wet.createView() },
         { binding: 6, resource: cells.createView() },
         { binding: 7, resource: vtxBed.createView() },
+        { binding: 8, resource: bedTex.createView() },
       ],
     }),
   );
@@ -331,6 +332,7 @@ test('prep: water surface, shoreline extension, walls and wet pyramid', async ()
         { binding: 5, resource: wet.createView() },
         { binding: 6, resource: cells.createView() },
         { binding: 7, resource: vtxBed.createView() },
+        { binding: 8, resource: bedTex.createView() },
       ],
     }),
   );
@@ -485,6 +487,7 @@ test('prep: blown-up cells never reach the geometry and are flagged for the glit
         { binding: 5, resource: wet.createView() },
         { binding: 6, resource: cells.createView() },
         { binding: 7, resource: vtxBed.createView() },
+        { binding: 8, resource: bedTex.createView() },
       ],
     }),
   );
@@ -662,7 +665,7 @@ test('prep: arrival and hazard views map the solver hazard accumulators into mis
   assert.deepEqual(errors, []);
 });
 
-test('prep: a footprint the solver blocks (buildings as obstacles) shows no roof film, an overtopped one its water, the street around it all of it', async () => {
+test('prep: a footprint the solver blocks (buildings as obstacles) shows no roof film, an overtopped one its water at roof level, the street around it all of it', async () => {
   const { createPipelines } = await import('../../src/render/pipelines');
   const device = await getDevice();
   const errors: string[] = [];
@@ -711,6 +714,12 @@ test('prep: a footprint the solver blocks (buildings as obstacles) shows no roof
     const cells = out('rg32float');
     const surf = out('rgba16float');
     const misc = out('rgba16float');
+    const V = N + 1;
+    const vtxOf = (format: GPUTextureFormat) => device.createTexture({ size: [V, V], format, usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC });
+    const vtxBed = vtxOf('r32float');
+    const vtx = vtxOf('rgba32float');
+    const wet = vtxOf('r32float');
+    const zero = tex('r32float', new Float32Array(N * N), 4);
     const enc = device.createCommandEncoder();
     const cp = enc.beginComputePass();
     cp.setPipeline(P.prepCells);
@@ -721,7 +730,7 @@ test('prep: a footprint the solver blocks (buildings as obstacles) shows no roof
         entries: [
           { binding: 0, resource: { buffer: params } },
           { binding: 1, resource: bedTex.createView() },
-          { binding: 2, resource: tex('r32float', new Float32Array(N * N), 4).createView() },
+          { binding: 2, resource: zero.createView() },
           { binding: 3, resource: stateTex.createView() },
           { binding: 4, resource: surf.createView() },
           { binding: 5, resource: out('rgba16float').createView() },
@@ -734,11 +743,43 @@ test('prep: a footprint the solver blocks (buildings as obstacles) shows no roof
       }),
     );
     cp.dispatchWorkgroups(N / 16, N / 16);
+    cp.setPipeline(P.prepVtxBed);
+    cp.setBindGroup(
+      0,
+      device.createBindGroup({
+        layout: P.prepVtxBed.getBindGroupLayout(0),
+        entries: [{ binding: 0, resource: { buffer: params } }, { binding: 1, resource: bedTex.createView() }, { binding: 2, resource: zero.createView() }, { binding: 4, resource: vtxBed.createView() }],
+      }),
+    );
+    cp.dispatchWorkgroups(Math.ceil(V / 16), Math.ceil(V / 16));
+    cp.setPipeline(P.prepVerts);
+    cp.setBindGroup(
+      0,
+      device.createBindGroup({
+        layout: P.prepVerts.getBindGroupLayout(0),
+        entries: [
+          { binding: 0, resource: { buffer: params } },
+          { binding: 4, resource: vtx.createView() },
+          { binding: 5, resource: wet.createView() },
+          { binding: 6, resource: cells.createView() },
+          { binding: 7, resource: vtxBed.createView() },
+          { binding: 8, resource: (hasObst ? obstTex : bedTex).createView() },
+        ],
+      }),
+    );
+    cp.dispatchWorkgroups(Math.ceil(V / 16), Math.ceil(V / 16));
     cp.end();
     device.queue.submit([enc.finish()]);
     const c2 = await readTexture(device, surf, N, N);
     const m4 = await readTexture(device, misc, N, N);
-    return { depth: (i: number, j: number) => c2[(j * N + i) * 4], maxDepth: (i: number, j: number) => m4[(j * N + i) * 4 + 1] };
+    const ce = await readTexture(device, cells, N, N);
+    const vt = await readTexture(device, vtx, V, V);
+    return {
+      depth: (i: number, j: number) => c2[(j * N + i) * 4],
+      maxDepth: (i: number, j: number) => m4[(j * N + i) * 4 + 1],
+      eta: (i: number, j: number) => ce[(j * N + i) * 2 + 1],
+      vsurf: (k: number, l: number) => vt[(l * V + k) * 4 + 1],
+    };
   };
   const off = await run(0);
   const on = await run(1);
@@ -747,6 +788,12 @@ test('prep: a footprint the solver blocks (buildings as obstacles) shows no roof
   assert.equal(on.maxDepth(21, 21), 0, 'nor any max depth');
   assert.ok(Math.abs(on.depth(40, 40) - 0.6) < 1e-3, 'an overtopped roof shows the water over it');
   assert.ok(Math.abs(on.maxDepth(40, 40) - 0.7) < 2e-3);
+  // The water over an overtopped roof stands on the roof (the solver's bed is ground + obstacle), not at street
+  // level: a hole in the water sheet otherwise.
+  assert.ok(Math.abs(on.eta(40, 40) - 103.6) < 1e-3, `surface over the overtopped shed: ${on.eta(40, 40)} (want 103.6)`);
+  assert.ok(Math.abs(on.vsurf(41, 41) - 103.6) < 1e-3, `vertex over the shed: ${on.vsurf(41, 41)} (want 103.6)`);
+  assert.ok(Math.abs(on.eta(19, 21) - 100.4) < 1e-3, 'the street surface is unchanged');
+  assert.ok(Math.abs(off.eta(40, 40) - 100.6) < 1e-3, 'without obstacles the bed is the ground');
   assert.ok(Math.abs(on.depth(19, 21) - 0.4) < 1e-3, 'the street against the wall keeps its water');
   assert.ok(Math.abs(on.maxDepth(19, 21) - 0.5) < 2e-3);
   assert.deepEqual(errors, []);

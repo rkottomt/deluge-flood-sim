@@ -6,6 +6,7 @@ import type { AppState, HazardFields, SimSnapshot, TerrainData, WaterSource } fr
 import { DEFAULT_SIM_PARAMS } from '../contracts';
 import type { ClimateForcing } from '../climate/apply';
 import type { ClimateSelection } from '../climate/scenarios';
+import { atlas14MayCover, lookupAtlas14, type Atlas14Grid, type Atlas14Point } from '../data/atlas14';
 import { isPresetId, listPresets, type PresetMeta } from '../data/presets';
 import { makeGeoToGrid } from '../data/geo';
 import {
@@ -18,6 +19,9 @@ import {
   floodedArea,
   memberForcing,
   parsePortfolio,
+  RAIN_DESIGN_DURATION_S,
+  RAIN_LADDER_CAVEATS,
+  RAIN_SWEEP_MINUTES,
   regionForBounds,
   sampleMembers,
   SITE_LIMITS,
@@ -41,7 +45,8 @@ import { chainEnsembleInput, type ChainSetup } from './chain';
 import type { ForcingPatch, RunProgress } from './headless';
 import { fmtSeconds, toJson, type Log } from './io';
 import { geotiffBytes, hazardLayers } from './rasters';
-import { buildLadder, feetOf, parseClimate, resolveForcing, scaledForcing, UsageError, type LadderRung, type ResolvedForcing } from './scenario';
+import { buildLadder, feetOf, parseClimate, rainForcing, resolveForcing, scaledForcing, UsageError, type Ladder, type LadderKind, type LadderRung, type ResolvedForcing } from './scenario';
+import { SURGE_LADDER_CAVEATS, SURGE_SWEEP_MINUTES } from '../surge/stations';
 import { formatMoney } from '../ui/format';
 
 const FT = 0.3048;
@@ -73,6 +78,8 @@ export interface CliEnv {
   presetIds(): string[];
   presetMeta(id: string): PresetMeta | null;
   loadTerrain(id: string, onProgress?: (message: string, fraction: number) => void): Promise<TerrainData>;
+  /** The baked NOAA Atlas 14 grid (public/atlas14/pf60m-pds.bin, the app's file, decoded by the app's decoder). */
+  loadAtlas14(): Promise<Atlas14Grid>;
   openScene(terrain: TerrainData, presetId: string, opts: { climate: ClimateSelection; appCadence: boolean }): Promise<SceneLike>;
   /** Adapter description, for the reports. */
   gpuName(): Promise<string>;
@@ -94,6 +101,8 @@ interface Prepared {
   climate: ClimateSelection;
   loadS: number;
   appCadence: boolean;
+  /** NOAA Atlas 14 at the map centre, when a ladder needed it and the map is covered. */
+  rain: Atlas14Point | null;
 }
 
 function requirePreset(env: CliEnv, o: ParsedOptions): string {
@@ -113,29 +122,60 @@ function scenarioFlags(o: ParsedOptions) {
   return { level: str(o, 'scenario'), stageFt: num(o, 'stage-ft'), rain: num(o, 'rain'), scale: num(o, 'scale'), manning: num(o, 'manning') };
 }
 
-/** Validate everything that needs no GPU, then load the preset and open the scene. */
-async function prepare(env: CliEnv, o: ParsedOptions, check?: (presetId: string, scenario: TerrainData['scenario']) => void): Promise<Prepared> {
+/**
+ * NOAA Atlas 14 at the centre of a map (where the app's rain ladder reads it, siteCheck.ts mapCentre), from the same
+ * baked grid; null outside coverage or when the grid cannot be read (then there is no rain ladder, as in the app).
+ */
+async function rainAt(env: CliEnv, b: { north: number; south: number; east: number; west: number }): Promise<Atlas14Point | null> {
+  const lat = (b.north + b.south) / 2;
+  const lon = (b.east + b.west) / 2;
+  if (!atlas14MayCover(lat, lon)) return null;
+  try {
+    return lookupAtlas14(await env.loadAtlas14(), lat, lon);
+  } catch (err) {
+    env.log.warn(`NOAA Atlas 14 grid unavailable (${err instanceof Error ? err.message : String(err)}): no rain ladder.`);
+    return null;
+  }
+}
+
+/**
+ * Validate everything that needs no GPU, then load the preset and open the scene. `check` sees the scenario and the
+ * Atlas 14 point first (a site sweep builds its ladder there) and may return its own default for --minutes.
+ */
+async function prepare(env: CliEnv, o: ParsedOptions, check?: (presetId: string, scenario: TerrainData['scenario'], rain: Atlas14Point | null) => number | undefined): Promise<Prepared> {
   const presetId = requirePreset(env, o);
-  const durationS = Math.round(minutesOf(o) * 60);
+  const minutesAsked = num(o, 'minutes') !== undefined ? minutesOf(o) : undefined;
   const climate = parseClimate(str(o, 'climate'));
+  const flags = scenarioFlags(o);
+  // Atlas 14 only when a ladder needs it: a site check, or a level asked for by id.
+  const needRain = !!check || flags.level !== undefined;
+  let rain: Atlas14Point | null = null;
+  let checkMinutes: number | undefined;
   // The flags against the preset's own scenario before the (slow) load: a bad level or stage fails at once.
   const meta = env.presetMeta(presetId);
   if (meta) {
-    resolveForcing(presetId, meta.scenario, scenarioFlags(o));
-    check?.(presetId, meta.scenario);
+    if (needRain) rain = await rainAt(env, meta.bounds);
+    resolveForcing(presetId, meta.scenario, flags, { rain });
+    checkMinutes = check?.(presetId, meta.scenario, rain);
   }
   const t0 = performance.now();
   env.log.info(`Loading ${presetId}…`);
   const terrain = await env.loadTerrain(presetId, (msg, f) => env.log.progress('load', f, msg));
   env.log.endProgress();
-  if (!meta) check?.(presetId, terrain.scenario);
+  if (!meta) {
+    if (needRain) rain = await rainAt(env, terrain.bounds);
+    checkMinutes = check?.(presetId, terrain.scenario, rain);
+  }
   const scene = await env.openScene(terrain, presetId, { climate, appCadence: flag(o, 'app-cadence') });
   const loadS = (performance.now() - t0) / 1000;
   // Resolve against the scene's scenario: on a chain preset the routed wave has replaced the entry inflow.
-  const resolved = resolveForcing(presetId, scene.state.scenario, scenarioFlags(o));
+  const resolved = resolveForcing(presetId, scene.state.scenario, flags, { rain });
+  // The app's simulated time per level: 120 min for a rain level (the 1-hour storm and an hour of run-off).
+  const rainLevel = !!resolved.level && Number.isFinite(resolved.level.mmPerHour);
+  const durationS = Math.round((minutesAsked ?? checkMinutes ?? (rainLevel ? RAIN_SWEEP_MINUTES : ENSEMBLE_LIMITS.defaultMinutes)) * 60);
   if (scene.chain) env.log.info(`Hazard chain: routed ${scene.chain.file.name} in ${(scene.chain.ms / 1000).toFixed(1)} s (entry peak ${Math.round(scene.chain.result.entryPeak)} m³/s).`);
   if (!scene.climateForcing.identity) env.log.info(`Climate: ${scene.climateForcing.label} — rain × ${scene.climateForcing.rainMult.toFixed(3)}${scene.climateForcing.seaRiseM ? `, sea +${scene.climateForcing.seaRiseM.toFixed(2)} m` : ''}.`);
-  return { presetId, terrain, scene, resolved, durationS, climate, loadS, appCadence: flag(o, 'app-cadence') };
+  return { presetId, terrain, scene, resolved, durationS, climate, loadS, appCadence: flag(o, 'app-cadence'), rain };
 }
 
 interface CaseResult {
@@ -159,15 +199,25 @@ function storeForcing(s: AppState): ForcingState {
  * One headless run (src/ui/headless.ts, one case): `apply` sets the case's forcing in the store, the water is reset,
  * the solver runs exactly `durationS` simulated seconds, and the hazard fields are read.
  */
-async function runCase(scene: SceneLike, apply: () => void, durationS: number, log: Log, label: string): Promise<CaseResult> {
+async function runCase(scene: SceneLike, apply: () => void, durationS: number, log: Log, label: string, rainStopS: number | null = null): Promise<CaseResult> {
   apply();
   scene.resetWater();
   const t0 = performance.now();
-  await scene.runFor(durationS, (p) => {
+  const onProgress = (p: RunProgress) => {
     const el = (performance.now() - t0) / 1000;
-    const fr = p.target > 0 ? p.simTime / p.target : 1;
-    log.progress(label, fr, `${(p.simTime / 60).toFixed(1)} of ${(p.target / 60).toFixed(0)} sim min · ${el.toFixed(0)} s`);
-  });
+    const fr = durationS > 0 ? p.simTime / durationS : 1;
+    log.progress(label, fr, `${(p.simTime / 60).toFixed(1)} of ${(durationS / 60).toFixed(0)} sim min · ${el.toFixed(0)} s`);
+  };
+  if (rainStopS !== null && rainStopS < durationS) {
+    // An Atlas 14 rain level: the 1-hour storm, then run-off with the rain stopped — the app's sweep stops it on the
+    // same simulated second (siteCheck.ts afterChunk). The rate is put back afterwards, so the scene's forcing is the
+    // case's again (an ensemble takes it as its base).
+    const rate = scene.state.sim.rainRate;
+    await scene.runFor(rainStopS, onProgress);
+    scene.setForcing({ rainRate: 0 });
+    await scene.runFor(durationS - rainStopS, onProgress);
+    scene.setForcing({ rainRate: rate });
+  } else await scene.runFor(durationS, onProgress);
   const tr = performance.now();
   const { fields, snapshot } = await scene.read();
   log.endProgress();
@@ -199,7 +249,15 @@ function scenarioJson(p: Prepared, f: ForcingState) {
   return {
     simulatedMinutes: p.durationS / 60,
     changes: p.resolved.changes,
-    level: p.resolved.level ? { id: p.resolved.level.id, label: p.resolved.level.label, returnPeriod: p.resolved.level.sourceRp } : null,
+    level: p.resolved.level
+      ? {
+          id: p.resolved.level.id,
+          label: p.resolved.level.label,
+          returnPeriod: p.resolved.level.sourceRp,
+          ...(Number.isFinite(p.resolved.level.mmPerHour) ? { rainMmHr: p.resolved.level.mmPerHour, source: p.resolved.level.sourceText } : {}),
+        }
+      : null,
+    rainStopsAtMin: p.resolved.rainStopsAtS !== null ? p.resolved.rainStopsAtS / 60 : null,
     stage: sc?.stage ? { gauge: sc.stage.label, gaugeFt: round(feetOf(sc.stage, f.stageOffset) ?? NaN, 2), offsetM: round(f.stageOffset, 3) } : null,
     rainMmHr: f.rainRate,
     manningN: f.manningN,
@@ -242,13 +300,17 @@ function runJson(p: Prepared, gpu: string, wallS: number, cases: number) {
 // ─── presets ────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 export async function presetsCommand(env: CliEnv, o: ParsedOptions): Promise<number> {
-  const rows = env.presetIds().map((id) => {
+  const rows = [];
+  for (const id of env.presetIds()) {
     const info = listPresets().find((p) => p.id === id)!;
     const meta = env.presetMeta(id);
     const sc = meta?.scenario ?? null;
     const st = sc?.stage ?? null;
-    const ladder = buildLadder(id, st);
-    return {
+    // Every ladder the Site check offers here, the one it picks by itself first (its ticked levels are the defaults).
+    const rain = meta ? await rainAt(env, meta.bounds) : null;
+    const first = buildLadder(id, sc, { rain });
+    const ladders: Ladder[] = [first, ...first.kinds.filter((k) => k !== first.kind).map((k) => buildLadder(id, sc, { rain, kind: k }))];
+    rows.push({
       id,
       name: info.name,
       subtitle: info.subtitle,
@@ -263,9 +325,22 @@ export async function presetsCommand(env: CliEnv, o: ParsedOptions): Promise<num
             hazardChain: !!sc.hazardChain,
           }
         : null,
-      levels: ladder.map((l) => ({ id: l.id, label: l.label, gaugeFt: Number.isFinite(l.ft) ? l.ft : null, scale: Number.isFinite(l.scale) ? l.scale : null, returnPeriod: l.sourceRp, default: l.on, outOfRange: l.outOfRange })),
-    };
-  });
+      ladder: first.kind,
+      levels: ladders.flatMap((L) =>
+        L.rungs.map((l) => ({
+          id: l.id,
+          label: l.label,
+          ladder: L.kind,
+          gaugeFt: Number.isFinite(l.ft) ? l.ft : null,
+          scale: Number.isFinite(l.scale) ? l.scale : null,
+          rainMmHr: Number.isFinite(l.mmPerHour) ? l.mmPerHour : null,
+          returnPeriod: l.sourceRp === null ? null : round(l.sourceRp, 1),
+          default: L === first && l.on,
+          outOfRange: l.outOfRange,
+        })),
+      ),
+    });
+  }
   if (flag(o, 'json')) {
     env.stdout(toJson({ presets: rows }));
     return EXIT.ok;
@@ -289,7 +364,7 @@ export async function presetsCommand(env: CliEnv, o: ParsedOptions): Promise<num
     lines.push(`${''.padEnd(11)} ${r.grid ? `${r.grid.nx}×${r.grid.ny} @ ${r.grid.cellSizeM} m · ` : ''}${what}`);
     if (flag(o, 'levels')) {
       for (const l of r.levels) {
-        const extra = [l.gaugeFt != null ? `${l.gaugeFt} ft` : null, l.returnPeriod ? `${l.returnPeriod}-yr` : null].filter(Boolean).join(', ');
+        const extra = [l.gaugeFt != null ? `${l.gaugeFt} ft` : null, l.rainMmHr != null ? `${l.rainMmHr} mm/hr for 1 h` : null, l.returnPeriod ? `${l.returnPeriod}-yr` : null].filter(Boolean).join(', ');
         lines.push(`${''.padEnd(13)}--scenario ${l.id.padEnd(11)} ${l.label}${extra ? ` (${extra})` : ''}${l.outOfRange ? ' — beyond the stage range' : l.default ? '' : ' — not swept by default'}`);
       }
     }
@@ -308,7 +383,7 @@ export async function runCommand(env: CliEnv, o: ParsedOptions): Promise<number>
     const f = baseForcing(p.resolved);
     const gpu = await env.gpuName();
     env.log.info(`Running ${p.presetId} for ${p.durationS / 60} simulated min on ${gpu}…`);
-    const c = await runCase(p.scene, () => setScenario(p.scene, f), p.durationS, env.log, 'simulate');
+    const c = await runCase(p.scene, () => setScenario(p.scene, f), p.durationS, env.log, 'simulate', p.resolved.rainStopsAtS);
     const { fields, snapshot } = c;
     const t = p.terrain;
     const analysis = analyze({ fields, terrain: t, velocityKnown: true, debrisFlow: debrisFlowFor(p.presetId) });
@@ -424,7 +499,7 @@ export async function portfolioCommand(env: CliEnv, o: ParsedOptions): Promise<n
     const f = baseForcing(p.resolved);
     const t0 = performance.now();
     env.log.info(`${assets.length} assets · ${p.presetId} · ${p.durationS / 60} simulated min${membersAsked ? ` · + ${membersAsked}-member ensemble` : ''} on ${gpu}`);
-    const c = await runCase(p.scene, () => setScenario(p.scene, f), p.durationS, env.log, 'scenario');
+    const c = await runCase(p.scene, () => setScenario(p.scene, f), p.durationS, env.log, 'scenario', p.resolved.rainStopsAtS);
     const a = assessPortfolioRun(c.fields, p.terrain, p.presetId, assets);
     if (a.unassessed.length) env.log.warn(`${a.unassessed.length} asset${a.unassessed.length > 1 ? 's are' : ' is'} outside the ${p.presetId} map and not assessed: ${a.unassessed.slice(0, 8).map((x) => x.id).join(', ')}${a.unassessed.length > 8 ? ' …' : ''}`);
 
@@ -514,7 +589,7 @@ async function runEnsemble(env: CliEnv, p: Prepared, n: number, seed: number, as
         if (demOn) scene.setBedPerturbation(demPerturbation({ nx: terrain.nx, ny: terrain.ny, cellSize: terrain.cellSize, sigma: ranges.demSigmaM, corrLenM: ranges.demCorrM, seed: m.seed, initialDepth: scene.initialWater, elevation: ground0 }));
       };
       const tr = performance.now();
-      const c = await runCase(scene, apply, p.durationS, env.log, `member ${m.index + 1}/${n}`);
+      const c = await runCase(scene, apply, p.durationS, env.log, `member ${m.index + 1}/${n}`, p.resolved.rainStopsAtS);
       rows.push(collectMember(c.fields, terrain, p.presetId, { index: m.index, params: m, runMs: performance.now() - tr, readMs: c.readS * 1000 }, assets, tallies));
     }
   } finally {
@@ -597,17 +672,21 @@ export async function siteCommand(env: CliEnv, o: ParsedOptions): Promise<number
   const rp = parseRp(str(o, 'rp'));
   const freeboardFt = num(o, 'freeboard-ft');
   if (freeboardFt !== undefined && !(freeboardFt >= 0 && freeboardFt <= 10)) throw new UsageError('--freeboard-ft must be between 0 and 10');
-  let ladder: LadderRung[] = [];
+  const kindAsked = str(o, 'ladder');
+  if (kindAsked !== undefined && kindAsked !== 'stage' && kindAsked !== 'rain' && kindAsked !== 'scale') throw new UsageError(`--ladder must be stage, rain or scale, got "${kindAsked}"`);
+  if (kindAsked !== undefined && !sweep) throw new UsageError('--ladder picks the ladder --sweep runs (for one run, pick a level with --scenario)');
+  let ladder: Ladder = { kind: 'scale', kinds: ['scale'], rungs: [] };
   let todo: LadderRung[] = [];
-  const p = await prepare(env, o, (presetId, scenario) => {
-    ladder = buildLadder(presetId, scenario?.stage);
-    if (sweep) {
-      todo = sweepLevels(ladder, str(o, 'levels'));
-      if (!todo.length) throw new UsageError('no levels to sweep');
-      for (const id of rp.keys()) if (!ladder.some((l) => l.id === id)) throw new UsageError(`--rp: no level "${id}"`);
-      const design = str(o, 'design');
-      if (design && !todo.some((l) => l.id === design)) throw new UsageError(`--design ${design} is not among the levels swept`);
-    }
+  const p = await prepare(env, o, (presetId, scenario, rain) => {
+    ladder = buildLadder(presetId, scenario, { rain, kind: kindAsked as LadderKind | undefined });
+    if (!sweep) return undefined;
+    todo = sweepLevels(ladder.rungs, str(o, 'levels'));
+    if (!todo.length) throw new UsageError('no levels to sweep');
+    for (const id of rp.keys()) if (!ladder.rungs.some((l) => l.id === id)) throw new UsageError(`--rp: no level "${id}"`);
+    const design = str(o, 'design');
+    if (design && !todo.some((l) => l.id === design)) throw new UsageError(`--design ${design} is not among the levels swept`);
+    // The app's simulated time per level for this ladder (siteCheck.ts defaultDuration).
+    return ladder.kind === 'rain' ? RAIN_SWEEP_MINUTES : ladder.kind === 'stage' && scenario?.coastal ? SURGE_SWEEP_MINUTES : undefined;
   });
   try {
     const t = p.terrain;
@@ -639,35 +718,43 @@ export async function siteCommand(env: CliEnv, o: ParsedOptions): Promise<number
     };
     if (!sweep) {
       env.log.info(`Site check: ${p.presetId} · ${p.durationS / 60} simulated min on ${gpu}`);
-      const c = await runCase(p.scene, () => setScenario(p.scene, base), p.durationS, env.log, 'simulate');
+      const c = await runCase(p.scene, () => setScenario(p.scene, base), p.durationS, env.log, 'simulate', p.resolved.rainStopsAtS);
       const run = assessSiteForRun(spec, { fields: c.fields, terrain: t, presetId: p.presetId, ground: p.scene.ground(), router, shelters, endDepth: c.snapshot?.depth.slice() ?? null });
       report.run = siteRunJson(run);
       report.egressSummary = egressClause(run);
       report.timing = runJson(p, gpu, (performance.now() - t0) / 1000, 1);
     } else {
       const st = p.scene.state.scenario?.stage ?? null;
+      const kind = ladder.kind;
       env.log.info(`Site check sweep: ${todo.length} levels × ${p.durationS / 60} simulated min on ${gpu}`);
       const rows: SweepRow[] = [];
       // The user's scenario first; each level then changes it as the app's sweep does (siteCheck.ts runSweep): the
-      // stage slider alone on a stage ladder, the scaled lists (stage untouched) on a scale ladder.
+      // stage slider alone on a stage ladder; on a rain ladder rain only (river at normal level, inflows and storm cells
+      // off) for the 1-hour storm, then run-off; the scaled lists (stage untouched) on a scale ladder.
       setScenario(p.scene, base);
       const saved = storeForcing(p.scene.state);
       for (let i = 0; i < todo.length; i++) {
         const L = todo[i];
         const apply =
-          st && Number.isFinite(L.ft)
+          kind === 'stage' && st
             ? () => p.scene.setForcing({ stageOffset: L.ft * FT + st.gaugeDatum - st.normalLevel })
-            : () => {
-                const k = scaledForcing(L.scale, saved);
-                p.scene.applyPatch({ sources: k.sources, storms: k.storms, sim: { ...p.scene.state.sim, rainRate: k.rainRate } });
-              };
-        const c = await runCase(p.scene, apply, p.durationS, env.log, `level ${i + 1}/${todo.length} ${L.id}`);
+            : kind === 'rain'
+              ? () => {
+                  const k = rainForcing(L.mmPerHour, saved);
+                  p.scene.applyPatch({ stageOffset: 0, sources: k.sources, storms: k.storms, sim: { ...p.scene.state.sim, rainRate: k.rainRate } });
+                }
+              : () => {
+                  const k = scaledForcing(L.scale, saved);
+                  p.scene.applyPatch({ sources: k.sources, storms: k.storms, sim: { ...p.scene.state.sim, rainRate: k.rainRate } });
+                };
+        const c = await runCase(p.scene, apply, p.durationS, env.log, `level ${i + 1}/${todo.length} ${L.id}`, kind === 'rain' ? RAIN_DESIGN_DURATION_S : null);
         const userRp = rp.get(L.id) ?? null;
         const info: SweepLevelInfo = {
           id: L.id,
           label: L.label,
           ft: L.ft,
           scale: L.scale,
+          ...(kind === 'rain' ? { rainMmH: L.mmPerHour } : {}),
           returnPeriod: L.sourceRp ?? userRp,
           rpFrom: L.sourceRp != null ? 'source' : userRp != null ? 'user' : null,
           durationS: c.fields.simTime,
@@ -677,7 +764,14 @@ export async function siteCommand(env: CliEnv, o: ParsedOptions): Promise<number
         const r = run.result;
         env.log.info(`  ${L.label}: ${r ? (r.reached ? `${r.depth.toFixed(2)} m, loss ${formatMoney(r.loss).replace(/ /g, ' ')}` : 'dry') : 'outside'} (${fmtSeconds(c.wallS)})`);
       }
-      report.ladder = { kind: st ? 'stage' : 'scale', gauge: st?.label ?? null, sources: [...new Set(todo.map((l) => l.source).filter(Boolean))].map((k) => ({ key: k, text: ladder.find((l) => l.source === k)?.sourceText ?? '' })) };
+      const coastal = kind === 'stage' && !!p.scene.state.scenario?.coastal;
+      report.ladder = {
+        kind,
+        gauge: kind === 'stage' ? (st?.label ?? null) : null,
+        ...(kind === 'rain' && p.rain ? { atlas14At: { lat: round(p.rain.lat, 4), lon: round(p.rain.lon, 4) }, stormMinutes: RAIN_DESIGN_DURATION_S / 60 } : {}),
+        sources: [...new Set(todo.map((l) => l.source).filter(Boolean))].map((k) => ({ key: k, text: ladder.rungs.find((l) => l.source === k)?.sourceText ?? '' })),
+        caveats: kind === 'rain' ? [...RAIN_LADDER_CAVEATS] : coastal ? [...SURGE_LADDER_CAVEATS] : [],
+      };
       report.sweep = siteSweepReport(spec, rows, { designId: str(o, 'design') ?? null, freeboardM: freeboardFt !== undefined ? freeboardFt * FT : undefined, country: region.costCountry });
       report.timing = runJson(p, gpu, (performance.now() - t0) / 1000, todo.length);
     }

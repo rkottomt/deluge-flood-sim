@@ -32,6 +32,14 @@ import { fetchBytes, MB } from './net';
 /** Return periods (years, PDS ARI) baked into the grid, in file order. */
 export const ATLAS14_ARIS = [2, 10, 25, 100, 500] as const;
 
+/**
+ * Whether a point is in the part of the world Atlas 14 could cover (the Americas north of 15° N, plus nothing else
+ * worth a download): scenes elsewhere — the Himalayan presets — never fetch the grid. The lookup decides the rest.
+ */
+export function atlas14MayCover(lat: number, lon: number): boolean {
+  return lon < -60 && lat > 15;
+}
+
 /** Where the grid is served from (same origin; covered by CSP 'self'). */
 export function atlas14GridUrl(): string {
   const env = (import.meta as ImportMeta & { env?: { BASE_URL?: string } }).env;

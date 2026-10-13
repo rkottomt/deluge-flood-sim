@@ -354,6 +354,18 @@ test('?sites= round trip: pins, outlines, values, defaults, names with separator
   assert.equal(encodeSites([]), '');
 });
 
+test('?sites= never carries a street address: a site still named by the geocoder is shared without its name', () => {
+  const addr = '1600 Smith Street';
+  const site: SiteSpec = { ...newSite('s1', -95.3698, 29.7604), name: addr, geocodedName: addr };
+  const enc = encodeSites([site]);
+  assert.ok(!/Smith|1600/.test(decodeURIComponent(enc)), enc);
+  const back = decodeSites(enc).sites[0];
+  assert.equal(back.name, '');
+  assert.ok(Math.abs(back.lat - 29.7604) < 1e-9 && Math.abs(back.lon + 95.3698) < 1e-9);
+  // Renamed by the user: the name is theirs and travels.
+  assert.match(decodeURIComponent(encodeSites([{ ...site, name: 'HQ' }])), /~HQ$/);
+});
+
 test('?sites= hostile input: bounded, strict, never echoed', () => {
   const ok = encodeSites([newSite('s1', -80, 40)]);
   const evil = [
@@ -435,6 +447,10 @@ test('rain ladder sweep: EAL with sourced return periods, the 100-yr rain is the
   assert.equal(design.basis, '100-yr');
   assert.equal(design.row.level.id, 'a14-100');
   assert.ok(isOnePercent(100) && isOnePercent(100.5008) && !isOnePercent(125) && !isOnePercent(null));
+  // The 1 % level by its annual chance: 1 % itself, or the Atlas 14 100-yr ARI's 0.995 % (Langbein, 100.5 yr) —
+  // not a neighbouring 99- or 101-yr level (1.01 % / 0.990 %).
+  assert.ok(isOnePercent(L.find((l) => l.id === 'a14-100')!.returnPeriod) && isOnePercent(100.5));
+  assert.ok(!isOnePercent(99) && !isOnePercent(101) && !isOnePercent(100.6) && !isOnePercent(99.9));
   assert.deepEqual(L.map((l) => formatReturnPeriod(l.returnPeriod)), ['2.5', '10.5', '25.5', '100.5', '500.5']);
   assert.equal(formatReturnPeriod(2), '2');
   const v = siteVerdict('Lot 9', sum, money).join(' ');

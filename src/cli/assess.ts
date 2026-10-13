@@ -253,6 +253,7 @@ export function levelJson(l: SweepLevelInfo): Record<string, unknown> {
     label: l.label,
     gaugeFt: num(l.ft, 2),
     forcingScale: num(l.scale, 3),
+    ...(l.rainMmH !== undefined ? { rainMmHr: num(l.rainMmH, 1) } : {}),
     returnPeriod: l.returnPeriod,
     returnPeriodFrom: l.rpFrom,
     simulatedMinutes: num(l.durationS / 60, 2),

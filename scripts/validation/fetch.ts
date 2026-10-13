@@ -29,7 +29,7 @@ import { geoToGrid } from '../../src/data/geo';
 import type { PresetMeta } from '../../src/data/presets';
 import { mergeBySite, parseStnHwms, type StnHwmRecord } from '../../src/validation/hwm';
 import { fillGeoJsonGeometry, rleEncode, ringToGrid, type GridSpec } from '../../src/validation/raster';
-import { FT } from '../../src/validation/datum';
+import { FT, numberField } from '../../src/validation/datum';
 import {
   FEMA_CLASSES,
   type ObservedFile,
@@ -262,7 +262,7 @@ function deriveLadder(preset: string, meta: PresetMeta, g: NonNullable<PresetPla
       if (!geom) continue;
       const lines = geom.type === 'LineString' ? [geom.coordinates as number[][]] : geom.type === 'MultiLineString' ? (geom.coordinates as number[][][]) : [];
       let d = Infinity;
-      const elev = Number(f.properties.ELEV);
+      const elev = numberField(f.properties.ELEV);
       if (!Number.isFinite(elev) || String(f.properties.LEN_UNIT ?? '').toLowerCase().startsWith('m')) continue;
       for (const l of lines) {
         const pts = ringToGrid(grid, l);
@@ -292,7 +292,7 @@ function deriveLadder(preset: string, meta: PresetMeta, g: NonNullable<PresetPla
   const near: Array<{ d: number; swel: number; datum: string }> = [];
   for (const f of fc.features) {
     const geom = f.geometry;
-    const swel = Number(f.properties.SWEL);
+    const swel = numberField(f.properties.SWEL);
     if (!geom || !Number.isFinite(swel) || swel <= 0 || swel > 50) continue;
     const lines = geom.type === 'LineString' ? [geom.coordinates as number[][]] : geom.type === 'MultiLineString' ? (geom.coordinates as number[][][]) : [];
     let d = Infinity;
@@ -337,15 +337,20 @@ function deriveGauges(meta: PresetMeta, list: NonNullable<PresetPlan['gauges']>)
       console.warn(`  ! ${g.site}: no site record or no peak on ${g.peakDate}`);
       continue;
     }
-    const datumFt = Number(site.alt_va);
+    const datumFt = numberField(site.alt_va);
     if (site.alt_datum_cd !== 'NAVD88' || !Number.isFinite(datumFt)) {
       console.warn(`  ! ${g.site}: gauge datum ${site.alt_va} ${site.alt_datum_cd} is not NAVD88 — skipped`);
       continue;
     }
-    const lon = Number(site.dec_long_va);
-    const lat = Number(site.dec_lat_va);
+    const lon = numberField(site.dec_long_va);
+    const lat = numberField(site.dec_lat_va);
+    const stageFt = numberField(pk.gage_ht);
+    // A blank field is missing, not zero (numberField): no location or no gauge height → no peak to compare.
+    if (!Number.isFinite(lon) || !Number.isFinite(lat) || !Number.isFinite(stageFt)) {
+      console.warn(`  ! ${g.site}: no location or no gauge height for the ${g.peakDate} peak — skipped`);
+      continue;
+    }
     const at = geoToGrid(grid, lon, lat);
-    const stageFt = Number(pk.gage_ht);
     out.push({
       id: `USGS ${g.site}`,
       name: g.name,
