@@ -234,15 +234,17 @@ export function stageShift(f: ClimateForcing | null): number {
 }
 
 /**
- * Can the Site check compare today with this future by re-running its ladder? Yes for forcing ladders (rain / inflows)
- * and sea-level ladders; no for a river-stage ladder (no stage scaling) or a hazard chain (its wave is re-routed
+ * Can the Site check compare today with this future by re-running its ladder? Yes for forcing ladders (rain / inflows),
+ * the NOAA Atlas 14 rain ladder and sea-level ladders; no for a river-stage ladder (no stage scaling) or a hazard chain (its wave is re-routed
  * asynchronously by the chain, not by the sweep).
  */
-export function sweepComparable(f: ClimateForcing, ladder: 'stage' | 'scale'): { ok: boolean; why: string } {
+export function sweepComparable(f: ClimateForcing, ladder: 'stage' | 'scale' | 'rain'): { ok: boolean; why: string } {
   if (f.identity) return { ok: false, why: 'Choose a future climate (Weather & rivers → Future climate) to compare.' };
   if (f.chainInflows) return { ok: false, why: 'The flood here comes from the hazard chain: apply the climate and re-run the sweep instead.' };
   if (ladder === 'stage' && f.riverStageUnscaled) return { ok: false, why: 'This ladder is river stages, which Deluge does not scale with climate (no defensible stage scaling).' };
   if (ladder === 'stage' && f.seaRiseM > 0) return { ok: true, why: '' };
   if (ladder === 'scale' && (f.rainMult !== 1 || f.inflowMult !== 1)) return { ok: true, why: '' };
+  // The NOAA Atlas 14 rain ladder is rain only (inflows off), so only the rain multiplier changes it.
+  if (ladder === 'rain' && f.rainMult !== 1) return { ok: true, why: '' };
   return { ok: false, why: 'This climate changes nothing the ladder runs.' };
 }

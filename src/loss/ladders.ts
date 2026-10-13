@@ -80,6 +80,11 @@ export const LADDER_SOURCES: Readonly<Record<string, LadderSource>> = {
     text: 'NOAA CO-OPS Extreme Water Levels, 8725520: annual exceedance levels above MHHW 50 % 1.60, 10 % 3.00, 2 % 5.15, 1 % 6.46 ft (1 % 90 % CI 4.56–11.13); + 5.68 ft MHHW → station-datum feet (converted). No 0.2 % level.',
     url: 'https://tidesandcurrents.noaa.gov/est/est_station.shtml?stnid=8725520',
   },
+  'noaa-atlas14': {
+    key: 'noaa-atlas14',
+    text: 'NOAA Atlas 14 precipitation-frequency estimates, 60-minute duration, partial-duration series (NOAA / NWS Office of Water Prediction, Hydrometeorological Design Studies Center; public domain), read from a 1/12° resampling of the HDSC GIS grids at the centre of the map (within 3.4 % of PFDS point values at 11 test points). Return periods for the loss maths: 1 / AEP with AEP = 1 − e^(−1/ARI) (Langbein).',
+    url: 'https://hdsc.nws.noaa.gov/pfds/',
+  },
 };
 
 /** Ladders by preset id. Ordered by level. */
@@ -125,4 +130,56 @@ export const SCALE_LADDER: readonly number[] = [0.25, 0.5, 0.75, 1, 1.25];
 /** Ladder for a preset, or null when it has no stage ladder (the forcing-multiplier ladder applies). */
 export function ladderFor(presetId: string | null): readonly LadderLevel[] | null {
   return presetId && Object.prototype.hasOwnProperty.call(PRESET_LADDERS, presetId) ? PRESET_LADDERS[presetId] : null;
+}
+
+// ─── Rain return-period ladder (NOAA Atlas 14) ───────────────────────────────────────────────────────────────────────
+
+/**
+ * Design storm duration for the rain ladder, s. One hour: live areas are 1–20 km squares (5 km from "Check an
+ * address"), and the times of concentration of the small urban catchments inside them are well under an hour — the
+ * regime where the 1-hour intensity is the design rain (the rational method takes the intensity at the time of
+ * concentration). Larger or slower catchments respond to longer storms, which the 1-hour storm understates; river
+ * floods are not rain on the map at all (RAIN_LADDER_CAVEATS).
+ */
+export const RAIN_DESIGN_DURATION_S = 3600;
+/** Default simulated time per rain level: the 1-hour storm plus an hour of run-off with the rain stopped. */
+export const RAIN_SWEEP_MINUTES = 120;
+
+export interface RainLadderLevel {
+  id: string;
+  label: string;
+  /** Uniform rain rate over the domain for RAIN_DESIGN_DURATION_S, mm/h (= the 1-hour depth in mm). */
+  mmPerHour: number;
+  /** NOAA Atlas 14 partial-duration average recurrence interval, years. */
+  ari: number;
+  /** Return period for the loss maths, 1 / annual exceedance probability (Langbein: AEP = 1 − e^(−1/ARI)). */
+  returnPeriod: number;
+  source: 'noaa-atlas14';
+}
+
+/** Caveats that travel with every rain-ladder result (panel and report). */
+export const RAIN_LADDER_CAVEATS: readonly string[] = [
+  'Rain only: a uniform 1-hour storm over the whole map, then an hour of run-off. Rivers are held at their normal level and inflows and storm cells are off, so this is surface-water (pluvial) flooding, not a river or coastal flood.',
+  'Run-off from outside the map is missing: a site low in a catchment larger than the map gets less water here than it would in reality.',
+  'No storm drains or culverts, and infiltration is whatever Advanced → Infiltration is set to (default 0: every drop runs off).',
+  'NOAA Atlas 14 is stationary: fitted to the historical record as if the climate did not change. For a warmer future, use Today vs future (Weather & rivers → Future climate).',
+];
+
+/** Return period for the loss maths of a PDS average recurrence interval (Langbein 1949). */
+export function annualReturnPeriod(ari: number): number {
+  return 1 / (1 - Math.exp(-1 / ari));
+}
+
+/** The rain ladder for an Atlas 14 point: one level per return period, 1-hour intensity. */
+export function rainLadder(point: { levels: ReadonlyArray<{ ari: number; mmPerHour: number }> }): RainLadderLevel[] {
+  return point.levels
+    .filter((l) => Number.isFinite(l.mmPerHour) && l.mmPerHour > 0 && Number.isFinite(l.ari) && l.ari >= 1)
+    .map((l) => ({
+      id: `a14-${l.ari}`,
+      label: `Atlas 14 ${l.ari}-yr 1-hour rain`,
+      mmPerHour: Math.round(l.mmPerHour * 10) / 10,
+      ari: l.ari,
+      returnPeriod: annualReturnPeriod(l.ari),
+      source: 'noaa-atlas14' as const,
+    }));
 }

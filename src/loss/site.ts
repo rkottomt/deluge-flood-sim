@@ -284,6 +284,8 @@ export interface SweepLevelInfo {
   ft: number;
   /** Forcing multiplier (scale ladders); NaN for stage ladders. */
   scale: number;
+  /** Uniform rain rate, mm/h (rain ladders: NOAA Atlas 14 1-hour intensity); absent otherwise. */
+  rainMmH?: number;
   returnPeriod: number | null;
   /** 'source' = from the ladder's citation; 'user' = typed by the user; null = none. */
   rpFrom: 'source' | 'user' | null;
@@ -313,7 +315,25 @@ export interface SweepSummary {
   userReturnPeriods: boolean;
 }
 
-const levelOrder = (r: SweepRow) => (Number.isFinite(r.level.ft) ? r.level.ft : r.level.scale);
+const levelOrder = (r: SweepRow) => (Number.isFinite(r.level.ft) ? r.level.ft : r.level.rainMmH != null && Number.isFinite(r.level.rainMmH) ? r.level.rainMmH : r.level.scale);
+
+/**
+ * Is this return period the 1 %-annual-chance level? Exactly 100 from a stage-frequency source, or 100.5 from a rain
+ * ladder (a 100-yr partial-duration ARI is a 0.995 % AEP, 1 / AEP = 100.5 yr — ladders.ts annualReturnPeriod).
+ */
+export function isOnePercent(T: number | null | undefined): boolean {
+  return T != null && Number.isFinite(T) && Math.abs(T - 100) <= 1;
+}
+
+/**
+ * A return period for display: whole years as they are; anything else to one decimal below 1,000 years — a rain
+ * ladder's Langbein-converted ARI reads "100.5", not a rounded-up "101".
+ */
+export function formatReturnPeriod(T: number): string {
+  if (!Number.isFinite(T)) return '—';
+  if (Math.abs(T - Math.round(T)) < 0.05 || T >= 1000) return Math.round(T).toLocaleString('en-US');
+  return T.toFixed(1);
+}
 
 export function summarizeSweep(rows: readonly SweepRow[]): SweepSummary {
   const sorted = [...rows].sort((a, b) => levelOrder(a) - levelOrder(b));
@@ -432,10 +452,10 @@ export function designEventText(rec: FfeRecommendation): string {
  */
 export function pickDesign(rows: readonly SweepRow[], selectedId: string | null): { row: SweepRow; basis: DesignBasis; onePercent: SweepRow | null } | null {
   if (!rows.length) return null;
-  const rp100 = rows.find((r) => r.level.returnPeriod === 100 && r.level.rpFrom === 'source');
-  const onePercent = rp100 ?? rows.find((r) => r.level.returnPeriod === 100) ?? null;
+  const rp100 = rows.find((r) => isOnePercent(r.level.returnPeriod) && r.level.rpFrom === 'source');
+  const onePercent = rp100 ?? rows.find((r) => isOnePercent(r.level.returnPeriod)) ?? null;
   const sel = selectedId ? rows.find((r) => r.level.id === selectedId) : undefined;
-  if (sel) return { row: sel, basis: sel.level.returnPeriod === 100 ? '100-yr' : 'selected', onePercent };
+  if (sel) return { row: sel, basis: isOnePercent(sel.level.returnPeriod) ? '100-yr' : 'selected', onePercent };
   if (rp100) return { row: rp100, basis: '100-yr', onePercent };
   const top = [...rows].sort((a, b) => levelOrder(b) - levelOrder(a))[0];
   return { row: top, basis: 'highest', onePercent };
@@ -591,7 +611,8 @@ export function fmtMinutes(s: number): string {
   return `${h} h ${String(m % 60).padStart(2, '0')} min`;
 }
 
-const levelName = (r: SweepRow) => (Number.isFinite(r.level.ft) ? `${r.level.label} (${fmt(r.level.ft, 1)} ft)` : r.level.label);
+const levelName = (r: SweepRow) =>
+  Number.isFinite(r.level.ft) ? `${r.level.label} (${fmt(r.level.ft, 1)} ft)` : r.level.rainMmH != null && Number.isFinite(r.level.rainMmH) ? `${r.level.label} (${fmt(r.level.rainMmH, 0)} mm/h)` : r.level.label;
 
 /** Egress against arrival at the site, one clause. */
 export function egressClause(run: SiteRun): string {
