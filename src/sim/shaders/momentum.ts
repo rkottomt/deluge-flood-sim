@@ -71,13 +71,13 @@
  * 'naive' mode (the textbook reference scheme) uses explicit friction, no smoothing, no guard and no cap, and ignores
  * the rheology (it is water only).
  *
- * ROUGHNESS MAP (sim.surfFlags & SURF_ROUGHNESS; FloodSolver.setLandSurface, src/data/landcover.ts). Each cell carries a
+ * ROUGHNESS MAP (the ROUGHNESS_MAP pipeline variant; FloodSolver.setLandSurface, src/data/landcover.ts). Each cell carries a
  * roughness factor r = n_cell / manningN_ref (surfTex.r); a face uses n_f = manningN · (r_L + r_R)/2, so the global
  * slider stays a multiplier over the land-cover map. n² enters as sim.n2 · r_f², which is sim.n2 exactly when r = 1:
- * a uniform map is the uniform solver bit for bit. With the flag off the texture is never read. The map applies to
+ * a uniform map is the uniform solver bit for bit. In the default pipeline the code is not compiled. The map applies to
  * water (Manning) only; a debris rheology keeps its own uniform coefficients.
  */
-import { HELPERS_WGSL, SIM_WGSL, SURFACE_WGSL, SURF_ROUGHNESS } from './common';
+import { HELPERS_WGSL, SIM_WGSL, SURFACE_WGSL } from './common';
 
 export const momentumWGSL = /* wgsl */ `
 ${SIM_WGSL}
@@ -85,6 +85,8 @@ ${SIM_WGSL}
 @group(0) @binding(1) var stateTex: texture_2d<f32>;
 @group(0) @binding(2) var fluxOut: texture_storage_2d<rg32float, write>;
 @group(0) @binding(3) var surfTex: texture_2d<f32>;
+// Pipeline variant: the land-cover roughness map on (see ROUGHNESS MAP in the header). False in the default pipeline.
+override ROUGHNESS_MAP: bool = false;
 ${HELPERS_WGSL}
 ${SURFACE_WGSL}
 
@@ -237,7 +239,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
   // Manning n² of the two faces: uniform, or from the land-cover roughness map (see ROUGHNESS MAP in the header).
   var n2x = sim.n2;
   var n2y = sim.n2;
-  if ((sim.surfFlags & ${SURF_ROUGHNESS}) != 0) {
+  if (ROUGHNESS_MAP) {
     let rc = surf(i, j).r;
     n2x = faceN2(rc, surf(i + 1, j).r);
     n2y = faceN2(rc, surf(i, j + 1).r);

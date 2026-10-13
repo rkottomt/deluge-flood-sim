@@ -74,7 +74,7 @@ import { HAZARD_PER_CELL, unpackHazardFields } from './hazard';
 import { RHEO_VISC_DEPTH, rheologyCoefficients } from './rheology';
 import type { Rheology } from '../hazard/types';
 import { brushWGSL, BRUSH_UNIFORM_BYTES } from './shaders/brush';
-import { ACC_PER_CELL, FORCING_UNIFORM_BYTES, SIM_UNIFORM_BYTES, SURF_DRAINS, SURF_ROUGHNESS } from './shaders/common';
+import { ACC_PER_CELL, FORCING_UNIFORM_BYTES, SIM_UNIFORM_BYTES } from './shaders/common';
 import { continuityWGSL } from './shaders/continuity';
 import { exportWGSL } from './shaders/exportState';
 import { momentumWGSL } from './shaders/momentum';
@@ -180,6 +180,9 @@ export class GpuFloodSolver implements FloodSolver {
 
   private readonly momentumPipe: GPUComputePipeline;
   private readonly continuityPipe: GPUComputePipeline;
+  /** The same passes compiled with a land-surface layer on (ROUGHNESS_MAP, STORM_DRAINS); same bind groups. */
+  private readonly momentumRoughPipe: GPUComputePipeline;
+  private readonly continuityDrainPipe: GPUComputePipeline;
   private readonly exportPipe: GPUComputePipeline;
   private readonly brushPipe: GPUComputePipeline;
   private readonly raisePipe: GPUComputePipeline;
@@ -329,6 +332,8 @@ export class GpuFloodSolver implements FloodSolver {
     pipes: {
       momentum: GPUComputePipeline;
       continuity: GPUComputePipeline;
+      momentumRough: GPUComputePipeline;
+      continuityDrains: GPUComputePipeline;
       exportP: GPUComputePipeline;
       brush: GPUComputePipeline;
       brushLayout: GPUBindGroupLayout;
@@ -423,6 +428,8 @@ export class GpuFloodSolver implements FloodSolver {
 
     this.momentumPipe = pipes.momentum;
     this.continuityPipe = pipes.continuity;
+    this.momentumRoughPipe = pipes.momentumRough;
+    this.continuityDrainPipe = pipes.continuityDrains;
     this.exportPipe = pipes.exportP;
     this.brushPipe = pipes.brush;
     this.brushLayout = pipes.brushLayout;
@@ -544,7 +551,11 @@ export class GpuFloodSolver implements FloodSolver {
       buffer: { type },
     });
 
-    const make = async (label: string, code: string, entries: GPUBindGroupLayoutEntry[]) => {
+    /**
+     * Compile `code` into a pipeline per constants set in `variants` (the first is the default), all sharing one
+     * explicit bind group layout so the same bind groups serve every variant.
+     */
+    const make = async (label: string, code: string, entries: GPUBindGroupLayoutEntry[], variants: Array<Record<string, number>> = [{}]) => {
       const module = device.createShaderModule({ label, code });
       // Readable WGSL diagnostics in the browser. (Dawn-for-node crashes in getCompilationInfo, and there a
       // compile error surfaces through the pipeline promise / error scope anyway.)
@@ -556,18 +567,23 @@ export class GpuFloodSolver implements FloodSolver {
         }
       }
       const layout = device.createBindGroupLayout({ label, entries });
-      const pipeline = await device.createComputePipelineAsync({
-        label,
-        layout: device.createPipelineLayout({ label, bindGroupLayouts: [layout] }),
-        compute: { module, entryPoint: 'main' },
-      });
-      return { pipeline, layout };
+      const pipelineLayout = device.createPipelineLayout({ label, bindGroupLayouts: [layout] });
+      const pipelines = await Promise.all(
+        variants.map((constants, k) =>
+          device.createComputePipelineAsync({
+            label: k === 0 ? label : `${label}+${Object.keys(constants).join('+')}`,
+            layout: pipelineLayout,
+            compute: { module, entryPoint: 'main', constants },
+          }),
+        ),
+      );
+      return { pipeline: pipelines[0], variants: pipelines, layout };
     };
     device.pushErrorScope('validation');
     let built: Awaited<ReturnType<typeof make>>[];
     try {
       built = await Promise.all([
-      make('sim.momentum', momentumWGSL, [uniform(0, SIM_UNIFORM_BYTES), sampled(1), storageTex(2, 'rg32float'), sampled(3)]),
+      make('sim.momentum', momentumWGSL, [uniform(0, SIM_UNIFORM_BYTES), sampled(1), storageTex(2, 'rg32float'), sampled(3)], [{}, { ROUGHNESS_MAP: 1 }]),
       make('sim.continuity', continuityWGSL, [
         uniform(0, SIM_UNIFORM_BYTES),
         uniform(1, FORCING_UNIFORM_BYTES),
@@ -576,7 +592,7 @@ export class GpuFloodSolver implements FloodSolver {
         storageTex(4, 'rgba32float'),
         storageBuf(5),
         sampled(6),
-      ]),
+      ], [{}, { STORM_DRAINS: 1 }]),
       make('sim.export', exportWGSL, [uniform(0, SIM_UNIFORM_BYTES), sampled(1), sampled(2), storageTex(3, 'rgba32float'), storageBuf(4)]),
       make('sim.brush', brushWGSL, [
         uniform(0, BRUSH_UNIFORM_BYTES),
@@ -615,6 +631,8 @@ export class GpuFloodSolver implements FloodSolver {
       {
         momentum: momentum.pipeline,
         continuity: continuity.pipeline,
+        momentumRough: momentum.variants[1],
+        continuityDrains: continuity.variants[1],
         exportP: exportP.pipeline,
         brush: brush.pipeline,
         brushLayout: brush.layout,
@@ -1364,6 +1382,9 @@ export class GpuFloodSolver implements FloodSolver {
     if (cuts.length) this.writeHazardSampleUniforms(cuts, n, dt);
     const tw = probe?.timestampWrites;
     let done = 0;
+    // Land-surface layers on: their pipeline variants (same bind groups); off: the plain passes, which never read them.
+    const momentumPipe = this.roughnessOn ? this.momentumRoughPipe : this.momentumPipe;
+    const continuityPipe = this.drainsOn ? this.continuityDrainPipe : this.continuityPipe;
     for (let s = 0; s <= cuts.length; s++) {
       const end = s < cuts.length ? cuts[s] : n;
       // The GPU timing spans every segment: the first pass writes the start, the last one the end.
@@ -1372,10 +1393,10 @@ export class GpuFloodSolver implements FloodSolver {
         : undefined;
       const pass = enc.beginComputePass({ label: 'sim.substeps', timestampWrites });
       for (let k = done; k < end; k++) {
-        pass.setPipeline(this.momentumPipe);
+        pass.setPipeline(momentumPipe);
         pass.setBindGroup(0, this.bgMomentum[this.cur]);
         pass.dispatchWorkgroups(this.gx, this.gy);
-        pass.setPipeline(this.continuityPipe);
+        pass.setPipeline(continuityPipe);
         pass.setBindGroup(0, this.bgContinuity[this.cur]);
         pass.dispatchWorkgroups(this.gx, this.gy);
         this.cur = 1 - this.cur;
@@ -1586,11 +1607,11 @@ export class GpuFloodSolver implements FloodSolver {
     fv[33] = rc.gXi;
     fv[34] = RHEO_VISC_DEPTH;
     fv[35] = 0;
-    // Land-surface layers (setLandSurface): roughness map in the momentum pass, drains in the continuity pass. Water
-    // only for the roughness map: a debris rheology keeps its own uniform coefficients.
+    // Storm drains (setLandSurface): the capacity multiplier. Which land-surface layers run is a choice of pipeline
+    // (encodeFrame), not a uniform: with a layer off its code is not compiled.
     const ds = p.drainageScale;
-    iv[36] = (this.roughnessOn ? SURF_ROUGHNESS : 0) | (this.drainsOn ? SURF_DRAINS : 0);
-    fv[37] = typeof ds === 'number' && Number.isFinite(ds) ? Math.max(0, ds) : 1;
+    fv[36] = typeof ds === 'number' && Number.isFinite(ds) ? Math.max(0, ds) : 1;
+    fv[37] = 0;
     fv[38] = 0;
     fv[39] = 0;
     this.device.queue.writeBuffer(this.simBuf, 0, this.simBytes);

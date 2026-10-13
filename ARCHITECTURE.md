@@ -505,12 +505,17 @@ flooded river would back the outfalls up. Non-US presets and live areas have no 
 have no land cover — no land-cover host is on the CSP allow-list, `src/data/csp.ts`).
 
 **GPU.** One `rg32float` surface texture (roughness factor, drain capacity in m/s) bound to the momentum and
-continuity passes, and one `r32float` obstacle texture read by the brush pass. The Sim uniform grew 144 → 160 bytes
-(`surfFlags`, `drainScale`); a pass reads the surface texture only when its flag bit is set, and the momentum pass only
-on cells with a wet face. Cost per substep at 1024² on the GTX 1660 Ti, interleaved A/B against the plain solver
-(`node --import tsx tests/sim/benchLand.ts`), measured while other processes kept the GPU at 100 % (so ±5 %): roughness
-+1–3 %, drains +7 % (with rain on every cell, every cell reads the texture), obstacles 0–2 % (nothing runs per
-substep; noise), all three +1–10 %.
+continuity passes, and one `r32float` obstacle texture read by the brush pass (and the renderer). Which layers run is a
+choice of pipeline, not a uniform: each pass is compiled twice, with the pipeline-overridable constant
+`ROUGHNESS_MAP` / `STORM_DRAINS` false (the default) and true, sharing one bind group layout, and `encodeFrame` picks
+the variant. With a layer off, the code that reads the texture is not compiled at all. A first version branched on a
+uniform flag instead and cost the default solver 3 % (2,285–2,328 against 2,376–2,392 substeps/s at 1024²); with the
+variants the default path is unchanged — 2,377–2,387 against 2,380–2,384 substeps/s, interleaved runs of
+`tests/sim/bench.ts 1024` against `v2` on the GTX 1660 Ti — and bit for bit the old solver. The Sim uniform grew 144 →
+160 bytes (`drainScale`, padding). Cost of a layer when on, per substep at 1024², interleaved A/B against the plain
+solver (`node --import tsx tests/sim/benchLand.ts`, 15 rounds, median; ±3 % between runs): roughness +6 %, drains
++6–9 % (with rain on every cell, every cell reads the texture), obstacles 0 ± 2 % (nothing runs per substep), all three
++16 %.
 
 **Tests** (`tests/sim/landSurface.test.ts`, GTX 1660 Ti / D3D12):
 

@@ -23,14 +23,10 @@ export const ACC_PER_CELL = 2;
  * read by the export pass alone (its hazard accumulators, shaders/exportState.ts): the simulated time the export
  * describes and the simulated seconds since the previous export. The rheo* fields are the scenario's debris-flow
  * rheology (src/sim/rheology.ts; read by the momentum pass alone, rheoKind 0 = water); rheoPad keeps the struct a
- * multiple of 16 bytes. The surf* fields switch the land-surface layers (FloodSolver.setLandSurface, the `surfTex`
- * texture of SURFACE_WGSL): surfFlags bit 0 = per-cell Manning roughness (momentum pass), bit 1 = storm drains
- * (continuity pass); drainScale multiplies the per-cell drain capacity. surfFlags 0 never reads the texture.
+ * multiple of 16 bytes. drainScale multiplies the per-cell storm-drain capacity of the land-surface texture (read only by
+ * the continuity pass's STORM_DRAINS pipeline); surfPad* keep the struct a multiple of 16 bytes.
  */
 export const SIM_UNIFORM_BYTES = 160;
-/** Sim.surfFlags bits. */
-export const SURF_ROUGHNESS = 1;
-export const SURF_DRAINS = 2;
 /** Byte size of the `Forcing` uniform. */
 export const FORCING_UNIFORM_BYTES = (2 * MAX_SOURCES + MAX_STORMS) * 16;
 
@@ -45,7 +41,7 @@ struct Sim {
   bFrMax: f32, wallAdv: f32, hzTime: f32, hzSpan: f32,
   rheoKind: i32, rheoTau: f32, rheoMu: f32, rheoVisc: f32,
   rheoN2: f32, rheoGXi: f32, rheoHVisc: f32, rheoPad: f32,
-  surfFlags: i32, drainScale: f32, surfPad0: f32, surfPad1: f32,
+  drainScale: f32, surfPad0: f32, surfPad1: f32, surfPad2: f32,
 };
 `;
 
@@ -54,7 +50,9 @@ struct Sim {
  *   r = Manning roughness factor of the cell, relative to the global n (SimParams.manningN): a face's n is
  *       manningN · (r_L + r_R)/2, so n² = sim.n2 · r_f². r = 1 everywhere reproduces the uniform-n solver bit for bit.
  *   g = storm-drain capacity of the cell, m/s of depth (× sim.drainScale).
- * Read only when the matching sim.surfFlags bit is set.
+ * Each pass reads it only in its pipeline variant that has the layer on (the pipeline-overridable constants
+ * ROUGHNESS_MAP and STORM_DRAINS, false in the default pipelines): with a layer off the code that reads it is not
+ * compiled at all, so the default solver costs what it did before the layers existed.
  */
 export const SURFACE_WGSL = /* wgsl */ `
 fn surf(i: i32, j: i32) -> vec2f {

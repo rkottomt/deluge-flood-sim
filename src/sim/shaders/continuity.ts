@@ -33,7 +33,7 @@
  * (a cell filling from nearly dry): half a ULP at most, once, random in sign.
  */
 import { INFLOW_EDGE_MASK_CELLS } from '../constants';
-import { ACC_PER_CELL, FORCING_WGSL, HELPERS_WGSL, SIM_WGSL, SNAP_WGSL, SURFACE_WGSL, SURF_DRAINS } from './common';
+import { ACC_PER_CELL, FORCING_WGSL, HELPERS_WGSL, SIM_WGSL, SNAP_WGSL, SURFACE_WGSL } from './common';
 
 export const continuityWGSL = /* wgsl */ `
 ${SIM_WGSL}
@@ -45,6 +45,8 @@ ${FORCING_WGSL}
 @group(0) @binding(4) var stateOut: texture_storage_2d<rgba32float, write>;
 @group(0) @binding(5) var<storage, read_write> acc: array<f32>;
 @group(0) @binding(6) var surfTex: texture_2d<f32>;
+// Pipeline variant: storm drains on (the land-surface layer). False in the default pipeline.
+override STORM_DRAINS: bool = false;
 ${HELPERS_WGSL}
 ${SNAP_WGSL}
 ${SURFACE_WGSL}
@@ -215,7 +217,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
 
   // ── Storm drains (land-surface layer): a per-cell sink at the drain capacity, never more than is there, booked
   //    with the outflow exactly like infiltration ──
-  if ((sim.surfFlags & ${SURF_DRAINS}) != 0 && h > 0.0) {
+  if (STORM_DRAINS && h > 0.0) {
     let cap = surf(i, j).g * sim.drainScale * sim.dt;
     if (cap > 0.0) {
       let drQ = snapInc(h, min(cap, h));
