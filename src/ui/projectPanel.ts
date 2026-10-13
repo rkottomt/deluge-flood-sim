@@ -12,9 +12,9 @@
  */
 import type { TerrainData } from '../contracts';
 import { cleanPlaceLabel } from '../data/placeName';
-import { autosaveEnabled, readAutosave, setAutosaveEnabled, writeAutosave } from '../project/autosave';
-import { describeEdits, editLogFor } from '../project/edits';
-import { PROJECT_EXTENSION, PROJECT_LIMITS, PROJECT_MIME, type ProjectFile } from '../project/format';
+import { AutosaveGate, autosaveEnabled, readAutosave, readAutosaveBackup, setAutosaveEnabled, writeAutosave } from '../project/autosave';
+import { describeEdits, editLogFor, editsCost, replayEdits } from '../project/edits';
+import { PROJECT_EXTENSION, PROJECT_LIMITS, PROJECT_MIME, type ProjectEdit, type ProjectFile } from '../project/format';
 import { decodeProjectLink, encodeProjectLink, LINK_BUDGET, PROJECT_PARAM } from '../project/share';
 import { parseProjectText, projectToJson, type ReadResult } from '../project/validate';
 import { bridgeFor } from './bridge';
@@ -23,7 +23,7 @@ import { h, setText, toggleClass, type UIContext } from './dom';
 import { downloadsBlocked, downloadText, safeFilename } from './download';
 import { fmtNum } from './format';
 import { headlessBusy } from './headless';
-import { applyProject, captureProject, sceneMatches } from './projectState';
+import { applyProject, captureProject, gridMatches, sceneMatches } from './projectState';
 import { sitesFor } from './sites';
 
 /** Autosave cadence, ms of wall time (a write happens only when the project changed). */
@@ -46,7 +46,9 @@ export function createProjectSection(ctx: UIContext): ProjectSection {
   let includeResults = true;
   let busy = false;
   let autosaveOn = autosaveEnabled();
-  let lastAutosave = '';
+  const gate = new AutosaveGate();
+  /** A link's terrain edits, held until the user agrees to apply them (on the scene they were opened on). */
+  let pendingTerrain: { edits: ProjectEdit[]; terrain: TerrainData } | null = null;
   /** Scene key a ?project= link was applied on; leaving it drops the parameter from the address bar. */
   let linkScene: string | null = null;
 
@@ -82,6 +84,16 @@ export function createProjectSection(ctx: UIContext): ProjectSection {
   autosaveSwitch.set(autosaveOn);
   autosaveSwitch.el.dataset.project = 'autosave';
   const autosaveNote = h('p', { class: 'dl-impact-fine', 'data-project': 'autosave-note' });
+  const restorePrevBtn = button('Restore the earlier copy', () => void restoreBackup(), { className: 'dl-btn-sm', tip: 'The autosaved project from before this session’s first autosave', side: 'top' });
+  restorePrevBtn.dataset.project = 'autosave-previous';
+  restorePrevBtn.hidden = true;
+  // A link's terrain edits wait for the user's yes: a link is someone else's text, and digging is not undone by Clear walls.
+  const terrainText = h('p', { class: 'dl-impact-fine' });
+  const terrainApplyBtn = button('Apply terrain edits', () => applyPendingTerrain(), { variant: 'primary', className: 'dl-btn-sm', tip: 'Dig and raise the ground as the link says', side: 'top' });
+  terrainApplyBtn.dataset.project = 'link-terrain-apply';
+  const terrainSkipBtn = button('Leave the ground as it is', () => dropPendingTerrain('The link’s terrain edits were not applied.'), { className: 'dl-btn-sm', side: 'top' });
+  terrainSkipBtn.dataset.project = 'link-terrain-skip';
+  const terrainCard = h('div', { class: 'dl-impact-block', 'data-project': 'link-terrain', hidden: true }, h('div', { class: 'dl-label-row' }, h('span', { class: 'dl-label' }, 'Terrain edits from the link')), terrainText, h('div', { class: 'dl-row dl-row-wrap' }, terrainApplyBtn, terrainSkipBtn));
 
   const body = [
     intro,
@@ -91,7 +103,8 @@ export function createProjectSection(ctx: UIContext): ProjectSection {
     h('div', { class: 'dl-row dl-row-wrap' }, saveBtn, openBtn, shareBtn, fileInput),
     status,
     issues,
-    h('div', { class: 'dl-impact-block' }, h('div', { class: 'dl-label-row' }, h('span', { class: 'dl-label' }, 'Privacy')), h('div', { class: 'dl-switches' }, autosaveSwitch.el), autosaveNote),
+    terrainCard,
+    h('div', { class: 'dl-impact-block' }, h('div', { class: 'dl-label-row' }, h('span', { class: 'dl-label' }, 'Privacy')), h('div', { class: 'dl-switches' }, autosaveSwitch.el), autosaveNote, h('div', { class: 'dl-row dl-row-wrap' }, restorePrevBtn)),
   ];
 
   // ─── Behaviour ──────────────────────────────────────────────────────────────────────────────────────────────
@@ -143,9 +156,13 @@ export function createProjectSection(ctx: UIContext): ProjectSection {
     }
     busy = true;
     setStatus('Opening the project…');
+    // Another project replaces what a link left pending.
+    if (pendingTerrain) dropPendingTerrain('');
     try {
       const out = await applyProject(r.project, { store, actions, fromLink, waitForScene });
       if (!fromLink) nameIn.value = r.project.name;
+      // The user chose this project (a file, or the autosave offered back): autosave may keep it from now on.
+      if (out.ok && !fromLink) gate.arm();
       const notes = [...r.warnings, ...out.notes];
       if (out.ok) setStatus(`${fromLink ? 'Opened the project from the link' : r.project.name ? `Opened “${r.project.name}”` : 'Opened the project'}: ${summaryText(r.project)}.`, notes.length ? 'warn' : 'info', notes);
       else setStatus('The project could not be opened.', 'warn', notes);
@@ -197,6 +214,12 @@ export function createProjectSection(ctx: UIContext): ProjectSection {
   async function share() {
     const c = capture(true);
     if (!c.ok) return setStatus(c.error, 'warn');
+    // The reader holds a link to a far smaller replay budget than a file (format.ts maxLinkBrushCells): a link it would
+    // refuse is not written.
+    const g = c.project.grid;
+    if (g && [c.project.edits, ...c.project.designs.map((d) => d.edits)].some((e) => editsCost(e, g).cells > PROJECT_LIMITS.maxLinkBrushCells)) {
+      return setStatus('The walls and terrain edits of this project cover too much of the map for a link. Save the file and share that instead.', 'warn');
+    }
     let enc: { value: string | null; length: number };
     try {
       enc = await encodeProjectLink(c.project);
@@ -230,23 +253,68 @@ export function createProjectSection(ctx: UIContext): ProjectSection {
     const stored = setAutosaveEnabled(on);
     autosaveOn = on && stored;
     autosaveSwitch.set(autosaveOn);
-    lastAutosave = '';
     if (on && !stored) setStatus('This browser does not allow storage here (private window or blocked site data), so autosave is unavailable.', 'warn');
     else if (on) {
+      // Turned on here and now: keep what is on screen (there is no older copy — turning it off deleted it).
+      gate.arm();
       tickAutosave();
       setStatus('Autosave on: the project (without a portfolio) is kept in this browser and offered back next time.');
     } else setStatus('Autosave off: the saved copy was deleted. Nothing is stored.');
     renderAutosaveNote();
   }
 
-  function tickAutosave() {
-    if (!autosaveOn || busy || headlessBusy(store) || store.get().loading || !getTerrain()) return;
+  /** The project as autosave compares it: no time stamp, no camera (it moves on its own; it is saved with the rest). */
+  function autosaveKey(p: ProjectFile): string {
+    return projectToJson({ ...p, savedAt: '', camera: null }, false);
+  }
+
+  /** What is on screen, as an autosave key (null while nothing can be captured). */
+  function currentKey(): { key: string; project: ProjectFile } | null {
+    if (busy || headlessBusy(store) || store.get().loading || !getTerrain()) return null;
     const c = captureProject(store, { name: nameIn.value, includePortfolio: false, includeResults: true });
-    if (!c.ok) return;
-    const text = projectToJson({ ...c.project, savedAt: '' }, false);
-    if (text === lastAutosave) return;
-    lastAutosave = text;
-    writeAutosave(projectToJson(c.project, false));
+    return c.ok ? { key: autosaveKey(c.project), project: c.project } : null;
+  }
+
+  function tickAutosave() {
+    if (!autosaveOn) return;
+    const now = currentKey();
+    if (!now) return;
+    // The first project seen is the baseline (normally set at startup, below): it is not a change worth a write.
+    gate.setBaseline(now.key);
+    if (!gate.shouldWrite(now.key)) return;
+    writeAutosave(projectToJson(now.project, false), { backup: gate.takeBackup() });
+    renderAutosaveNote();
+  }
+
+  async function restoreBackup() {
+    const text = readAutosaveBackup();
+    if (!text) return renderAutosaveNote();
+    await open(parseProjectText(text), false);
+  }
+
+  // ─── A link's terrain edits (asked first) ───────────────────────────────────────────────────────────────────
+  function holdTerrain(edits: ProjectEdit[], terrain: TerrainData) {
+    pendingTerrain = { edits, terrain };
+    setText(terrainText, `The link also digs or raises the ground in ${fmtNum(edits.length)} place${edits.length === 1 ? '' : 's'}. They are applied only if you choose to (Reset all undoes them).`);
+    terrainCard.hidden = false;
+  }
+
+  function dropPendingTerrain(message: string) {
+    pendingTerrain = null;
+    terrainCard.hidden = true;
+    if (message) setStatus(message);
+  }
+
+  function applyPendingTerrain() {
+    const p = pendingTerrain;
+    if (!p) return;
+    if (headlessBusy(store)) return setStatus('A sweep, ensemble or comparison is running: apply the terrain edits when it has finished.', 'warn');
+    const solver = bridge.scene?.getSolver() ?? null;
+    if (getTerrain() !== p.terrain || !solver) return dropPendingTerrain('The scene changed, so the link’s terrain edits were not applied.');
+    // Ground edits commute with the walls (another raster), so applying them after the link's walls changes nothing.
+    // Recorded like the user's own digging.
+    replayEdits(solver, p.edits);
+    dropPendingTerrain(`Applied the link’s ${fmtNum(p.edits.length)} terrain edit${p.edits.length === 1 ? '' : 's'}.`);
   }
 
   function renderAutosaveNote() {
@@ -257,6 +325,7 @@ export function createProjectSection(ctx: UIContext): ProjectSection {
         ? `On: kept in this browser only, every few seconds while you work${desktop ? '. The desktop app clears storage each time it starts, so the copy lasts until you quit.' : '.'} Turning it off deletes the copy.`
         : 'Off: Deluge stores nothing. Turn it on to have this browser keep your project (without a portfolio) and offer it back next time.',
     );
+    restorePrevBtn.hidden = !autosaveOn || !readAutosaveBackup();
   }
 
   const timer = setInterval(tickAutosave, AUTOSAVE_MS);
@@ -279,7 +348,16 @@ export function createProjectSection(ctx: UIContext): ProjectSection {
     renderAutosaveNote();
   }
 
-  ctx.own(log.on(() => render()));
+  let logFull = false;
+  ctx.own(
+    log.on(() => {
+      render();
+      if (log.overflow && !logFull) {
+        bridge.notify({ kind: 'warn', key: 'edit-log-full', title: 'Edit log full', message: 'Walls and digging from now on stay on the map but are not kept in a saved project or link: the log holds as much as a project can reopen.' });
+      }
+      logFull = log.overflow;
+    }),
+  );
   ctx.own(sitesFor(store).on(() => render()));
   ctx.bind(
     (s) => `${s.presetId}|${s.terrainName}|${!!s.loading}`,
@@ -306,6 +384,12 @@ export function createProjectSection(ctx: UIContext): ProjectSection {
   } catch {
     raw = null;
   }
+  // Autosave's baseline: the project as first shown (the default scene) is not a change, so it never overwrites the
+  // copy from last time on its own (AutosaveGate).
+  void waitForScene().then((t) => {
+    const now = t ? currentKey() : null;
+    if (now) gate.setBaseline(now.key);
+  });
   if (raw !== null) {
     void (async () => {
       const r = await decodeProjectLink(raw);
@@ -315,10 +399,28 @@ export function createProjectSection(ctx: UIContext): ProjectSection {
       }
       const t = await waitForScene();
       if (!t) return;
-      const ok = await open(r, true);
-      if (ok) {
-        linkScene = sceneKey();
-        bridge.notify({ kind: 'info', key: 'project-link', title: 'Project link opened', message: 'Walls, sites and settings from the link are on screen. Names are not carried by links.' });
+      // The link's walls, sites and settings open at once; its digging waits for the user's yes (holdTerrain).
+      const terrainEdits = r.project.edits.filter((e) => e.op === 'terrain');
+      const ok = await open({ ...r, project: { ...r.project, edits: r.project.edits.filter((e) => e.op !== 'terrain') } }, true);
+      if (!ok) return;
+      linkScene = sceneKey();
+      // Put on screen for the user, not by them: autosave keeps waiting for a real change (the earlier copy stays).
+      const now = currentKey();
+      if (now) gate.rebase(now.key);
+      const kept = autosaveOn && readAutosave() ? ' Your autosaved project is still kept in this browser.' : '';
+      const onScene = getTerrain();
+      if (terrainEdits.length && onScene && gridMatches(r.project.grid, onScene)) {
+        holdTerrain(terrainEdits, onScene);
+        bridge.notify({
+          kind: 'warn',
+          key: 'project-link',
+          title: 'Project link opened',
+          message: `Walls, sites and settings from the link are on screen. The link also digs or raises the ground in ${fmtNum(terrainEdits.length)} place${terrainEdits.length === 1 ? '' : 's'}: apply that only if you trust the link.${kept}`,
+          action: { label: 'Apply terrain edits', run: () => applyPendingTerrain() },
+          durationMs: 30000,
+        });
+      } else {
+        bridge.notify({ kind: 'info', key: 'project-link', title: 'Project link opened', message: `Walls, sites and settings from the link are on screen. Names are not carried by links.${kept}` });
       }
     })();
   } else if (autosaveOn) {

@@ -22,7 +22,8 @@
  *   DIST-*     SEC-07  no source maps, no local paths, no debug surfaces in the released bundle
  *   AUDIT-*    supply chain: `npm audit --omit=dev` is clean
  *   *-PROJECT-*  saved projects (src/project): a ?project= link never puts its names on the page, never executes,
- *              never pollutes Object.prototype and stops a gzip bomb; hostile .deluge.json files get fixed refusals
+ *              never pollutes Object.prototype and stops a gzip bomb; a link of map-sized brushes is refused, not
+ *              replayed, and a link's digging waits for the user's yes; hostile .deluge.json files get fixed refusals
  *
  * A case whose fix has not landed yet is reported as PENDING rather than failing the build; DELUGE_SEC_STRICT=1
  * makes pending fatal too. Results: artifacts/security/security-results.json + a printed table; regressions exit 1.
@@ -705,6 +706,55 @@ try {
     const refused = /could not be unpacked/.test(text);
     const alive = await page.evaluate(() => !!document.querySelector('.dl-scene-name')?.textContent);
     record('CAP-PROJECT-LINK-BOMB', 'SEC-03', 'a gzip-bomb ?project= link (4 MB inflated) is refused', fits && refused && alive ? 'pass' : fits ? 'fail' : 'skip', `${value.length} characters; ${refused ? 'refused with the fixed sentence' : 'no refusal'}${alive ? ', app alive' : ', app dead'}`);
+    await page.close();
+  }
+
+  if (shouldRun('CAP-PROJECT-LINK-BRUSH')) {
+    // ~1.5 kB: 4,000 digs with a 99,999-cell radius. Replayed, each would visit the whole grid on the CPU mirror (~27 ms
+    // at 1024²) — minutes of a frozen tab, again in every design comparison. The reader clamps the radius and refuses
+    // the link past its replay budget (src/project/format.ts maxLinkBrushCells). DOM only: the app answers, the fixed
+    // refusal is shown, and nothing of the link (its site) is on screen.
+    const p = hostileProject('x');
+    p.grid = { nx: 1024, ny: 1024, cellSize: 7.8125 };
+    p.edits = Array.from({ length: 4000 }, (_, i) => ({ op: 'terrain', at: [500 + (i % 9), 512], r: 99999, d: -1 }));
+    const value = projectLink(JSON.stringify(p));
+    const page = await newPage(browser);
+    const t0 = Date.now();
+    const { text, applied } = await openProjectLink(page, value);
+    const ping0 = Date.now();
+    const alive = await page.evaluate(() => !!document.querySelector('.dl-scene-name')?.textContent).catch(() => false);
+    const pingMs = Date.now() - ping0;
+    const refused = /cover more of the map/.test(text);
+    record('CAP-PROJECT-LINK-BRUSH', 'SEC-03', 'a ?project= link of thousands of map-sized brushes is refused, not replayed', value.length <= 6000 && refused && alive && !applied && pingMs < 2000 ? 'pass' : value.length <= 6000 ? 'fail' : 'skip', `${value.length} characters; ${refused ? 'refused with the fixed sentence' : 'no refusal'}${applied ? ', link APPLIED' : ''}; page answered in ${pingMs} ms (${((Date.now() - t0) / 1000).toFixed(1)} s with the load)${alive ? '' : ', app dead'}`);
+    await page.close();
+  }
+
+  if (shouldRun('PROJECT-LINK-TERRAIN-ASK')) {
+    // A link's digging is someone else's: its walls and sites open at once, the ground only after the user says yes —
+    // on a card in the Project section, never a browser dialog.
+    const p = hostileProject('x');
+    p.grid = { nx: 1024, ny: 1024, cellSize: 7.8125 };
+    p.edits = [...p.edits, { op: 'terrain', at: [600, 420], r: 6, d: -8 }];
+    const page = await newPage(browser);
+    const dialogs = [];
+    page.on('dialog', (d) => {
+      dialogs.push(d.type());
+      void d.dismiss().catch(() => {});
+    });
+    const { applied } = await openProjectLink(page, projectLink(p));
+    const card = await page.evaluate(() => {
+      const el = document.querySelector('[data-project="link-terrain"]');
+      return !!el && !el.hidden;
+    });
+    await page.evaluate(() => {
+      const sec = document.querySelector('[data-section="project"]');
+      if (sec && !sec.classList.contains('dl-open')) sec.querySelector('.dl-sec-head')?.click();
+      document.querySelector('[data-project="link-terrain-apply"]')?.click();
+    });
+    await page.waitForTimeout(500);
+    const after = await page.evaluate(() => ({ status: document.querySelector('[data-project="status"]')?.textContent ?? '', card: !document.querySelector('[data-project="link-terrain"]')?.hidden }));
+    const yes = /^Applied the link.s 1 terrain edit/.test(after.status) && !after.card;
+    record('PROJECT-LINK-TERRAIN-ASK', 'SEC-08', 'a ?project= link’s terrain edits wait for the user’s yes on an in-app card (no browser dialog)', !applied ? 'pending' : card && yes && !dialogs.length ? 'pass' : 'fail', `link applied (${applied} site); card ${card ? 'shown' : 'MISSING'}; after the yes: ${after.status.slice(0, 60) || '(no status)'}${dialogs.length ? `; browser dialogs: ${dialogs.join(', ')}` : ''}`);
     await page.close();
   }
 
