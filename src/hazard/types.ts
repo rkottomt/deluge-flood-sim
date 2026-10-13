@@ -191,6 +191,27 @@ export interface ChainObservation {
   source: string;
 }
 
+/**
+ * Bed resistance law of the 1-D routing (src/hazard/resistance.ts). 'manning' (the default when absent): the
+ * ChainFile's n per node. 'ferguson2007': Ferguson's (2007) variable-power equation
+ * U/u* = a1·a2·(R/D84)/√(a1² + a2²·(R/D84)^{5/3}) on the bed's D84, applied as its depth-dependent equivalent n — it
+ * REPLACES the ChainFile's n (which the bake keeps at 0.05 for the Manning path). Additive: a spec without it routes as
+ * before, bit for bit.
+ */
+export type ResistanceLaw =
+  | { law: 'manning' }
+  | {
+      law: 'ferguson2007';
+      /**
+       * D84 of the bed, m: one value for the whole profile, or reaches [{ s, d84 }, …] — each applies from its
+       * chainage s (m) down to the next entry's (the first also upstream of its s).
+       */
+      d84: number | ReadonlyArray<{ s: number; d84: number }>;
+      /** Override Ferguson's a1 = 6.5 / a2 = 2.5 (sensitivity studies only). */
+      a1?: number;
+      a2?: number;
+    };
+
 /** `ScenarioPreset.hazardChain` (in meta.json): how a preset's flood is produced upstream. */
 export interface HazardChainSpec {
   trigger: HazardTrigger;
@@ -199,6 +220,11 @@ export interface HazardChainSpec {
   rheology: Rheology;
   /** Per-scenario solver overrides: speed cap (debris floods were measured at 20–25 m/s; the default is 15). */
   solver?: { uMax?: number };
+  /**
+   * 1-D routing options of this preset (additive; absent = Manning with the ChainFile's n). `resistance`: the bed
+   * resistance law (ResistanceLaw); a ChainOverrides.routing.resistance replaces it for one run.
+   */
+  routing?: { resistance?: ResistanceLaw };
   /** Time of the alert (s after clock zero), for warning lead time; e.g. Nepal 2026's SMS at 09:15 NPT. */
   alertTime?: number;
   observations?: ChainObservation[];

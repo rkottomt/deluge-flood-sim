@@ -173,6 +173,13 @@ export const ROUTING_U_MAX = 30;
 export const ROUTING_FROUDE_MAX = 8;
 /** Manning n of a bouldery mountain river carrying clear water (spec §E.2; the bake's default). [S] */
 export const MANNING_N = 0.05;
+/**
+ * Ferguson (2007, WRR 43, W05427) variable-power resistance equation, U/u* = a1·a2·(R/D84)/√(a1² + a2²·(R/D84)^{5/3}):
+ * his compromise coefficients for absolute and relative error on 376 gravel- and boulder-bed measurements, restated by
+ * Ferguson & Recking 2025 (WRR, doi:10.1029/2024WR038852). src/hazard/resistance.ts. [V]
+ */
+export const VPE_A1 = 6.5;
+export const VPE_A2 = 2.5;
 /** Baseflow when a scenario gives none, m³/s: keeps the routed river wet so the front does not run on a dry bed. [H] */
 export const BASEFLOW_DEFAULT = 20;
 /** Spin-up of the routing on baseflow alone before t = 0, s: lets the river settle from the normal-depth guess. [H] */

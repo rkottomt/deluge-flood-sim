@@ -273,6 +273,7 @@ export function runChain(spec: HazardChainSpec, file: ChainFile, overrides: Chai
     entryS: file.domainEntry.s,
     // A run without a flood still routes an hour so the entry shows the (raised) baseflow.
     ...(src.info.flood ? {} : { tEnd: 3600 }),
+    ...(spec.routing?.resistance ? { resistance: spec.routing.resistance } : {}),
     ...ov.routing,
   });
 

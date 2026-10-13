@@ -23,6 +23,11 @@
  * §C.5/E.2), so a flood bulks on steep reaches and drops its load where the valley flattens. Rough beds of a debris
  * flood are rougher: n × dispersiveManningFactor(Cv) (Lin et al. 2005).
  *
+ * Resistance law (RoutingOptions.resistance, src/hazard/resistance.ts): Manning with the profile's n per node
+ * (default), or Ferguson's (2007) variable-power equation on a bed of D84, applied as the depth-dependent Manning n it
+ * is equivalent to, n_eq(R) = R^{1/6}/(√g·U/u*), tabulated per node on the same depth grid as the geometry. The
+ * dispersive factor multiplies either.
+ *
  * Stability: dt from a CFL condition on |u| + √(g·A/W) (Courant 0.7), the semi-implicit friction can only slow water,
  * speeds are capped (30 m/s, Froude 8), and a donor-limited flux correction keeps every volume ≥ 0 exactly, which is
  * what makes the scheme mass-conservative AND positive on a dry bed.
@@ -49,6 +54,7 @@ import {
   FRONT_STAGE_RISE,
 } from './defaults';
 import { CV_MAX, dispersiveManningFactor, takahashiCv } from './mass';
+import { d84At, vpeManningN, type ResistanceLaw } from './resistance';
 import type { Series } from './series';
 
 /** Points in each node's resampled depth table. */
@@ -331,14 +337,17 @@ function depthOf(net: Network, i: number, v: number, hint: Int32Array): number {
   return (j + (v - v0) / (v1 - v0)) * net.dh;
 }
 
-/** Manning normal depth at node i for discharge q on the node's averaged slope (bisection). */
-export function normalDepth(net: Network, i: number, q: number, slope?: number): number {
+/**
+ * Normal depth at node i for discharge q on the node's averaged slope (bisection): Manning with the node's n, or —
+ * given a resistance table (resistanceTable) — the depth-dependent n of that law.
+ */
+export function normalDepth(net: Network, i: number, q: number, slope?: number, nTab?: ResistanceTable | null): number {
   if (!(q > 0)) return 0;
   const S = Math.max(SLOPE_MIN, slope ?? net.slope[i]);
-  const n = net.manning[i];
   const qOf = (h: number) => {
     const A = areaAt(net, i, h);
     const P = perimAt(net, i, h);
+    const n = nTab ? nAt(net, nTab, i, h, A / P) : net.manning[i];
     return (A * Math.pow(A / P, 2 / 3) * Math.sqrt(S)) / n;
   };
   let lo = 0;
@@ -371,6 +380,55 @@ export function valleyStorage(file: ChainFile, i: number, crest: number): { volu
 /** Area of the valley section at node i below height h above its thalweg, m² (for avalanche-dam heights). */
 export function sectionArea(file: ChainFile, i: number, h: number): number {
   return areaAt(prepareNetwork(file), i, Math.max(0, h));
+}
+
+/**
+ * A depth-dependent resistance law on a network: the equivalent Manning n per (node, table depth) — n_eq at the
+ * hydraulic radius of that node's section at that depth — plus each node's D84 for depths above the table.
+ */
+export interface ResistanceTable {
+  n: Float64Array;
+  d84: Float64Array;
+  a1?: number;
+  a2?: number;
+}
+const resistanceCache = new WeakMap<Network, Map<string, ResistanceTable>>();
+
+/** The table of a law on a network (cached per network and law); null for Manning (the profile's own n). */
+export function resistanceTable(net: Network, law: ResistanceLaw | undefined): ResistanceTable | null {
+  if (!law || law.law === 'manning') return null;
+  if (law.law !== 'ferguson2007') throw new Error(`unknown resistance law ${(law as { law: string }).law}`);
+  const key = JSON.stringify(law);
+  let m = resistanceCache.get(net);
+  if (!m) resistanceCache.set(net, (m = new Map()));
+  const hit = m.get(key);
+  if (hit) return hit;
+  const J = TABLE_POINTS;
+  const d84 = Float64Array.from(net.s, (s) => d84At(law.d84, s));
+  for (let i = 0; i < net.n; i++) if (!(d84[i] > 0)) throw new Error(`ferguson2007: D84 must be > 0 (node ${i})`);
+  const n = new Float64Array(net.n * J);
+  for (let i = 0; i < net.n; i++) {
+    const o = i * J;
+    for (let j = 1; j < J; j++) {
+      const R = net.hyd[(o + j) * HYD] / net.perim[o + j];
+      n[o + j] = vpeManningN(R, d84[i], law.a1, law.a2);
+    }
+    // Depth 0 carries no flow (ROUTING_H_MIN); the first wet entry stands for it so interpolation stays finite.
+    n[o] = n[o + 1];
+  }
+  const t: ResistanceTable = { n, d84, ...(law.a1 !== undefined ? { a1: law.a1 } : {}), ...(law.a2 !== undefined ? { a2: law.a2 } : {}) };
+  m.set(key, t);
+  return t;
+}
+
+/** Equivalent n at node i, depth h (hydraulic radius R there, used above the table). */
+function nAt(net: Network, t: ResistanceTable, i: number, h: number, R: number): number {
+  const J = TABLE_POINTS;
+  const x = h / net.dh;
+  if (x >= J - 1) return vpeManningN(R, t.d84[i], t.a1, t.a2);
+  const j = Math.floor(x);
+  const o = i * J + j;
+  return t.n[o] + (t.n[o + 1] - t.n[o]) * (x - j);
 }
 
 /**
@@ -452,6 +510,12 @@ export interface RoutingOptions {
   stopFraction?: number;
   /** Step only the reach the flood has reached (plus a margin); default true. Off: every node every step. */
   window?: boolean;
+  /**
+   * Bed resistance law (src/hazard/resistance.ts). Default Manning with the profile's n per node; 'ferguson2007' is
+   * Ferguson's variable-power equation on the given D84, which replaces the profile's n. The dispersive factor for
+   * the sediment load multiplies either.
+   */
+  resistance?: ResistanceLaw;
 }
 
 export interface ProbeSeries {
@@ -558,6 +622,8 @@ class RouterState {
   readonly constNodes: Int32Array;
   readonly qBaseNode: Float64Array;
   inflows: Array<{ node: number; series: Series; cv: number }> = [];
+  /** Depth-dependent resistance (null: Manning with the profile's n). */
+  readonly nTab: ResistanceTable | null;
   /**
    * Active nodes [0, nAct): beyond them the valley still holds its t = 0 baseflow and is not stepped. The face into
    * the first inactive node passes its water straight to the outlet (that reach is steady: what enters it leaves).
@@ -624,6 +690,7 @@ class RouterState {
     this.relax = (opts.cvMode ?? 'relax') === 'relax';
     this.outletSlope = Math.max(SLOPE_MIN, net.slope[N - 1]);
     this.entryFace = opts.entryS === undefined ? N - 1 : faceNear(net, opts.entryS);
+    this.nTab = resistanceTable(net, opts.resistance);
   }
 }
 
@@ -718,6 +785,7 @@ function advance(st: RouterState, t: number, dt: number, flood: boolean): number
   const ILF = net.invLf;
   const IDX = net.invDx;
   const MAN = net.manning;
+  const NT = st.nTab ? st.nTab.n : null;
   const WEIR = net.weirAt;
   const CINF = net.cInf;
   const HY = net.hyd;
@@ -810,6 +878,7 @@ function advance(st: RouterState, t: number, dt: number, flood: boolean): number
         let Af: number;
         let ARf: number;
         let Wf: number;
+        let nBase: number;
         const x = hf * invDh;
         if (x < Jm1) {
           const j = x | 0;
@@ -819,11 +888,17 @@ function advance(st: RouterState, t: number, dt: number, flood: boolean): number
           Af = 0.5 * (HY[oi] + (HY[oi + HYD] - HY[oi]) * fr + HY[ok] + (HY[ok + HYD] - HY[ok]) * fr);
           Wf = 0.5 * (HY[oi + 1] + (HY[oi + HYD + 1] - HY[oi + 1]) * fr + HY[ok + 1] + (HY[ok + HYD + 1] - HY[ok + 1]) * fr);
           ARf = 0.5 * (HY[oi + 2] + (HY[oi + HYD + 2] - HY[oi + 2]) * fr + HY[ok + 2] + (HY[ok + HYD + 2] - HY[ok + 2]) * fr);
+          if (NT) {
+            const ni = i * J + j;
+            const nk = ni + J;
+            nBase = 0.5 * (NT[ni] + (NT[ni + 1] - NT[ni]) * fr + NT[nk] + (NT[nk + 1] - NT[nk]) * fr);
+          } else nBase = 0.5 * (MAN[i] + MAN[k]);
         } else {
           Af = 0.5 * (areaAt(net, i, hf) + areaAt(net, k, hf));
           const Rf = Af / (0.5 * (perimAt(net, i, hf) + perimAt(net, k, hf)));
           ARf = Af * Rf * Math.cbrt(Rf);
           Wf = 0.5 * (widthAt(net, i, hf) + widthAt(net, k, hf));
+          nBase = st.nTab ? 0.5 * (nAt(net, st.nTab, i, hf, Rf) + nAt(net, st.nTab, k, hf, Rf)) : 0.5 * (MAN[i] + MAN[k]);
         }
         const qPrev = Q[f];
         // Neighbours corrected for the point sources between them and this face (a tributary, the outburst inflow), so
@@ -831,8 +906,10 @@ function advance(st: RouterState, t: number, dt: number, flood: boolean): number
         const qL = f > 0 && WEIR[f - 1] < 0 ? Q[f - 1] + srcRate[i] : qPrev;
         const qR = f < N - 2 && WEIR[f + 1] < 0 ? Q[f + 1] - srcRate[k] : qPrev;
         const qs = theta * qPrev + 0.5 * (1 - theta) * (qL + qR);
-        const nEff = 0.5 * (MAN[i] + MAN[k]) * nFac[qs >= 0 ? i : k];
-        // Semi-implicit Manning: g·n²·|Q|/(A·R^{4/3}) in the denominator can only slow the flow.
+        const nEff = nBase * nFac[qs >= 0 ? i : k];
+        // Semi-implicit Manning: g·n²·|Q|/(A·R^{4/3}) in the denominator can only slow the flow. With a depth-dependent
+        // law n is its equivalent at this face's depth (g·n²/R^{1/3} = Cf): still a positive coefficient, still
+        // implicit in |Q|.
         const fr = (dt * g * nEff * nEff * (qs >= 0 ? qs : -qs)) / ARf;
         // Convective acceleration ∂(Q²/A)/∂x, first-order upwind on the previous step's face momentum fluxes (zero
         // gradient at the upstream end and next to weirs). Without it the scheme is Bates' local-inertial, which on
@@ -873,7 +950,8 @@ function advance(st: RouterState, t: number, dt: number, flood: boolean): number
     if (hh > ROUTING_H_MIN) {
       const A = areaAt(net, i, hh);
       const R = A / perimAt(net, i, hh);
-      q = (A * Math.cbrt(R * R) * Math.sqrt(st.outletSlope)) / (MAN[i] * nFac[i]);
+      const nOut = st.nTab ? nAt(net, st.nTab, i, hh, R) : MAN[i];
+      q = (A * Math.cbrt(R * R) * Math.sqrt(st.outletSlope)) / (nOut * nFac[i]);
     }
     Qn[N - 1] = q;
     uFace[N - 1] = hh > ROUTING_H_MIN ? q / areaAt(net, i, hh) : 0;
@@ -1000,7 +1078,7 @@ export function route(file: ChainFile, opts: RoutingOptions): RoutingResult {
 
   // Initial state: baseflow at normal depth, pools behind structures filled to spilling.
   if (!opts.dryStart && st.constNodes.length > 0) {
-    for (let i = 0; i < N; i++) h[i] = normalDepth(net, i, qBaseNode[i]);
+    for (let i = 0; i < N; i++) h[i] = normalDepth(net, i, qBaseNode[i], undefined, st.nTab);
     for (const w of net.weirs) {
       const qb = qBaseNode[w.face];
       const pool = w.crest + Math.pow(qb / (WEIR_C_RECT * w.width), 2 / 3);
