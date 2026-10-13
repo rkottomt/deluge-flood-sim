@@ -5,7 +5,7 @@
 import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import type { FloodSolver, SimSnapshot, WaterSource } from '../../src/contracts';
-import { channelBaseSurface, CrestFill, raisedInitialDepth } from '../../src/app/crest';
+import { afterLoading, channelBaseSurface, CrestFill, raisedInitialDepth } from '../../src/app/crest';
 import { createInitialState } from '../../src/app/defaults';
 import { ErrorReporter } from '../../src/app/errors';
 import { createStore } from '../../src/app/store';
@@ -222,6 +222,29 @@ test('crest: a non-robust solver and loading states are left alone', () => {
   store.set({ sim: { ...store.get().sim, stabilityMode: 'robust' }, loading: { message: 'x', progress: 0 } });
   setOffset(4, 5000);
   assert.equal(solver.initialWaterCalls.length, 0);
+});
+
+test('crest: a climate chosen while a scene loads still raises the channel once loading clears (Fort Myers SLR)', () => {
+  // App's order: the climate layer moves the sea boundary while the store says loading (crest ignores it), the scene
+  // is bound (onSceneChanged: applied = 0), then loading clears. The raise must be re-issued then, or the sea-level
+  // rise arrives as a bore from the edges — and the start depends on whether the climate was picked before or after.
+  const { ground, initial } = valley();
+  const solver = new InPlaceSolver(ground);
+  const { store, crest } = setup(solver, initial);
+  const seaRise = 0.4;
+  store.set({ loading: { message: 'Loading Fort Myers…', progress: 0.5 } });
+  const stop = afterLoading(store, () => crest.onStageOffset(store.get().stageOffset + seaRise, 1000));
+  crest.onStageOffset(seaRise, 500); // the climate's onChange → pushStage, mid-load
+  assert.equal(solver.raises.length, 0, 'nothing while loading');
+  crest.onSceneChanged(); // onSceneReady
+  store.set({ loading: { message: 'Filling rivers…', progress: 0.9 } });
+  assert.equal(solver.raises.length, 0, 'a progress update is not the end of the load');
+  store.set({ loading: null });
+  assert.equal(solver.raises.length, 1, 'raised once loading cleared');
+  assert.equal(solver.raises[0][idx(3, 1)], Math.fround(102 + seaRise), 'the channel stands at normal pool + the sea-level rise');
+  store.set({ paused: true });
+  assert.equal(solver.raises.length, 1, 'only the loading → ready edge re-issues it');
+  stop();
 });
 
 test('device lost: the page reloads itself at most once per guard window', () => {

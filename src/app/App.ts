@@ -4,7 +4,7 @@ import { createRenderer, type DelugeRendererAPI, type SimPressure } from '../ren
 import { createRouter } from '../routing';
 import { createToolController, mountUI } from '../ui';
 import { createActions } from './actions';
-import { CrestFill } from './crest';
+import { afterLoading, CrestFill } from './crest';
 import { APP_CONFIG, createInitialState } from './defaults';
 import { FrameDriver } from './driver';
 import { errorMessage, ErrorReporter } from './errors';
@@ -263,6 +263,12 @@ export class App {
     this.probe.install();
     this.climate.install();
     this.sim.install();
+    // A stage raise asked for while a scene loaded (a climate picked mid-load: Fort Myers' sea-level rise) was dropped
+    // by the crest fill, and onSceneReady reset it: lift the channels to the applied stage once loading clears, so
+    // the start does not depend on whether the climate came before or after the load.
+    afterLoading(this.store, () => {
+      if (this.scenes?.scene) this.pushStage();
+    });
     this.store.subscribe((s, prev) => {
       if (s.stageOffset === prev.stageOffset) return;
       this.stageRamp.setTarget(s.stageOffset);

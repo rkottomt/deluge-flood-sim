@@ -50,6 +50,17 @@ export function canRaiseInPlace(solver: FloodSolver): solver is FloodSolver & Ra
   return typeof (solver as Partial<RaiseWaterSurface>).raiseWaterSurface === 'function';
 }
 
+/**
+ * Call `fn` each time a load finishes (store.loading goes from set to null). CrestFill ignores stage changes while
+ * the store is loading, and a new scene resets what it has applied — so a raise asked for mid-load (a climate picked
+ * while a preset loads moves the sea boundary of Fort Myers) has to be issued again here. Returns the unsubscribe.
+ */
+export function afterLoading(store: Store, fn: () => void): () => void {
+  return store.subscribe((s, prev) => {
+    if (prev.loading && !s.loading) fn();
+  });
+}
+
 /** Initial-fill depth above which a cell counts as river channel. */
 export const CHANNEL_WET_DEPTH = 0.05;
 
