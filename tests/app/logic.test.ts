@@ -21,7 +21,7 @@ import { createInitialState } from '../../src/app/defaults';
 import { ErrorReporter } from '../../src/app/errors';
 import { EvacController } from '../../src/app/evac';
 import { NO_TRANSIENT, OverlayComposer } from '../../src/app/overlays';
-import { RunForScheduler } from '../../src/app/runFor';
+import { RAMP_FRAME_S, rampFrameLimit, RunForScheduler } from '../../src/app/runFor';
 import { SimSync } from '../../src/app/simSync';
 import { StageLevels, stageOffsetForFeet, feetForStageOffset } from '../../src/app/stage';
 import { STAGE_RATE_MAX, StageRamp } from '../../src/app/stageRamp';
@@ -447,6 +447,47 @@ test('runFor: falls back after a grace period when readbacks carry NaN time; tim
   sched.onFrame(null, 0, 1e9);
   await assert.rejects(stuck, /timed out/);
   await assert.rejects(sched.start(Number.NaN, 0), /invalid/);
+});
+
+test('runFor: the frame cap is the smallest remaining time; 0 once targets are reached; exact stops wait for that very readback', async () => {
+  const sched = new RunForScheduler();
+  assert.equal(sched.stepLimit(), Infinity, 'no runs: no cap');
+  const a = sched.start(100, 0);
+  const b = sched.start(30, 0);
+  assert.equal(sched.stepLimit(), 30);
+  sched.onStep(30, 30, 16, snap(0), true);
+  assert.equal(sched.stepLimit(), 70, 'b reached its target; a still steps');
+  sched.onStep(70 - 1e-9, 100 - 1e-9, 32, snap(0), true); // float rounding of a sum: within RUN_TARGET_EPSILON_S
+  assert.equal(sched.stepLimit(), 0, 'both reached: stop stepping, wait for the readback');
+  // A stopped run takes only a readback of where it stopped — not one from earlier in its last (large) frame.
+  sched.onFrame(snap(99.9), 70, 48);
+  assert.equal(sched.active, true);
+  sched.onFrame(snap(100), 0, 64);
+  await Promise.all([a, b]);
+  assert.equal(sched.active, false);
+  assert.equal(sched.stepLimit(), Infinity);
+  // runFor(0) completes as soon as the driver ticks it with no advance and a readback is there.
+  const z = sched.start(0, 0);
+  assert.equal(sched.stepLimit(), 0);
+  sched.onStep(0, 0, 10, snap(0), true);
+  sched.onFrame(snap(0), 0, 10);
+  await z;
+});
+
+test('runFor: while the stage ramps, frames end on the RAMP_FRAME_S grid of simulated time', () => {
+  assert.equal(RAMP_FRAME_S, 5);
+  assert.equal(rampFrameLimit(0), 5);
+  assert.ok(Math.abs(rampFrameLimit(3.2) - 1.8) < 1e-12);
+  assert.equal(rampFrameLimit(5), 5);
+  assert.ok(Math.abs(rampFrameLimit(10 - 1e-9) - 5) < 1e-6, 'a clock a rounding short of a grid point is on it');
+  // Driving a clock with frames of any size capped at the grid lands on every grid point.
+  let t = 0;
+  const seen: number[] = [];
+  for (const want of [57, 0.4, 3, 60, 60, 2.2, 60]) {
+    t += Math.min(want, rampFrameLimit(t));
+    seen.push(Math.round(t * 1e6) / 1e6);
+  }
+  assert.deepEqual(seen, [5, 5.4, 8.4, 10, 15, 17.2, 20]);
 });
 
 // ─── evac ────────────────────────────────────────────────────────────────────────────────────

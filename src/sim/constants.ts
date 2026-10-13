@@ -83,6 +83,17 @@ export interface SolverOptions {
   /** Target interval between asynchronous readbacks (snapshots / stats), ms. */
   readbackIntervalMs: number;
   /**
+   * Longest stretch of simulated time a step() frame runs without sampling the hazard accumulators, s (0 = off). The
+   * maxima (depth, speed, depth × speed) and arrival times are taken at exports, and an export otherwise happens once
+   * per rendered frame or readback, i.e. on a wall-clock cadence: at 3600× under a render hold that is 60–120 simulated
+   * seconds apart, so a flood front crossing a building between two exports was recorded at whatever moment happened
+   * to be sampled — Site check's 1936-crest result for a North Shore parcel read d·v 6.6 one run and 8.2 the next.
+   * A frame that advances further than this splits its substeps and exports in between (in the same command buffer),
+   * which makes the sampling a function of simulated time. Interactive play at ≤ 150× (30 fps) never advances this
+   * far in a frame and is unaffected; at high speed-ups one export (~¼ of a substep) per ~10 substeps costs a few %.
+   */
+  hazardSampleSeconds: number;
+  /**
    * GPU time budget for the solver per rendered frame, ms. The solver measures its own GPU cost per substep
    * (timestamp queries) and caps substeps so the UI stays interactive (in addition to
    * SimParams.maxSubstepsPerFrame). Infinity = off: no measurement readbacks; for hosts that pace the solver
@@ -123,6 +134,7 @@ export const DEFAULT_SOLVER_OPTIONS: SolverOptions = {
   dtMin: 0.001,
   dtMax: 5,
   readbackIntervalMs: 300,
+  hazardSampleSeconds: 5,
   gpuBudgetMs: 8,
   rainRunoffSpeed: 2,
   rainPondingFactor: 50,

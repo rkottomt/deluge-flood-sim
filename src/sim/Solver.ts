@@ -85,7 +85,14 @@ const PROBE_IDLE_MS = 500;
 const RAIN_LAG_MAX_S = 1200;
 /** reset() keeps a GPU copy of the initial state up to this grid size (16 MB at 1024²); larger grids rebuild it each time. */
 const RESET_CACHE_MAX_CELLS = 1 << 20;
-const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+/**
+ * step(…, maxSimSeconds): a remainder shorter than this (s) is not run as its own substep. Float64 rounding of
+ * n·dt + (limit − n·dt) leaves ~1e-13 s; anything that small is dropped rather than run as a microscopic step.
+ */
+export const MIN_TAIL_STEP_S = 1e-6;
+/** Most hazard samples (intermediate exports) inside one step() frame; beyond it the samples are spread wider. */
+const MAX_HAZARD_SAMPLES = 32;
+const now =() => (typeof performance !== 'undefined' ? performance.now() : Date.now());
 
 interface StagingSet {
   depth: GPUBuffer;
@@ -258,6 +265,10 @@ export class GpuFloodSolver implements FloodSolver {
   private readonly staging: StagingSet[] = [];
   private readonly pendingMaps = new Set<Promise<void>>();
   private lastReadbackMs = -Infinity;
+  /** stateVersionN when the latest readback was encoded (requestReadback skips when nothing changed since). */
+  private readbackVersion = -1;
+  /** Sim uniform blocks for the hazard samples inside a frame (encodeFrame); created on first use. */
+  private hazardSampleBuf: GPUBuffer | null = null;
   /** Largest dt used since the last readback was encoded (for the Courant statistic), and the last dt. */
   private windowDtMax = 0;
   private lastDt = 0;
@@ -801,35 +812,74 @@ export class GpuFloodSolver implements FloodSolver {
    * sim instead of one per frame — up to ~25× less GPU work — and naive mode really runs at the requested Courant
    * number at any time scale). If the substep cap (maxSubstepsPerFrame ∩ GPU budget) cannot keep up, the backlog
    * beyond one substep is dropped and `throttled` is reported: sim speed degrades, frame rate does not.
+   *
+   * `maxSimSeconds` (default: no limit) caps this frame's advance, carried time included, for a host that has to stop
+   * at an exact simulated time (the app's runFor: Site check sweeps, ensembles). When the cap is what limits the
+   * frame, the frame lands on it exactly — whole CFL substeps, then one shorter substep for the remainder (shorter than
+   * the CFL step, so always stable) — and nothing is carried past it. If the substep budget leaves no room for the
+   * short substep this frame, the remainder is carried and run first thing next frame. A remainder under
+   * MIN_TAIL_STEP_S is dropped (the reported advance is short by that much).
    */
-  step(realSeconds: number): StepInfo {
+  step(realSeconds: number, maxSimSeconds = Infinity): StepInfo {
     const info: StepInfo = { simSecondsAdvanced: 0, substeps: 0, dt: 0, throttled: false };
     if (this.destroyed) return info;
     const scale = Number.isFinite(this.params.timeScale) ? Math.max(0, this.params.timeScale) : 0;
     const requested = (Number.isFinite(realSeconds) ? Math.max(0, realSeconds) : 0) * scale;
+    const limit = maxSimSeconds >= 0 ? maxSimSeconds : 0; // NaN → 0
     const dt = this.computeDt();
     info.dt = dt;
-    if (!(requested > 0)) return info;
+    if (!(requested > 0) || !(limit > 0)) return info;
 
     this.pendingSimTime += requested;
+    const capped = this.pendingSimTime >= limit;
+    if (capped) this.pendingSimTime = limit;
     // 1e-9 relative slack so exact multiples (e.g. timeScale = dt·fps) don't lose a substep to rounding.
     let n = Math.floor(this.pendingSimTime / dt + 1e-9);
+    // …but that slack must not take a capped frame past its cap.
+    if (capped && n * dt > limit) n = Math.max(0, n - 1);
     const cap = this.substepCap();
     if (n > cap) {
       n = cap;
       info.throttled = true;
     }
-    if (n <= 0) {
+    // Landing on the cap: the remainder as one short substep, when the budget has room for it.
+    const tail = capped && !info.throttled ? limit - n * dt : 0;
+    const runTail = tail >= MIN_TAIL_STEP_S && n + 1 <= cap;
+    if (n <= 0 && !runTail) {
       // Nothing to run yet (the carried time is less than one substep), or the GPU queue is backed up.
       if (info.throttled) this.pendingSimTime = Math.min(this.pendingSimTime, dt);
+      else if (capped && tail < MIN_TAIL_STEP_S) this.pendingSimTime = 0;
       return info;
     }
-    this.encodeFrame(n, dt, true);
-    this.pendingSimTime = Math.max(0, this.pendingSimTime - n * dt);
-    if (info.throttled) this.pendingSimTime = Math.min(this.pendingSimTime, dt);
-    info.substeps = n;
-    info.simSecondsAdvanced = n * dt;
+    if (n > 0) this.encodeFrame(n, dt, true);
+    let advanced = n * dt;
+    if (runTail) {
+      // Its own command buffer (the Sim uniform carries one dt); the readback and budget probe only if it is alone.
+      this.encodeFrame(1, tail, n === 0);
+      advanced += tail;
+    }
+    if (info.throttled) this.pendingSimTime = Math.min(Math.max(0, this.pendingSimTime - n * dt), dt);
+    else if (capped) this.pendingSimTime = runTail || tail < MIN_TAIL_STEP_S ? 0 : tail;
+    else this.pendingSimTime = Math.max(0, this.pendingSimTime - n * dt);
+    info.substeps = n + (runTail ? 1 : 0);
+    info.simSecondsAdvanced = advanced;
     return info;
+  }
+
+  /**
+   * Make sure a readback of the current state is on its way: a no-op when the latest state already has one encoded, or
+   * when both staging sets are busy (call again next frame). For a host that has stopped stepping and still needs a
+   * snapshot of where it stopped (runFor: a paused solver produces no readbacks of its own).
+   */
+  requestReadback(): void {
+    if (this.destroyed || this.readbackVersion === this.stateVersionN) return;
+    const enc = this.device.createCommandEncoder({ label: 'sim.readback' });
+    // An export due here describes the current time (the uniform may hold a later frame's or a brush's).
+    if (this.exportDirty) this.writeSimUniform(this.lastDt);
+    const map = this.maybeEncodeReadback(enc, true);
+    if (!map) return;
+    this.device.queue.submit([enc.finish()]);
+    map();
   }
 
   reset(opts?: { resetTerrain?: boolean }): void {
@@ -1048,6 +1098,7 @@ export class GpuFloodSolver implements FloodSolver {
     for (const b of [this.accBuf, this.hazardBuf, this.simBuf, this.forcingBuf, this.brushBuf, this.depthBuf, this.blocksBuf, this.dryMaskBuf]) {
       b.destroy();
     }
+    this.hazardSampleBuf?.destroy();
     // A hazard readback in flight destroys its staging pair itself once its map settles.
     if (this.hazardStaging && !this.hazardStaging.busy) {
       this.hazardStaging.hazard.destroy();
@@ -1268,17 +1319,38 @@ export class GpuFloodSolver implements FloodSolver {
     // Frames driven by step() are timed on the GPU to keep the substep budget current (see shouldProbe).
     const probe = fromStep && this.shouldProbe() ? this.budget.beginFrame(n) : null;
     if (probe) this.lastProbeMs = now();
-    const pass = enc.beginComputePass({ label: 'sim.substeps', timestampWrites: probe?.timestampWrites });
-    for (let k = 0; k < n; k++) {
-      pass.setPipeline(this.momentumPipe);
-      pass.setBindGroup(0, this.bgMomentum[this.cur]);
-      pass.dispatchWorkgroups(this.gx, this.gy);
-      pass.setPipeline(this.continuityPipe);
-      pass.setBindGroup(0, this.bgContinuity[this.cur]);
-      pass.dispatchWorkgroups(this.gx, this.gy);
-      this.cur = 1 - this.cur;
+    // Hazard samples inside the frame (SolverOptions.hazardSampleSeconds): export after these substep counts.
+    const cuts = fromStep ? this.hazardCuts(n, dt) : [];
+    if (cuts.length) this.writeHazardSampleUniforms(cuts, n, dt);
+    const tw = probe?.timestampWrites;
+    let done = 0;
+    for (let s = 0; s <= cuts.length; s++) {
+      const end = s < cuts.length ? cuts[s] : n;
+      // The GPU timing spans every segment: the first pass writes the start, the last one the end.
+      const timestampWrites = tw && (s === 0 || s === cuts.length)
+        ? { querySet: tw.querySet, ...(s === 0 ? { beginningOfPassWriteIndex: tw.beginningOfPassWriteIndex } : {}), ...(s === cuts.length ? { endOfPassWriteIndex: tw.endOfPassWriteIndex } : {}) }
+        : undefined;
+      const pass = enc.beginComputePass({ label: 'sim.substeps', timestampWrites });
+      for (let k = done; k < end; k++) {
+        pass.setPipeline(this.momentumPipe);
+        pass.setBindGroup(0, this.bgMomentum[this.cur]);
+        pass.dispatchWorkgroups(this.gx, this.gy);
+        pass.setPipeline(this.continuityPipe);
+        pass.setBindGroup(0, this.bgContinuity[this.cur]);
+        pass.dispatchWorkgroups(this.gx, this.gy);
+        this.cur = 1 - this.cur;
+      }
+      pass.end();
+      done = end;
+      if (!cuts.length) break;
+      // Block s holds sample s's export time; block cuts.length is the frame's own uniform, put back after the last.
+      enc.copyBufferToBuffer(this.hazardSampleBuf!, s * SIM_UNIFORM_BYTES, this.simBuf, 0, SIM_UNIFORM_BYTES);
+      if (s < cuts.length) {
+        this.encodeExportPass(enc);
+        this.resetMaxPending = false;
+        this.hazardTime = this.simTime + end * dt;
+      }
     }
-    pass.end();
     probe?.resolve(enc);
     // The export follows lazily (stateTexture getter, or the readback below when one is due).
     this.exportDirty = true;
@@ -1306,16 +1378,63 @@ export class GpuFloodSolver implements FloodSolver {
 
   /** Encode the export pass. The caller must have written the Sim uniform for this command buffer. */
   private encodeExport(enc: GPUCommandEncoder): void {
+    this.encodeExportPass(enc);
+    // resetMax only applies to the first export after a reset; the uniform already carried it.
+    this.resetMaxPending = false;
+    this.exportDirty = false;
+    this.hazardTime = this.hazardTimePending;
+  }
+
+  /** The export pass alone (the caller keeps resetMaxPending / exportDirty / hazardTime). */
+  private encodeExportPass(enc: GPUCommandEncoder): void {
     const pass = enc.beginComputePass({ label: 'sim.export' });
     pass.setPipeline(this.exportPipe);
     pass.setBindGroup(0, this.bgExport[this.cur][this.exportCur]);
     pass.dispatchWorkgroups(this.gx, this.gy);
     pass.end();
     this.exportCur = 1 - this.exportCur;
-    // resetMax only applies to the first export after a reset; the uniform already carried it.
-    this.resetMaxPending = false;
-    this.exportDirty = false;
-    this.hazardTime = this.hazardTimePending;
+  }
+
+  /**
+   * Substep counts (ascending, each in 1 … n−1) after which a step() frame of n substeps of dt samples the hazard
+   * accumulators, so that no stretch of more than SolverOptions.hazardSampleSeconds goes unsampled (at most
+   * MAX_HAZARD_SAMPLES of them; spread wider beyond that). Empty when the frame is short enough or sampling is off.
+   */
+  private hazardCuts(n: number, dt: number): number[] {
+    const span = this.options.hazardSampleSeconds;
+    if (!(span > 0) || !(n * dt > span) || n < 2) return [];
+    let k = Math.max(1, Math.floor(span / dt));
+    if (Math.ceil(n / k) - 1 > MAX_HAZARD_SAMPLES) k = Math.ceil(n / (MAX_HAZARD_SAMPLES + 1));
+    const cuts: number[] = [];
+    for (let m = k; m < n; m += k) cuts.push(m);
+    return cuts;
+  }
+
+  /**
+   * Fill hazardSampleBuf for encodeFrame: block s (s < cuts.length) is the Sim uniform as writeSimUniform just wrote it
+   * for this frame, but describing an export after cuts[s] substeps (its time, the span since the previous export, and
+   * resetMax only on the first); the last block is the frame's own uniform, with its span counted from the last sample.
+   */
+  private writeHazardSampleUniforms(cuts: readonly number[], n: number, dt: number): void {
+    const B = SIM_UNIFORM_BYTES;
+    const size = B * (MAX_HAZARD_SAMPLES + 1);
+    this.hazardSampleBuf ??= this.device.createBuffer({ label: 'sim.hazardSamples', size, usage: GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST });
+    const blocks = new ArrayBuffer(B * (cuts.length + 1));
+    const bytes = new Uint8Array(blocks);
+    const src = new Uint8Array(this.simBytes);
+    let prev = this.hazardTime;
+    let reset = this.resetMaxPending;
+    for (let s = 0; s <= cuts.length; s++) {
+      bytes.set(src, s * B);
+      const t = this.simTime + (s < cuts.length ? cuts[s] : n) * dt;
+      new Int32Array(blocks, s * B, B / 4)[20] = reset ? 1 : 0;
+      const f = new Float32Array(blocks, s * B, B / 4);
+      f[26] = t;
+      f[27] = Math.max(0, t - prev);
+      prev = t;
+      reset = false;
+    }
+    this.device.queue.writeBuffer(this.hazardSampleBuf, 0, blocks);
   }
 
   private userSubstepCap(): number {
@@ -1702,6 +1821,7 @@ export class GpuFloodSolver implements FloodSolver {
     const staging = set;
     staging.busy = true;
     this.lastReadbackMs = t;
+    this.readbackVersion = this.stateVersionN;
     // The reduction reads the exported state: it must include every substep booked in the accounting buffer
     // (zeroed below), or volume and in/out volumes would come from different moments.
     if (this.exportDirty) this.encodeExport(enc);

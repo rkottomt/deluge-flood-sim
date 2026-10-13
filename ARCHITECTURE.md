@@ -208,6 +208,14 @@ arrival times land within one export interval of the per-substep answer and ~¼ 
 cell that wets and dries again between two exports is missed, and the maxima are sampled at exports, as max depth
 always was. Cells dry now and at the last export with no flow skip the buffer entirely, so the export went from 0.21 to
 0.23 ms at 1024² on a river valley (0.30 ms with every cell wet; Dawn on D3D12), and nothing changes per substep.
+Exports otherwise follow the wall clock (a rendered frame, a readback), which under a headless sweep's render hold at
+3600× left 60–120 simulated seconds between samples: a flood front crossing a building was recorded at whatever
+moment happened to be sampled. So a `step()` frame that advances more than `hazardSampleSeconds` (5 s) splits its
+substeps into compute passes and exports between them, in the same command buffer — each sample's export time comes
+from a small uniform block copied over the Sim uniform before its export pass (`copyBufferToBuffer`), and the GPU
+timing spans all the passes. Interactive play up to ~150× never advances 5 s in a frame; at high speed-ups it is one
+export per ~10 substeps, a few %. `tests/sim/exactStop.test.ts` checks the in-frame samples equal hand-made exports
+at the same substeps, bit for bit.
 `readHazardFields()` copies the buffer and the exported state to its own staging buffers on demand (~32 B/cell),
 independently of the stats readbacks; `hazardBuffer` hands it to the renderer (§6).
 
@@ -369,7 +377,15 @@ reads valley floors 2–4 m high) is not represented.
 **Running.** `src/ui/headless.ts` is the runner Site check's sweep and the ensemble share: pause, render hold (the 3-D
 view drops to a heartbeat so the GPU goes to the solver), per case apply the forcing, reset the water, `runFor` the
 duration in 300-s chunks (Cancel answers within one), collect, and finally put back forcing, stage, Manning n, the
-water and the play state. Per member (`src/ui/ensemble.ts`):
+water and the play state. Every case runs exactly its duration: with the user's flood paused, the frame driver caps
+each frame at the runner's remaining time (`FloodSolver.step(realSeconds, maxSimSeconds)`, which lands on the cap with
+one short final substep and carries nothing past it), stops stepping at the target and asks for a readback of that
+moment (`requestReadback`). Before, a run kept stepping until a readback caught up — 600 s asked ended at 614–706 s —
+and a today-vs-2050 comparison moved by as much from run length as from climate. While the river stage still ramps,
+frames also end on a 5-s grid of simulated time (`RAMP_FRAME_S`): the app moves the stage once per frame, and a
+minute-long frame at 3600× raised the river 3 m at once. With readbacks only where the runs force them, two identical
+runs are bit-identical (`tests/sim/exactStop.test.ts`); at the app's 300-ms readback cadence the CFL timestep follows
+whichever readback has arrived, and repeats differ by millimetres of depth. Per member (`src/ui/ensemble.ts`):
 
 * **Map: a GPU accumulate pass, no readback.** `src/sim/ensemble.ts` folds the exported max depth (`stateTexture.a`)
   into a storage buffer of one vec4f per cell — members over 0.15 m, members over 0.5 m, Σ max depth, the largest
