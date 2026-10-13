@@ -47,11 +47,26 @@ export type SimAction =
   | { kind: 'replayUpstream' }
   /** Set up a business use case (src/ui/useCaseDefs.ts) on the scene. */
   | { kind: 'useCase'; id: 'site' | 'glacier' | 'portfolio' }
+  /**
+   * Site check: put the site use case's two demo parcels in the list in place of whatever is there (the user's own
+   * sites come back when the story ends), select the first and open the section.
+   */
+  | { kind: 'demoSites' }
+  /** Site check: run the sweep over the scene's default ladder, every level ticked. Resolves when it is done. */
+  | { kind: 'siteSweep' }
+  /**
+   * Compare designs: the walls on the map become the only design, and it runs against the baseline over the named
+   * levels of the stage ladder (with return periods typed for levels that have no published one — labelled as the
+   * user's input, as in the panel). Resolves when the comparison is done. The user's designs come back at the end.
+   */
+  | { kind: 'compare'; levels: string[]; userRp?: Array<{ level: string; years: number }> }
+  /** Dam stories: read arrival time and peak depth along the flow path below the dam (the dialog's Read arrivals). */
+  | { kind: 'readArrivals' }
   /** Open the side panel on a section, or close it (null). */
   | { kind: 'panel'; section: PanelSection | null };
 
 /** Side-panel sections a story may open (panel.ts section ids). */
-export const PANEL_SECTIONS = ['scenario', 'chain', 'weather', 'evac', 'impact', 'site', 'view'] as const;
+export const PANEL_SECTIONS = ['scenario', 'chain', 'weather', 'evac', 'impact', 'site', 'designs', 'view'] as const;
 export type PanelSection = (typeof PANEL_SECTIONS)[number];
 
 /** What a beat waits for before it moves on (on top of its reading time; capped by `maxWaitMs`). */
@@ -70,7 +85,7 @@ export type UntilSpec =
   | { kind: 'route' };
 
 /** UI the player may point at: a fixed allowlist, never a selector from data. */
-export const UI_TARGETS = ['timeline', 'route', 'impact', 'hud', 'tryit'] as const;
+export const UI_TARGETS = ['timeline', 'route', 'impact', 'site', 'designs', 'hud', 'tryit'] as const;
 export type UiTarget = (typeof UI_TARGETS)[number];
 
 export type Highlight =
@@ -101,11 +116,29 @@ export interface Beat {
   highlight?: Highlight[];
 }
 
+/**
+ * A story that plays on a dam breach rather than a preset: the dam-breach use case's own scene (src/ui/damView.ts),
+ * the valley below an NID dam loaded as a live area with the breach sent in. Needs the internet for the terrain, as
+ * the use case does; the dam index ships with the app.
+ */
+export interface DamScene {
+  /** NID id (src/dams/nidIndex.ts NID_ID_RE). */
+  nid: string;
+  breach: 'sunny' | 'flood';
+}
+
+/** Which business stories there are: they are listed first. */
+export type StoryGroup = 'business' | 'event';
+
 export interface Story {
   /** [a-z0-9-], ≤ 32 chars: the `?story=` value. */
   id: string;
-  /** The preset it plays on. */
-  preset: string;
+  /** The preset it plays on (exactly one of `preset` and `dam`). */
+  preset?: string;
+  /** …or the dam breach it plays on. */
+  dam?: DamScene;
+  /** A business decision ('business', listed first) or an event retold ('event', the default). */
+  group?: StoryGroup;
   title: string;
   /** One line under the title (the event and its date). */
   subtitle: string;

@@ -22,6 +22,7 @@ import { areaCentreForDam, downstreamBearing, readDownstream, type DownstreamRea
 import { damBreachScenario, withoutDamText, type DamBreachSpec } from '../dams/scenario';
 import { bridgeFor, postNotice } from './bridge';
 import { h, setText, type UIContext } from './dom';
+import { storyHooksFor } from './storyHooks';
 import { fmtNum } from './format';
 import { icon } from './icons';
 import type { Panel } from './panel';
@@ -301,6 +302,8 @@ export function createDamView(ctx: UIContext, deps: { panel: Pick<Panel, 'reveal
   }
 
   let last: { spec: DamBreachSpec; terrain: TerrainData } | null = null;
+  /** The last downstream readout, for a story's {arrival:…} tokens. */
+  let reading: { spec: DamBreachSpec; rows: DownstreamReading[]; simTime: number } | null = null;
   /** The view and clock before the first breach on this scenario, and what the view set them to. */
   let raised: { waterMode: RenderSettings['waterMode']; timeScale: number; set: { waterMode: RenderSettings['waterMode']; timeScale: number } } | null = null;
   ctx.bind(
@@ -388,6 +391,7 @@ export function createDamView(ctx: UIContext, deps: { panel: Pick<Panel, 'reveal
       return null;
     }
     const rows = readDownstream(fields, spec.path);
+    reading = { spec, rows, simTime: fields.simTime };
     renderReadout(rows, null, fields.simTime);
     return rows;
   }
@@ -458,6 +462,84 @@ export function createDamView(ctx: UIContext, deps: { panel: Pick<Panel, 'reveal
     renderDetail();
     await breach(dam, link.breach, link.method, sizeM);
   }
+
+  // ─── Narrated stories (storyHooks.ts) ─────────────────────────────────────────────────────────────────────
+  /** The breach on screen is this dam's, on the map it was installed on. */
+  const isOn = (nid: string): boolean => {
+    const spec = store.get().scenario?.damBreach ?? null;
+    return !!spec && spec.nidId === nid && !!last && last.terrain === (bridge.scene?.getTerrain() ?? null);
+  };
+  /** The NID record behind the breach on screen (the index is loaded by then). */
+  const damOnScreen = (): NidDam | null => {
+    const spec = store.get().scenario?.damBreach ?? null;
+    return spec && index ? damById(index, spec.nidId) : null;
+  };
+  storyHooksFor(store).dam = {
+    async open(nid, breachMode) {
+      const idx = await ensureIndex();
+      const dam = idx ? damById(idx, nid) : null;
+      if (!dam) return false;
+      if (isOn(nid) && store.get().scenario?.damBreach?.mode === breachMode) return true;
+      selected = dam;
+      renderDetail();
+      reading = null;
+      await breach(dam, breachMode, DEFAULT_BREACH_METHOD, DAM_AREA_M);
+      return isOn(nid);
+    },
+    isOn,
+    async readArrivals() {
+      return !!(await readArrivals());
+    },
+    fact(f) {
+      const spec = store.get().scenario?.damBreach ?? null;
+      if (!spec) return null;
+      const dam = damOnScreen();
+      const band = spec.band;
+      switch (f) {
+        case 'name':
+          return spec.name;
+        case 'nid':
+          return spec.nidId;
+        case 'height':
+          return dam ? `${fmtNum(dam.heightM, 1)} m` : null;
+        case 'storage':
+          return dam ? `${fmtInt(dam.storageAcFt)} acre-ft (${fmtNum((dam.storageAcFt * 1233.48) / 1e6, 1)} million m³)` : null;
+        case 'hazard':
+          return dam ? `${dam.hazard.toLowerCase()}` : null;
+        case 'mode':
+          return BREACH_MODES[spec.mode].label.toLowerCase();
+        case 'peak':
+          return fmtQ(spec.peak);
+        case 'tpeak':
+          return fmtMin(spec.tPeak);
+        case 'band':
+          return `${fmtQ(band.low.peak)} – ${fmtQ(band.high.peak)}`;
+        case 'central':
+          return `${fmtQ(band.central.peak)} (${band.central.label})`;
+        case 'low':
+          return `${fmtQ(band.low.peak)} (${band.low.label})`;
+        case 'high':
+          return `${fmtQ(band.high.peak)} (${band.high.label})`;
+        case 'volume':
+          return `${fmtNum(spec.volume / 1e6, 1)} million m³`;
+        case 'width':
+          return `${fmtNum(spec.widthM, 0)} m`;
+        case 'formation':
+          return fmtMin(spec.formationS);
+        case 'readat':
+          return reading && reading.spec === spec ? fmtMin(reading.simTime) : null;
+      }
+      return null;
+    },
+    arrival(km) {
+      const spec = store.get().scenario?.damBreach ?? null;
+      if (!spec || !reading || reading.spec !== spec) return null;
+      const r = reading.rows.find((x) => Math.abs(x.distanceM - km * 1000) < 1);
+      if (!r) return null;
+      if (r.arrivalS === null) return `not yet, ${fmtMin(reading.simTime)} after the breach began`;
+      return `${fmtMin(r.arrivalS)} (${fmtMinRange(scaledArrival(r.arrivalS, spec.peak, spec.band.high.peak), scaledArrival(r.arrivalS, spec.peak, spec.band.low.peak))} across the band)`;
+    },
+  };
 
   return {
     el,

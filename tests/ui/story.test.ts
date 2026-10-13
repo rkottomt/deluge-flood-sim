@@ -10,10 +10,10 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { parseStartupRequest, storyMatches } from '../../src/app/url';
 import { isPresetId, listPresets } from '../../src/data/presets';
-import { captionTokens, NO_VALUE, resolveCaption } from '../../src/story/captions';
-import { parseStoryParam, STORIES, storiesForPreset, storyById, STORY_WARNING, USE_CASE_STORIES } from '../../src/story/registry';
+import { ARRIVAL_KM, BCA_FACTS, captionTokens, DAM_FACTS, NO_VALUE, resolveCaption, SITE_FACTS, SITE_PARCELS } from '../../src/story/captions';
+import { isBusinessStory, parseStoryParam, sceneStory, STORIES, storiesForPreset, storyById, STORY_WARNING, USE_CASE_STORIES } from '../../src/story/registry';
 import { holdMs, StoryRunner, waitCapMs, type RunnerEnv } from '../../src/story/runner';
-import { DEFAULT_MAX_WAIT_MS, type Beat, type Story } from '../../src/story/types';
+import { DEFAULT_MAX_WAIT_MS, type Beat, type SimAction, type Story } from '../../src/story/types';
 import { validateStory } from '../../src/story/validate';
 import { shouldAutoStartTutorial } from '../../src/ui/tutorial';
 
@@ -22,16 +22,17 @@ const json = (rel: string) => JSON.parse(readFileSync(new URL(`../../public/pres
 
 // ─── Schema ─────────────────────────────────────────────────────────────────────────────────────────────────────
 
-test('story: every bundled story validates, on a preset that exists', () => {
-  assert.ok(STORIES.length >= 5);
+test('story: every bundled story validates, on a preset that exists or a dam breach', () => {
+  assert.equal(STORIES.length, 8);
   for (const s of STORIES) {
     const r = validateStory(s, { presets: PRESETS });
     assert.deepEqual(r.errors, [], s.id);
-    assert.ok(isPresetId(s.preset), s.id);
+    if (s.preset) assert.ok(isPresetId(s.preset), s.id);
+    else assert.ok(s.dam, s.id);
   }
   assert.deepEqual(
-    STORIES.map((s) => s.preset).sort(),
-    ['chamoli', 'chungthang', 'houston', 'nepal', 'pittsburgh'],
+    STORIES.map((s) => s.preset ?? `dam:${s.dam!.nid}`).sort(),
+    ['chamoli', 'chungthang', 'dam:MI00549', 'houston', 'nepal', 'pittsburgh', 'pittsburgh', 'pittsburgh'],
   );
 });
 
@@ -175,7 +176,7 @@ test('story registry: lookups and the use-case mapping', () => {
 // ─── The bundled stories against their presets' data ──────────────────────────────────────────────────────────
 
 test('stories: every station, levee, gauge and evacuation a story uses exists in its preset', () => {
-  for (const story of STORIES) {
+  for (const story of STORIES.filter((s) => s.preset)) {
     const meta = json(`${story.preset}/meta.json`);
     const sc = meta.scenario;
     const chain = sc.hazardChain ? json(`${story.preset}/${sc.hazardChain.profile}`) : null;
@@ -223,6 +224,137 @@ test('stories: glacier stories tell the model’s timing honestly, and keep casu
   }
   const nepal = storyById('nepal-2026')!.beats.map((b) => `${b.kicker ?? ''} ${b.caption}`).join(' ');
   for (const fact of ['08:37', '09:15', '9:20', 'Betrawati']) assert.ok(nepal.includes(fact), fact);
+});
+
+// ─── The business stories ───────────────────────────────────────────────────────────────────────────────────────
+
+const BUSINESS = ['site-decision', 'levee-bca', 'dam-upstream'];
+const captionsOf = (id: string) => storyById(id)!.beats.map((b) => b.caption).join(' ');
+
+test('business stories: listed first and grouped, 60–120 s of reading, each ending on its limits', () => {
+  assert.deepEqual(STORIES.slice(0, 3).map((s) => s.id), BUSINESS);
+  assert.ok(STORIES.slice(0, 3).every(isBusinessStory));
+  assert.ok(STORIES.slice(3).every((s) => !isBusinessStory(s)));
+  for (const id of BUSINESS) {
+    const s = storyById(id)!;
+    const read = s.beats.reduce((a, b) => a + b.durationMs, 0);
+    assert.ok(read >= 60_000 && read <= 120_000, `${id}: ${read} ms of reading`);
+    assert.match(s.beats.at(-1)!.kicker ?? '', /honestly|is not/i, id);
+  }
+  // "Watch the story" on Pittsburgh is still the 1936 event, not one of the decisions on the same map.
+  assert.deepEqual(storiesForPreset('pittsburgh').map((s) => s.id), ['site-decision', 'levee-bca', 'pittsburgh-1936']);
+  assert.equal(sceneStory('pittsburgh')?.id, 'pittsburgh-1936');
+  assert.equal(sceneStory('nepal')?.id, 'nepal-2026');
+  assert.equal(sceneStory('johnstown'), null);
+  assert.equal(USE_CASE_STORIES.site, 'site-decision');
+  assert.equal(USE_CASE_STORIES.dam, 'dam-upstream');
+});
+
+test('business stories: every number the run computes is a live token, never typed into a caption', () => {
+  const site = captionsOf('site-decision');
+  for (const t of ['{site:a.reach}', '{site:a.floor}', '{site:a.egress}', '{site:a.eal}', '{site:a.ffe}', '{site:a.ffe100}', '{site:a.worst}', '{site:b.reach}', '{site:b.egress}', '{site:b.worst}']) assert.ok(site.includes(t), t);
+  const levee = captionsOf('levee-bca');
+  for (const t of ['{kept}', '{bca:deltaeal}', '{bca:cost}', '{bca:rate}', '{bca:bcr}', '{bca:range}', '{bca:verdict}', '{bca:breakeven}']) assert.ok(levee.includes(t), t);
+  const dam = captionsOf('dam-upstream');
+  for (const t of ['{dam:band}', '{dam:central}', '{dam:storage}', '{arrival:1}', '{arrival:3}', '{arrival:5}', '{arrival:8}', '{simtime}']) assert.ok(dam.includes(t), t);
+  for (const id of BUSINESS) {
+    // What is left once the tokens are out may carry inputs (the building's $45 M, a 500-year assumption, the wall's
+    // 2.4 km) but no result: no money, no BCR, no depth, discharge or arrival time.
+    const bare = captionsOf(id)
+      .replace(/\{[a-z]+(:[^}]*)?\}/g, '')
+      .replace('$45 M to replace', '');
+    assert.doesNotMatch(bare, /\$\s?\d/, id);
+    assert.doesNotMatch(bare, /BCR (is|of) \d|\d\.\d\d\b/, id);
+    assert.doesNotMatch(bare, /\d+(\.\d+)? ?m³\/s|\d+ min\b|\d+(\.\d+)? m (deep|at the lowest|above the)/, id);
+    assert.doesNotMatch(bare, /\b(dead|died|killed|deaths)\b/i, id);
+  }
+});
+
+test('business stories: what they act on exists — the demo parcels, the ladder levels, the dam in the index', async () => {
+  // The site story's camera goes to the use case's own demo parcels.
+  const { DEMO_SITES_PARAM } = await import('../../src/ui/useCaseDefs');
+  const { decodeSites } = await import('../../src/loss/site');
+  const parcels = decodeSites(DEMO_SITES_PARAM).sites;
+  assert.equal(parcels.length, 2);
+  const at = (beat: string) => storyById('site-decision')!.beats.find((b) => b.id === beat)!.camera as { lat: number; lon: number };
+  [at('a-verdict'), at('b-verdict')].forEach((c, i) => assert.ok(Math.abs(parcels[i].lat - c.lat) < 1e-6 && Math.abs(parcels[i].lon - c.lon) < 1e-6, `parcel ${i}`));
+  assert.ok(storyById('site-decision')!.beats.some((b) => b.actions?.some((a) => a.kind === 'demoSites')));
+  assert.ok(storyById('site-decision')!.beats.some((b) => b.actions?.some((a) => a.kind === 'siteSweep')));
+  // The levee story compares on Pittsburgh's ladder: the 1 % level is published, the 1936 record is not (so its
+  // return period is the story's typed assumption, labelled as the user's input in the panel).
+  const { ladderFor } = await import('../../src/loss/ladders');
+  const ladder = ladderFor('pittsburgh')!;
+  const cmp = storyById('levee-bca')!.beats.flatMap((b) => b.actions ?? []).find((a) => a.kind === 'compare') as Extract<SimAction, { kind: 'compare' }>;
+  assert.deepEqual(cmp.levels, ['rp100', 'record1936']);
+  assert.equal(ladder.find((l) => l.id === 'rp100')?.returnPeriod, 100);
+  assert.equal(ladder.find((l) => l.id === 'record1936')?.returnPeriod, null);
+  assert.deepEqual(cmp.userRp, [{ level: 'record1936', years: 500 }]);
+  assert.ok(storyById('levee-bca')!.beats.findIndex((b) => b.actions?.some((a) => a.kind === 'levee')) < storyById('levee-bca')!.beats.findIndex((b) => b.actions?.some((a) => a.kind === 'compare')), 'the levee is built before it is compared');
+  // The dam story's dam is in the baked NID index, where its pin says.
+  const { gunzipSync } = await import('node:zlib');
+  const { decodeNidIndex, damById } = await import('../../src/dams/nidIndex');
+  let buf: Uint8Array = readFileSync(new URL('../../public/dams/nid-index.bin', import.meta.url));
+  if (buf[0] === 0x1f && buf[1] === 0x8b) buf = gunzipSync(buf);
+  const story = storyById('dam-upstream')!;
+  const dam = damById(decodeNidIndex(buf), story.dam!.nid)!;
+  assert.equal(dam.name, 'Edenville Dam');
+  const pin = story.beats[0].highlight!.find((hl) => hl.kind === 'pin') as { lat: number; lon: number };
+  assert.ok(Math.abs(pin.lat - dam.lat) < 1e-4 && Math.abs(pin.lon - dam.lon) < 1e-4);
+  assert.ok(story.beats.some((b) => b.actions?.some((a) => a.kind === 'readArrivals')));
+  // The readout distances the {arrival:…} tokens may name are the readout's own.
+  const { READOUT_DISTANCES_M } = await import('../../src/dams/placement');
+  assert.deepEqual([...ARRIVAL_KM].map(Number), READOUT_DISTANCES_M.map((m) => m / 1000));
+});
+
+test('story validator: a dam scene instead of a preset, the group, and the business actions', () => {
+  const dam = { ...minimal(), preset: undefined, dam: { nid: 'MI00549', breach: 'flood' } };
+  assert.deepEqual(validateStory(dam, { presets: PRESETS }).errors, []);
+  assert.match(errorsOf({ ...minimal(), dam: { nid: 'MI00549', breach: 'flood' } }), /exactly one of preset and dam/);
+  assert.match(errorsOf({ ...minimal(), preset: undefined }), /exactly one of preset and dam/);
+  assert.match(errorsOf({ ...dam, dam: { nid: '<img>', breach: 'flood' } }), /NID id/);
+  assert.match(errorsOf({ ...dam, dam: { nid: 'MI00549', breach: 'overtop' } }), /breach: must be one of/);
+  assert.match(errorsOf({ ...dam, dam: { nid: 'MI00549', breach: 'flood', name: 'x' } }), /unknown key "name"/);
+  assert.match(errorsOf({ ...minimal(), group: 'vip' }), /group: must be one of/);
+  assert.deepEqual(validateStory({ ...minimal(), group: 'business' }, { presets: PRESETS }).errors, []);
+  for (const kind of ['demoSites', 'siteSweep', 'readArrivals']) {
+    assert.equal(errorsOf(withBeat({ actions: [{ kind }] })), '', kind);
+    assert.match(errorsOf(withBeat({ actions: [{ kind, extra: 1 }] })), /unknown key "extra"/, kind);
+  }
+  const cmp = (a: Record<string, unknown>) => errorsOf(withBeat({ actions: [{ kind: 'compare', ...a }] }));
+  assert.equal(cmp({ levels: ['rp100', 'record1936'], userRp: [{ level: 'record1936', years: 500 }] }), '');
+  assert.match(cmp({ levels: [] }), /1–8 distinct level ids/);
+  assert.match(cmp({ levels: ['rp100', 'rp100'] }), /1–8 distinct level ids/);
+  assert.match(cmp({ levels: ['<b>'] }), /1–8 distinct level ids/);
+  assert.match(cmp({ levels: ['rp100'], userRp: [{ level: 'record1936', years: 500 }] }), /must be one of the levels run/);
+  assert.match(cmp({ levels: ['rp100'], userRp: [{ level: 'rp100', years: 0.5 }] }), /whole number of years/);
+  assert.match(cmp({ levels: ['rp100'], userRp: [{ level: 'rp100', years: 100, note: 'x' }] }), /unknown key "note"/);
+  assert.equal(errorsOf(withBeat({ actions: [{ kind: 'panel', section: 'designs' }], highlight: [{ kind: 'ui', target: 'site' }, { kind: 'ui', target: 'designs' }] })), '');
+});
+
+test('story validator: business tokens name only facts the panels compute', () => {
+  assert.equal(errorsOf(withBeat({ caption: '{site:a.reach} {site:b.ffe100} {site:c.name} {bca:range} {bca:breakeven} {dam:band} {arrival:0.5} {arrival:12}' })), '');
+  assert.match(errorsOf(withBeat({ caption: '{site:d.reach}' })), /names nothing it knows/);
+  assert.match(errorsOf(withBeat({ caption: '{site:a.score}' })), /names nothing it knows/);
+  assert.match(errorsOf(withBeat({ caption: '{site:reach}' })), /names nothing it knows/);
+  assert.match(errorsOf(withBeat({ caption: '{bca:npv}' })), /names nothing it knows/);
+  assert.match(errorsOf(withBeat({ caption: '{dam:owner}' })), /names nothing it knows/);
+  assert.match(errorsOf(withBeat({ caption: '{arrival:4}' })), /names nothing it knows/);
+  assert.match(errorsOf(withBeat({ caption: '{bca}' })), /needs an argument/);
+  // Every argument the lists allow is a valid token.
+  const all = [...SITE_PARCELS.flatMap((p) => SITE_FACTS.map((f) => `{site:${p}.${f}}`)), ...BCA_FACTS.map((f) => `{bca:${f}}`), ...DAM_FACTS.map((f) => `{dam:${f}}`), ...ARRIVAL_KM.map((k) => `{arrival:${k}}`)];
+  for (const t of all) assert.equal(errorsOf(withBeat({ caption: t })), '', t);
+});
+
+test('story link: a dam story opens on the area below the dam once loaded, else the default preset', () => {
+  const r = parseStartupRequest('?story=dam-upstream');
+  assert.deepEqual(r.warnings, []);
+  assert.equal(r.request.kind, 'preset');
+  const live = parseStartupRequest('?story=dam-upstream&usecase=dam&nid=MI00549&breach=flood&live=43.75,-84.39,12').request;
+  assert.equal(live.kind, 'live');
+  assert.equal(storyMatches('?story=dam-upstream', { kind: 'live', req: { center: { lat: 43.75, lon: -84.39 }, sizeMeters: 12000, resolution: 1024 } }), true);
+  assert.equal(storyMatches('?story=dam-upstream', { kind: 'preset', id: 'pittsburgh' }), false);
+  assert.equal(storyMatches('?story=site-decision', { kind: 'preset', id: 'pittsburgh' }), true);
+  assert.deepEqual(parseStartupRequest('?story=levee-bca&preset=nepal').request, { kind: 'preset', id: 'pittsburgh' });
 });
 
 // ─── Scheduling ─────────────────────────────────────────────────────────────────────────────────────────────────

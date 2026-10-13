@@ -7,14 +7,20 @@
  */
 import { CHAMOLI_STORY } from './stories/chamoli';
 import { CHUNGTHANG_STORY } from './stories/chungthang';
+import { DAM_STORY } from './stories/dam';
 import { HOUSTON_STORY } from './stories/houston';
+import { LEVEE_STORY } from './stories/levee';
 import { NEPAL_STORY } from './stories/nepal';
 import { PITTSBURGH_STORY } from './stories/pittsburgh';
+import { SITE_STORY } from './stories/site';
 import type { Story } from './types';
 import { STORY_ID_RE, validateStory } from './validate';
 
-/** Every bundled story, in the order the entry points list them. */
-const ALL: readonly Story[] = [NEPAL_STORY, PITTSBURGH_STORY, HOUSTON_STORY, CHUNGTHANG_STORY, CHAMOLI_STORY];
+/**
+ * Every bundled story, in the order the entry points list them: the business decisions first (a developer's site, a
+ * protection investment, a dam owner's county briefing), then the events retold.
+ */
+const ALL: readonly Story[] = [SITE_STORY, LEVEE_STORY, DAM_STORY, NEPAL_STORY, PITTSBURGH_STORY, HOUSTON_STORY, CHUNGTHANG_STORY, CHAMOLI_STORY];
 
 /** The stories that pass validation (all of them; the unit tests fail otherwise). */
 export const STORIES: readonly Story[] = ALL.filter((s) => {
@@ -33,15 +39,31 @@ export function storyById(id: string | null | undefined): Story | null {
   return STORIES.find((s) => s.id === id) ?? null;
 }
 
+/** A business decision (listed first) or an event retold. */
+export function isBusinessStory(s: Story): boolean {
+  return s.group === 'business';
+}
+
+/** Every story on a preset, in list order. */
 export function storiesForPreset(preset: string | null | undefined): Story[] {
   return preset ? STORIES.filter((s) => s.preset === preset) : [];
 }
 
+/**
+ * The story "Watch the story" plays on a preset: its event story when it has one (Pittsburgh 1936 rather than the
+ * site decision on the same map), else the first story on it.
+ */
+export function sceneStory(preset: string | null | undefined): Story | null {
+  const list = storiesForPreset(preset);
+  return list.find((s) => !isBusinessStory(s)) ?? list[0] ?? null;
+}
+
 /** The story each business use case tells (src/ui/useCaseDefs.ts ids). */
-export const USE_CASE_STORIES: Readonly<Record<'site' | 'glacier' | 'portfolio', string>> = {
-  site: 'pittsburgh-1936',
+export const USE_CASE_STORIES: Readonly<Record<'site' | 'glacier' | 'portfolio' | 'dam', string>> = {
+  site: 'site-decision',
   glacier: 'nepal-2026',
   portfolio: 'houston-harvey',
+  dam: 'dam-upstream',
 };
 
 /**

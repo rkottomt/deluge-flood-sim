@@ -27,7 +27,9 @@ export function parseStartupRequest(search: string): { request: SceneRequest; wa
   const st = parseStoryParam(search);
   warnings.push(...st.warnings);
   const story = storyById(st.story);
-  if (story) return { request: { kind: 'preset', id: story.preset }, warnings };
+  if (story?.preset) return { request: { kind: 'preset', id: story.preset }, warnings };
+  // A dam story has no scene of its own, like ?usecase=dam: the area below the dam once it has been loaded (?live=,
+  // written then), else the default preset; src/ui/storyPlayer.ts breaches the dam before the first beat.
   const uc = parseUseCase(search);
   warnings.push(...uc.warnings);
   if (uc.useCase === 'address' || uc.useCase === 'surge') {
@@ -130,8 +132,13 @@ export function useCaseMatches(search: string, request: SceneRequest): boolean {
   return request.kind === 'preset' && request.id === useCaseById(uc).preset;
 }
 
-/** Whether the address bar's `?story=` names a story whose preset is the scene `request` loads. */
+/**
+ * Whether the address bar's `?story=` names a story whose scene is the one `request` loads: its preset, or — for a
+ * dam story — a live area (the story player checks that the dam is on it before using it, as the dam view does).
+ */
 export function storyMatches(search: string, request: SceneRequest): boolean {
   const story = storyById(parseStoryParam(search).story);
-  return !!story && request.kind === 'preset' && request.id === story.preset;
+  if (!story) return false;
+  if (story.dam) return request.kind === 'live';
+  return request.kind === 'preset' && request.id === story.preset;
 }

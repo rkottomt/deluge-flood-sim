@@ -27,9 +27,10 @@ import { downloadsBlocked, downloadText, safeFilename } from './download';
 import { fmtNum } from './format';
 import { headlessBusy, runHeadless, saveScenario } from './headless';
 import { printReport, reportHtmlDocument } from './impactReport';
-import { bcaHead, bcaRows, bcaUncertaintyNote, buildCompareReport, COMPARE_REPORT_CSS, comparisonHead, comparisonRows, depthChangeLegend, designSummaryLine, drawDepthChange, type DepthThumb } from './compareReport';
+import { bcaFact, bcaHead, bcaRows, bcaUncertaintyNote, buildCompareReport, COMPARE_REPORT_CSS, comparisonHead, comparisonRows, depthChangeLegend, designSummaryLine, drawDepthChange, type DepthThumb } from './compareReport';
 import './compareBca.css';
 import { projectHooksFor } from './projectState';
+import { storyHooksFor } from './storyHooks';
 import { numField } from './siteCheck';
 import { simpleTable } from './siteReport';
 
@@ -803,6 +804,85 @@ export function createCompareSection(ctx: UIContext): CompareSection {
       bca = b ? { discountRate: b.discountRate, analysisYear: b.analysisYear } : defaultBca();
       syncBcaInputs();
       recompute();
+    },
+  };
+  // Narrated stories (storyHooks.ts): "Is the levee worth it?" runs the levee on the map as the only design.
+  interface CompareSnapshot {
+    terrain: TerrainData | null;
+    designs: DesignSpec[];
+    summary: ComparisonSummary | null;
+    outcome: Outcome | null;
+    bca: BcaSettings;
+    ladderChoice: CompareLadder | 'auto';
+    levels: Level[];
+    minutes: number;
+    minutesTouched: boolean;
+    mapLevel: number;
+  }
+  let storyRun: Promise<void> | null = null;
+  storyHooksFor(store).compare = {
+    snapshot(): CompareSnapshot {
+      return { terrain: terrainRef, designs: designs.map((d) => ({ ...d, edits: cloneEdits(d.edits), cost: { ...d.cost } })), summary, outcome, bca: { ...bca }, ladderChoice, levels: levels.map((l) => ({ ...l })), minutes, minutesTouched, mapLevel };
+    },
+    restore(snap: unknown) {
+      const s = snap as CompareSnapshot;
+      if (running || s.terrain !== getTerrain() || s.terrain !== terrainRef) return;
+      designs = s.designs;
+      summary = s.summary;
+      outcome = s.outcome;
+      bca = s.bca;
+      ladderChoice = s.ladderChoice;
+      levels = s.levels;
+      minutes = s.minutes;
+      minutesTouched = s.minutesTouched;
+      minutesIn.set(minutes);
+      mapLevel = s.mapLevel;
+      syncBcaInputs();
+      render();
+    },
+    async runWalls(ids, userRp) {
+      const t = getTerrain();
+      if (running || !t || headlessBusy(store)) return false;
+      ensureScene(t);
+      const edits = log.snapshot();
+      if (!edits.length) return false;
+      designs = [{ id: 'A', name: 'Design A', edits, cost: { type: 'floodwall', capexUsd: null, omUsdPerYear: null, lengthM: null, heightM: null } }];
+      summary = null;
+      outcome = null;
+      bca = defaultBca();
+      syncBcaInputs();
+      ladderChoice = 'stage';
+      minutesTouched = false;
+      buildLadder();
+      if (ladder !== 'stage') return false;
+      for (const l of levels) {
+        l.on = ids.includes(l.id) && !l.outOfRange;
+        const typed = userRp.find((r) => r.level === l.id);
+        if (typed && l.sourceRp == null) l.userRp = typed.years;
+      }
+      if (!levels.some((l) => l.on)) return false;
+      render();
+      const p = run();
+      storyRun = p;
+      try {
+        await p;
+      } finally {
+        if (storyRun === p) storyRun = null;
+      }
+      // (run() set it: the narrowing above does not see through the await.)
+      const done = outcome as Outcome | null;
+      // The story reads the benefit–cost block next: bring it into view in the panel.
+      if (done) requestAnimationFrame(() => resultsEl.querySelector('[data-compare="bca"]')?.scrollIntoView?.({ block: 'start', behavior: 'smooth' }));
+      return !!done && !done.cancelled;
+    },
+    busy: () => running,
+    async cancel() {
+      if (!running) return;
+      cancelRequested = true;
+      await storyRun?.catch(() => {});
+    },
+    fact(f) {
+      return outcome ? bcaFact(outcome.result, f) : null;
     },
   };
   // An ensemble that finishes (or is cleared) after a comparison widens (or narrows) its range at once.

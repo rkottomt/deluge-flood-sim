@@ -17,6 +17,7 @@
 import { isLikelyUS, makeGeoToGrid } from '../data/geo';
 import { cleanPlaceLabel } from '../data/placeName';
 import { decodeSites } from '../loss/site';
+import { parseStoryParam } from '../story/registry';
 import { MAX_GEO_QUERY, searchUSPlaces, type GeoChoice } from './geoResults';
 import { bridgeFor, postNotice } from './bridge';
 import { h, setText, toggleClass, type UIContext } from './dom';
@@ -515,8 +516,11 @@ export function createUseCases(ctx: UIContext, deps: { panel: Pick<Panel, 'revea
   }
 
   // A ?usecase= link: set it up once the first scene is on screen (src/app/url.ts already loaded its preset).
-  const { useCase } = parseUseCase(typeof location === 'undefined' ? '' : location.search);
-  if (useCase) {
+  // A ?story= link wins: the story sets up its own scene (a dam story breaches its dam itself; a story that used a use
+  // case leaves ?usecase= in the address bar, which must not set it up a second time under the story).
+  const search = typeof location === 'undefined' ? '' : location.search;
+  const { useCase } = parseUseCase(search);
+  if (useCase && !parseStoryParam(search).story) {
     let pending = true;
     ctx.bind(
       (s) => !!(s.terrainName && !s.loading),

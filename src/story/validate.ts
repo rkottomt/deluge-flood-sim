@@ -8,6 +8,10 @@ import { captionTokens, tokenProblem } from './captions';
 import { DEFAULT_MAX_WAIT_MS, PANEL_SECTIONS, UI_TARGETS, type Story } from './types';
 
 export const STORY_ID_RE = /^[a-z0-9-]{1,32}$/;
+/** An NID id, as src/dams/nidIndex.ts NID_ID_RE (kept here so this module imports nothing from the app). */
+const NID_RE = /^[A-Z]{2}[A-Z0-9]{3,6}$/;
+/** A sweep or comparison level id (src/loss/ladders.ts ids: rp100, record1936…). */
+const LEVEL_RE = /^[a-z0-9-]{1,32}$/;
 const WATER_VIEWS = ['realistic', 'depth', 'maxDepth', 'velocity', 'arrival', 'hazard', 'default'];
 const USE_CASES = ['site', 'glacier', 'portfolio'];
 /** C0/C1 controls (newline allowed nowhere) and bidi overrides/isolates: never in on-screen text. */
@@ -65,10 +69,22 @@ export function validateStory(value: unknown, opts: { presets?: readonly string[
 
   if (!isObj(value)) return { ok: false, errors: ['story: must be an object'] };
   const s = value;
-  keys(s, 'story', ['id', 'preset', 'title', 'subtitle', 'summary', 'beats']);
+  keys(s, 'story', ['id', 'preset', 'dam', 'group', 'title', 'subtitle', 'summary', 'beats']);
   if (typeof s.id !== 'string' || !STORY_ID_RE.test(s.id)) err('story.id', 'must match [a-z0-9-]{1,32}');
-  if (typeof s.preset !== 'string' || !STORY_ID_RE.test(s.preset)) err('story.preset', 'must match [a-z0-9-]{1,32}');
-  else if (opts.presets && !opts.presets.includes(s.preset)) err('story.preset', `unknown preset "${s.preset}"`);
+  if ((s.preset === undefined) === (s.dam === undefined)) err('story', 'needs exactly one of preset and dam');
+  if (s.preset !== undefined) {
+    if (typeof s.preset !== 'string' || !STORY_ID_RE.test(s.preset)) err('story.preset', 'must match [a-z0-9-]{1,32}');
+    else if (opts.presets && !opts.presets.includes(s.preset)) err('story.preset', `unknown preset "${s.preset}"`);
+  }
+  if (s.dam !== undefined) {
+    if (!isObj(s.dam)) err('story.dam', 'must be an object');
+    else {
+      keys(s.dam, 'story.dam', ['nid', 'breach']);
+      if (typeof s.dam.nid !== 'string' || !NID_RE.test(s.dam.nid)) err('story.dam.nid', 'must be an NID id such as MI00549');
+      oneOf(s.dam, 'breach', 'story.dam', ['sunny', 'flood']);
+    }
+  }
+  if (s.group !== undefined) oneOf(s, 'group', 'story', ['business', 'event']);
   text(s, 'title', 'story', LIMITS.title);
   text(s, 'subtitle', 'story', LIMITS.subtitle);
   text(s, 'summary', 'story', LIMITS.summary);
@@ -152,7 +168,28 @@ export function validateStory(value: unknown, opts: { presets?: readonly string[
       case 'levee':
       case 'evacuate':
       case 'replayUpstream':
+      case 'demoSites':
+      case 'siteSweep':
+      case 'readArrivals':
         return keys(a, p, ['kind']);
+      case 'compare': {
+        keys(a, p, ['kind', 'levels', 'userRp']);
+        const levels = a.levels;
+        if (!Array.isArray(levels) || levels.length < 1 || levels.length > 8 || !levels.every((l) => typeof l === 'string' && LEVEL_RE.test(l)) || new Set(levels).size !== levels.length) {
+          err(`${p}.levels`, 'must be 1–8 distinct level ids');
+        }
+        if (a.userRp !== undefined) {
+          if (!Array.isArray(a.userRp) || a.userRp.length > 8) return err(`${p}.userRp`, 'must be an array of at most 8');
+          a.userRp.forEach((r: unknown, k: number) => {
+            const q = `${p}.userRp[${k}]`;
+            if (!isObj(r)) return err(q, 'must be an object');
+            keys(r, q, ['level', 'years']);
+            if (typeof r.level !== 'string' || !Array.isArray(levels) || !levels.includes(r.level)) err(`${q}.level`, 'must be one of the levels run');
+            if (!Number.isInteger(r.years) || (r.years as number) < 1 || (r.years as number) > 100_000) err(`${q}.years`, 'must be a whole number of years in [1, 100000]');
+          });
+        }
+        return;
+      }
       case 'play':
       case 'release':
         keys(a, p, ['kind', 'speed']);

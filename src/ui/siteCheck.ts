@@ -46,6 +46,7 @@ import {
   SCALE_LADDER,
   SITE_LIMITS,
   SITE_OCCUPANCIES,
+  siteFact,
   siteVerdict,
   SnapshotHazardAccumulator,
   summarizeSweep,
@@ -85,6 +86,8 @@ import {
   type SiteReportInput,
 } from './siteReport';
 import { sitesFor } from './sites';
+import { storyHooksFor } from './storyHooks';
+import { DEMO_SITES_PARAM } from './useCaseDefs';
 import { selectTool } from './toolDefs';
 import { headlessBusy, runHeadless, saveScenario } from './headless';
 import { CLIMATE_TODAY, climateForcing, sweepComparable } from '../climate';
@@ -1124,6 +1127,84 @@ export function createSiteSection(ctx: UIContext): SiteSection {
   } catch {
     /* no location (tests) */
   }
+
+  // ─── Narrated stories (storyHooks.ts) ───────────────────────────────────────────────────────────────────────
+  let storySweep: Promise<void> | null = null;
+  interface SiteSnapshot {
+    terrain: TerrainData | null;
+    sites: ReturnType<typeof registry.saveState>;
+    sweep: SweepState | null;
+    levels: LevelCfg[];
+    ladderChoice: LadderKind | 'auto';
+    durationMin: number;
+    durationTouched: boolean;
+    designId: string | null;
+    freeboardFt: number | null;
+  }
+  storyHooksFor(store).site = {
+    snapshot(): SiteSnapshot {
+      return { terrain: terrainRef, sites: registry.saveState(), sweep, levels: levels.map((l) => ({ ...l })), ladderChoice, durationMin, durationTouched, designId, freeboardFt };
+    },
+    restore(snap: unknown) {
+      const s = snap as SiteSnapshot;
+      if (sweeping) return;
+      registry.restoreState(s.sites);
+      // The sweep and ladder belong to the scene they were made on; on another scene the section starts fresh anyway.
+      if (s.terrain === getTerrain() && s.terrain === terrainRef) {
+        sweep = s.sweep;
+        levels = s.levels;
+        ladderChoice = s.ladderChoice;
+        durationMin = s.durationMin;
+        durationTouched = s.durationTouched;
+        durIn.set(durationMin);
+        designId = s.designId;
+        freeboardFt = s.freeboardFt;
+      }
+      render();
+    },
+    useDemoParcels() {
+      const t = getTerrain();
+      if (!t || sweeping) return false;
+      ensureScene(t);
+      const { sites } = decodeSites(DEMO_SITES_PARAM);
+      if (!sites.length) return false;
+      registry.replace(sites);
+      render();
+      return true;
+    },
+    async sweep() {
+      if (sweeping || busy) return false;
+      ensureScene(getTerrain());
+      ladderChoice = 'auto';
+      durationTouched = false;
+      designId = null;
+      freeboardFt = null;
+      buildLadder();
+      render();
+      const p = runSweep();
+      storySweep = p;
+      try {
+        await p;
+      } finally {
+        if (storySweep === p) storySweep = null;
+      }
+      const done = !!sweep && !sweep.cancelled && sweep.levels.length > 0;
+      // The story reads the verdict next: bring it into view in the panel.
+      if (done) requestAnimationFrame(() => sweepOut.querySelector('[data-site="verdict"]')?.scrollIntoView?.({ block: 'start', behavior: 'smooth' }));
+      return done;
+    },
+    busy: () => sweeping,
+    async cancel() {
+      if (!sweeping) return;
+      cancelRequested = true;
+      await storySweep?.catch(() => {});
+    },
+    fact(index, f) {
+      const spec = registry.sites[index];
+      if (!spec || !sweep) return null;
+      return siteFact(spec.name, summaryFor(spec.id), spec.occupancy, f, (v) => formatMoney(v));
+    },
+  };
 
   render();
   return {

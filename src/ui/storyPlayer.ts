@@ -16,7 +16,11 @@
  * time scale, evacuation start, water view, tool and play state as they were on play(), and the walls and digging —
  * a story clears walls and raises its demo levee, so the map's edits are stashed from the edit log on play() and, when
  * they differ at the end, the ground is reset and the user's edits replayed (recorded as theirs again; the water
- * restarts). Another scene on screen keeps its own defaults. The one exception is the end card's *Explore on your
+ * restarts). The business stories also swap Site check's sites and Compare designs' designs for their own, and run a
+ * sweep or a comparison: those panels' state is snapshotted too (storyHooks.ts) and put back, and a sweep or comparison
+ * still running when the story ends is cancelled first, the user's state restored once it has stopped. A dam story's
+ * scene is the live area its breach loads (damView.ts), so it has no earlier scene to go back to.
+ * Another scene on screen keeps its own defaults. The one exception is the end card's *Explore on your
  * own*: that is an invitation to carry on from what the story set up (its levee, its raised river), so it keeps the
  * story's state; Esc, the close button and leaving mid-story restore.
  *
@@ -29,12 +33,13 @@ import { editLogFor, replayEdits } from '../project/edits';
 import type { ProjectEdit } from '../project/format';
 import { makeGeoToGrid } from '../data/geo';
 import type { ChainStation } from '../hazard/types';
-import { resolveCaption, captionTokens, type CaptionToken } from '../story/captions';
-import { parseStoryParam, STORIES, storiesForPreset, storyById, STORY_PARAM } from '../story/registry';
+import { resolveCaption, captionTokens, SITE_PARCELS, type BcaFact, type CaptionToken, type DamFact, type SiteFact } from '../story/captions';
+import { isBusinessStory, parseStoryParam, sceneStory, STORIES, storyById, STORY_PARAM } from '../story/registry';
 import { StoryRunner, holdMs, type RunnerEnv, type RunnerOptions, type RunnerState } from '../story/runner';
 import type { Beat, CameraSpec, Highlight, SimAction, Story, UiTarget, UntilSpec } from '../story/types';
 import { transformPoint4 } from '../render/math';
-import { bridgeFor } from './bridge';
+import { bridgeFor, postNotice } from './bridge';
+import { storyHooksFor } from './storyHooks';
 import { formatEventTime, formatSpan, formatWhen, parseEventClock } from './chainTime';
 import { h, isTypingTarget, setText, toggleClass, type UIContext } from './dom';
 import { fmtNum } from './format';
@@ -51,6 +56,8 @@ const UI_SELECTORS: Record<UiTarget, string> = {
   timeline: '.dl-chainline',
   route: '.dl-route-chip',
   impact: '[data-section="impact"]',
+  site: '[data-section="site"]',
+  designs: '[data-section="designs"]',
   hud: '.dl-hud',
   tryit: '.dl-welcome',
 };
@@ -71,6 +78,9 @@ interface UserSnapshot {
   tool: AppState['tool'];
   paused: boolean;
   edits: ProjectEdit[];
+  /** Site check's sites and sweep, and Compare designs' designs and results (storyHooks.ts), as they were. */
+  site: unknown;
+  compare: unknown;
 }
 
 export interface StoryPlayOptions extends RunnerOptions {
@@ -124,6 +134,7 @@ export function createStoryPlayer(
 ): StoryPlayer {
   const { store } = ctx;
   const bridge = bridgeFor(store);
+  const hooks = storyHooksFor(store);
 
   // ─── DOM ──────────────────────────────────────────────────────────────────────────────────────────────────────
   const titleEl = h('span', { class: 'dl-nar-title' });
@@ -214,7 +225,19 @@ export function createStoryPlayer(
         const km = p.roadMeters / 1000;
         return `${fmtNum(acres, acres >= 100 ? 0 : 1)} acres${km >= 0.1 ? ` and ${fmtNum(km, km >= 10 ? 0 : 1)} km of streets` : ''}`;
       }
+      case 'site': {
+        const [p, f] = (arg ?? '').split('.') as [string, SiteFact];
+        const i = (SITE_PARCELS as readonly string[]).indexOf(p);
+        return i >= 0 ? (hooks.site?.fact(i, f) ?? null) : null;
+      }
+      case 'bca':
+        return hooks.compare?.fact(arg as BcaFact) ?? null;
+      case 'dam':
+        return hooks.dam?.fact(arg as DamFact) ?? null;
+      case 'arrival':
+        return arg ? (hooks.dam?.arrival(Number(arg)) ?? null) : null;
     }
+    return null;
   };
 
   // ─── Rendering ────────────────────────────────────────────────────────────────────────────────────────────────
@@ -438,6 +461,23 @@ export function createStoryPlayer(
     return false;
   }
 
+  /** A headless batch a beat started (a sweep, a comparison): stop() cancels it and restores the user's state after. */
+  let jobRunning: Promise<void> | null = null;
+  async function job(fn: () => Promise<boolean>, what: string): Promise<void> {
+    const p = fn().then(
+      (ok) => {
+        if (!ok) console.warn(`[story] ${what} did not complete`);
+      },
+      (err) => console.warn(`[story] ${what} failed`, err),
+    );
+    jobRunning = p;
+    try {
+      await p;
+    } finally {
+      if (jobRunning === p) jobRunning = null;
+    }
+  }
+
   const setSpeed = (speed: number | undefined) => {
     const s = store.get();
     store.set({ paused: false, sim: speed ? { ...s.sim, timeScale: speed } : s.sim });
@@ -496,6 +536,18 @@ export function createStoryPlayer(
       case 'useCase':
         await deps.applyUseCase(a.id);
         return;
+      case 'demoSites':
+        if (!hooks.site?.useDemoParcels()) console.warn('[story] the demo parcels could not be placed');
+        return;
+      case 'siteSweep':
+        await job(() => hooks.site?.sweep() ?? Promise.resolve(false), 'the Site check sweep');
+        return;
+      case 'compare':
+        await job(() => hooks.compare?.runWalls(a.levels, a.userRp ?? []) ?? Promise.resolve(false), 'the design comparison');
+        return;
+      case 'readArrivals':
+        if (!(await hooks.dam?.readArrivals())) console.warn('[story] no downstream readout');
+        return;
       case 'panel':
         if (a.section === null) deps.panel.setOpen(false);
         else deps.panel.reveal(a.section);
@@ -552,6 +604,8 @@ export function createStoryPlayer(
     clearTimer: (t) => window.clearTimeout(t as number),
     now: () => performance.now(),
     onPause(paused) {
+      // A sweep or comparison runs the simulation itself (headless.ts): pausing the story must not touch it.
+      if (headlessBusy(store)) return;
       if (paused) {
         if (!store.get().paused) {
           pausedSim = true;
@@ -562,7 +616,12 @@ export function createStoryPlayer(
         store.set({ paused: false });
       }
     },
-    onChange: (st) => renderState(st),
+    // Also when a beat's actions finish: a sweep, a comparison or a readout has just produced the facts its caption
+    // quotes, and a short beat may move on before the next tick.
+    onChange: (st) => {
+      renderState(st);
+      refresh();
+    },
     onError(err, action) {
       console.warn(`[story] action ${action.kind} failed`, err);
     },
@@ -607,16 +666,25 @@ export function createStoryPlayer(
 
   // ─── Play / stop ──────────────────────────────────────────────────────────────────────────────────────────────
   async function ensureScene(story: Story): Promise<boolean> {
+    if (story.dam) {
+      // The dam-breach use case's own scene: the valley below the dam (a live area, over the internet) with the breach
+      // sent in. Kept when it is already on screen.
+      const dam = hooks.dam;
+      const ok = !!dam && (await dam.open(story.dam.nid, story.dam.breach).catch(() => false));
+      if (!ok) postNotice(store, { kind: 'warn', key: 'story', title: story.title, message: 'This story breaches a dam on the valley below it, which needs the internet for the terrain (USGS 3DEP). The valley could not be loaded: try again online, or watch another story.' });
+      return ok && !store.get().loading;
+    }
+    const preset = story.preset!;
     const s = store.get();
-    if (!(s.presetId === story.preset && s.terrainName && !s.loading)) {
+    if (!(s.presetId === preset && s.terrainName && !s.loading)) {
       try {
-        await ctx.actions.loadPreset(story.preset);
+        await ctx.actions.loadPreset(preset);
       } catch {
         return false;
       }
     }
     const after = store.get();
-    if (after.presetId !== story.preset || !after.terrainName) return false;
+    if (after.presetId !== preset || !after.terrainName) return false;
     // Glacier scenes: the stations, the clock and the fronts come from the chain; give it a moment to arrive.
     if (after.scenario?.hazardChain) {
       const ctl = new AbortController();
@@ -680,6 +748,8 @@ export function createStoryPlayer(
       tool: s.tool,
       paused: s.paused,
       edits: editLogFor(store).snapshot(),
+      site: hooks.site?.snapshot() ?? null,
+      compare: hooks.compare?.snapshot() ?? null,
     };
   }
 
@@ -695,6 +765,9 @@ export function createStoryPlayer(
       render: { ...s.render, waterMode: u.waterMode },
     });
     if (s.tool !== u.tool) selectTool(store, u.tool);
+    // The demo parcels and the story's sweep or comparison give way to the user's own sites, designs and results.
+    if (u.site !== null) hooks.site?.restore(u.site);
+    if (u.compare !== null) hooks.compare?.restore(u.compare);
     // Walls and digging, through the edit log (header). Only when they changed: this restarts the water.
     const log = editLogFor(store);
     const solver = bridge.scene?.getSolver() ?? null;
@@ -733,7 +806,14 @@ export function createStoryPlayer(
     teardown(true);
     const u = saved;
     saved = null;
-    if (u && restore) restoreUser(u);
+    const pending = jobRunning;
+    if (pending && restore) {
+      // A sweep or comparison the story started is still running: stop it, and put the user's state back once it has
+      // put its own scenario back (it restores what it found, which was the story's).
+      void hooks.site?.cancel();
+      void hooks.compare?.cancel();
+      if (u) void pending.finally(() => restoreUser(u));
+    } else if (u && restore) restoreUser(u);
     current = null;
     el.hidden = true;
     el.inert = true;
@@ -743,11 +823,14 @@ export function createStoryPlayer(
     if (was) writeStoryToUrl(null);
   }
 
-  // A new scene from elsewhere (the preset list, a live area) ends the story.
+  // A new scene from elsewhere (the preset list, a live area) ends the story. A dam story's scene is the live area
+  // its breach loaded: any other terrain ends it.
   ctx.bind(
-    (s) => s.presetId,
-    (preset) => {
-      if (current && preset !== current.preset && !store.get().loading) stop();
+    (s) => `${s.presetId}|${s.terrainName}|${!!s.loading}`,
+    () => {
+      const s = store.get();
+      if (!current || s.loading) return;
+      if (current.dam ? !hooks.dam?.isOn(current.dam.nid) || s.presetId !== null : s.presetId !== current.preset) stop();
     },
   );
   ctx.own(() => stop(false));
@@ -762,7 +845,7 @@ export function createStoryPlayer(
       'data-tip-side': 'left',
       hidden: true,
       onclick: () => {
-        const st = storiesForPreset(store.get().presetId)[0];
+        const st = sceneStory(store.get().presetId);
         if (st) void play(st.id);
       },
     },
@@ -772,25 +855,29 @@ export function createStoryPlayer(
   ctx.bind(
     (s) => `${s.presetId}|${!!s.terrainName}`,
     () => {
-      const st = storiesForPreset(store.get().presetId)[0];
+      const st = sceneStory(store.get().presetId);
       watchButton.hidden = !st;
       if (st) watchButton.dataset.tip = `${st.title}: a narrated walk-through, about ${Math.round(st.beats.reduce((a, b) => a + b.durationMs, 0) / 60000) || 1} min`;
     },
   );
 
+  /** The Use cases row: the business decisions first, then the events retold, each group under its own label. */
   function storyRow(): HTMLElement {
+    const chip = (st: Story) =>
+      h(
+        'button',
+        { type: 'button', class: 'dl-btn dl-btn-subtle dl-btn-sm dl-nar-chip', 'data-story': st.id, 'data-story-group': isBusinessStory(st) ? 'business' : 'event', 'data-tip': st.summary, 'data-tip-side': 'top', onclick: () => void play(st.id) },
+        h('span', { class: 'dl-nar-chip-title' }, st.title),
+        h('span', { class: 'dl-nar-chip-sub' }, st.subtitle.split(' · ').slice(-1)[0]),
+      );
+    const business = STORIES.filter(isBusinessStory);
+    const events = STORIES.filter((s) => !isBusinessStory(s));
     return h(
       'div',
       { class: 'dl-nar-row' },
       h('span', { class: 'dl-nar-row-label' }, icon('play', 13), 'Narrated stories'),
-      ...STORIES.map((st) =>
-        h(
-          'button',
-          { type: 'button', class: 'dl-btn dl-btn-subtle dl-btn-sm dl-nar-chip', 'data-story': st.id, 'data-tip': st.summary, 'data-tip-side': 'top', onclick: () => void play(st.id) },
-          h('span', { class: 'dl-nar-chip-title' }, st.title),
-          h('span', { class: 'dl-nar-chip-sub' }, st.subtitle.split(' · ').slice(-1)[0]),
-        ),
-      ),
+      ...(business.length ? [h('span', { class: 'dl-nar-row-group' }, 'Decisions'), ...business.map(chip)] : []),
+      ...(events.length ? [h('span', { class: 'dl-nar-row-group' }, 'Events'), ...events.map(chip)] : []),
     );
   }
 
