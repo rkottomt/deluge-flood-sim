@@ -25,7 +25,7 @@ import type {
 import { geoToGrid, gridToGeo } from '../data/geo';
 import { TOOL_BY_ID } from './toolDefs';
 import { bridgeFor, type HoverInfo, type WallSegment } from './bridge';
-import { checkWall, scanWalls, stageSurface, suggestedWallHeight, wallShare, WALL_ALARM_CELLS, WALL_MAX, WALL_MIN } from './wallCheck';
+import { checkWall, effectiveStageOffset, scanWalls, stageLevelOf, stageSurface, suggestedWallHeight, wallShare, WALL_ALARM_CELLS, WALL_MAX, WALL_MIN } from './wallCheck';
 import { formatStageFt } from './format';
 import { stageFt } from './scales';
 import { sitesFor } from './sites';
@@ -488,7 +488,7 @@ export function createToolController(canvas: HTMLCanvasElement, deps: ToolContro
           barrier: info.barrier,
           depth: info.depth,
           wallHeight: s.wallHeight,
-          stageLevel: stageSurface(s.scenario?.stage, s.stageOffset),
+          stageLevel: stageLevelOf(s),
         })
       : null;
     const low = !!check && !check.ok;
@@ -519,7 +519,9 @@ export function createToolController(canvas: HTMLCanvasElement, deps: ToolContro
     const s = state();
     const snap = solver.getSnapshot?.() ?? null;
     const ctrl = s.scenario?.stage ?? null;
-    const level = stageSurface(ctrl, s.stageOffset);
+    // The level the solver's boundary stands at: the slider plus a future climate's sea-level rise.
+    const stageOff = effectiveStageOffset(s);
+    const level = stageSurface(ctrl, stageOff);
     const depth = snap && snap.nx === solver.nx && snap.ny === solver.ny ? snap.depth : null;
     // Solvers that track where walls were raised (GpuFloodSolver.wallBounds) let the scan skip the empty grid.
     const bounds = (solver as FloodSolver & { wallBounds?: { x0: number; y0: number; x1: number; y1: number } | null }).wallBounds;
@@ -546,7 +548,7 @@ export function createToolController(canvas: HTMLCanvasElement, deps: ToolContro
       belowLevel: scan.belowLevel,
       neededHeight: scan.neededHeight,
       settled: settled && physical,
-      stageFt: ctrl ? stageFt(ctrl, s.stageOffset) : null,
+      stageFt: ctrl ? stageFt(ctrl, stageOff) : null,
     });
     const need = suggestedWallHeight(scan, s.wallHeight);
     // With the wall card open the card already carries the details (and the live numbers): keep the notice to one line.
@@ -578,7 +580,7 @@ export function createToolController(canvas: HTMLCanvasElement, deps: ToolContro
         bridge.notify({
           kind: 'warn',
           key: 'wall-below-stage',
-          title: `Your wall is lower than the river at ${formatStageFt(stageFt(ctrl, s.stageOffset))}`,
+          title: `Your wall is lower than the river at ${formatStageFt(stageFt(ctrl, stageOff))}`,
           message: brief
             ? `${wallShare(scan.belowLevel, scan.cells)}% of it will be overtopped.`
             : `The river will stand at ${level.toFixed(1)} m; the top of ${wallShare(scan.belowLevel, scan.cells)}% of your wall is lower, so expect it to be overtopped.`,
@@ -861,8 +863,10 @@ export function createToolController(canvas: HTMLCanvasElement, deps: ToolContro
       publishHover();
     }
     if (s.brushRadius !== prev.brushRadius || s.wallHeight !== prev.wallHeight) transientDirty = true;
-    if (s.wallHeight !== prev.wallHeight || s.stageOffset !== prev.stageOffset || s.scenario !== prev.scenario) publishHover();
-    if (s.stageOffset > prev.stageOffset) {
+    const stageMoved = s.stageOffset !== prev.stageOffset || s.climate !== prev.climate || s.presetId !== prev.presetId;
+    if (s.wallHeight !== prev.wallHeight || stageMoved || s.scenario !== prev.scenario) publishHover();
+    // The river rose — the slider, or a future climate's sea-level rise on the same boundary.
+    if (stageMoved && effectiveStageOffset(s) > effectiveStageOffset(prev)) {
       wallScan.stageDirty = true;
       wallScan.stageChangedAt = now();
       wallScan.armed = true;

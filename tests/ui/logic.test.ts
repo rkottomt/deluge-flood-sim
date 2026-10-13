@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { checkWall, scanWalls, stageSurface, WALL_FREEBOARD } from '../../src/ui/wallCheck';
+import { checkWall, effectiveStageOffset, scanWalls, stageLevelOf, stageSurface, WALL_FREEBOARD } from '../../src/ui/wallCheck';
 import { SpeedEstimator, displaySpeed, isDiverged } from '../../src/ui/stats';
 import { suggestEvacStarts } from '../../src/ui/evacSuggest';
 import { rainCategory, rainSubLabel, RAIN_TICKS, RAIN_MAX } from '../../src/ui/scales';
@@ -32,6 +32,28 @@ test('wall check: the default 2 m wall on the Mon wharf is overtopped at the 193
   const w = checkWall({ ground: 230, barrier: 0, depth: 1.2, wallHeight: 1, stageLevel: level })!;
   assert.equal(w.source, 'water');
   assert.equal(w.ok, false);
+});
+
+test('wall check: the water level includes the sea-level rise the solver adds (Fort Myers, 2100 SSP5-8.5)', async () => {
+  const { climateForcing, stageShift } = await import('../../src/climate');
+  const FM: StageControl = { label: 'Caloosahatchee', gaugeDatum: -1.646, normalLevel: -0.28, marks: [], maxOffset: 2.8 };
+  const climate = { horizon: '2100', pathway: 'ssp585', scaling: 'cc' } as const;
+  const rise = stageShift(climateForcing(climate, 'ftmyers'));
+  assert.ok(rise > 0.5, `NOAA rise at Fort Myers by 2100: ${rise} m`);
+  const s = { presetId: 'ftmyers', scenario: { stage: FM } as never, stageOffset: 1, climate };
+  // What the solver gets: normal level + the slider's offset + the climate's shift (App getAppliedStageOffset).
+  assert.ok(Math.abs(effectiveStageOffset(s) - (1 + rise)) < 1e-9);
+  assert.ok(Math.abs(stageLevelOf(s)! - (FM.normalLevel + 1 + rise)) < 1e-9);
+  // A wall that clears today's level but not the future one is "low", and the suggestion clears the future level.
+  const ground = FM.normalLevel + 1 + 0.2;
+  assert.equal(checkWall({ ground, barrier: 0, depth: 0, wallHeight: 0.5, stageLevel: stageSurface(FM, 1) })!.ok, true, 'today');
+  const future = checkWall({ ground, barrier: 0, depth: 0, wallHeight: 0.5, stageLevel: stageLevelOf(s) })!;
+  assert.equal(future.ok, false);
+  assert.ok(ground + future.suggested >= FM.normalLevel + 1 + rise + WALL_FREEBOARD - 0.05);
+  // Today: no shift; a river preset never gets one.
+  assert.equal(effectiveStageOffset({ ...s, climate: { ...climate, horizon: 'today' } }), 1);
+  assert.equal(effectiveStageOffset({ ...s, presetId: 'pittsburgh' }), 1);
+  assert.equal(stageLevelOf({ ...s, scenario: null }), null);
 });
 
 test('wall scan counts overtopped cells and a percentile height (not one deep outlier)', () => {

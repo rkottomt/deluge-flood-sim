@@ -3,7 +3,9 @@
  * overtopping notices. In the solver the bed is ground + barrier, so a wall holds back water only while its
  * TOP (ground + height) stays above the water surface around it.
  */
-import type { StageControl } from '../contracts';
+import type { AppState, StageControl } from '../contracts';
+import { climateForcing, stageShift } from '../climate/apply';
+import type { ClimateSelection } from '../climate/scenarios';
 import type { ProtectionSummary } from './bridge';
 import { fmtNum } from './format';
 import { stageFt } from './scales';
@@ -26,6 +28,23 @@ const CREST_TOLERANCE = 0.05;
 export function stageSurface(ctrl: StageControl | null | undefined, offset: number): number | null {
   if (!ctrl) return null;
   return ctrl.normalLevel + Math.max(0, offset);
+}
+
+/** What the effective stage depends on (a slice of AppState). */
+export type StageLevelState = Pick<AppState, 'stageOffset' | 'presetId' | 'scenario'> & { climate?: ClimateSelection };
+
+/**
+ * Stage offset the solver's boundary actually stands at for the slider target: the slider (≥ 0) plus the sea-level
+ * rise of the chosen climate (src/climate stageShift — what App adds in getAppliedStageOffset). Every "will the wall
+ * hold" number reads this one, so a future sea is never checked against today's.
+ */
+export function effectiveStageOffset(s: StageLevelState): number {
+  return Math.max(0, s.stageOffset) + stageShift(climateForcing(s.climate, s.presetId, s.scenario));
+}
+
+/** Water-surface elevation of the stage boundary the solver gets (stageSurface at effectiveStageOffset), m. */
+export function stageLevelOf(s: StageLevelState): number | null {
+  return stageSurface(s.scenario?.stage, effectiveStageOffset(s));
 }
 
 export interface WallCheckInput {

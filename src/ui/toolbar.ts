@@ -5,7 +5,7 @@
 import type { AppState, ToolId } from '../contracts';
 import { h, setText, toggleClass, setAttr, type UIContext } from './dom';
 import { bridgeFor, type HoverInfo } from './bridge';
-import { checkWall, keptStatus, stageSurface, wallPreviewText, wallVerdict } from './wallCheck';
+import { checkWall, keptStatus, stageLevelOf, wallPreviewText, wallVerdict } from './wallCheck';
 import { MAX_SOURCES, MAX_STORMS } from './tools';
 import { icon, type IconName } from './icons';
 import { slider, kbd } from './controls';
@@ -161,7 +161,7 @@ export function createToolbar(ctx: UIContext): { toolbar: HTMLElement; options: 
     checkIcon.replaceChildren(icon(kind === 'ok' ? 'check' : kind === 'low' ? 'warning' : kind === 'wall' ? 'wall' : 'gauge', 14));
   };
   const renderWallCheck = (hov: HoverInfo | null, s: AppState) => {
-    const level = stageSurface(s.scenario?.stage, s.stageOffset);
+    const level = stageLevelOf(s);
     const res = hov
       ? checkWall({ ground: hov.ground, barrier: hov.barrier, depth: hov.depth, wallHeight: s.wallHeight, stageLevel: level })
       : null;
@@ -201,7 +201,7 @@ export function createToolbar(ctx: UIContext): { toolbar: HTMLElement; options: 
   ctx.own(bridge.wallStatusChanged.on(() => store.get().tool === 'wall' && renderWallCheck(bridge.hover, store.get())));
   ctx.own(bridge.protectionChanged.on(() => store.get().tool === 'wall' && renderWallCheck(bridge.hover, store.get())));
   bind(
-    (s) => `${s.tool}|${s.wallHeight}|${s.stageOffset}|${s.scenario === null}`,
+    (s) => `${s.tool}|${s.wallHeight}|${s.stageOffset}|${s.scenario === null}|${s.climate?.horizon}|${s.climate?.pathway}`,
     (_k, s) => s.tool === 'wall' && renderWallCheck(bridge.hover, s),
   );
 
