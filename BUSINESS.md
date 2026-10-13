@@ -225,8 +225,8 @@ alert (+22 min at Rasuwagadhi, +31 min at the best site, for Betrawati) is the m
 ### 4.4 Developer, anywhere: any US address against NOAA Atlas 14 rain (`?usecase=address&at=<lat>,<lon>`)
 
 §4.1 needs a city with a researched river ladder. Most acquisitions are not in one. **Check an address** takes a
-street address (geocoded by Nominatim), loads a 5 km live area around it from USGS 3DEP, Esri imagery and Census
-roads, drops a site on the point, and sweeps it through the **NOAA Atlas 14** 1-hour rain at 2, 10, 25, 100 and 500
+street address (geocoded by Nominatim), loads a 5 km live area around it from USGS 3DEP, Esri imagery, Census
+roads and (lower 48) NLCD 2021 land cover, drops a site on the point, and sweeps it through the **NOAA Atlas 14** 1-hour rain at 2, 10, 25, 100 and 500
 years — published return periods, so the expected annual loss needs nothing from the user. Run on this branch on a
 GTX 1660 Ti in October 2026 against the real services (e2e flow 22; default building: a 3-storey office, value from
 floor area, first floor 0.3 m):
@@ -379,13 +379,15 @@ metering for the *API / ensemble compute* tier in §5 are next.
 Say these before a customer finds them; the app says them in its panels and reports too.
 
 * **Bare-earth terrain by default.** Bridge decks and culverts are not in the elevation model, so water flows under
-  viaducts and embankments pond rain behind them. Buildings, land-cover roughness and storm drains are optional layers,
-  off by default because none yet beats bare earth on the validation floods. River channels are burned to a
+  viaducts and embankments pond rain behind them. Buildings (solid blocks, porous part-covered cells, roof rain to
+  the downspouts), land-cover roughness and storm drains are optional layers, off by default because none beats bare
+  earth at every validation site: buildings bring Asheville's Swannanoa gauge from 1.22 m to 0.49 m low but cost
+  0.4–2.1 CSI points against FEMA's zones elsewhere. River channels are burned to a
   nominal depth (3DEP has no bathymetry).
 * **River return periods are mostly uncalibrated.** The site sweep has published river or tide return periods only
   for some levels in Pittsburgh, Nashville and Fort Myers; elsewhere river probabilities are the user's input and
   labelled as such (§4.1). Anywhere in the US the NOAA Atlas 14 rain ladder gives a sourced EAL — but for surface-water
-  flooding only: rain on the map, rivers held level, no surge, no drains, a stationary climate (§4.4); and none in
+  flooding only: rain on the map, rivers held level, no surge, no drains by default (an optional drain layer exists), a stationary climate (§4.4); and none in
   western Washington and Oregon, which Atlas 14 does not cover.
 * **Dam breaches are screening regressions.** Eight published relations on a reservoir described by two NID numbers,
   no hydraulic structures, the wave entering at the toe. The relations disagree 2–5× for one dam, so Deluge shows the
