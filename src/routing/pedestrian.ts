@@ -6,7 +6,9 @@
  * develops: a street that is safe at T+10 min may be knee-deep and fast at T+40. HazardFields carries, per cell, the
  * maxima of the run and the moment water first stood 15 cm deep (firstWet), so — exactly like egress.ts — an
  * EARLY (pessimistic) timeline is rebuilt: a cell whose maxima are unsafe for people is treated as unsafe from the
- * moment water first arrived there.
+ * moment water first arrived there. Water with no arrival time (firstWet −1: never 15 cm deep) is not "from T+0": it
+ * does not slow walkers, and when it is unsafe (thin and fast) the edge closes from the end of the run, counted as
+ * UNTIMED in the result (walkHazard).
  *
  * WALKING NETWORK. The baked road files are TIGER/Line (US) or OSM drivable ways (the global presets); neither carries
  * footways, paths or steps, so people walk along every road edge, in both directions, ignoring car-only restrictions
@@ -76,6 +78,8 @@ export interface WalkHazard {
   simTime: number;
   /** The fields carried speeds (false: snapshot fallback, depth only). */
   speedsKnown: boolean;
+  /** Edges unsafe only through water with no arrival time, closed from the end of the run (walkHazard UNTIMED). */
+  untimedUnsafe: number;
 }
 
 export interface WalkPoint {
@@ -219,15 +223,20 @@ export class WalkNetwork {
     if (!f) return Infinity;
     const steps = Math.ceil(Math.hypot(x1 - x0, y1 - y0) * 2);
     let t = Infinity;
+    let untimed = false;
     for (let k = 1; k < steps; k++) {
       const c = this.fieldCell(x0 + ((x1 - x0) * k) / steps, y0 + ((y1 - y0) * k) / steps);
-      if (f.firstWet[c] === 0) {
+      const fw = f.firstWet[c];
+      if (fw === 0) {
         if (f.maxDepth[c] >= 0.3) return -Infinity;
         continue;
       }
-      if (unsafeForWalking(f.maxDepth[c], f.maxSpeed[c], f.maxDV[c])) t = Math.min(t, f.firstWet[c] > 0 ? f.firstWet[c] : 0);
+      if (!unsafeForWalking(f.maxDepth[c], f.maxSpeed[c], f.maxDV[c])) continue;
+      if (fw > 0) t = Math.min(t, fw);
+      else untimed = true;
     }
-    return t;
+    // Unsafe water with no arrival time: from the end of the run, as walkHazard's UNTIMED edges.
+    return t === Infinity && untimed ? f.simTime : t;
   }
 
   /**
@@ -392,22 +401,37 @@ export function walkHazard(g: RoadGraph, refNx: number, refNy: number, f: Hazard
     speedsKnown = true;
     break;
   }
+  let untimedUnsafe = 0;
   for (let e = 0; e < E; e++) {
     let tu = Infinity, tw = Infinity;
+    let untimed = false;
     for (let s = g.sampleStart[e]; s < g.sampleStart[e + 1]; s++) {
       if (mask[s]) continue;
       const c = idx[s];
       const d = f.maxDepth[c];
       if (!(d >= WALK_WET_DEPTH)) continue;
       const fw = f.firstWet[c];
-      const t = fw > 0 ? fw : 0;
-      if (t < tw) tw = t;
-      if (t < tu && unsafeForWalking(d, f.maxSpeed[c], f.maxDV[c])) tu = t;
+      const unsafe = unsafeForWalking(d, f.maxSpeed[c], f.maxDV[c]);
+      // Untimed water (firstWet −1: it never stood 15 cm deep, so no arrival was recorded): not wet from T+0 — it
+      // does not slow walkers — and, when unsafe, closes the edge at an unknown time (UNTIMED below).
+      if (!(fw > 0)) {
+        if (unsafe) untimed = true;
+        continue;
+      }
+      if (fw < tw) tw = fw;
+      if (fw < tu && unsafe) tu = fw;
+    }
+    // UNTIMED: thin fast water with no arrival time anywhere on the edge is unsafe, but WHEN is unknown — it is
+    // counted from the end of the run, the one moment it is known to have happened by, and the result says how many
+    // edges that touched (as src/loss/infra.ts leaves an untimed status standing without a time).
+    if (tu === Infinity && untimed) {
+      tu = f.simTime;
+      untimedUnsafe++;
     }
     tUnsafe[e] = tu;
     tWet[e] = tw;
   }
-  return { tUnsafe, tWet, simTime: f.simTime, speedsKnown };
+  return { tUnsafe, tWet, simTime: f.simTime, speedsKnown, untimedUnsafe };
 }
 
 /**
