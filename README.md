@@ -431,26 +431,66 @@ A (the one-click levee, or anything drawn), **Clear walls**, draw Design B, capt
 forcing multipliers, or the scenario on screen — headless, with the designs swapped in by replaying their logs and
 your own walls put back afterwards. Per design: loss per level, EAL, ΔEAL against the baseline, cost (the eal.ts unit
 costs per metre × height^1.3 summed along the drawn segments, by type, or your own figure and O&M), NPV and BCR over
-50 years at 7 % and 3.1 %, buildings protected, and **who gets wetter** — buildings newly reached or more than 10 cm
-deeper, land newly flooded or deeper — with a map of the change in max depth per design. It exports as a print / HTML
-report and travels in the project file.
+the design's useful life at 7 % and 3.1 %, buildings protected, and **who gets wetter** — buildings newly reached or
+more than 10 cm deeper, land newly flooded or deeper — with a map of the change in max depth per design. It exports as
+a print / HTML report and travels in the project file.
 
 Pittsburgh, the one-click North Shore levee against its upstream half (a shorter wall, 1.1 km at the same crest), on
 FEMA's 1 % level and the 1936 crest (500-yr typed as the user's return period), 30 simulated minutes per level — six
-runs in 43 s here:
+runs in 44 s here:
 
 | | Baseline | One-click levee | Shorter wall |
 | --- | --- | --- | --- |
-| Loss, FEMA 1 % / 1936 crest | $793 M / $12.5 B | $742 M / $10.7 B | $793 M / $12.0 B |
-| EAL · ΔEAL | $78.2 M | $66.9 M · **$11.3 M/yr** | $75.1 M · $3.0 M/yr |
+| Loss, FEMA 1 % / 1936 crest | $793 M / $12.6 B | $742 M / $10.7 B | $792 M / $12.0 B |
+| EAL · ΔEAL | $78.6 M | $67.0 M · **$11.7 M/yr** | $75.2 M · $3.4 M/yr |
 | Cost (floodwall unit costs) | | $190 M (2,415 m × 7.2 m) | $106 M (1,133 m × 8.3 m) |
-| NPV 7 % · 3.1 % | | −$34 M · +$95 M | −$64 M · −$30 M |
-| BCR 7 % · 3.1 % | | 0.82 · **1.50** | 0.39 · 0.72 |
-| Buildings protected · newly reached · deeper | | 87 · 0 · 6 | 11 · 2 · 25 |
-| Land newly flooded or deeper | | 35 acres | 78 acres |
+| NPV 7 % · 3.1 % | | −$29 M · +$105 M | −$59 M · −$19 M |
+| BCR 7 % · 3.1 % | | 0.85 · **1.55** | 0.45 · 0.82 |
+| Buildings protected · newly reached · deeper | | 87 · 1 · 5 | 11 · 2 · 23 |
+| Land newly flooded or deeper | | 34 acres | 77 acres |
 
 The shorter wall costs more than half as much and buys a quarter of the benefit, and it pushes more water onto its
 neighbours than the full levee does. Screening numbers on bare-earth terrain, like everything above.
+
+**Benefit–cost.** Below the table, each design gets an investment view at a discount rate you set (default **7 %**
+real: OMB Circular A-94 (1992), which OMB reinstated on 8 April 2025 when it revoked the 2023 update's 3.1 %; FEMA's
+BCA Toolkit has defaulted to 7 % again since its 4 June 2025 release) over a **useful life** per design (default
+FEMA's standard value for its type from the BCA Reference Guide, Appendix D: 50 years for flood walls and levees,
+with 30 for residential elevation, 25 for non-residential elevation and dry floodproofing, and 100 for acquisition in
+the same table), with its cost and annual O&M on the design's card and an analysis year. It shows the avoided EAL (the
+same trapezoid over the same ladder as the EAL rows), the present value of benefits and of construction + O&M, the
+**BCR with its range**, the net benefit, the **break-even construction cost** (the most it can cost for BCR 1) and a
+verdict that says "pays" only when the whole range clears 1. A BCR is never shown on its own. The range is taken over
+every corner of the damage curves at ±1σ (before and after together), the unit-cost band (±50 %, none for a typed
+figure), the EAL with and without its tail (two levels or more), and, once a flood-probability **ensemble** has run on
+the scene (Uncertainty), its loss p10 / p90 as ratios to its p50 — the ensemble ran on the scenario on screen, not on
+each design and level, and the note under the block says so. Return periods, what the model leaves out, and the
+discount rate and useful life themselves are never in the range. Changing a cost, a useful life or the rate recomputes
+at once without a re-run. Same run as the table, at 7 %:
+
+| | One-click levee | Shorter wall |
+| --- | --- | --- |
+| Avoided EAL (range) | $11.7 M/yr ($7.8–11.8 M) | $3.4 M/yr ($1.9–4.3 M) |
+| PV benefits · PV costs (50 yr) | $161 M · $190 M | $47.6 M · $106 M |
+| BCR (range) | **0.85 (0.38–1.72)** | 0.45 (0.16–1.13) |
+| Net benefit (range) | −$29 M (−$176 M to +$68 M) | −$59 M (−$134 M to +$7 M) |
+| Break-even construction cost | $161 M | $47.6 M |
+| Verdict | uncertain: the range straddles 1 | uncertain: the range straddles 1 |
+
+With a 3-member ensemble of the bare scene at the 1936 crest (loss p10 / p50 / p90 $11.9 / 12.4 / 14.7 B) and the
+levee compared on that level alone (500-yr), the levee's BCR at 7 % is 0.26 / 0.27 / 0.32 at the ensemble's p10 / p50
+/ p90, inside an overall range of 0.17–0.66 (e2e flow 45). The pure math is in [src/loss/bca.ts](src/loss/bca.ts)
+(`analyzeBca`, `bca`, `avoidedEal`; tests in `tests/loss/bca.test.ts`), usable outside the panel; the CLI has no
+compare command yet.
+
+The report adds the same block and an **Appendix — FEMA BCA Toolkit inputs**: per design, the damages before and after
+mitigation per recurrence interval (the Toolkit's Damage-Frequency Assessment), the project useful life with its
+source, the construction cost and annual maintenance, the discount rate and the analysis year, with Deluge's own ΔEAL
+and BCR to check the Toolkit's answer against. It says in so many words that it is **not a FEMA-accepted BCA**: the
+damages are building structure and contents from a bare-earth screening model, for an engineer to check and
+transcribe. Projects (and `?project=` links) keep the rate, the analysis year and each design's useful life, read
+strictly like everything else: a rate outside 0–20 % or a year outside 1990–2200 drops the section with a fixed
+warning, and a useful life that is not a whole number of years from 1 to 200 drops its design.
 
 **Autosave** (off by default, under Project → Privacy) is the one thing in Deluge that writes to browser storage:
 when switched on it keeps the project (never the portfolio) in this browser's localStorage and offers it back next

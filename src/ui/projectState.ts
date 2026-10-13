@@ -17,6 +17,7 @@ import {
   PROJECT_FORMAT,
   PROJECT_LIMITS,
   PROJECT_VERSION,
+  type BcaSettings,
   type ComparisonSummary,
   type DesignSpec,
   type EnsembleSettings,
@@ -33,7 +34,14 @@ export interface ProjectHooks {
   siteCheck: { getSettings(): SiteCheckSettings; applySettings(s: SiteCheckSettings): Promise<void> } | null;
   ensemble: { getSettings(): EnsembleSettings; applySettings(s: EnsembleSettings): void } | null;
   portfolio: { get(): { name: string; text: string } | null; load(name: string, text: string): void } | null;
-  designs: { get(): DesignSpec[]; set(d: DesignSpec[], summary: ComparisonSummary | null): void; summary(): ComparisonSummary | null } | null;
+  designs: {
+    get(): DesignSpec[];
+    set(d: DesignSpec[], summary: ComparisonSummary | null): void;
+    summary(): ComparisonSummary | null;
+    /** The benefit–cost inputs every design shares (discount rate, analysis year). */
+    getBca?(): BcaSettings;
+    setBca?(b: BcaSettings | null): void;
+  } | null;
 }
 
 const hooks = new WeakMap<Store, ProjectHooks>();
@@ -199,6 +207,7 @@ export function captureProject(store: Store, opts: CaptureOptions, now = new Dat
       buildings: s.look.buildings,
     },
     designs: (h.designs?.get() ?? []).map((d) => ({ ...d, edits: cloneEdits(d.edits), cost: { ...d.cost } })),
+    ...(h.designs?.getBca ? { bca: h.designs.getBca() } : {}),
     comparison: opts.includeResults ? (h.designs?.summary() ?? null) : null,
   };
   return { ok: true, project, notes };
@@ -310,6 +319,8 @@ export async function applyProject(p: ProjectFile, deps: ApplyDeps): Promise<{ o
     if (h.portfolio) h.portfolio.load(p.portfolio.name, p.portfolio.csv);
   }
   // Designs and their cached results belong to the grid they were drawn on: neither is kept on another.
+  // The benefit–cost inputs are not tied to the grid: an older file without them puts the defaults back.
+  h.designs?.setBca?.(p.bca ?? null);
   h.designs?.set(sameGrid ? p.designs : [], sameGrid ? p.comparison : null);
 
   // View and camera.

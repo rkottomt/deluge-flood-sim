@@ -160,9 +160,10 @@ export function sampleProject(): ProjectFile {
     camera: { target: { gx: 512, gy: 480, elevation: 230 }, distance: 2400, yaw: 0.4, pitch: 0.7 },
     view: { waterMode: 'maxDepth', verticalExaggeration: 1.5, showImagery: true, showRoads: true, showContours: false, timeOfDay: 'goldenHour', buildings: true },
     designs: [
-      { id: 'A', name: 'Full levee', edits: [levee], cost: { type: 'floodwall', capexUsd: null, omUsdPerYear: 50_000, lengthM: null, heightM: null } },
+      { id: 'A', name: 'Full levee', edits: [levee], cost: { type: 'floodwall', capexUsd: null, omUsdPerYear: 50_000, lengthM: null, heightM: null, usefulLifeYears: 40 } },
       { id: 'B', name: 'Short wall', edits: [{ op: 'wall', pts: [400, 500, 460, 480], h: 3, r: 1.92 }], cost: { type: 'earthen', capexUsd: 4_000_000, omUsdPerYear: null, lengthM: null, heightM: null } },
     ],
+    bca: { discountRate: 0.031, analysisYear: 2026 },
     comparison: null,
   };
 }
@@ -260,6 +261,50 @@ test('a project from a link carries no names, portfolio or cached results', () =
   // A live area's name from a link must look like a place (linkPlaceLabel), else it is dropped.
   const live = parseProjectText(corrupt((o) => (o.scene = { kind: 'live', lat: 40.44, lon: -80, sizeM: 5000, resolution: 1024, name: 'EVACUATE NOW: call 555-0100' })), { fromLink: true });
   assert.ok(live.ok && live.project.scene.kind === 'live' && !live.project.scene.name);
+});
+
+test('benefit–cost inputs: kept in a file and a link; out-of-range or ill-typed values are refused, never clamped in', async () => {
+  const p = sampleProject();
+  const file = parseProjectText(projectToJson(p));
+  assert.ok(file.ok);
+  if (!file.ok) return;
+  assert.deepEqual(file.project.bca, { discountRate: 0.031, analysisYear: 2026 });
+  assert.equal(file.project.designs[0].cost.usefulLifeYears, 40);
+  assert.equal(file.project.designs[1].cost.usefulLifeYears, undefined, 'absent stays absent (FEMA’s standard value applies)');
+  // A link carries them (numbers, not someone else's text).
+  const enc = await encodeProjectLink(p);
+  const link = await decodeProjectLink(enc.value);
+  assert.ok(link.ok, link.ok ? '' : link.error);
+  if (!link.ok) return;
+  assert.deepEqual(link.project.bca, { discountRate: 0.031, analysisYear: 2026 });
+  assert.equal(link.project.designs[0].cost.usefulLifeYears, 40);
+  // An older file without them still opens, without them.
+  const old = parseProjectText(corrupt((o) => {
+    delete o.bca;
+    delete o.designs[0].cost.usefulLifeYears;
+  }));
+  assert.ok(old.ok && old.project.bca === undefined && old.project.designs[0].cost.usefulLifeYears === undefined && old.warnings.length === 0);
+  // Bad settings: the section is dropped with a fixed warning, the rest of the file stands.
+  for (const bad of [{ discountRate: 0.5, analysisYear: 2026 }, { discountRate: -0.01, analysisYear: 2026 }, { discountRate: '0.07', analysisYear: 2026 }, { discountRate: 0.07, analysisYear: 2026.5 }, { discountRate: 0.07, analysisYear: 3000 }, { discountRate: 0.07 }, [0.07, 2026], 'seven']) {
+    const r = parseProjectText(corrupt((o) => (o.bca = bad)));
+    assert.ok(r.ok, JSON.stringify(bad));
+    if (!r.ok) continue;
+    assert.equal(r.project.bca, undefined, JSON.stringify(bad));
+    assert.deepEqual(r.warnings, ['The benefit–cost settings in the project could not be read and were left as they are.']);
+  }
+  const inf = parseProjectText(corrupt((o) => (o.bca = { discountRate: 1, analysisYear: 2026 })).replace('"discountRate": 1', '"discountRate": 1e400'));
+  assert.ok(inf.ok && inf.project.bca === undefined);
+  // A bad useful life fails its design (as any bad cost does): skipped with a warning, the other design kept.
+  for (const bad of [0, 30.5, 201, 1e9, '50', -50, true]) {
+    const r = parseProjectText(corrupt((o) => (o.designs[0].cost.usefulLifeYears = bad)));
+    assert.ok(r.ok);
+    if (!r.ok) continue;
+    assert.deepEqual(r.project.designs.map((d) => d.id), ['B'], String(bad));
+  }
+  // Hostile keys inside the section are refused like anywhere else.
+  const proto = parseProjectText(projectToJson(p).replace('"bca": {', '"bca": { "__proto__": { "polluted": 1 },'));
+  assert.equal(proto.ok, false);
+  assert.equal(({} as Record<string, unknown>).polluted, undefined);
 });
 
 test('SimParams merge: only keys the app has, with their own type', () => {

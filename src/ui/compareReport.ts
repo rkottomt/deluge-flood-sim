@@ -4,9 +4,23 @@
  * maps travel as PNG data URLs (img-src allows data:), drawn by drawDepthChange below.
  */
 import { MITIGATION_LABELS } from '../loss/eal';
+import {
+  BCA_DEFAULT_RATE,
+  BCA_NOT_INCLUDED,
+  BCA_UNCERTAINTY_LABELS,
+  BCA_VERDICT_TEXT,
+  bcrRangeText,
+  bcrText,
+  damageFrequencyRows,
+  DISCOUNT_RATE_SOURCE,
+  USEFUL_LIFE,
+  USEFUL_LIFE_SOURCE,
+  usefulLifeOutsideLimits,
+  type BcaUncertainty,
+} from '../loss/bca';
 import type { ComparisonResult, DesignResult } from '../project/compare';
 import { DEEPER_M, WET_M } from '../project/compare';
-import type { DesignSpec, ProjectEdit } from '../project/format';
+import type { BcaSettings, DesignSpec, ProjectEdit } from '../project/format';
 import { describeEdits } from '../project/edits';
 import { h } from './dom';
 import { fmtNum, formatAcres, formatMoney } from './format';
@@ -103,7 +117,7 @@ export function comparisonRows(c: ComparisonResult, compact = false): string[][]
   rows.push(['ΔEAL vs baseline (avoided per year)', '—', ...c.designs.map((d) => moneyOrDash(d.deltaEal))]);
   rows.push(['Cost (construction)', '—', ...c.designs.map((d) => `${formatMoney(d.cost.capex)}${d.cost.basis === 'override' || compact ? '' : ` (${formatMoney(d.cost.low)}–${formatMoney(d.cost.high)})`}`)]);
   rows.push(['Wall length · mean height', '—', ...c.designs.map((d) => (d.cost.lengthM > 0 ? `${fmtNum(d.cost.lengthM)} m · ${fmtNum(d.cost.meanHeightM, 1)} m` : '—'))]);
-  rows.push([`NPV at 7 %, ${c.designs[0]?.years ?? 50} yr`, '—', ...c.designs.map((d) => moneyOrDash(d.npv7))]);
+  rows.push(['NPV at 7 % over the useful life', '—', ...c.designs.map((d) => moneyOrDash(d.npv7))]);
   rows.push(['NPV at 3.1 %', '—', ...c.designs.map((d) => moneyOrDash(d.npv3))]);
   rows.push(['BCR at 7 %', '—', ...c.designs.map((d) => ratio(d.bcr7))]);
   rows.push(['BCR at 3.1 %', '—', ...c.designs.map((d) => ratio(d.bcr3))]);
@@ -119,6 +133,100 @@ export function comparisonHead(c: ComparisonResult): string[] {
   return ['', 'Baseline', ...c.designs.map((d) => d.name)];
 }
 
+// ─── Benefit–cost ──────────────────────────────────────────────────────────────────────────────────────────────────
+const pct = (r: number) => {
+  const p = Math.round(r * 1e5) / 1e3; // percent, to 0.001
+  return `${fmtNum(p, Number.isInteger(p) ? 0 : Number.isInteger(p * 10) ? 1 : 2)} %`;
+};
+const moneyRange = (lo: number, hi: number) => (formatMoney(lo) === formatMoney(hi) ? formatMoney(lo) : `${formatMoney(lo)} – ${formatMoney(hi)}`);
+
+/** "50 yr (FEMA standard)" or "40 yr (your input; FEMA's limits for a flood wall are 35–50)". */
+export function usefulLifeText(d: DesignResult): string {
+  const kind = d.cost.type;
+  const u = USEFUL_LIFE[kind];
+  if (d.cost.yearsFrom !== 'user') return `${fmtNum(d.years)} yr (FEMA standard)`;
+  return `${fmtNum(d.years)} yr (your input${usefulLifeOutsideLimits(kind, d.years) ? `; outside FEMA’s ${fmtNum(u.range[0])}–${fmtNum(u.range[1])} yr` : ''})`;
+}
+
+export function bcaHead(c: ComparisonResult): string[] {
+  return ['', ...c.designs.map((d) => d.name)];
+}
+
+/** The benefit–cost table: one column per design; every BCR with its range, never alone. */
+export function bcaRows(c: ComparisonResult): string[][] {
+  const col = (f: (d: DesignResult) => string) => c.designs.map((d) => (d.bca ? f(d) : '—'));
+  const rows: string[][] = [
+    ['Avoided EAL (ΔEAL) · range', ...col((d) => `${formatMoney(d.bca!.central.deltaEal)} (${moneyRange(d.bca!.range.deltaEal[0], d.bca!.range.deltaEal[1])})`)],
+    ['Useful life', ...c.designs.map(usefulLifeText)],
+    [`PV of benefits at ${pct(c.rate)}`, ...col((d) => formatMoney(d.bca!.central.pvBenefits))],
+    ['PV of costs (construction + O&M)', ...col((d) => formatMoney(d.bca!.central.pvCosts))],
+    ['BCR (central)', ...col((d) => bcrText(d.bca!.central.bcr))],
+    ['BCR range', ...col((d) => bcrRangeText(d.bca!.range.bcr[0], d.bca!.range.bcr[1]))],
+    ['BCR · damage curves −1σ / +1σ', ...col((d) => (d.bca!.curve ? `${bcrText(d.bca!.curve.lo.bcr)} / ${bcrText(d.bca!.curve.hi.bcr)}` : 'no curve range'))],
+    ['BCR · construction cost low / high', ...col((d) => (d.bca!.cost ? `${bcrText(d.bca!.cost.lo.bcr)} / ${bcrText(d.bca!.cost.hi.bcr)}` : 'your figure (no band)'))],
+  ];
+  if (c.ensemble) rows.push([`BCR · ensemble p10 / p50 / p90 (${fmtNum(c.ensemble.members)} members)`, ...col((d) => (d.bca!.ensemble ? `${bcrText(d.bca!.ensemble.p10.bcr)} / ${bcrText(d.bca!.ensemble.p50.bcr)} / ${bcrText(d.bca!.ensemble.p90.bcr)}` : '—'))]);
+  rows.push(
+    ['Net benefit (PV) · range', ...col((d) => `${formatMoney(d.bca!.central.netBenefit)} (${moneyRange(d.bca!.range.netBenefit[0], d.bca!.range.netBenefit[1])})`)],
+    ['Break-even construction cost (BCR = 1)', ...col((d) => (d.bca!.central.breakEvenCapex > 0 ? `${formatMoney(d.bca!.central.breakEvenCapex)} (${moneyRange(Math.max(0, d.bca!.range.breakEvenCapex[0]), Math.max(0, d.bca!.range.breakEvenCapex[1]))})` : 'none: the benefit does not cover O&M'))],
+    ['Verdict', ...col((d) => BCA_VERDICT_TEXT[d.bca!.verdict])],
+  );
+  return rows;
+}
+
+/** Which uncertainties the ranges include (over every design), and what they never include. */
+export function bcaUncertaintyNote(c: ComparisonResult): string {
+  const inc = new Set<BcaUncertainty>();
+  for (const d of c.designs) for (const u of d.bca?.included ?? []) inc.add(u);
+  const included = (['curve', 'cost', 'ensemble', 'tail'] as const).filter((u) => inc.has(u)).map((u) => BCA_UNCERTAINTY_LABELS[u]);
+  const ens = c.ensemble
+    ? ` The ensemble (${fmtNum(c.ensemble.members)} members) ran on the scenario on screen, not on each design and level: its loss p10 / p50 and p90 / p50 (×${fmtNum(c.ensemble.p10, 2)}, ×${fmtNum(c.ensemble.p90, 2)}) are applied to the avoided EAL as ratios.`
+    : ' No flood-probability ensemble has run on this scene, so hazard-input uncertainty is not in the range (Uncertainty → Run ensemble, then the range widens).';
+  return `At ${pct(c.rate)} real over each design’s useful life. The range includes: ${included.length ? included.join('; ') : 'nothing — every input has a single value here'}.${ens} Never included: ${BCA_NOT_INCLUDED.join('; ')}.`;
+}
+
+/** The FEMA BCA Toolkit inputs, per design: what an engineer would transcribe. */
+export function femaBcaSection(c: ComparisonResult, i: { ladderLabel: string; bca: BcaSettings }): HTMLElement {
+  const general = kvList([
+    ['Analysis year (dollar year)', `${i.bca.analysisYear}`],
+    ['Discount rate', `${pct(c.rate)}${Math.abs(c.rate - BCA_DEFAULT_RATE) < 1e-9 ? ' — the Toolkit’s default' : ' — not the Toolkit’s default (7 %); FEMA requires 7 % for HMA projects not awarded by 8 April 2025'} (${DISCOUNT_RATE_SOURCE})`],
+    ['Hazard', `Flood — ${i.ladderLabel}`],
+    ['Toolkit module', 'Damage-Frequency Assessment: expected damages before and after mitigation per recurrence interval'],
+    ['Damages counted', 'Building structure and contents from the Impact model (JRC depth–damage curves, per-country unit costs); no displacement, loss of function, emergency or social benefits, which the Toolkit adds separately'],
+    ['Useful-life source', USEFUL_LIFE_SOURCE],
+  ]);
+  const perDesign = c.designs.map((d) => {
+    const rows = damageFrequencyRows(c.levels, c.baseline.loss, d.loss);
+    return h(
+      'div',
+      { class: 'dl-cmp-fema-design' },
+      h('h3', null, d.name),
+      kvList([
+        ['Project useful life', usefulLifeText(d)],
+        ['Project cost (construction)', `${formatMoney(d.cost.capex)}${d.cost.basis === 'override' ? ' (your figure)' : ` (unit-cost estimate, ${formatMoney(d.cost.low)}–${formatMoney(d.cost.high)})`}`],
+        ['Annual maintenance', d.cost.om > 0 ? formatMoney(d.cost.om) : '$0 (none entered)'],
+        ['Mitigation type', `${MITIGATION_LABELS[d.cost.type]} — FEMA table row: ${USEFUL_LIFE[d.cost.type].row}`],
+      ]),
+      rows.length
+        ? simpleTable(['Recurrence interval', 'Event', 'Damages before mitigation', 'Damages after mitigation', 'Return period from'], rows.map((r) => [`${fmtNum(r.T)} yr`, r.label, formatMoney(r.before), formatMoney(r.after), r.rpFrom === 'source' ? 'published' : r.rpFrom === 'user' ? 'your input' : '—']))
+        : h('p', { class: 'dl-rep-note' }, 'No level has a return period and a loss: nothing to transcribe.'),
+      h('p', { class: 'dl-rep-note' }, `For checking the Toolkit's answer: Deluge's own ΔEAL ${d.bca ? formatMoney(d.bca.central.deltaEal) : '—'}/yr and BCR ${d.bca ? `${bcrText(d.bca.central.bcr)} (range ${bcrRangeText(d.bca.range.bcr[0], d.bca.range.bcr[1])})` : '—'}. The Toolkit integrates damages its own way (its treatment of events beyond the rarest one differs), so expect close, not equal, numbers.`),
+    );
+  });
+  return h(
+    'section',
+    { class: 'dl-rep-wide', 'data-compare-report': 'fema-bca' },
+    h('h2', null, 'Appendix — FEMA BCA Toolkit inputs'),
+    h(
+      'p',
+      { class: 'dl-rep-warn' },
+      'This is not a FEMA-accepted benefit–cost analysis. It lists screening numbers from a bare-earth 2-D model for an engineer to check and transcribe into FEMA’s BCA Toolkit; a BCA for a Hazard Mitigation Assistance, BRIC or FMA application must be prepared in the Toolkit with documented damages and is reviewed by the state and FEMA.',
+    ),
+    general,
+    ...perDesign,
+  );
+}
+
 export interface CompareReportInput {
   generatedAt: Date;
   terrainName: string;
@@ -130,9 +238,12 @@ export interface CompareReportInput {
   cellSize: number;
   /** PNG data URLs of the depth-change maps, by design id, with the level they show. */
   maps: Map<string, { url: string; level: string }>;
+  /** The benefit–cost inputs every design shares (the discount rate is in result.rate). */
+  bca: BcaSettings;
 }
 
 export const COMPARE_REPORT_CSS = `
+.dl-cmp-fema-design{break-inside:avoid;margin-top:10px}.dl-cmp-fema-design h3{margin:8px 0 4px;font-size:13px}
 .dl-cmp-swatch{display:inline-block;width:10px;height:10px;border-radius:2px;margin:0 3px;vertical-align:middle}
 .dl-cmp-maps{display:flex;flex-wrap:wrap;gap:12px}.dl-cmp-maps figure{margin:0;flex:1 1 220px}
 .dl-cmp-maps img{width:100%;max-width:360px;image-rendering:pixelated;border:1px solid #ccc}
@@ -148,7 +259,7 @@ export function buildCompareReport(i: CompareReportInput): HTMLElement {
       h('div', { class: 'dl-rep-kicker' }, 'Deluge — mitigation design comparison'),
       h('h1', null, i.terrainName || 'Scenario'),
       h('p', { class: 'dl-rep-meta' }, `${c.designs.length} design${c.designs.length === 1 ? '' : 's'} against ${c.levels.length} level${c.levels.length === 1 ? '' : 's'} (${i.ladderLabel}), ${fmtNum(i.durationS / 60)} simulated min each · generated ${i.generatedAt.toISOString().slice(0, 16).replace('T', ' ')} UTC`),
-      h('p', { class: 'dl-rep-warn' }, 'Screening estimates from a bare-earth 2-D simulation: not a flood study, a design or a FEMA benefit–cost analysis. Return periods marked “your input” are the user’s. Ranges show only the cost band; the real uncertainty is wider.'),
+      h('p', { class: 'dl-rep-warn' }, 'Screening estimates from a bare-earth 2-D simulation: not a flood study, a design or a FEMA benefit–cost analysis. Return periods marked “your input” are the user’s. Every BCR is shown with its range, and the benefit–cost section says which uncertainties that range includes; the real uncertainty is wider still.'),
     ),
   );
   sections.push(
@@ -178,6 +289,9 @@ export function buildCompareReport(i: CompareReportInput): HTMLElement {
     ),
   );
   sections.push(h('section', { class: 'dl-rep-wide' }, h('h2', null, 'Results'), simpleTable(comparisonHead(c), comparisonRows(c))));
+  if (c.designs.some((d) => d.bca)) {
+    sections.push(h('section', { class: 'dl-rep-wide' }, h('h2', null, 'Benefit–cost'), simpleTable(bcaHead(c), bcaRows(c)), h('p', { class: 'dl-rep-note' }, bcaUncertaintyNote(c))));
+  }
   sections.push(
     h(
       'section',
@@ -221,11 +335,12 @@ export function buildCompareReport(i: CompareReportInput): HTMLElement {
         ['Loss', 'Building damage and dollar loss from the Impact model (JRC depth–damage curves, per-country unit costs) on the run’s per-cell maxima.'],
         ['EAL', 'Trapezoid rule over annual exceedance probability with the tail term (loss held at the rarest level beyond it); levels without a return period do not enter it.'],
         ['Cost', 'Unit cost per metre × height^1.3 by type (src/loss/eal.ts; US floodwall ≈ $6,000/m at 1 m), summed segment by segment along the drawn walls, ±50 %; or your figure. Terrain edits are not costed.'],
-        ['NPV, BCR', `Present value of ΔEAL over ${c.designs[0]?.years ?? 50} years at 7 % (OMB A-94, FEMA default) and 3.1 %, against construction plus O&M.`],
+        ['NPV, BCR', 'Present value of ΔEAL over each design’s useful life (FEMA BCA Reference Guide Appendix D standard values unless you typed one) at 7 % (OMB A-94 1992, the FEMA BCA Toolkit default since June 2025) and 3.1 % (the revoked 2023 A-94 rate), against construction plus O&M. The benefit–cost section repeats it at your discount rate with the range over the damage curves, the cost band, the EAL tail and, when it has run, the ensemble.'],
         ['Transferred risk', `Buildings reached with the design but not in the baseline, or more than ${fmtNum(DEEPER_M * 100)} cm deeper; land newly over ${fmtNum(WET_M * 100)} cm or more than ${fmtNum(DEEPER_M * 100)} cm deeper (rivers and lakes excluded). Counts are the most over the levels.`],
       ]),
     ),
   );
+  sections.push(femaBcaSection(c, { ladderLabel: i.ladderLabel, bca: i.bca }));
   if (i.attribution) sections.push(h('p', { class: 'dl-rep-note' }, i.attribution));
   return h('article', { class: 'dl-print-report' }, ...sections);
 }
