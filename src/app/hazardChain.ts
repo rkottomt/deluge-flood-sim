@@ -264,6 +264,8 @@ export class HazardChainController {
       if (!current()) return;
       this.publish({ status: 'ready', progress: null, bands: ensemble.stationBands, entryBand: ensemble.result.ensemble ?? null, members: ensemble.members });
     } catch (err) {
+      // A crashed worker refuses every later request: drop it (whoever's run this was), so the next run gets a new one.
+      if (backend.broken && this.backend === backend) this.disposeBackend();
       if (!current()) return;
       // The map already runs on the routed hydrograph when only the ensemble failed: keep it, say so.
       if (this.view?.result && this.view.status === 'ensemble') {

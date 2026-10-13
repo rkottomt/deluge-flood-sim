@@ -357,6 +357,45 @@ test('controller: a chain preset routes the wave, drives the map with it, then a
   assert.equal(bridgeFor(store).chainControl, null);
 });
 
+test('controller: a crashed worker is replaced, not kept (the next run gets a fresh backend)', async () => {
+  const file = valley();
+  const spec = givenSpec();
+  const presetInflow: WaterSource = { id: 'edge', type: 'inflow', gx: 10, gy: 10, radius: 4, discharge: 7000 };
+  const scenario = { description: '', sources: [presetInflow], storms: [], shelters: [], rainRate: 0, stage: null, initialFill: [], hazardChain: spec };
+  const store = createStore(baseState({ presetId: 'nepal', scenario: scenario as never, sources: [{ ...presetInflow }] }));
+  // The first backend's worker dies on its first request (createHazardWorker's fail(): broken, every request refused).
+  const crashed: HazardChainBackend & { disposed: boolean } = {
+    offThread: true,
+    broken: false,
+    disposed: false,
+    async run() {
+      (crashed as { broken: boolean }).broken = true;
+      throw new Error('hazard-chain worker failed');
+    },
+    async ensemble() {
+      throw new Error('hazard-chain worker failed');
+    },
+    dispose() {
+      crashed.disposed = true;
+    },
+  };
+  const made: HazardChainBackend[] = [];
+  const createBackend = () => {
+    const b = made.length === 0 ? crashed : inlineBackend();
+    made.push(b);
+    return b;
+  };
+  const c = new HazardChainController({ store, errors: { warn() {} } as never, resetWater() {}, createBackend, loadFile: async () => file });
+  c.onSceneReady({ request: { kind: 'preset', id: 'nepal' }, terrain: { scenario } } as never);
+  await until(() => bridgeFor(store).chain?.status === 'error');
+  assert.equal(crashed.disposed, true, 'the broken backend is disposed');
+  bridgeFor(store).chainControl!.run({ overrides: {} });
+  await until(() => bridgeFor(store).chain?.status === 'ready');
+  assert.equal(made.length, 2, 'a new backend for the next run');
+  assert.ok(bridgeFor(store).chain!.result, 'and it answers');
+  c.dispose();
+});
+
 test('controller: a profile that cannot load falls back on the preset’s inflow and says why', async () => {
   const presetInflow: WaterSource = { id: 'edge', type: 'inflow', gx: 10, gy: 10, radius: 4, discharge: 7000 };
   const scenario = { description: '', sources: [presetInflow], storms: [], shelters: [], rainRate: 0, stage: null, initialFill: [], hazardChain: givenSpec() };

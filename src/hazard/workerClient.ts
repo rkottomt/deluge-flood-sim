@@ -21,6 +21,11 @@ export interface HazardChainBackend {
   ): Promise<{ id: number; ms: number; ensemble: EnsembleResult }>;
   /** True when the work runs off the main thread. */
   readonly offThread: boolean;
+  /**
+   * True once the backend can answer nothing more (its worker crashed or could not deserialize a message): every
+   * further request would be refused. The owner disposes it and makes a new one (src/app/hazardChain.ts).
+   */
+  readonly broken?: boolean;
   dispose(): void;
 }
 
@@ -97,6 +102,9 @@ export function createHazardWorker(): HazardChainBackend {
 
   return {
     offThread: true,
+    get broken() {
+      return broken !== null;
+    },
     async run(spec, file, overrides) {
       const id = nextId++;
       const m = await send({ type: 'run', id, spec, file, overrides });
