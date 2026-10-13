@@ -1,0 +1,37 @@
+Coastal still-water levels by return period — source and terms
+===============================================================
+
+ewl-stations.json  125 NOAA CO-OPS water-level stations with an Extreme Water Levels analysis: station id, name, state,
+                   location, tidal datum epoch, MHHW above NAVD88 (null where the station has no NAVD88 tie) and above
+                   MSL, the annual exceedance probability levels 99 %, 50 %, 10 %, 2 % and 1 % above MHHW (high water,
+                   GEV fit to annual maxima), the 90 % confidence interval of the 1 % level, and the NOAA 2022
+                   relative sea-level-rise medians (Low ... High) at 2050 / 2080 / 2100. JSON (format: src/surge/stations.ts),
+                   38.5 kB.
+
+SOURCES         NOAA National Ocean Service, Center for Operational Oceanographic Products and Services (CO-OPS):
+                  Extreme Water Levels   https://api.tidesandcurrents.noaa.gov/dpapi/prod/webapi/product.json?name=extremewaterlevels
+                                         (&station=<id>&details=exceedancelevels&levelType=high&units=metric)
+                                         https://tidesandcurrents.noaa.gov/est/
+                  Tidal datums           https://api.tidesandcurrents.noaa.gov/mdapi/prod/webapi/stations/<id>/datums.json?units=metric
+                  Sea-level rise         https://api.tidesandcurrents.noaa.gov/dpapi/prod/webapi/product/slr_projections.json
+                                         ?station=<id>&units=metric&report_year=2022&affil=US
+                                         (Sweet et al. 2022, Global and Regional Sea Level Rise Scenarios for the United
+                                         States, NOAA Technical Report NOS 01; medians, zeroed at 2005)
+                Downloaded October 2026. 126 stations are listed; Port Mansfield (8778490) returned no exceedance levels.
+
+TERMS           Public domain (U.S. Government work). Acknowledge NOAA/NOS/CO-OPS.
+
+CHECK           Fort Myers (8725520) reproduces the Fort Myers preset's hand-transcribed ladder (src/loss/ladders.ts,
+                ewl-8725520) to the centimetre on NAVD88, and its sea-level-rise record equals the climate layer's
+                (src/climate/scenarios.ts TIDE_GAUGE_SLR) — tests/surge/surge.test.ts.
+
+HOW IT WAS MADE scripts/bake-surge.ts:   node --import tsx scripts/bake-surge.ts
+
+WHY BAKED       The CO-OPS APIs do send Access-Control-Allow-Origin: * (checked October 2026), so a page could call them;
+                the table is small, Site check must work offline like every other ladder, and baking adds no endpoint to
+                the content-security policy.
+
+WHAT IT IS NOT  Not NOAA SLOSH: the SLOSH Maximum of Maximums are per hurricane category (no annual chance) and the public
+                National Storm Surge Hazard Maps are binned depths above ground, not water levels. The extreme water
+                levels are a still-water statistic at the gauge: tide + surge + the wave setup the gauge feels, no wave
+                run-up, stationary (fitted as if sea level did not rise).

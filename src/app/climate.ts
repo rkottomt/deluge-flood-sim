@@ -20,7 +20,7 @@ export class ClimateLayer {
 
   constructor(private readonly deps: ClimateLayerDeps) {
     const s = deps.store.get();
-    this.key = keyOf(s.climate, s.presetId, !!s.scenario?.hazardChain);
+    this.key = keyOf(s.climate, s.presetId, scenarioKey(s.scenario));
     this.forcing = climateForcing(s.climate, s.presetId, s.scenario);
   }
 
@@ -35,7 +35,7 @@ export class ClimateLayer {
   /** Recompute from the store; notifies when the result differs. */
   refresh(): void {
     const s = this.deps.store.get();
-    const key = keyOf(s.climate, s.presetId, !!s.scenario?.hazardChain);
+    const key = keyOf(s.climate, s.presetId, scenarioKey(s.scenario));
     if (key === this.key) return;
     this.key = key;
     const prev = this.forcing;
@@ -58,7 +58,11 @@ export class ClimateLayer {
   }
 }
 
-/** What the forcing depends on: the selection, the preset, and whether its scenario has a hazard chain. */
-function keyOf(sel: { horizon: string; pathway: string; scaling: string } | undefined, presetId: string | null, chain: boolean): string {
-  return `${sel ? `${presetId}|${sel.horizon}|${sel.pathway}|${sel.scaling}` : `${presetId}|today`}|${chain ? 'chain' : ''}`;
+/** What the forcing depends on: the selection, the preset, and what its scenario carries (a hazard chain, a dam breach, a sea gauge). */
+function keyOf(sel: { horizon: string; pathway: string; scaling: string } | undefined, presetId: string | null, scenario: string): string {
+  return `${sel ? `${presetId}|${sel.horizon}|${sel.pathway}|${sel.scaling}` : `${presetId}|today`}|${scenario}`;
+}
+
+function scenarioKey(sc: { hazardChain?: unknown; damBreach?: { nidId: string }; coastal?: { stationId: string } } | null | undefined): string {
+  return `${sc?.hazardChain ? 'chain' : ''}|${sc?.damBreach ? `dam:${sc.damBreach.nidId}` : ''}|${sc?.coastal ? `sea:${sc.coastal.stationId}` : ''}`;
 }

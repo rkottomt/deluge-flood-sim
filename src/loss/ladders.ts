@@ -85,6 +85,11 @@ export const LADDER_SOURCES: Readonly<Record<string, LadderSource>> = {
     text: 'NOAA Atlas 14 precipitation-frequency estimates, 60-minute duration, partial-duration series (NOAA / NWS Office of Water Prediction, Hydrometeorological Design Studies Center; public domain), read from a 1/12° resampling of the HDSC GIS grids at the centre of the map (within 3.4 % of PFDS point values at 11 test points). Return periods for the loss maths: 1 / AEP with AEP = 1 − e^(−1/ARI) (Langbein).',
     url: 'https://hdsc.nws.noaa.gov/pfds/',
   },
+  'noaa-ewl': {
+    key: 'noaa-ewl',
+    text: 'NOAA CO-OPS Extreme Water Levels at the nearest long-term tide station (annual exceedance probability levels of a GEV fit to the annual maxima of observed water level: tide + surge + gauge-felt wave setup, no run-up; public domain), put on the map’s datum with the station’s tidal datums (MHHW above NAVD88, or MSL where there is no NAVD88 tie); baked into public/surge/ewl-stations.json by scripts/bake-surge.ts. Return periods are 1 / AEP.',
+    url: 'https://tidesandcurrents.noaa.gov/est/',
+  },
 };
 
 /** Ladders by preset id. Ordered by level. */
@@ -127,9 +132,14 @@ export const PRESET_LADDERS: Readonly<Record<string, readonly LadderLevel[]>> = 
  */
 export const SCALE_LADDER: readonly number[] = [0.25, 0.5, 0.75, 1, 1.25];
 
-/** Ladder for a preset, or null when it has no stage ladder (the forcing-multiplier ladder applies). */
-export function ladderFor(presetId: string | null): readonly LadderLevel[] | null {
-  return presetId && Object.prototype.hasOwnProperty.call(PRESET_LADDERS, presetId) ? PRESET_LADDERS[presetId] : null;
+/**
+ * Ladder for a preset, or null when it has no stage ladder (the forcing-multiplier ladder applies). A live area set up
+ * for coastal surge (ScenarioPreset.coastal, src/surge/coastal.ts) carries its own: the nearest NOAA tide station's
+ * extreme water levels.
+ */
+export function ladderFor(presetId: string | null, scenario?: { coastal?: { ladder: readonly LadderLevel[] } | null } | null): readonly LadderLevel[] | null {
+  if (presetId && Object.prototype.hasOwnProperty.call(PRESET_LADDERS, presetId)) return PRESET_LADDERS[presetId];
+  return scenario?.coastal?.ladder?.length ? scenario.coastal.ladder : null;
 }
 
 // ─── Rain return-period ladder (NOAA Atlas 14) ───────────────────────────────────────────────────────────────────────
