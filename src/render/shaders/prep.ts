@@ -146,6 +146,17 @@ struct Nb {
   wet: bool,
 }
 
+/**
+ * Height of a building obstacle above the ground (m; 0 without obstacles). The solver's bed is ground + barrier +
+ * obstacle (sim/shaders/brush.ts) while bedTex leaves the obstacle out, so water standing on an overtopped roof is at
+ * bed + obstacle + depth: drawn at bed + depth it would sit at street level, a hole in the water sheet. Only the water
+ * surface takes it; the bed slopes (terrain shading) stay the ground's.
+ */
+fn obstAt(p: vec2i) -> f32 {
+  if (P.hasObst == 0) { return 0.0; }
+  return max(textureLoad(obstTex, cl(p), 0).r, 0.0);
+}
+
 fn neighbour(p: vec2i) -> Nb {
   var o: Nb;
   o.inside = all(p == cl(p));
@@ -153,7 +164,7 @@ fn neighbour(p: vec2i) -> Nb {
   o.d = depthOf(s);
   o.vel = s.gb;
   o.bedY = bed(p);
-  o.eta = o.bedY + o.d;
+  o.eta = o.bedY + obstAt(p) + o.d;
   o.wet = o.inside && o.d > P.hWet;
   return o;
 }
@@ -174,6 +185,8 @@ fn cells(@builtin(global_invocation_id) gid: vec3u) {
   let s = cstate(c);
   let h = depthOf(s);
   let b = bed(c);
+  // The surface the water stands on: the bed, plus the roof where a building obstacle is (obstAt).
+  let top = b + obstAt(c);
   let dx = P.cellSize;
 
   let nR = neighbour(c + vec2i(1, 0));
@@ -195,7 +208,7 @@ fn cells(@builtin(global_invocation_id) gid: vec3u) {
   var collect = 0.0;
   let speed = length(s.gb);
   if (h > P.hWet) {
-    let e = b + h;
+    let e = top + h;
     sex = clamp(etaSlopeNb(nR, nL, e), -3.0, 3.0);
     sez = clamp(etaSlopeNb(nD, nU, e), -3.0, 3.0);
     let froude = speed / sqrt(9.81 * max(h, 0.05));
@@ -259,7 +272,7 @@ fn cells(@builtin(global_invocation_id) gid: vec3u) {
     }
   }
   textureStore(miscOut, c, vec4f(max(barrier, 0.0), max(s.a, 0.0), mapped, cover));
-  textureStore(cellOut, c, vec4f(h, b + h, 0.0, 0.0));
+  textureStore(cellOut, c, vec4f(h, top + h, 0.0, 0.0));
 }
 `;
 
@@ -268,6 +281,8 @@ export const PREP_VERTS_WGSL = /* wgsl */ `
 @group(0) @binding(5) var wetPrev: texture_2d<f32>;
 @group(0) @binding(6) var cellTex: texture_2d<f32>;
 @group(0) @binding(7) var vtxBedTex: texture_2d<f32>;
+// Building obstacles (as in the cells pass); read only if P.hasObst — the bed texture stands in otherwise.
+@group(0) @binding(8) var obstTex: texture_2d<f32>;
 
 /** Was there water within ~4 base quads of this vertex last frame? (conservative; 1 when no hint is available) */
 fn nearWaterLastFrame(kl: vec2i) -> bool {
@@ -300,15 +315,20 @@ fn verts(@builtin(global_invocation_id) gid: vec3u) {
   var depthMax = 0.0;
   var etaWet = 0.0;
   var wetCount = 0.0;
+  // Tallest building obstacle under wet water at this corner: water on an overtopped roof stands that much higher
+  // than the vertex bed (which, like bedTex, leaves obstacles out), so the surface cap below lets it.
+  var roofMax = 0.0;
   for (var oy = -1; oy <= 0; oy++) {
     for (var ox = -1; ox <= 0; ox++) {
-      let cd = cellAt(base + vec2i(ox, oy));
+      let q = base + vec2i(ox, oy);
+      let cd = cellAt(q);
       let d = cd.r;
       depthSum += d;
       depthMax = max(depthMax, d);
       if (d > P.hWet) {
         etaWet += cd.g;
         wetCount += 1.0;
+        if (P.hasObst != 0) { roofMax = max(roofMax, textureLoad(obstTex, cl(q), 0).r); }
       }
     }
   }
@@ -316,7 +336,7 @@ fn verts(@builtin(global_invocation_id) gid: vec3u) {
   let bedV = textureLoad(vtxBedTex, kl, 0).r;
   var surface = bedV - P.collapse;
   if (wetCount > 0.0) {
-    surface = min(etaWet / wetCount, bedV + depthMax);
+    surface = min(etaWet / wetCount, bedV + roofMax + depthMax);
   } else if (nearWaterLastFrame(kl)) {
     // Dry vertex next to water: extend the neighbouring water plane underneath it instead of snapping the surface
     // to the bed. The flat plane then meets the terrain mesh exactly along the terrain's contour at the water level,
