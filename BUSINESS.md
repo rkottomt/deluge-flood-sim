@@ -134,7 +134,7 @@ assumption, labelled "your input" in the app and in the report) and the 1936 cre
 * expected annual loss **$30 k – $45 k per year** (without / with the tail beyond the rarest level);
 * indicative finished floor **4.32 m above the lowest grade** (design water 225.74 m + 0.30 m ASCE 24-14 freeboard),
   4.02 m higher than planned;
-* **raising the floor** avoids $37 k/yr and pays at 7 % over 50 years if it costs **≤ $515 k**;
+* **raising the floor** avoids $37 k/yr and pays at 7 % over FEMA's 30-year useful life for raising a home if it costs **≤ $463 k**;
 * a 361 m perimeter **floodwall**, 4.3 m high: $14.6 M ($7.3–21.9 M), **BCR 0.0–0.1**; an earthen **levee**: $6.1 M,
   BCR 0.1–0.2 (and it needs a 29 m strip all round);
 * **dry floodproofing**: not applicable (3.7 m of design water; FEMA TB-3 stops at 0.9 m, and at 5 ft/s).
@@ -375,9 +375,8 @@ metering for the *API / ensemble compute* tier in §5 are next.
   publishes it.
 * **Benefit–cost from hazard runs per design:** the FEMA BCA Toolkit appendix is in (damages before and after per
   recurrence interval, useful life, 7 %, cost, maintenance, analysis year; stated as not a FEMA-accepted BCA). Next:
-  run the ensemble per design and level so the BCR band comes from hazard runs rather than a ratio, a
-  `deluge compare` command on the same `src/loss/bca.ts`, and Site check's floor-raising costed over FEMA's 30-year
-  residential life instead of 50.
+  run the ensemble per design and level so the BCR band comes from hazard runs rather than a ratio, and a
+  `deluge compare` command on the same `src/loss/bca.ts`.
 * **Headless batch / API:** the batch CLI and its HTTP job API (`deluge serve`) are in ([§6.1](#61-how-a-customer-integrates-the-cli-and-an-http-api));
   next, webhooks, per-key metering and GPU workers behind a shared queue for portfolios of thousands, and parametric
   trigger design on top (what fraction of insured sites is wet when the gauge reads X; basis risk).

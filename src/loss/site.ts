@@ -20,7 +20,8 @@ import type { HeightProfile } from '../data/buildings';
 import { cleanPlaceLabel } from '../data/placeName';
 import type { AccessIndex } from './access';
 import { curveForOccupancy, OCCUPANCY_PROFILES, storeyHeightFor, type Occupancy } from './value';
-import { bcr, ealRange, mitigationCost, upv, DISCOUNT_RATE_FEMA, DISCOUNT_RATE_LOW, USEFUL_LIFE_WALL_YEARS, type LossPoint, type MitigationType } from './eal';
+import { bcr, ealRange, mitigationCost, upv, DISCOUNT_RATE_FEMA, DISCOUNT_RATE_LOW, type LossPoint, type MitigationType } from './eal';
+import { defaultUsefulLife, type UsefulLifeKind } from './bca';
 import { analyzeEgress, type EgressResult, type EgressRouter, type FloodTimeline } from './egress';
 import { clearanceSentence, shareOutSentence, type EgressTiming } from './egressTiming';
 import { openCells } from './footprints';
@@ -504,6 +505,8 @@ export interface SiteMitigation {
   bcr3: { mid: number; low: number; high: number } | null;
   /** Most it could cost and still break even at 7 % over the useful life (PV of the avoided EAL). */
   breakEvenCapex7: number;
+  /** The useful life the BCR and break-even use, years: FEMA's standard value for the option, or the caller's. */
+  usefulLifeYears: number;
   /** Why it may not apply (empty when nothing stands out). */
   caveats: string[];
   applicable: boolean;
@@ -515,6 +518,7 @@ export interface MitigationContext {
   /** Cost table country (eal.ts mitigationCost). */
   country: 'US' | 'IN' | 'NP' | null;
   perimeterM: number;
+  /** One useful life for every option, years; absent = FEMA's standard value per option (bca.ts USEFUL_LIFE). */
   years?: number;
 }
 
@@ -533,18 +537,19 @@ function ealWith(sum: SweepSummary, lossOf: (r: SweepRow) => number): { low: num
 }
 
 export function mitigationOptions(sum: SweepSummary, m: MitigationContext): SiteMitigation[] {
-  const years = m.years ?? USEFUL_LIFE_WALL_YEARS;
   const base = sum.eal;
   const rec = m.rec;
+  const residential = m.occ === 'res' || m.occ === 'apt';
   const out: SiteMitigation[] = [];
-  const finish = (o: Omit<SiteMitigation, 'deltaEal' | 'bcr7' | 'bcr3' | 'breakEvenCapex7'>): SiteMitigation => {
+  const finish = (o: Omit<SiteMitigation, 'deltaEal' | 'bcr7' | 'bcr3' | 'breakEvenCapex7' | 'usefulLifeYears'>, life: UsefulLifeKind): SiteMitigation => {
+    const years = m.years ?? defaultUsefulLife(life);
     const delta = base && o.ealAfter ? Math.max(0, mid(base) - mid(o.ealAfter)) : NaN;
     const ratio = (rate: number) => {
       if (!o.cost || !Number.isFinite(delta)) return null;
       const f = (capex: number) => bcr({ deltaEal: delta, capex, rate, years }).bcr;
       return { mid: f(o.cost.mid), low: f(o.cost.high), high: f(o.cost.low) };
     };
-    return { ...o, deltaEal: delta, bcr7: ratio(DISCOUNT_RATE_FEMA), bcr3: ratio(DISCOUNT_RATE_LOW), breakEvenCapex7: Number.isFinite(delta) ? delta * upv(DISCOUNT_RATE_FEMA, years) : NaN };
+    return { ...o, deltaEal: delta, bcr7: ratio(DISCOUNT_RATE_FEMA), bcr3: ratio(DISCOUNT_RATE_LOW), breakEvenCapex7: Number.isFinite(delta) ? delta * upv(DISCOUNT_RATE_FEMA, years) : NaN, usefulLifeYears: years };
   };
 
   // 1. Elevate the finished floor to the recommendation.
@@ -559,7 +564,7 @@ export function mitigationOptions(sum: SweepSummary, m: MitigationContext): Site
       ealAfter: ealWith(sum, (r) => lossAtFloor(r.run, Math.max(rec.ffeAboveGrade, r.run.firstFloorHeight))),
       caveats: rec.raiseBy <= 0.01 ? ['The planned floor already clears the design level.'] : ['Cost of fill / a raised slab is not estimated here; at the design stage it is usually a fraction of the building.'],
       applicable: rec.raiseBy > 0.01,
-    }),
+    }, residential ? 'elevationResidential' : 'elevationNonResidential'),
   );
 
   // 2–3. A wall or levee around the site, tall enough for the design water + freeboard.
@@ -584,12 +589,11 @@ export function mitigationOptions(sum: SweepSummary, m: MitigationContext): Site
         ealAfter: ealWith(sum, protectedLoss),
         caveats,
         applicable: wallH > 0,
-      }),
+      }, kind),
     );
   }
 
   // 4. Dry floodproofing (non-residential only).
-  const residential = m.occ === 'res' || m.occ === 'apt';
   const designAbove = Number.isFinite(rec.designWse) ? rec.designWse - (rec.grade + rec.plannedFloorM) : NaN;
   const designSpeed = sum.rows.find((r) => r.level.label === rec.designLabel)?.run.result?.speed ?? NaN;
   const dpCaveats: string[] = [];
@@ -608,7 +612,7 @@ export function mitigationOptions(sum: SweepSummary, m: MitigationContext): Site
       ealAfter: ealWith(sum, (r) => (depthAboveFloor(r.run) > DRY_FLOODPROOF_MAX_M ? (r.run.result?.loss ?? 0) : 0)),
       caveats: dpCaveats,
       applicable: !residential && Number.isFinite(designAbove) && designAbove > 0,
-    }),
+    }, 'dryFloodproofing'),
   );
   return out;
 }

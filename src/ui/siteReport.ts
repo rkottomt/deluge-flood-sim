@@ -14,7 +14,6 @@ import {
   LADDER_SOURCES,
   OCCUPANCY_PROFILES,
   REACHED_DEPTH,
-  USEFUL_LIFE_WALL_YEARS,
   defaultFirstFloorHeight,
   designEventText,
   depthAboveFloor,
@@ -194,7 +193,7 @@ export function ffeRows(rec: FfeRecommendation): Array<[string, string]> {
 export function mitigationTableRows(opts: readonly SiteMitigation[], money: (v: number) => string): string[][] {
   return opts.map((o) => [
     o.label + (o.applicable ? '' : ' (not applicable)'),
-    o.assumption,
+    `${o.assumption} Useful life ${o.usefulLifeYears} yr.`,
     o.cost ? `${money(o.cost.mid)} (${money(o.cost.low)} – ${money(o.cost.high)})` : 'not costed',
     Number.isFinite(o.deltaEal) ? `${money(o.deltaEal)}/yr` : '—',
     o.bcr7 ? `${ratio(o.bcr7.mid)} (${ratio(o.bcr7.low)} – ${ratio(o.bcr7.high)})` : Number.isFinite(o.breakEvenCapex7) ? `pays if ≤ ${money(o.breakEvenCapex7)}` : '—',
@@ -202,7 +201,7 @@ export function mitigationTableRows(opts: readonly SiteMitigation[], money: (v: 
   ]);
 }
 
-export const MITIGATION_HEAD = ['Option', 'Assumes', 'Planning cost', 'Avoided EAL', `BCR 7 %, ${USEFUL_LIFE_WALL_YEARS} yr`, 'BCR 3.1 %'];
+export const MITIGATION_HEAD = ['Option', 'Assumes', 'Planning cost', 'Avoided EAL', 'BCR 7 %', 'BCR 3.1 %'];
 
 /** Methods and limitations specific to Site check, for the panel's details and the report's appendix. */
 export const SITE_METHOD_NOTES: ReadonlyArray<{ title: string; text: string }> = [
@@ -236,7 +235,7 @@ export const SITE_METHOD_NOTES: ReadonlyArray<{ title: string; text: string }> =
     text:
       'EAL by the trapezoid rule over annual exceedance probability (1/T), reported without and with the tail term (the rarest level’s loss times its ' +
       `probability) — Deluge runs events, it does not know how often they happen. BCR = PV(avoided EAL) / cost at ${Math.round(DISCOUNT_RATE_FEMA * 1000) / 10} % (FEMA BCA default) ` +
-      `and ${Math.round(DISCOUNT_RATE_LOW * 1000) / 10} %, over ${USEFUL_LIFE_WALL_YEARS} years, on the mid of the EAL range. Only walls and levees have unit costs here; for the other ` +
+      `and ${Math.round(DISCOUNT_RATE_LOW * 1000) / 10} %, over each option’s FEMA standard useful life (BCA Reference Guide 2009, App. D: walls and levees 50 years, raising a home 30, raising another building or dry floodproofing it 25), on the mid of the EAL range. Only walls and levees have unit costs here; for the other ` +
       'options the most they could cost and still break even is shown instead.',
   },
   {

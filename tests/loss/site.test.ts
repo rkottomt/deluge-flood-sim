@@ -276,7 +276,10 @@ test('mitigation: wall height and cost from eal.ts, BCR = PV(avoided EAL)/cost, 
   assert.ok(wall.bcr7!.low < wall.bcr7!.mid && wall.bcr7!.mid < wall.bcr7!.high);
   const elev = opts.find((o) => o.kind === 'elevate')!;
   assert.equal(elev.cost, null);
-  assert.ok(Math.abs(elev.breakEvenCapex7 - elev.deltaEal * f) < 1e-6);
+  // Each option over FEMA's standard useful life (BCA Reference Guide 2009, App. D): walls 50 yr, raising an office 25.
+  assert.equal(wall.usefulLifeYears, 50);
+  assert.equal(elev.usefulLifeYears, 25);
+  assert.ok(Math.abs(elev.breakEvenCapex7 - elev.deltaEal * upv(DISCOUNT_RATE_FEMA, 25)) < 1e-6);
   assert.ok(elev.applicable);
   const dp = opts.find((o) => o.kind === 'dryproof')!;
   assert.ok(dp.applicable); // 0.7 m above the floor at the design level: under 3 ft
@@ -284,6 +287,10 @@ test('mitigation: wall height and cost from eal.ts, BCR = PV(avoided EAL)/cost, 
   const res = mitigationOptions(sum, { occ: 'res', rec, country: 'US', perimeterM: perim }).find((o) => o.kind === 'dryproof')!;
   assert.equal(res.applicable, false);
   assert.ok(res.caveats.some((c) => /residential/.test(c)));
+  // Raising a home: FEMA's 30 years; a caller's life applies to every option.
+  const home = mitigationOptions(sum, { occ: 'res', rec, country: 'US', perimeterM: perim });
+  assert.equal(home.find((o) => o.kind === 'elevate')!.usefulLifeYears, 30);
+  assert.ok(mitigationOptions(sum, { occ: 'res', rec, country: 'US', perimeterM: perim, years: 40 }).every((o) => o.usefulLifeYears === 40));
 });
 
 test('verdict: plain sentences with their numbers; no score; EAL caveats', () => {

@@ -358,6 +358,7 @@ export function siteSweepReport(
       bcr7: band3(o.bcr7),
       bcr3: band3(o.bcr3),
       breakEvenCapex7: num(o.breakEvenCapex7, 0),
+      usefulLifeYears: o.usefulLifeYears,
       caveats: o.caveats,
     })),
     verdict: siteVerdict(spec.name || 'The site', sum, money, opts.timing),
