@@ -11,12 +11,12 @@
   "routeDx": 100,
   "memberDx": 100,
   "members": 9,
-  "ms": 1918,
+  "ms": 2007,
   "member": {
    "volumeFactor": 1,
    "cv": 0.2
   },
-  "note": "9 members (1684 ms), median member re-run to the end of its recession; the mass reaches the river 4.3 min after the collapse (13.0 km at 50 m/s); direct flow: 20.7 Mm³ of melt water, 25.9 Mm³ at Cv 0.20, peak 43261 m³/s"
+  "note": "9 members (1774 ms), median member re-run to the end of its recession; the mass reaches the river 4.3 min after the collapse (13.0 km at 50 m/s); direct flow: 20.7 Mm³ of melt water, 25.9 Mm³ at Cv 0.20, peak 43261 m³/s"
  },
  "source": {
   "trigger": "massIntoRiver",
@@ -34,22 +34,22 @@
    "name": "Lhende Khola at 2,900 m (avalanche runout)",
    "s": 0,
    "kind": "source",
-   "tFront": 285,
-   "tPeak": 670,
-   "qPeak": 43198,
-   "stageMax": 2903.07,
-   "rise": 24,
-   "leadTime": -1995,
+   "tFront": 290,
+   "tPeak": 668,
+   "qPeak": 43193,
+   "stageMax": 2901.81,
+   "rise": 22.49,
+   "leadTime": -1990,
    "band": {
     "tFront": [
-     285,
-     285,
-     292
+     280,
+     290,
+     290
     ],
     "qPeak": [
-     24989,
-     43198,
-     74699
+     24985,
+     43193,
+     74704
     ]
    }
   },
@@ -57,22 +57,22 @@
    "name": "Rasuwagadhi",
    "s": 14976,
    "kind": "town",
-   "tFront": 1059,
-   "tPeak": 1357,
-   "qPeak": 24129,
-   "stageMax": 1812.24,
-   "rise": 13.25,
-   "leadTime": -1221,
+   "tFront": 1012,
+   "tPeak": 1306,
+   "qPeak": 24836,
+   "stageMax": 1811.59,
+   "rise": 12.3,
+   "leadTime": -1268,
    "band": {
     "tFront": [
-     976,
-     1064,
-     1187
+     941,
+     1012,
+     1133
     ],
     "qPeak": [
-     11491,
-     24129,
-     60666
+     11822,
+     24836,
+     62577
     ]
    },
    "observed": [
@@ -92,22 +92,22 @@
    "name": "Rasuwagadhi HEP headworks",
    "s": 15525,
    "kind": "hydro",
-   "tFront": 1087,
-   "tPeak": 1427,
-   "qPeak": 25155,
-   "stageMax": 1782.45,
-   "rise": 10.53,
-   "leadTime": -1193,
+   "tFront": 1041,
+   "tPeak": 1398,
+   "qPeak": 25512,
+   "stageMax": 1781.67,
+   "rise": 9.48,
+   "leadTime": -1239,
    "band": {
     "tFront": [
-     1002,
-     1097,
-     1221
+     966,
+     1042,
+     1164
     ],
     "qPeak": [
-     11287,
-     25155,
-     56436
+     11633,
+     25512,
+     57582
     ]
    }
   },
@@ -115,22 +115,22 @@
    "name": "Timure",
    "s": 18461,
    "kind": "town",
-   "tFront": 1284,
-   "tPeak": 1630,
-   "qPeak": 20808,
-   "stageMax": 1696.8,
-   "rise": 12.45,
-   "leadTime": -996,
+   "tFront": 1227,
+   "tPeak": 1573,
+   "qPeak": 21351,
+   "stageMax": 1696.57,
+   "rise": 11.99,
+   "leadTime": -1053,
    "band": {
     "tFront": [
-     1182,
-     1320,
-     1442
+     1133,
+     1251,
+     1373
     ],
     "qPeak": [
-     9908,
-     20808,
-     46950
+     10110,
+     21351,
+     48694
     ]
    }
   },
@@ -138,22 +138,22 @@
    "name": "Syafrubesi",
    "s": 29700,
    "kind": "town",
-   "tFront": 2066,
-   "tPeak": 2380,
-   "qPeak": 16944,
-   "stageMax": 1434.67,
-   "rise": 17.32,
-   "leadTime": -214,
+   "tFront": 1940,
+   "tPeak": 2250,
+   "qPeak": 17713,
+   "stageMax": 1434.08,
+   "rise": 16.48,
+   "leadTime": -340,
    "band": {
     "tFront": [
-     1819,
-     2066,
-     2379
+     1743,
+     1940,
+     2221
     ],
     "qPeak": [
-     7944,
-     16944,
-     36918
+     8278,
+     17713,
+     39240
     ]
    }
   },
@@ -161,22 +161,22 @@
    "name": "Syafrubesi gauge (DHM, position approximate)",
    "s": 29700,
    "kind": "gauge",
-   "tFront": 2066,
-   "tPeak": 2380,
-   "qPeak": 16944,
-   "stageMax": 1434.67,
-   "rise": 17.32,
-   "leadTime": -214,
+   "tFront": 1940,
+   "tPeak": 2250,
+   "qPeak": 17713,
+   "stageMax": 1434.08,
+   "rise": 16.48,
+   "leadTime": -340,
    "band": {
     "tFront": [
-     1819,
-     2066,
-     2379
+     1743,
+     1940,
+     2221
     ],
     "qPeak": [
-     7944,
-     16944,
-     36918
+     8278,
+     17713,
+     39240
     ]
    },
    "observed": [
@@ -191,22 +191,22 @@
    "name": "Chilime HEP powerhouse",
    "s": 30648,
    "kind": "hydro",
-   "tFront": 2135,
-   "tPeak": 2441,
-   "qPeak": 16828,
-   "stageMax": 1410.28,
-   "rise": 15.36,
-   "leadTime": -145,
+   "tFront": 2001,
+   "tPeak": 2300,
+   "qPeak": 17652,
+   "stageMax": 1409.66,
+   "rise": 14.49,
+   "leadTime": -279,
    "band": {
     "tFront": [
-     1873,
-     2135,
-     2461
+     1792,
+     2001,
+     2297
     ],
     "qPeak": [
-     7913,
-     16828,
-     36445
+     8259,
+     17652,
+     38583
     ]
    }
   },
@@ -214,22 +214,22 @@
    "name": "Upper Trishuli-1 HEP (under construction)",
    "s": 47233,
    "kind": "hydro",
-   "tFront": 3360,
-   "tPeak": 3700,
-   "qPeak": 12620,
-   "stageMax": 922.9,
-   "rise": 7.6,
-   "leadTime": 1080,
+   "tFront": 3114,
+   "tPeak": 3462,
+   "qPeak": 13004,
+   "stageMax": 922.65,
+   "rise": 7.11,
+   "leadTime": 834,
    "band": {
     "tFront": [
-     2856,
-     3360,
-     3970
+     2678,
+     3114,
+     3671
     ],
     "qPeak": [
-     5857,
-     12620,
-     27412
+     6150,
+     13004,
+     29259
     ]
    }
   },
@@ -237,22 +237,22 @@
    "name": "Betrawati 2-D domain (north edge)",
    "s": 53762,
    "kind": "domainEdge",
-   "tFront": 3895,
-   "tPeak": 4213,
-   "qPeak": 11446,
-   "stageMax": 736.79,
-   "rise": 9.17,
-   "leadTime": 1615,
+   "tFront": 3599,
+   "tPeak": 3908,
+   "qPeak": 12180,
+   "stageMax": 736.6,
+   "rise": 8.72,
+   "leadTime": 1319,
    "band": {
     "tFront": [
-     3284,
-     3895,
-     4627
+     3062,
+     3599,
+     4272
     ],
     "qPeak": [
-     5202,
-     11446,
-     26059
+     5477,
+     12180,
+     27299
     ]
    }
   },
@@ -260,22 +260,22 @@
    "name": "Upper Trishuli-3A HEP powerhouse",
    "s": 53875,
    "kind": "hydro",
-   "tFront": 3900,
-   "tPeak": 4221,
-   "qPeak": 11439,
-   "stageMax": 735.32,
-   "rise": 9.62,
-   "leadTime": 1620,
+   "tFront": 3607,
+   "tPeak": 3913,
+   "qPeak": 12174,
+   "stageMax": 735.19,
+   "rise": 9.16,
+   "leadTime": 1327,
    "band": {
     "tFront": [
-     3286,
-     3900,
-     4641
+     3066,
+     3607,
+     4285
     ],
     "qPeak": [
-     5198,
-     11439,
-     26040
+     5474,
+     12174,
+     27291
     ]
    }
   },
@@ -283,22 +283,22 @@
    "name": "Upper Trishuli-3B HEP powerhouse",
    "s": 57616,
    "kind": "hydro",
-   "tFront": 4257,
-   "tPeak": 4520,
-   "qPeak": 11140,
-   "stageMax": 650.45,
-   "rise": 9.18,
-   "leadTime": 1977,
+   "tFront": 3935,
+   "tPeak": 4170,
+   "qPeak": 11902,
+   "stageMax": 650.38,
+   "rise": 8.85,
+   "leadTime": 1655,
    "band": {
     "tFront": [
-     3563,
-     4257,
-     5086
+     3318,
+     3935,
+     4698
     ],
     "qPeak": [
-     5064,
-     11140,
-     25186
+     5356,
+     11902,
+     26813
     ]
    }
   },
@@ -306,22 +306,22 @@
    "name": "Betrawati",
    "s": 60273,
    "kind": "town",
-   "tFront": 4529,
-   "tPeak": 4890,
-   "qPeak": 9993,
-   "stageMax": 614.78,
-   "rise": 11.77,
-   "leadTime": 2249,
+   "tFront": 4183,
+   "tPeak": 4422,
+   "qPeak": 10872,
+   "stageMax": 614.86,
+   "rise": 11.57,
+   "leadTime": 1903,
    "band": {
     "tFront": [
-     3771,
-     4529,
-     5423
+     3509,
+     4183,
+     5008
     ],
     "qPeak": [
-     4744,
-     9993,
-     22130
+     5034,
+     10872,
+     24152
     ]
    },
    "observed": [
@@ -340,28 +340,28 @@
  ],
  "entry": {
   "s": 53762,
-  "tFront": 3895,
-  "qPeak": 11446,
-  "volume": 21685210,
+  "tFront": 3599,
+  "qPeak": 12180,
+  "volume": 21506177,
   "baseflow": 100,
   "band": {
    "tFront": [
-    3284,
-    3895,
-    4627
+    3062,
+    3599,
+    4272
    ],
    "qPeak": [
-    5202,
-    11446,
-    26059
+    5477,
+    12180,
+    27299
    ]
   }
  },
  "alertTime": 2280,
  "domain": {
-  "offset": 3595,
+  "offset": 3299,
   "sourceId": "trishuli-inflow",
-  "inflowVolume": 21781698,
-  "inflowPeak": 11444
+  "inflowVolume": 21699824,
+  "inflowPeak": 12173
  }
 }

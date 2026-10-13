@@ -11,12 +11,12 @@
   "routeDx": 100,
   "memberDx": 100,
   "members": 9,
-  "ms": 547,
+  "ms": 549,
   "member": {
    "volumeFactor": 1,
    "cv": 0.2
   },
-  "note": "9 members (483 ms), median member re-run to the end of its recession; the mass reaches the river 1.2 min after the collapse (3.7 km at 50 m/s); direct flow: 4.9 Mm³ of melt water, 6.2 Mm³ at Cv 0.20, peak 13921 m³/s"
+  "note": "9 members (486 ms), median member re-run to the end of its recession; the mass reaches the river 1.2 min after the collapse (3.7 km at 50 m/s); direct flow: 4.9 Mm³ of melt water, 6.2 Mm³ at Cv 0.20, peak 13921 m³/s"
  },
  "source": {
   "trigger": "massIntoRiver",
@@ -34,21 +34,21 @@
    "name": "Ronti Gad (avalanche runout, head of the mapped stream)",
    "s": 0,
    "kind": "source",
-   "tFront": 99,
-   "tPeak": 374,
-   "qPeak": 13913,
-   "stageMax": 4082.6,
-   "rise": 16.55,
+   "tFront": 110,
+   "tPeak": 373,
+   "qPeak": 13911,
+   "stageMax": 4081.7,
+   "rise": 15.39,
    "band": {
     "tFront": [
-     99,
-     99,
-     108
+     100,
+     110,
+     118
     ],
     "qPeak": [
      8040,
-     13913,
-     24057
+     13911,
+     24054
     ]
    },
    "observed": [
@@ -63,21 +63,21 @@
    "name": "Raini–Tapovan 2-D domain (east edge)",
    "s": 11564,
    "kind": "domainEdge",
-   "tFront": 676,
-   "tPeak": 749,
-   "qPeak": 12572,
-   "stageMax": 2248.46,
-   "rise": 11.15,
+   "tFront": 647,
+   "tPeak": 715,
+   "qPeak": 12763,
+   "stageMax": 2248.07,
+   "rise": 10.47,
    "band": {
     "tFront": [
-     612,
-     682,
-     780
+     587,
+     651,
+     749
     ],
     "qPeak": [
-     6420,
-     12572,
-     23471
+     6524,
+     12763,
+     23547
     ]
    }
   },
@@ -85,21 +85,21 @@
    "name": "Reni bridge (NH107B)",
    "s": 15223,
    "kind": "bridge",
-   "tFront": 864,
-   "tPeak": 948,
-   "qPeak": 10485,
-   "stageMax": 1971.88,
-   "rise": 9.84,
+   "tFront": 821,
+   "tPeak": 892,
+   "qPeak": 10925,
+   "stageMax": 1971.66,
+   "rise": 9.37,
    "band": {
     "tFront": [
-     780,
-     891,
-     994
+     745,
+     851,
+     949
     ],
     "qPeak": [
-     4935,
-     10485,
-     21501
+     5045,
+     10925,
+     21643
     ]
    }
   },
@@ -107,21 +107,21 @@
    "name": "Rishiganga HEP, Raini (position approximate)",
    "s": 15436,
    "kind": "hydro",
-   "tFront": 874,
-   "tPeak": 955,
-   "qPeak": 10435,
-   "stageMax": 1962.04,
-   "rise": 10.12,
+   "tFront": 830,
+   "tPeak": 900,
+   "qPeak": 10882,
+   "stageMax": 1961.81,
+   "rise": 9.66,
    "band": {
     "tFront": [
-     789,
-     902,
-     1006
+     754,
+     861,
+     960
     ],
     "qPeak": [
-     4902,
-     10435,
-     21431
+     5016,
+     10882,
+     21581
     ]
    },
    "observed": [
@@ -136,21 +136,21 @@
    "name": "Tapovan-Vishnugad HEP barrage (under construction)",
    "s": 21730,
    "kind": "hydro",
-   "tFront": 1336,
-   "tPeak": 1518,
-   "qPeak": 6025,
-   "stageMax": 1805.2,
-   "rise": 10.23,
+   "tFront": 1254,
+   "tPeak": 1403,
+   "qPeak": 6345,
+   "stageMax": 1805.09,
+   "rise": 9.88,
    "band": {
     "tFront": [
-     1153,
-     1336,
-     1600
+     1096,
+     1254,
+     1513
     ],
     "qPeak": [
-     2722,
-     6025,
-     13477
+     2778,
+     6345,
+     15222
     ]
    },
    "observed": [
@@ -165,21 +165,21 @@
    "name": "Tapovan",
    "s": 22039,
    "kind": "town",
-   "tFront": 1373,
-   "tPeak": 1469,
-   "qPeak": 5365,
-   "stageMax": 1804.97,
-   "rise": 14.08,
+   "tFront": 1284,
+   "tPeak": 1373,
+   "qPeak": 5917,
+   "stageMax": 1804.83,
+   "rise": 13.65,
    "band": {
     "tFront": [
-     1181,
-     1373,
-     1645
+     1119,
+     1284,
+     1554
     ],
     "qPeak": [
-     2390,
-     5365,
-     12165
+     2513,
+     5917,
+     14346
     ]
    },
    "observed": [
@@ -194,21 +194,21 @@
    "name": "Joshimath (Vishnuprayag confluence)",
    "s": 31487,
    "kind": "town",
-   "tFront": 2324,
-   "tPeak": 2506,
-   "qPeak": 3866,
-   "stageMax": 1452.98,
-   "rise": 7.06,
+   "tFront": 2162,
+   "tPeak": 2313,
+   "qPeak": 4020,
+   "stageMax": 1452.91,
+   "rise": 6.75,
    "band": {
     "tFront": [
-     1928,
-     2324,
-     2862
+     1791,
+     2162,
+     2705
     ],
     "qPeak": [
-     1668,
-     3866,
-     8601
+     1686,
+     4020,
+     9068
     ]
    },
    "observed": [
@@ -221,27 +221,27 @@
  ],
  "entry": {
   "s": 11564,
-  "tFront": 676,
-  "qPeak": 12572,
-  "volume": 5915772,
+  "tFront": 647,
+  "qPeak": 12763,
+  "volume": 5904254,
   "baseflow": 20,
   "band": {
    "tFront": [
-    612,
-    682,
-    780
+    587,
+    651,
+    749
    ],
    "qPeak": [
-    6420,
-    12572,
-    23471
+    6524,
+    12763,
+    23547
    ]
   }
  },
  "domain": {
-  "offset": 376,
+  "offset": 347,
   "sourceId": "rishiganga-inflow",
-  "inflowVolume": 5908294,
-  "inflowPeak": 12438
+  "inflowVolume": 5921845,
+  "inflowPeak": 12680
  }
 }

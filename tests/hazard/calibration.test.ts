@@ -1,15 +1,20 @@
 /**
- * CALIBRATION REGRESSION against the two real events the presets carry, on the BAKED valleys (public/presets/<id>/
+ * CALIBRATION REGRESSION against the three real events the presets carry, on the BAKED valleys (public/presets/<id>/
  * chain.json) and the baked chain runs (chain-result.json, which tests/data/presets.test.ts re-derives from the engine).
  *
  * The bounds below are where the model honestly stands after the October 2026 calibration — not the observations'
  * own tolerance. They exist to catch a regression (a re-bake or an engine change that moves the answers), and the
- * diagnostics print model against observation for every station. Residuals, Oct 2026:
- *   Nepal 2026       Betrawati front 75 min (ensemble 63–90) vs 43 min (NDRRMA) / 23 min (OPRI): the model is LATE,
- *                    +75 %. Rasuwagadhi 18 vs 3–7, Syafrubesi 34 vs ≤ 13. Before the calibration: 884 min (transient
+ * diagnostics print model against observation for every station. Residuals, Oct 2026 (research spec §G.9):
+ *   Nepal 2026       Betrawati front 70 min (ensemble 58–83) vs 43 min (NDRRMA) / 23 min (OPRI): the model is LATE,
+ *                    +62 %. Rasuwagadhi 17 vs 3–7, Syafrubesi 32 vs ≤ 13. With Manning n 0.05 instead of Ferguson's
+ *                    variable-power law (D84 0.5 m): 75 min (+76 %). Before the first calibration: 884 min (transient
  *                    dam on a profile with no valley to pond), 104 min (direct flow on the staircase profile).
- *   South Lhonak     Chungthang front 109 min (ensemble 99–156) vs ~137 min observed: −20 %, and the observation is
- *                    inside the ensemble band. Peak 9,800 m³/s, inside the published 7,355–14,673.
+ *   South Lhonak     Chungthang front 109 min (ensemble 99–156) vs ~137 min observed: −21 %, and the observation is
+ *                    inside the ensemble band. Peak 9,800 m³/s, inside the published 7,355–14,673. Manning n 0.05:
+ *                    the variable-power law would make it earlier (103 min), so it is not used here.
+ *   Chamoli 2021     Tapovan barrage front 21 min (ensemble 18–25) vs ~15 min (seismic): +39 % (Manning: 22 min,
+ *                    +49 %). Raini peak 10,900 m³/s inside the reconstructed 8,200–14,200; below Tapovan 5,900 against
+ *                    2,900–4,900 (21 % above the band; Manning 5,400).
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -43,11 +48,12 @@ test('Nepal 2026: Betrawati front within the calibrated tolerance; Rasuwagadhi �
   assert.ok(ras < sya && sya < bet, 'fronts in downstream order');
   // The avalanche's own travel is in the clock: nothing arrives before the mass reaches the river (4.3 min).
   assert.ok(at('Lhende Khola at 2,900 m (avalanche runout)').tFront! >= 13000 / 50 - 1);
-  // Betrawati: observed 43 min (NDRRMA). Model 75 min. Bound: never worse than ×2.1 (the pre-calibration answer was
-  // 104 min on this trigger, 884 min on the old one), and not suddenly early either.
+  // Betrawati: observed 43 min (NDRRMA). Model 70 min (×1.62). Bound ×1.7 (73 min): tightened from ×2.1 when the
+  // variable-power resistance law came in — a fall back to Manning n 0.05 (75 min, ×1.76) fails it — and not
+  // suddenly early either.
   const ratio = bet / (43 * 60);
   t.diagnostic(`Betrawati: model ${min(bet)} vs observed 43 min (×${ratio.toFixed(2)}); ensemble ${at('Betrawati').band!.tFront.map(min).join(' / ')}`);
-  assert.ok(ratio > 0.75 && ratio < 2.1, `Betrawati front ×${ratio.toFixed(2)} of the observed 43 min`);
+  assert.ok(ratio > 0.75 && ratio < 1.7, `Betrawati front ×${ratio.toFixed(2)} of the observed 43 min`);
   // The melt water the chain releases is DHM's measured excess at Devghat, to 10 %.
   assert.ok(Math.abs(r.source.volume * (1 - r.source.cv) - 19.96e6) / 19.96e6 < 0.1, `water ${(r.source.volume * (1 - r.source.cv) / 1e6).toFixed(1)} Mm³`);
 });
@@ -73,10 +79,34 @@ test('Nepal: the trigger as baked (direct flow) — the engine reproduces the ca
   const spec = meta.scenario.hazardChain;
   const r = runChain(spec, file, { routing: { stopFraction: 0.5 } });
   const bet = r.stations.find((s) => s.name === 'Betrawati')!;
-  assert.ok(bet.tFront < 2.1 * 43 * 60, `deterministic Betrawati ${(bet.tFront / 60).toFixed(0)} min`);
+  // Default member (source Cv 0.4): 73.5 min with the variable-power law.
+  assert.ok(bet.tFront < 1.8 * 43 * 60, `deterministic Betrawati ${(bet.tFront / 60).toFixed(1)} min`);
   // The old trigger on the same valley: no valley above s = 0 to pond, so the "dam" takes hours to fill.
   if (spec.trigger.kind !== 'massIntoRiver') return;
   const dam = runChain({ ...spec, trigger: { ...spec.trigger, mode: 'transientDam' } }, file, { routing: { stopFraction: 0.5 } });
   assert.ok(dam.sourceInfo.notes.some((n) => /no valley upstream of the impact/.test(n)), 'the engine says why a dam there is wrong');
   assert.ok(dam.stations.find((s) => s.name === 'Betrawati')!.tFront > 5 * 3600);
+});
+
+test('Chamoli 2021: Tapovan barrage front within the calibrated tolerance of ~15 min; Raini peak inside the reconstruction', { skip: !have('chamoli') }, (t) => {
+  const r = read<BakedChainResult>('chamoli', 'chain-result.json');
+  t.diagnostic(table(r));
+  const at = (name: string) => r.stations.find((s) => s.name === name)!;
+  const tap = at('Tapovan-Vishnugad HEP barrage (under construction)');
+  const raini = at('Rishiganga HEP, Raini (position approximate)');
+  const below = at('Tapovan');
+  const ratio = tap.tFront! / (15 * 60);
+  t.diagnostic(`Tapovan barrage: model ${min(tap.tFront)} vs ~15 min (×${ratio.toFixed(2)}); band ${tap.band!.tFront.map(min).join(' / ')}; Raini peak ${raini.qPeak}, below Tapovan ${below.qPeak} m³/s`);
+  // Model 21 min (×1.39). Bound ×1.45 (21.75 min): a fall back to Manning n 0.05 (22.3 min, ×1.49) fails it.
+  assert.ok(ratio > 0.75 && ratio < 1.45, `Tapovan barrage front ×${ratio.toFixed(2)} of ~15 min`);
+  assert.ok(raini.tFront! < tap.tFront! && tap.tFront! <= below.tFront!, 'fronts in downstream order');
+  assert.ok(raini.qPeak >= 8200 && raini.qPeak <= 14200, `Raini peak ${raini.qPeak} m³/s inside 8,200–14,200`);
+  // Below Tapovan the model is HIGH (no barrage or deposition in the profile): bounded here, not hidden.
+  assert.ok(below.qPeak < 1.3 * 4900, `below-Tapovan peak ${below.qPeak} m³/s within 30 % of the reconstruction's top`);
+});
+
+test('bed resistance as decided in research spec §G.9: Ferguson (2007) VPE on D84 0.5 m for Nepal and Chamoli, Manning for Chungthang', () => {
+  const law = (id: string) => read<{ scenario: { hazardChain: HazardChainSpec } }>(id, 'meta.json').scenario.hazardChain.routing?.resistance;
+  for (const id of ['nepal', 'chamoli']) if (have(id)) assert.deepEqual(law(id), { law: 'ferguson2007', d84: 0.5 }, id);
+  if (have('chungthang')) assert.equal(law('chungthang'), undefined, 'chungthang routes with the profile’s Manning n');
 });

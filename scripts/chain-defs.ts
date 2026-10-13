@@ -7,7 +7,7 @@
  * published number (cited). Numbers that are this bake's ASSUMPTIONS rather than anyone's measurement say so, here
  * and in public/presets/SOURCES.txt.
  */
-import { MATERIAL_GLENWOOD_1 } from '../src/hazard/defaults';
+import { MATERIAL_GLENWOOD_1, VPE_D84_HIMALAYA } from '../src/hazard/defaults';
 import type { HazardChainSpec } from '../src/hazard/types';
 
 export type LonLat = [number, number];
@@ -167,6 +167,14 @@ export const CHAIN_DEFS: ChainDef[] = [
        */
       rheology: { kind: 'quadratic', cv: 0.3, material: { ...MATERIAL_GLENWOOD_1 } },
       solver: { uMax: 25 },
+      /*
+       * 1-D bed resistance: Ferguson's (2007) variable-power equation on D84 = 0.5 m (src/hazard/defaults.ts
+       * VPE_D84_HIMALAYA — a literature-range assumption, not fitted to the arrival times), instead of a constant
+       * n = 0.05. At this flood's depths it is equivalent to n ≈ 0.044–0.047 (Manning–Strickler over a boulder bed), so
+       * it speeds the front only modestly: the median member's Betrawati front 75 → 70 min against 43 min reported.
+       * Adopted because it moves every Nepal station toward its observation (research spec §G.9).
+       */
+      routing: { resistance: { law: 'ferguson2007', d84: VPE_D84_HIMALAYA } },
       // The first DHM SMS alerts went out at about 09:15 NPT (DHM issued warnings 09:00–09:16; 632,295–679,295 SMS).
       alertTime: 38 * 60,
       observations: [
@@ -323,6 +331,13 @@ export const CHAIN_DEFS: ChainDef[] = [
        */
       rheology: { kind: 'quadratic', cv: 0.3, material: { ...MATERIAL_GLENWOOD_1 } },
       solver: { uMax: 25 },
+      /*
+       * 1-D bed resistance stays Manning n = 0.05 here (no `routing`), deliberately. Ferguson's VPE on the same
+       * D84 = 0.5 m as Nepal and Chamoli moves the median member's Chungthang front 109 → 103 min, further EARLY of the
+       * ~137 min observed (−24 % against −21 %); D84 = 1 m would give 120 min, but picking the bed size that fits the
+       * clock is the tuning this calibration refuses. The early bias here has other suspects (the breach hydrograph,
+       * the 30 m DEM's sections, how much of the ~270 Mm³ of mobilised sediment loaded the front) — research spec §G.9.
+       */
       observations: [
         {
           station: 'South Lhonak Lake',
@@ -442,6 +457,15 @@ export const CHAIN_DEFS: ChainDef[] = [
       rheology: { kind: 'quadratic', cv: 0.45, material: { ...MATERIAL_GLENWOOD_1 } },
       // Shugar et al.: the front ran ~25 m/s near the Rishiganga plant.
       solver: { uMax: 25 },
+      /*
+       * 1-D bed resistance: Ferguson's (2007) VPE on D84 = 0.5 m, as for Nepal (research spec §G.9). Median member:
+       * Tapovan barrage front 22.3 → 20.9 min against ~15 min (seismic), Raini peak 10,435 → 10,882 m³/s (inside the
+       * reconstructed 8,200–14,200) — but the peak below Tapovan rises 5,365 → 5,917 m³/s, further above the
+       * reconstructed 2,900–4,900. Adopted on the timing (the one timed observation) with that cost stated: the
+       * attenuation miss below Tapovan is the barrage and the debris the real flow dropped there, neither of which the
+       * profile carries (structures: []), not the bed law.
+       */
+      routing: { resistance: { law: 'ferguson2007', d84: VPE_D84_HIMALAYA } },
       observations: [
         {
           station: 'Ronti Gad (avalanche runout, head of the mapped stream)',
