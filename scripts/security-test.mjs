@@ -14,7 +14,7 @@
  * "venue wifi is down" case the lead re-confirmed SEC-01 under) or answered with a hostile payload of our choosing.
  *
  * CASES (each maps to a finding in artifacts/security-report/FINDINGS.json)
- *   SPOOF-*    SEC-01  ?name= / ?preset= / invalid ?live= must never put attacker prose in the app's own chrome
+ *   SPOOF-*    SEC-01  ?name= / ?preset= / invalid ?live= / ?story= must never put attacker prose in the app's own chrome
  *   XSS-*      SEC-01/08/09/10  hostile Nominatim, preset meta and road data must not execute (window.__pwned unset)
  *   CSP-*      SEC-02  the policy ships in the built index.html, and the main flows raise zero violations
  *   CAP-*      SEC-03  oversized and gzip-bomb responses are refused without exhausting memory
@@ -410,6 +410,7 @@ try {
     { id: 'SPOOF-BIDI', query: `?live=40.4406,-79.9959,2&res=512&name=${encodeURIComponent(SPOOF_BIDI)}`, what: '?name= bidi override is stripped' },
     { id: 'SPOOF-PRESET', query: `?preset=${encodeURIComponent(SPOOF_PRESET)}`, what: 'unknown ?preset= is rejected and never echoed' },
     { id: 'SPOOF-LIVE', query: `?live=${encodeURIComponent(SPOOF_LIVE)}`, what: 'invalid ?live= value is not echoed in a notice' },
+    { id: 'SPOOF-STORY', query: `?story=${encodeURIComponent(SPOOF_PRESET)}`, what: 'unknown ?story= is rejected and never echoed (no story plays)' },
   ];
   for (const c of spoofCases.filter((c) => shouldRun(c.id))) {
     const page = await newPage(browser); // every external host aborted: the lead's re-confirmation scenario

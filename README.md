@@ -78,6 +78,11 @@ under *Scenario → Change*, and in [Ten scenarios, offline](#ten-scenarios-offl
 `?live=<lat>,<lon>,<km>`
 (e.g. `?live=29.95,-90.07,6` for New Orleans; this needs the internet for USGS, Esri and Census TIGERweb).
 `?usecase=site|glacier|portfolio` opens one of the business use cases below, set up with its demo data.
+`?story=nepal-2026|pittsburgh-1936|houston-harvey|sikkim-2023|chamoli-2021` plays a narrated story (also *Watch the
+story* in the Scenario section, and the stories row under Use cases): the camera, the simulation and a caption card
+with sourced facts move together beat by beat (`Space` pause, `←`/`→` previous/next, `Esc` exit). The stories are data
+in [src/story/stories](src/story/stories); model times in captions are read live from the app, never typed in.
+`node scripts/record-story.mjs [--story=<id>|--all]` records one as a 1080p MP4 into `artifacts/stories/`.
 
 ## Try this (30 seconds)
 

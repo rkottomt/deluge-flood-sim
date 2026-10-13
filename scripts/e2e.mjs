@@ -2066,6 +2066,112 @@ const FLOWS = [
       await waitReady(120_000);
     },
   },
+  {
+    id: 20,
+    name: 'Narrated story: ?story= link, keys, and the Pittsburgh story played end to end',
+    timeoutMs: 420_000,
+    resetsPage: true,
+    async run(r, ctx) {
+      // src/ui/storyPlayer.ts + src/story: a ?story= link loads the story's preset and starts the caption card; Space,
+      // → and Esc drive it; then the whole Pittsburgh story is played at 1/20 of its reading time, sampling the card,
+      // the camera and the simulation on every beat.
+      const open = (qs) => page.goto(new URL(qs, ctx.baseUrl).href, { waitUntil: 'domcontentloaded' }).then(() => waitReady(120_000));
+      const card = () =>
+        D(() => {
+          const ui = document.getElementById('ui-root')?.__delugeUI;
+          const d = window.__deluge;
+          const s = d.getState();
+          const pose = d.getRenderer()?.camera?.pose;
+          return {
+            ...(ui?.story?.debugState() ?? {}),
+            dataState: document.querySelector('.dl-nar')?.getAttribute('data-state') ?? null,
+            visible: !!document.querySelector('.dl-nar:not([hidden])'),
+            mode: !!document.querySelector('.dl-nar-mode'),
+            simPaused: s.paused,
+            stageOffset: s.stageOffset,
+            stageApplied: s.stageOffsetApplied,
+            evac: !!s.evacStart,
+            route: s.route?.state ?? null,
+            walls: d.getProtection()?.wallCells ?? 0,
+            camera: pose ? { gx: pose.target.gx, gy: pose.target.gy, distance: pose.distance, yaw: pose.yaw } : null,
+            url: location.search,
+          };
+        });
+
+      // 1. The link.
+      await open('?story=pittsburgh-1936');
+      const started = await page
+        .waitForFunction(() => document.querySelector('.dl-nar[data-story="pittsburgh-1936"]:not([hidden])'), null, { timeout: 60_000 })
+        .then(() => true, () => false);
+      await sleep(800);
+      let c = await card();
+      const preset = await D(() => window.__deluge.getState().presetId);
+      check(r, '?story=pittsburgh-1936 opens Pittsburgh and starts the story in story mode', started && preset === 'pittsburgh' && c.mode && c.storyId === 'pittsburgh-1936' && /story=pittsburgh-1936/.test(c.url), `${preset}, beat ${c.beatId}, “${(c.caption ?? '').slice(0, 60)}…”`);
+      check(r, 'the first caption cites its source', /Allegheny/.test(c.caption) && /^Source: .+/.test(c.source), c.source);
+      await shot('20-story-first-beat');
+
+      // 2. Keys: Space pauses the story and the simulation, → moves on, Esc leaves story mode.
+      await page.keyboard.press('Space');
+      await sleep(300);
+      const paused = await card();
+      await page.keyboard.press('Space');
+      await sleep(300);
+      const resumed = await card();
+      check(r, 'Space pauses the story and the simulation, and resumes both', paused.paused && paused.simPaused && paused.dataState === 'paused' && !resumed.paused && !resumed.simPaused, `paused ${paused.paused}/${paused.simPaused}, resumed ${resumed.paused}/${resumed.simPaused}`);
+      const before = (await card()).index;
+      await page.keyboard.press('ArrowRight');
+      await sleep(300);
+      const after = (await card()).index;
+      check(r, '→ goes to the next beat', after === before + 1, `${before} → ${after}`);
+      await page.keyboard.press('Escape');
+      await sleep(300);
+      c = await card();
+      check(r, 'Esc exits: card hidden, story mode off, ?story= dropped from the address bar', !c.visible && !c.mode && !/story=/.test(c.url), c.url || '(no query)');
+
+      // 3. The entry points: "Watch the story" in the Scenario section, and the stories row in Use cases.
+      const entry = await D(() => ({
+        watch: !!document.querySelector('.dl-nar-watch:not([hidden])'),
+        chips: [...document.querySelectorAll('.dl-uc .dl-nar-chip')].map((b) => b.getAttribute('data-story')),
+      }));
+      check(r, 'entry points: Watch the story (Scenario) and five stories under Use cases', entry.watch && entry.chips.length === 5 && entry.chips.includes('nepal-2026'), entry.chips.join(', '));
+
+      // 4. The whole story at 1/20 pace (waits capped at 30 s so a slow GPU cannot stall the flow).
+      await D(() => window.__deluge.setPaused(false));
+      const ok = await D(() => document.getElementById('ui-root').__delugeUI.story.play('pittsburgh-1936', { pace: 0.05, maxWaitCapMs: 30_000 }));
+      check(r, 'the story plays from the debug handle', ok === true, String(ok));
+      const seen = new Map();
+      const t0 = Date.now();
+      let last = null;
+      while (Date.now() - t0 < 300_000) {
+        last = await card();
+        if (last.beatId && !seen.has(last.beatId) && !last.finished) {
+          seen.set(last.beatId, { ...last, at: (Date.now() - t0) / 1000 });
+          console.log(`  · ${((Date.now() - t0) / 1000).toFixed(1)} s beat ${last.beatId}: ${last.caption.slice(0, 90)}`);
+          if (last.beatId === 'kept' || last.beatId === 'under') await shot(`20-story-${last.beatId}`);
+        }
+        if (last.finished) break;
+        await sleep(150);
+      }
+      const order = [...seen.keys()];
+      r.metrics.storyBeats = [...seen.values()].map((b) => ({ beat: b.beatId, at: b.at, timedOut: b.timedOut, caption: b.caption }));
+      check(r, 'every beat played, in order, and the story finished', last?.finished && order.join() === 'point,record,under,evacuate,levee,kept,limits' && last.dataState === 'finished', `${order.join(' → ')} in ${((Date.now() - t0) / 1000).toFixed(0)} s`);
+      const captions = [...seen.values()].map((b) => b.caption);
+      check(r, 'captions carry their facts, live tokens resolved (no raw {token})', /46 ft/.test(seen.get('record')?.caption ?? '') && captions.every((t) => t && !/\{[a-z]+(:[^}]*)?\}/.test(t)), captions.map((t) => t.slice(0, 40)).join(' | '));
+      const pCam = seen.get('point')?.camera;
+      const lCam = seen.get('levee')?.camera;
+      await sleep(300);
+      const end = await card();
+      const camMoved = !!pCam && !!end.camera && (Math.hypot(pCam.gx - end.camera.gx, pCam.gy - end.camera.gy) > 20 || Math.abs(pCam.distance - end.camera.distance) > 100);
+      check(r, 'the camera moves with the story (scenario → North Shore levee → wide)', camMoved && !!lCam, `point (${num(pCam?.gx, 0)}, ${num(pCam?.gy, 0)}) ${num(pCam?.distance, 0)} m · end (${num(end.camera?.gx, 0)}, ${num(end.camera?.gy, 0)}) ${num(end.camera?.distance, 0)} m`);
+      const kept = seen.get('kept');
+      check(r, 'the simulation changes with it: river raised, route planned, levee standing', end.stageOffset > 5 && end.stageApplied > 1 && end.evac && end.walls > 0, `stage offset ${num(end.stageOffset)} m (applied ${num(end.stageApplied)}), route ${end.route}, ${end.walls} wall cells`);
+      check(r, 'kept-dry figure is read live from the protection estimate', !!kept && /acres|nothing yet/.test(kept.caption), kept?.caption.slice(0, 120));
+      await shot('20-story-end');
+      await D(() => document.getElementById('ui-root').__delugeUI.story.stop());
+      await page.goto(ctx.appUrl, { waitUntil: 'domcontentloaded' });
+      await waitReady(120_000);
+    },
+  },
 ];
 
 // ─── report ────────────────────────────────────────────────────────────────────────────────────
