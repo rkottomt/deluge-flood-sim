@@ -112,7 +112,26 @@ export interface ImpulseGeometry {
 export type HazardTrigger =
   | { kind: 'breach'; lake: GlacialLake; breach: BreachParams }
   | { kind: 'massIntoLake'; lake: GlacialLake; mass: MassMovement; breach: BreachParams; wave?: ImpulseGeometry }
-  | { kind: 'massIntoRiver'; mass: MassMovement; mode: 'transientDam' | 'directFlow'; damLength?: number; baseflow: number }
+  | {
+      kind: 'massIntoRiver';
+      mass: MassMovement;
+      mode: 'transientDam' | 'directFlow';
+      damLength?: number;
+      baseflow: number;
+      /**
+       * directFlow only: shape of the hydrograph where the mass enters the river (src/hazard/mass.ts DirectFlowShape) —
+       * 'gamma' (default; a breach-like rise to the peak) or 'surge' (a debris-flow surge whose peak arrives with the
+       * mass). Same peak and volume either way.
+       */
+      shape?: 'gamma' | 'surge';
+      /**
+       * directFlow only: run the avalanche as a Voellmy–Salm sliding block (src/hazard/runout.ts) from the detachment
+       * down its path and along the profile until the routed flood would be the faster, and start the flood there —
+       * instead of a fixed travel speed to the profile's head. μ (–) and ξ (m/s²) from a published back-analysis
+       * (`source` says which). Absent: the first calibration's behaviour.
+       */
+      slide?: { mu: number; xi: number; source?: string };
+    }
   | { kind: 'meltAnomaly'; glacierArea: number; meanElevation: number; debrisFraction: number; deltaT: number; days: number }
   | { kind: 'given'; hydrograph: Array<[number, number]>; provenance: Provenance };
 
@@ -212,6 +231,16 @@ export type ResistanceLaw =
       a2?: number;
     };
 
+/** A tributary (or a reach's lumped lateral inflow) joining the routed river: constant clear water at chainage s. */
+export interface ChainTributary {
+  /** Chainage of the confluence, m. */
+  s: number;
+  /** Discharge it adds, m³/s. */
+  q: number;
+  /** What joins there, and where the number comes from (shown in notes; not read by the engine). */
+  name?: string;
+}
+
 /** `ScenarioPreset.hazardChain` (in meta.json): how a preset's flood is produced upstream. */
 export interface HazardChainSpec {
   trigger: HazardTrigger;
@@ -222,9 +251,12 @@ export interface HazardChainSpec {
   solver?: { uMax?: number };
   /**
    * 1-D routing options of this preset (additive; absent = Manning with the ChainFile's n). `resistance`: the bed
-   * resistance law (ResistanceLaw); a ChainOverrides.routing.resistance replaces it for one run.
+   * resistance law (ResistanceLaw); a ChainOverrides.routing.resistance replaces it for one run. `tributaries`: the
+   * river's own flow joining below the source — constant clear-water inflows at chainages (m, m³/s), on top of the
+   * baseflow at the profile's upstream end, so the flood runs on the river as it was that day rather than on the
+   * source stream's baseflow alone; a ChainOverrides.tributaries replaces the list for one run.
    */
-  routing?: { resistance?: ResistanceLaw };
+  routing?: { resistance?: ResistanceLaw; tributaries?: ChainTributary[] };
   /** Time of the alert (s after clock zero), for warning lead time; e.g. Nepal 2026's SMS at 09:15 NPT. */
   alertTime?: number;
   observations?: ChainObservation[];
