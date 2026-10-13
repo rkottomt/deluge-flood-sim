@@ -4,7 +4,8 @@
  *
  *   loss per level, EAL (trapezoid over exceedance probability, src/loss/eal.ts; with and without the tail term),
  *   ΔEAL = EAL(baseline) − EAL(design), cost (unit costs × wall length × height^1.3 by type, or the user's figure),
- *   NPV and BCR over the wall's useful life at 7 % and 3.1 %, buildings protected (reached in the baseline, not with
+ *   NPV and BCR over the design's useful life at 7 % and 3.1 %, the benefit–cost analysis at the chosen discount rate
+ *   with its range (src/loss/bca.ts analyzeBca), buildings protected (reached in the baseline, not with
  *   the design), and "who gets wetter" — buildings newly reached or deeper, and land newly flooded or deeper than in the
  *   baseline at the same level: the risk a design TRANSFERS, booked on its own line rather than netted off.
  *
@@ -13,7 +14,8 @@
  * still shows that neighbour.
  */
 import { REACHED_DEPTH } from '../loss/impact';
-import { bcr, DISCOUNT_RATE_FEMA, DISCOUNT_RATE_LOW, eal, mitigationCost, USEFUL_LIFE_WALL_YEARS, type MitigationType } from '../loss/eal';
+import { bcr, DISCOUNT_RATE_FEMA, DISCOUNT_RATE_LOW, eal, mitigationCost, type MitigationType } from '../loss/eal';
+import { analyzeBca, BCA_DEFAULT_RATE, BCA_LIMITS, defaultUsefulLife, type BcaAnalysis, type EnsembleSpread } from '../loss/bca';
 import type { ComparisonSummary, DesignCost, LadderKind, ProjectEdit } from './format';
 import { wallSegments } from './edits';
 
@@ -154,9 +156,23 @@ export interface ResolvedCost {
   basis: 'override' | 'dims' | 'segments' | 'raster' | 'none';
   /** The design also digs or raises ground, which is not costed. */
   terrainNotCosted: boolean;
+  /** Project useful life, years (absent: FEMA's standard value for the type) and where it came from. */
+  years?: number;
+  yearsFrom?: 'user' | 'fema';
+}
+
+/** A design's useful life: the user's, else FEMA's standard value for its type (src/loss/bca.ts USEFUL_LIFE). */
+export function usefulLifeOf(cost: Pick<ResolvedCost, 'type' | 'years'>): number {
+  const y = cost.years;
+  return y != null && Number.isFinite(y) && y >= BCA_LIMITS.years[0] ? Math.min(BCA_LIMITS.years[1], Math.round(y)) : defaultUsefulLife(cost.type);
 }
 
 export function resolveCost(cost: DesignCost, edits: readonly ProjectEdit[], cellSize: number, country: 'US' | 'IN' | 'NP' | null, raster?: { lengthM: number; meanHeightM: number } | null): ResolvedCost {
+  const life = cost.usefulLifeYears != null ? { years: cost.usefulLifeYears, yearsFrom: 'user' as const } : { years: defaultUsefulLife(cost.type), yearsFrom: 'fema' as const };
+  return { ...resolveCapex(cost, edits, cellSize, country, raster), ...life };
+}
+
+function resolveCapex(cost: DesignCost, edits: readonly ProjectEdit[], cellSize: number, country: 'US' | 'IN' | 'NP' | null, raster?: { lengthM: number; meanHeightM: number } | null): ResolvedCost {
   const om = cost.omUsdPerYear ?? 0;
   const seg = wallSegments(edits);
   const terrainNotCosted = seg.terrain;
@@ -208,16 +224,22 @@ export interface DesignResult {
   id: string;
   name: string;
   loss: number[];
+  /** The damage-curve ±1σ losses per level (the Impact model's range). */
+  lossLo: number[];
+  lossHi: number[];
   /** EAL with the tail term (the headline) and without it. */
   eal: number | null;
   ealNoTail: number | null;
   deltaEal: number | null;
   cost: ResolvedCost;
+  /** Useful life the NPVs and the benefit–cost analysis use, years. */
   years: number;
   npv7: number | null;
   npv3: number | null;
   bcr7: number | null;
   bcr3: number | null;
+  /** The benefit–cost analysis at the comparison's discount rate, with its range (null without a return period). */
+  bca: BcaAnalysis | null;
   perLevel: Array<BuildingDelta & AreaDelta & { avoided: number }>;
   /** Most over the levels. */
   protectedBuildings: number;
@@ -230,10 +252,20 @@ export interface DesignResult {
 
 export interface ComparisonResult {
   levels: CompareLevel[];
-  baseline: { loss: number[]; eal: number | null; ealNoTail: number | null };
+  baseline: { loss: number[]; lossLo: number[]; lossHi: number[]; eal: number | null; ealNoTail: number | null };
   designs: DesignResult[];
   /** Levels that carry a return period (EAL needs at least one). */
   withRp: number;
+  /** The discount rate of the benefit–cost analysis. */
+  rate: number;
+  /** The hazard-input ensemble's loss spread folded into the BCA range (null: it has not run on this scene). */
+  ensemble: EnsembleSpread | null;
+}
+
+export interface CompareOptions {
+  /** Discount rate of the benefit–cost analysis (default: the FEMA BCA Toolkit's 7 %). */
+  rate?: number;
+  ensemble?: EnsembleSpread | null;
 }
 
 function ealOf(levels: readonly CompareLevel[], losses: readonly number[], tail: boolean): number | null {
@@ -241,16 +273,22 @@ function ealOf(levels: readonly CompareLevel[], losses: readonly number[], tail:
   return pts.length ? eal(pts, tail) : null;
 }
 
-export function compareDesigns(levels: readonly CompareLevel[], baseline: readonly LevelRun[], designs: readonly DesignInput[]): ComparisonResult {
+/** A level's curve range, falling back to its central loss when the range is not a number. */
+const lo = (r: LevelRun | undefined) => (r && Number.isFinite(r.lossLo) ? r.lossLo : (r?.loss ?? NaN));
+const hi = (r: LevelRun | undefined) => (r && Number.isFinite(r.lossHi) ? r.lossHi : (r?.loss ?? NaN));
+
+export function compareDesigns(levels: readonly CompareLevel[], baseline: readonly LevelRun[], designs: readonly DesignInput[], opts: CompareOptions = {}): ComparisonResult {
+  const rate = opts.rate != null && Number.isFinite(opts.rate) ? Math.min(BCA_LIMITS.rate[1], Math.max(BCA_LIMITS.rate[0], opts.rate)) : BCA_DEFAULT_RATE;
+  const ensemble = opts.ensemble ?? null;
   const bLoss = baseline.map((r) => r.loss);
   const bEal = ealOf(levels, bLoss, true);
   const withRp = levels.filter((l) => l.returnPeriod != null && l.returnPeriod > 0).length;
-  const years = USEFUL_LIFE_WALL_YEARS;
   const out: DesignResult[] = designs.map((d) => {
+    const years = usefulLifeOf(d.cost);
     const loss = d.levels.map((r) => r.loss);
     const e = ealOf(levels, loss, true);
     const delta = bEal != null && e != null ? bEal - e : null;
-    const money = (rate: number) => (delta != null && d.cost.capex + d.cost.om > 0 ? bcr({ deltaEal: delta, capex: d.cost.capex, om: d.cost.om, rate, years }) : null);
+    const money = (r: number) => (delta != null && d.cost.capex + d.cost.om > 0 ? bcr({ deltaEal: delta, capex: d.cost.capex, om: d.cost.om, rate: r, years }) : null);
     const r7 = money(DISCOUNT_RATE_FEMA);
     const r3 = money(DISCOUNT_RATE_LOW);
     const perLevel = d.levels.map((r, i) => ({
@@ -259,10 +297,30 @@ export function compareDesigns(levels: readonly CompareLevel[], baseline: readon
       avoided: (baseline[i]?.loss ?? 0) - r.loss,
     }));
     const most = (f: (x: (typeof perLevel)[number]) => number) => perLevel.reduce((m, x) => Math.max(m, f(x)), 0);
+    const analysis = analyzeBca({
+      levels: levels.map((l, i) => ({
+        T: l.returnPeriod,
+        before: baseline[i]?.loss ?? NaN,
+        beforeLo: lo(baseline[i]),
+        beforeHi: hi(baseline[i]),
+        after: d.levels[i]?.loss ?? NaN,
+        afterLo: lo(d.levels[i]),
+        afterHi: hi(d.levels[i]),
+      })),
+      capex: d.cost.capex,
+      capexLo: d.cost.low,
+      capexHi: d.cost.high,
+      omPerYear: d.cost.om,
+      years,
+      rate,
+      ensemble,
+    });
     return {
       id: d.id,
       name: d.name,
       loss,
+      lossLo: d.levels.map(lo),
+      lossHi: d.levels.map(hi),
       eal: e,
       ealNoTail: ealOf(levels, loss, false),
       deltaEal: delta,
@@ -272,6 +330,7 @@ export function compareDesigns(levels: readonly CompareLevel[], baseline: readon
       npv3: r3 ? r3.npv : null,
       bcr7: r7 && Number.isFinite(r7.bcr) ? r7.bcr : null,
       bcr3: r3 && Number.isFinite(r3.bcr) ? r3.bcr : null,
+      bca: analysis,
       perLevel,
       protectedBuildings: most((x) => x.protectedCount),
       newlyReached: most((x) => x.newlyReached),
@@ -281,14 +340,28 @@ export function compareDesigns(levels: readonly CompareLevel[], baseline: readon
       protectedAreaM2: most((x) => x.protectedM2),
     };
   });
-  return { levels: levels.slice(), baseline: { loss: bLoss, eal: bEal, ealNoTail: ealOf(levels, bLoss, false) }, designs: out, withRp };
+  return {
+    levels: levels.slice(),
+    baseline: { loss: bLoss, lossLo: baseline.map(lo), lossHi: baseline.map(hi), eal: bEal, ealNoTail: ealOf(levels, bLoss, false) },
+    designs: out,
+    withRp,
+    rate,
+    ensemble,
+  };
 }
 
 /** The numbers a project keeps (format.ts ComparisonSummary). */
 export function comparisonSummary(c: ComparisonResult, ladder: LadderKind | 'current', durationS: number, at = new Date()): ComparisonSummary {
-  const fin = (v: number | null) => (v != null && Number.isFinite(v) ? v : null);
+  const fin = (v: number | null | undefined) => (v != null && Number.isFinite(v) ? v : null);
   // A loss that is not a number (no buildings in the scene: NaN) is kept as an explicit null, not JSON's silent one.
   const lossOf = (v: number) => (Number.isFinite(v) ? Math.max(0, v) : null);
+  // Inside the reader's ranges (validate.ts), so a saved comparison always opens: beyond them, "no value".
+  const within = (v: number | null | undefined, lim: number) => {
+    const x = fin(v);
+    return x != null && Math.abs(x) <= lim ? x : null;
+  };
+  const ratioOf = (v: number | null | undefined) => within(v, 1e6);
+  const moneyOf = (v: number | null | undefined) => within(v, 1e13);
   return {
     generatedAt: at.toISOString(),
     ladder,
@@ -310,6 +383,14 @@ export function comparisonSummary(c: ComparisonResult, ladder: LadderKind | 'cur
       newlyReached: d.newlyReached,
       deeperBuildings: d.deeperBuildings,
       wetterAreaM2: d.wetterAreaM2,
+      // An infinite BCR (a benefit at no cost) is kept as null, like every other non-number.
+      years: d.years,
+      bcr: ratioOf(d.bca?.central.bcr),
+      bcrLow: ratioOf(d.bca?.range.bcr[0]),
+      bcrHigh: ratioOf(d.bca?.range.bcr[1]),
+      netBenefit: moneyOf(d.bca?.central.netBenefit),
+      breakEvenCost: moneyOf(d.bca?.central.breakEvenCapex),
     })),
+    discountRate: c.rate,
   };
 }

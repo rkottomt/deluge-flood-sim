@@ -17,6 +17,7 @@ import type { CameraPose, HydrographPoint, Shelter, StormCell, WaterSource, Wate
 import { cleanPlaceLabel, linkPlaceLabel } from '../data/placeName';
 import { isPresetId } from '../data/presets';
 import type { MitigationType } from '../loss/eal';
+import { BCA_LIMITS } from '../loss/bca';
 import { ENSEMBLE_LIMITS, RANGE_LIMITS } from '../loss/ensemble';
 import { SITE_LIMITS, SITE_OCCUPANCIES, type SiteOccupancy } from '../loss/site';
 import {
@@ -24,6 +25,7 @@ import {
   PROJECT_LIMITS,
   PROJECT_VERSION,
   RANGES,
+  type BcaSettings,
   type ComparisonSummary,
   type DesignCost,
   type DesignSpec,
@@ -101,6 +103,9 @@ function int(v: unknown, range: readonly [number, number]): number {
 }
 function optNum(v: unknown, range: readonly [number, number]): number | null {
   return v === undefined || v === null ? null : num(v, range);
+}
+function optInt(v: unknown, range: readonly [number, number]): number | null {
+  return v === undefined || v === null ? null : int(v, range);
 }
 function bool(v: unknown): boolean {
   return typeof v === 'boolean' ? v : fail();
@@ -468,13 +473,21 @@ function readView(v: unknown): ProjectView {
 function readCost(v: unknown): DesignCost {
   const o = obj(v ?? {});
   const type = own(o, 'type');
+  // Useful life: whole years inside FEMA-plausible bounds; absent / null = FEMA's standard value for the type.
+  const years = optInt(own(o, 'usefulLifeYears'), BCA_LIMITS.years);
   return {
     type: type === undefined ? 'floodwall' : oneOf(type, MITIGATION_TYPES),
     capexUsd: optNum(own(o, 'capexUsd'), RANGES.money),
     omUsdPerYear: optNum(own(o, 'omUsdPerYear'), RANGES.money),
     lengthM: optNum(own(o, 'lengthM'), [0, 1e6]),
     heightM: optNum(own(o, 'heightM'), RANGES.wallHeight),
+    ...(years !== null ? { usefulLifeYears: years } : {}),
   };
+}
+
+function readBca(v: unknown): BcaSettings {
+  const o = obj(v);
+  return { discountRate: num(own(o, 'discountRate'), BCA_LIMITS.rate), analysisYear: int(own(o, 'analysisYear'), BCA_LIMITS.analysisYear) };
 }
 
 const DESIGN_IDS = ['A', 'B', 'C'] as const;
@@ -541,8 +554,15 @@ function readComparison(v: unknown): ComparisonSummary {
         newlyReached: int(own(x, 'newlyReached'), [0, 1e7]),
         deeperBuildings: int(own(x, 'deeperBuildings'), [0, 1e7]),
         wetterAreaM2: num(own(x, 'wetterAreaM2'), [0, 1e12]),
+        years: optInt(own(x, 'years'), BCA_LIMITS.years),
+        bcr: optRatio(own(x, 'bcr')),
+        bcrLow: optRatio(own(x, 'bcrLow')),
+        bcrHigh: optRatio(own(x, 'bcrHigh')),
+        netBenefit: optMoney(own(x, 'netBenefit')),
+        breakEvenCost: optMoney(own(x, 'breakEvenCost')),
       };
     }),
+    discountRate: optNum(own(o, 'discountRate'), BCA_LIMITS.rate),
   };
 }
 
@@ -610,6 +630,9 @@ function build(value: unknown, opts: ReadOptions): ReadResult {
       designs: own(o, 'designs') == null ? [] : readDesigns(own(o, 'designs'), opts, bounds, warnings),
       comparison: opts.fromLink ? null : optional(own(o, 'comparison'), readComparison, warnings, 'cached comparison results'),
     };
+    // Benefit–cost inputs: absent in files from before they existed (the panel's defaults then apply).
+    const bca = optional(own(o, 'bca'), readBca, warnings, 'benefit–cost settings');
+    if (bca) project.bca = bca;
     if (opts.fromLink && (own(o, 'portfolio') != null || own(o, 'comparison') != null)) warnings.push('A shared link never carries a portfolio or cached results; those parts were ignored.');
     return { ok: true, project, warnings };
   } catch (err) {

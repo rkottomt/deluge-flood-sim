@@ -10,6 +10,7 @@
  *   impact.ts     per-building metrics and the scenario summary from HazardFields
  *   portfolio.ts  the user's CSV of assets: parse, match to footprints, assess, export
  *   eal.ts        expected annual loss, benefit–cost ratio, mitigation unit costs
+ *   bca.ts        a design's benefit–cost analysis: avoided EAL, PV, BCR with its range, FEMA BCA Toolkit rows
  *   fallback.ts   depth-only HazardFields from snapshots, for a solver without readHazardFields
  *   egress.ts     when every road route from a site to a shelter closes (router over the arrival-ordered flood)
  *   site.ts       site check: one planned building across a ladder of events, FFE, mitigation options, verdict, link
@@ -37,6 +38,7 @@ export * from './impact';
 export * from './portfolio';
 export * from './csv';
 export * from './eal';
+export * from './bca';
 export * from './fallback';
 export * from './egress';
 export * from './site';

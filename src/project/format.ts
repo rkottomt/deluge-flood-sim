@@ -26,7 +26,10 @@
  *                                               values; off unless the user ticks it, never in a link)
  *   camera     CameraPose?                      orbit target (grid coords + elevation), distance, yaw, pitch
  *   view       ProjectView?                     water view, vertical exaggeration, layers, time of day, buildings
- *   designs    DesignSpec[] ≤ 3                 mitigation designs: named edit sets with optional cost overrides
+ *   designs    DesignSpec[] ≤ 3                 mitigation designs: named edit sets with optional cost overrides and a
+ *                                               useful life (null: FEMA's standard value for the type, src/loss/bca.ts)
+ *   bca        BcaSettings?                     the benefit–cost inputs every design shares: discount rate, analysis
+ *                                               year (absent in older files: the defaults)
  *   comparison ComparisonSummary | null          OPT-IN cached results: the last design comparison's numbers
  *
  * ─── Edits: why a log, and why polylines ───────────────────────────────────────────────────────────────────────────
@@ -202,6 +205,16 @@ export interface DesignCost {
   /** Override the measured wall length / mean height for the unit-cost estimate. */
   lengthM: number | null;
   heightM: number | null;
+  /** Project useful life, whole years (null: FEMA's standard value for the type, src/loss/bca.ts USEFUL_LIFE). */
+  usefulLifeYears?: number | null;
+}
+
+/** Benefit–cost inputs every design of a comparison shares (src/loss/bca.ts BCA_LIMITS bounds them). */
+export interface BcaSettings {
+  /** Real discount rate, fraction (0.07 = the FEMA BCA Toolkit default). */
+  discountRate: number;
+  /** The year the dollars are in (the FEMA BCA Toolkit's analysis year). */
+  analysisYear: number;
 }
 
 export interface DesignSpec {
@@ -234,7 +247,16 @@ export interface ComparisonSummary {
     newlyReached: number;
     deeperBuildings: number;
     wetterAreaM2: number;
+    /** Benefit–cost at the comparison's discount rate, with its range (absent in older files: null). */
+    years: number | null;
+    bcr: number | null;
+    bcrLow: number | null;
+    bcrHigh: number | null;
+    netBenefit: number | null;
+    breakEvenCost: number | null;
   }>;
+  /** The discount rate the bcr / netBenefit fields used (absent in older files: null). */
+  discountRate: number | null;
 }
 
 export interface ProjectFile {
@@ -253,6 +275,7 @@ export interface ProjectFile {
   camera: CameraPose | null;
   view: ProjectView | null;
   designs: DesignSpec[];
+  bca?: BcaSettings | null;
   comparison: ComparisonSummary | null;
 }
 

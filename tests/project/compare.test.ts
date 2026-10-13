@@ -128,5 +128,72 @@ test('no return period: no EAL, no BCR — and nothing invented', () => {
   assert.equal(c.baseline.eal, null);
   assert.equal(c.designs[0].deltaEal, null);
   assert.equal(c.designs[0].bcr7, null);
+  assert.equal(c.designs[0].bca, null);
   close(c.designs[0].perLevel[0].avoided, 4e6);
+});
+
+test('the benefit–cost analysis per design: the chosen rate, a user useful life, the curve and cost band, and what a project keeps', () => {
+  const levels: CompareLevel[] = [
+    { id: 'rp100', label: 'FEMA 1 %', returnPeriod: 100, rpFrom: 'source' },
+    { id: 'record1936', label: '1936 crest', returnPeriod: 500, rpFrom: 'user' },
+  ];
+  const baseline = [run(10e6), run(100e6)];
+  const cost = { type: 'floodwall' as const, capex: 20e6, low: 10e6, high: 30e6, om: 100_000, lengthM: 2000, meanHeightM: 3, basis: 'segments' as const, terrainNotCosted: false };
+  const designs = [
+    { id: 'A', name: 'Levee', cost, levels: [run(0), run(30e6)] },
+    { id: 'B', name: 'Levee, 30-yr life', cost: { ...cost, years: 30, yearsFrom: 'user' as const }, levels: [run(0), run(30e6)] },
+    { id: 'C', name: 'Makes it worse', cost, levels: [run(12e6), run(120e6)] },
+  ];
+  const c = compareDesigns(levels, baseline, designs, { rate: 0.031 });
+  assert.equal(c.rate, 0.031);
+  const [a, b, w] = c.designs;
+  assert.equal(a.years, 50, 'FEMA’s standard value for a flood wall');
+  assert.equal(b.years, 30);
+  const dE = a.deltaEal!;
+  close(a.bca!.eal.avoided, dE);
+  close(a.bca!.central.bcr, (dE * upv(0.031, 50)) / (20e6 + 100_000 * upv(0.031, 50)));
+  close(b.bca!.central.bcr, (dE * upv(0.031, 30)) / (20e6 + 100_000 * upv(0.031, 30)));
+  // The NPVs at 7 % / 3.1 % use the design's own useful life too.
+  close(b.npv7!, dE * upv(DISCOUNT_RATE_FEMA, 30) - 20e6 - 100_000 * upv(DISCOUNT_RATE_FEMA, 30));
+  // The run's loss range is ±30 %: the curve band scales the avoided EAL by 0.7 / 1.3.
+  close(a.bca!.curve!.lo.deltaEal, dE * 0.7);
+  close(a.bca!.curve!.hi.deltaEal, dE * 1.3);
+  assert.deepEqual(a.bca!.included, ['curve', 'cost', 'tail']);
+  assert.ok(a.bca!.range.bcr[0] < a.bca!.central.bcr && a.bca!.central.bcr < a.bca!.range.bcr[1]);
+  assert.equal(w.bca!.verdict, 'worse');
+  assert.ok(w.bca!.central.bcr < 0);
+  // An ensemble spread widens the range and is labelled.
+  const e = compareDesigns(levels, baseline, designs, { ensemble: { p10: 0.5, p90: 2, members: 12 } });
+  assert.equal(e.rate, 0.07, 'the FEMA default when no rate is given');
+  assert.ok(e.designs[0].bca!.included.includes('ensemble'));
+  close(e.designs[0].bca!.ensemble!.p90.bcr, e.designs[0].bca!.central.bcr * 2);
+  // What a project keeps passes the strict reader, the BCA fields included.
+  const s = comparisonSummary(c, 'stage', 1800, new Date('2026-10-12T00:00:00Z'));
+  assert.equal(s.discountRate, 0.031);
+  assert.equal(s.designs[1].years, 30);
+  close(s.designs[0].bcr!, a.bca!.central.bcr);
+  close(s.designs[0].bcrLow!, a.bca!.range.bcr[0]);
+  close(s.designs[0].breakEvenCost!, a.bca!.central.breakEvenCapex);
+  const r = readProject({ format: PROJECT_FORMAT, version: PROJECT_VERSION, scene: { kind: 'preset', id: 'pittsburgh' }, scenario: { stageOffset: 0, sim: {} }, comparison: JSON.parse(JSON.stringify(s)) });
+  assert.ok(r.ok && r.project.comparison);
+  if (r.ok && r.project.comparison) {
+    assert.deepEqual(r.project.comparison.designs.map((d) => d.years), [50, 30, 50]);
+    assert.equal(r.project.comparison.discountRate, 0.031);
+  }
+  // A free design with a benefit: an infinite BCR is saved as "no value", and the summary still reads back.
+  const free = compareDesigns(levels, baseline, [{ id: 'A', name: 'Free', cost: { ...cost, capex: 0, low: 0, high: 0, om: 0 }, levels: [run(0), run(0)] }]);
+  assert.equal(free.designs[0].bca!.central.bcr, Infinity);
+  const fsum = comparisonSummary(free, 'stage', 60);
+  assert.equal(fsum.designs[0].bcr, null);
+  assert.ok(readProject({ format: PROJECT_FORMAT, version: PROJECT_VERSION, scene: { kind: 'preset', id: 'pittsburgh' }, scenario: { stageOffset: 0, sim: {} }, comparison: JSON.parse(JSON.stringify(fsum)) }).ok);
+});
+
+test('resolveCost: the useful life is the user’s, else FEMA’s standard value for the type', () => {
+  const edits = [{ op: 'wall' as const, pts: [0, 0, 100, 0], h: 2, r: 1 }];
+  const fema = resolveCost({ type: 'earthen', capexUsd: null, omUsdPerYear: null, lengthM: null, heightM: null }, edits, 8, 'US');
+  assert.equal(fema.years, 50);
+  assert.equal(fema.yearsFrom, 'fema');
+  const mine = resolveCost({ type: 'earthen', capexUsd: null, omUsdPerYear: null, lengthM: null, heightM: null, usefulLifeYears: 75 }, edits, 8, 'US');
+  assert.equal(mine.years, 75);
+  assert.equal(mine.yearsFrom, 'user');
 });
