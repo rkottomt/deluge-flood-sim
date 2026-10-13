@@ -6318,3 +6318,13 @@ select.dl-num-input {
   margin: 0 3px;
   vertical-align: middle;
 }
+.dl-cmp-ladder td:first-child {
+  width: 22px;
+}
+.dl-cmp-ladder .dl-site-off {
+  opacity: 0.5;
+}
+.dl-cmp-ladder th:nth-child(2),
+.dl-cmp-ladder td:nth-child(2) {
+  text-align: left;
+}

@@ -120,7 +120,7 @@ export function createCompareSection(ctx: UIContext): CompareSection {
     buildLadder();
     render();
   });
-  const ladderEl = h('div', { class: 'dl-impact-table dl-site-ladder', 'data-compare': 'levels' });
+  const ladderEl = h('div', { class: 'dl-impact-table dl-cmp-ladder', 'data-compare': 'levels' });
   const minutesIn = numField({
     label: 'Simulated time per level',
     unit: 'min',
