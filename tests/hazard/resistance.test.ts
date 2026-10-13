@@ -7,7 +7,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { G, VPE_A1, VPE_A2 } from '../../src/hazard/defaults';
 import { d84At, fergusonVpe, vpeCf, vpeManningN } from '../../src/hazard/resistance';
-import { normalDepth, prepareNetwork, readProbe, resistanceTable, route } from '../../src/hazard/routing';
+import { normalDepth, prepareNetwork, readProbe, resistanceTable, route, type RoutingOptions } from '../../src/hazard/routing';
 import { Series } from '../../src/hazard/series';
 import { weirErosionBreach } from '../../src/hazard/breach';
 import type { ResistanceLaw } from '../../src/hazard/types';
@@ -107,7 +107,7 @@ test('VPE routing on steep beds (5, 10, 20, 30 %): bounded, positive, determinis
     const file = syntheticValley({ reaches: [{ length: L, drop: slope * L, bottomWidth: 20, sideSlope: 1, n: 0.05 }], z0: 5000, tableDepth: 60 });
     const src = new Series([0, 300, 1500, 1501], [0, 5000, 0, 0]);
     for (const dryStart of [true, false]) {
-      const opts = {
+      const opts: RoutingOptions = {
         inflows: [{ s: 0, series: src, cv: 0.4 }],
         ...(dryStart ? { dryStart: true } : { baseflow: 30 }),
         resistance: law,
