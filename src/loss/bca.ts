@@ -271,7 +271,9 @@ export function analyzeBca(i: BcaUncertaintyInput): BcaAnalysis | null {
   const ensemble = ens ? { p10: bca(mid.avoided * ens.p10, inputs(i.capex)), p50: central, p90: bca(mid.avoided * ens.p90, inputs(i.capex)), members: ens.members } : null;
   if (ensemble) included.push('ensemble');
 
-  const tailDiffers = Math.abs(midNoTail.avoided - mid.avoided) > 1e-9 * Math.max(1, Math.abs(mid.avoided));
+  // With and without the tail is a real choice only with two levels or more: on one level the integral without the
+  // tail is zero by construction (no width to integrate over), which bounds nothing.
+  const tailDiffers = mid.levels >= 2 && Math.abs(midNoTail.avoided - mid.avoided) > 1e-9 * Math.max(1, Math.abs(mid.avoided));
   if (tailDiffers) included.push('tail');
 
   // Corners.

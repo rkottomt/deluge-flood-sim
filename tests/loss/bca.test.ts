@@ -186,6 +186,9 @@ test('analyzeBca: the ensemble’s p10 / p90 loss ratios scale the avoided EAL, 
   assert.ok(!a.included.includes('cost'));
   assert.ok(!a.included.includes('curve'));
   assert.equal(a.curve, null);
+  // One level: without the tail the integral is zero by construction, so it is not a bound (no 0.00 floor).
+  assert.ok(!a.included.includes('tail'));
+  close(a.range.bcr[0], a.central.bcr * 0.6);
   close(a.range.bcr[1], a.central.bcr * 1.8);
   // No usable ensemble: a p50 of zero, or not a number.
   assert.equal(ensembleSpread([0, 0, 5], 12), null);
