@@ -69,12 +69,21 @@ export const PRESET_CLIMATE: Readonly<Record<string, PresetClimateProfile>> = {
   ftmyers: { region: 'us-southeast', stage: { sea: 'fort-myers' } },
   nepal: { region: 'hkh', stage: null, chainInflows: true, note: 'The flood is an ice-rock avalanche, not a lake: nothing in the chain is scaled.' },
   chungthang: { region: 'hkh', stage: null, chainInflows: true, lake: 'south-lhonak' },
+  // No lake: the 2021 flow came from the Ronti Peak rock-and-ice collapse itself, and no sourced trend says how that
+  // slope changes with warming — so nothing in the chain is scaled.
+  chamoli: { region: 'hkh', stage: null, chainInflows: true, note: 'The flood is a rock-and-ice avalanche turned debris flow, not a lake or rain: nothing in the chain is scaled.' },
 };
 
 export const DEFAULT_PROFILE: PresetClimateProfile = { region: 'us', stage: null };
 
-export function climateProfile(presetId: string | null | undefined): PresetClimateProfile {
-  return presetId && Object.prototype.hasOwnProperty.call(PRESET_CLIMATE, presetId) ? PRESET_CLIMATE[presetId] : DEFAULT_PROFILE;
+/**
+ * The climate profile of a preset. A scenario with a hazard chain (ScenarioPreset.hazardChain) floods from a mass
+ * movement or an outburst upstream, never from rain, so its inflows are chain inflows whatever the table says — a
+ * chain preset missing from PRESET_CLIMATE must not fall back to rain-scaled US defaults.
+ */
+export function climateProfile(presetId: string | null | undefined, scenario?: { hazardChain?: unknown } | null): PresetClimateProfile {
+  const p = presetId && Object.prototype.hasOwnProperty.call(PRESET_CLIMATE, presetId) ? PRESET_CLIMATE[presetId] : DEFAULT_PROFILE;
+  return scenario?.hazardChain && !p.chainInflows ? { ...p, chainInflows: true } : p;
 }
 
 export interface LakeChange {
@@ -140,10 +149,17 @@ export function lakeChange(lake: LakeTrend, pathway: ClimatePathway, horizon: Cl
   return { lake, area, areaFactor, volumeFactor: v0 > 0 ? v1 / v0 : 1, deltaT };
 }
 
-/** Everything a selection does to a preset's scenario. Today returns the identity. */
-export function climateForcing(selection: ClimateSelection | null | undefined, presetId: string | null | undefined): ClimateForcing {
+/**
+ * Everything a selection does to a preset's scenario. Today returns the identity. Pass the scenario when it is at
+ * hand: a hazard chain in it marks the inflows as chain inflows (climateProfile).
+ */
+export function climateForcing(
+  selection: ClimateSelection | null | undefined,
+  presetId: string | null | undefined,
+  scenario?: { hazardChain?: unknown } | null,
+): ClimateForcing {
   const sel = selection ?? CLIMATE_TODAY;
-  const profile = climateProfile(presetId);
+  const profile = climateProfile(presetId, scenario);
   const region = CLIMATE_REGIONS[profile.region];
   const warming = globalWarming(sel.pathway, sel.horizon);
   const alpha = RAIN_SCALING[sel.scaling]?.alpha ?? RAIN_SCALING.cc.alpha;

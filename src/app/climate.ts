@@ -20,14 +20,14 @@ export class ClimateLayer {
 
   constructor(private readonly deps: ClimateLayerDeps) {
     const s = deps.store.get();
-    this.key = keyOf(s.climate, s.presetId);
-    this.forcing = climateForcing(s.climate, s.presetId);
+    this.key = keyOf(s.climate, s.presetId, !!s.scenario?.hazardChain);
+    this.forcing = climateForcing(s.climate, s.presetId, s.scenario);
   }
 
   install(): void {
     this.unsubscribe?.();
     this.unsubscribe = this.deps.store.subscribe((s, prev) => {
-      if (s.climate === prev.climate && s.presetId === prev.presetId) return;
+      if (s.climate === prev.climate && s.presetId === prev.presetId && s.scenario === prev.scenario) return;
       this.refresh();
     });
   }
@@ -35,11 +35,11 @@ export class ClimateLayer {
   /** Recompute from the store; notifies when the result differs. */
   refresh(): void {
     const s = this.deps.store.get();
-    const key = keyOf(s.climate, s.presetId);
+    const key = keyOf(s.climate, s.presetId, !!s.scenario?.hazardChain);
     if (key === this.key) return;
     this.key = key;
     const prev = this.forcing;
-    this.forcing = climateForcing(s.climate, s.presetId);
+    this.forcing = climateForcing(s.climate, s.presetId, s.scenario);
     this.deps.onChange(this.forcing, prev);
   }
 
@@ -58,6 +58,7 @@ export class ClimateLayer {
   }
 }
 
-function keyOf(sel: { horizon: string; pathway: string; scaling: string } | undefined, presetId: string | null): string {
-  return sel ? `${presetId}|${sel.horizon}|${sel.pathway}|${sel.scaling}` : `${presetId}|today`;
+/** What the forcing depends on: the selection, the preset, and whether its scenario has a hazard chain. */
+function keyOf(sel: { horizon: string; pathway: string; scaling: string } | undefined, presetId: string | null, chain: boolean): string {
+  return `${sel ? `${presetId}|${sel.horizon}|${sel.pathway}|${sel.scaling}` : `${presetId}|today`}|${chain ? 'chain' : ''}`;
 }

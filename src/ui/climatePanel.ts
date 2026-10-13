@@ -124,9 +124,9 @@ function shortName(src: WaterSource): string {
 export function createClimateNote(ctx: UIContext): HTMLElement {
   const el = h('p', { class: 'dl-climate-note', 'data-climate': 'note-line', hidden: true });
   ctx.bind(
-    (s) => [s.climate, s.presetId] as const,
+    (s) => [s.climate, s.presetId, !!s.scenario?.hazardChain] as const,
     (_, s) => {
-      const f = climateForcing(s.climate, s.presetId);
+      const f = climateForcing(s.climate, s.presetId, s.scenario);
       el.hidden = f.identity;
       const sea = f.seaRiseM > 0 ? ` · sea +${fmtNum(f.seaRiseM, 2)} m` : '';
       setText(el, f.identity ? '' : `Future climate ${f.label}: the map gets rain ${times(f.rainMult)}${sea} — the sliders show today (details under Future climate below)`);
@@ -184,7 +184,7 @@ export function createClimateBlock(ctx: UIContext): HTMLElement {
 
   function render(s: AppState) {
     const cur = s.climate ?? CLIMATE_TODAY;
-    const f = climateForcing(cur, s.presetId);
+    const f = climateForcing(cur, s.presetId, s.scenario);
     horizon.set(cur.horizon);
     pathway.set(cur.pathway);
     scaling.set(cur.scaling);
@@ -218,7 +218,7 @@ export function createClimateBlock(ctx: UIContext): HTMLElement {
   }
 
   ctx.bind(
-    (s) => [s.climate, s.presetId, s.sim.rainRate, s.sources, s.storms] as const,
+    (s) => [s.climate, s.presetId, s.sim.rainRate, s.sources, s.storms, !!s.scenario?.hazardChain] as const,
     (_, s) => render(s),
     (a, b) => shallowArrayEq(a, b),
   );

@@ -6,7 +6,10 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import type { FloodSolver, SimParams, StormCell, WaterSource } from '../../src/contracts';
+import fs from 'node:fs';
+import path from 'node:path';
+import type { FloodSolver, ScenarioPreset, SimParams, StormCell, WaterSource } from '../../src/contracts';
+import { PRESETS } from '../../src/data/presets';
 import {
   AR6_WARMING_PREINDUSTRIAL,
   AR6_WARMING_RECENT,
@@ -14,6 +17,7 @@ import {
   CLIMATE_TODAY,
   climateForcing,
   globalWarming,
+  inflowScaled,
   LAKE_TRENDS,
   PRESET_CLIMATE,
   rainMultiplier,
@@ -193,6 +197,42 @@ test('chain presets: the chain wave is not rain-scaled; South Lhonak grows; no s
   assert.ok(f.lake && f.lake.volumeFactor > 1);
   assert.ok(f.meltPerDay! > 0);
   assert.equal(sweepComparable(f, 'scale').ok, false);
+});
+
+test('every preset: a hazard-chain flood is never rain-scaled, and every baked preset has its own climate profile', () => {
+  const root = path.resolve(import.meta.dirname, '../../public/presets');
+  const f2100 = sel('2100');
+  for (const { id } of PRESETS) {
+    const file = path.join(root, id, 'meta.json');
+    if (id === 'sandbox' || !fs.existsSync(file)) continue;
+    const scenario = (JSON.parse(fs.readFileSync(file, 'utf8')) as { scenario: ScenarioPreset }).scenario;
+    // A baked preset is not left to the US defaults (the region decides the warming and the rain scaling).
+    assert.ok(Object.prototype.hasOwnProperty.call(PRESET_CLIMATE, id), `${id}: no PRESET_CLIMATE entry`);
+    const chain = !!scenario.hazardChain;
+    // With and without the scenario (the Site check asks by preset id alone): the same answer.
+    for (const f of [climateForcing(f2100, id, scenario), climateForcing(f2100, id)]) {
+      assert.equal(f.chainInflows, chain, `${id}: chainInflows`);
+      if (chain) {
+        assert.equal(f.inflowMult, 1, `${id}: the chain wave is a mass movement / outburst, not rain`);
+        assert.equal(f.region.id, 'hkh', `${id}: a Himalayan chain is not a US region`);
+        for (const s of scenario.sources) if (s.type === 'inflow') assert.equal(inflowScaled(f, s), false, `${id}: ${s.id} scaled`);
+        assert.equal(scaleSources(scenario.sources, f), scenario.sources, `${id}: sources untouched`);
+      }
+      if (!scenario.stage) assert.equal(f.seaRiseM, 0, `${id}: no stage, no sea-level rise`);
+    }
+  }
+  // Chamoli: the Ronti Peak rock-ice avalanche — no lake to grow, no stage.
+  const ch = climateForcing(f2100, 'chamoli');
+  assert.equal(ch.lake, null);
+  assert.equal(ch.seaRiseM, 0);
+  assert.ok(ch.note && /avalanche/.test(ch.note));
+  // Any scenario with a hazard chain defaults to an unscaled chain inflow, even one no table knows.
+  const spec = { trigger: { kind: 'given', hydrograph: [], provenance: 'test' }, profile: 'chain.json' } as unknown as ScenarioPreset['hazardChain'];
+  const unknown = climateForcing(f2100, 'not-a-preset', { hazardChain: spec });
+  assert.equal(unknown.chainInflows, true);
+  assert.equal(unknown.inflowMult, 1);
+  assert.equal(inflowScaled(unknown, inflow('chain-inflow', 5000)), false);
+  assert.equal(climateForcing(f2100, 'not-a-preset').chainInflows, false, 'without a chain: the defaults (rain-fed inflows scaled)');
 });
 
 // ─── the layer in the app ────────────────────────────────────────────────────────────────────────
