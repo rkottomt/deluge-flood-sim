@@ -105,13 +105,16 @@ export function climateCompareBlock(c: ClimateComparison, money: (v: number) => 
   );
 }
 
-/** Runs longer than asked overshoot by a readback or two; past 5 % apart, part of the difference is run length. */
-export const RUN_LENGTH_TOLERANCE = 0.05;
+/**
+ * Headless runs stop exactly on the asked time (src/ui/headless.ts), so the two runs of a level should be the same
+ * length; past 1 % apart (a run cut short, a level added to one side later), part of the difference is run length.
+ */
+export const RUN_LENGTH_TOLERANCE = 0.01;
 
 /** A warning when a level's today and future runs differ in simulated length by more than the tolerance. */
 export function lengthWarning(c: ClimateComparison): string | null {
   const off = c.rows.filter((r) => Number.isFinite(r.todayS) && Number.isFinite(r.futureS) && Math.abs(r.futureS - r.todayS) > RUN_LENGTH_TOLERANCE * Math.max(r.todayS, r.futureS));
   if (!off.length) return null;
   const list = off.map((r) => `${r.label} ${Math.round(r.todayS / 6) / 10} vs ${Math.round(r.futureS / 6) / 10} min`).join('; ');
-  return `The two runs of a level differ in simulated length (${list}): headless runs overshoot the asked time by up to a readback, so part of the change is run length, not climate. Run longer levels to shrink it.`;
+  return `The two runs of a level differ in simulated length (${list}), so part of the change is run length, not climate. Run the comparison again.`;
 }

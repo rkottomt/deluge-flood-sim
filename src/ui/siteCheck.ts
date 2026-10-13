@@ -572,7 +572,7 @@ export function createSiteSection(ctx: UIContext): SiteSection {
     const money = (v: number) => formatMoney(v);
     if (!sum) return { sum: null, rec: null, options: [], verdict: [] };
     const design = pickDesign(sum.rows, designId);
-    const rec = design ? recommendFfe(design.row, design.basis, spec.occupancy, freeboardFt != null ? freeboardFt * FT : undefined) : null;
+    const rec = design ? recommendFfe(design.row, design.basis, spec.occupancy, freeboardFt != null ? freeboardFt * FT : undefined, design.onePercent) : null;
     const t = getTerrain();
     const country = t ? regionForBounds(t.bounds).costCountry : null;
     const run0 = sum.rows[0]?.run;

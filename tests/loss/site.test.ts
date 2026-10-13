@@ -14,6 +14,7 @@ import { regionAt } from '../../src/loss/region';
 import {
   assessSiteRun,
   decodeSites,
+  designEventText,
   DEFAULT_FIRST_FLOOR_M,
   encodeSites,
   exceedanceCurve,
@@ -231,6 +232,24 @@ test('finished-floor recommendation: 100-yr water surface + ASCE 24 freeboard; t
   assert.match(rec3.freeboardBasis, /chosen by the user/);
   const picked = pickDesign(sum.rows, 'record')!;
   assert.equal(picked.basis, 'selected');
+  // The user designs to the record, but the 1 % level WAS run: the recommendation carries it, and says so.
+  assert.equal(picked.onePercent?.level.id, 'rp100');
+  const recRecord = recommendFfe(picked.row, picked.basis, 'office', undefined, picked.onePercent)!;
+  assert.equal(recRecord.onePercent?.label, 'rp100');
+  assert.ok(Math.abs(recRecord.onePercent!.wse - (GROUND + 1)) < 1e-4);
+  const said = designEventText(recRecord);
+  assert.match(said, /^record — your selection; the 1 % level was also run \(rp100: water surface .* m above datum\)$/);
+  assert.doesNotMatch(said, /no 1 % level was run/);
+  // Designing to the 1 % level itself: no "also run".
+  assert.equal(recommendFfe(design.row, design.basis, 'office', undefined, design.onePercent)!.onePercent, null);
+  assert.equal(designEventText(rec), 'rp100 — the 1 %-annual-chance level');
+  // No 1 % level in the sweep: the highest level stands in, and the text says why.
+  const noRp = summarizeSweep(sweepRows().filter((r) => r.level.id !== 'rp100'));
+  const auto = pickDesign(noRp.rows, null)!;
+  assert.deepEqual([auto.row.level.id, auto.basis, auto.onePercent], ['record', 'highest', null]);
+  assert.match(designEventText(recommendFfe(auto.row, auto.basis, 'office', undefined, auto.onePercent)!), /^record — the highest level run, as no published 1 % level was run$/);
+  const chosen = pickDesign(noRp.rows, 'major')!;
+  assert.match(designEventText(recommendFfe(chosen.row, chosen.basis, 'office', undefined, chosen.onePercent)!), /^major — your selection; no 1 % level was run$/);
   // A design level that does not reach the site: no requirement, the planned floor stands.
   const dry = recommendFfe(sum.rows[0], 'selected', 'office')!;
   assert.ok(Number.isNaN(dry.designWse));

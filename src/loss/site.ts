@@ -217,7 +217,7 @@ export function assessSiteRun(spec: SiteSpec, fields: HazardFields, ctx: SiteRun
     fields,
     { region: ctx.region, set: null, fp: null, heightProfile: ctx.heightProfile, debrisFlow: ctx.debrisFlow, alertTime: ctx.alertTime, access: ctx.access ?? null, grid: ctx.grid, toGrid: ctx.toGrid },
   );
-  const empty: CellSample = { sampled: 0, reachedCells: 0, maxDepth: 0, maxSpeed: 0, maxDV: 0, firstWet: -1, wetSeconds: 0 };
+  const empty: CellSample = { sampled: 0, reachedCells: 0, maxDepth: 0, maxSpeed: 0, maxDV: 0, structSpeed: 0, structDV: 0, firstWet: -1, wetSeconds: 0 };
   const run: SiteRun = {
     siteId: spec.id,
     outside: !result,
@@ -359,10 +359,20 @@ export function freeboardFor(occ: Occupancy): { m: number; ft: number; basis: st
   return { m: 1 * FT, ft: 1, basis: 'ASCE 24-14 Flood Design Class 2 (most residential, commercial, industrial): BFE + 1 ft' };
 }
 
+/**
+ * Why the design level is the one it is: '100-yr' — it is the 1 % (100-yr) level; 'selected' — the user chose another
+ * level; 'highest' — no 1 % level was run, so the highest level run stands in.
+ */
+export type DesignBasis = '100-yr' | 'selected' | 'highest';
+
 export interface FfeRecommendation {
   designLabel: string;
-  /** '100-yr' when the design level is the ladder's 1 % event; 'selected' otherwise (the user's choice). */
-  designBasis: '100-yr' | 'selected';
+  designBasis: DesignBasis;
+  /**
+   * The 1 % (100-yr) level when it was run but is not the design level (the user chose another): its label and its
+   * water surface at the site, m above datum (NaN when it does not reach the site). Null otherwise.
+   */
+  onePercent: { label: string; wse: number } | null;
   /** Design water surface at the site, m above datum; NaN when the design event does not reach the site. */
   designWse: number;
   grade: number;
@@ -377,7 +387,7 @@ export interface FfeRecommendation {
   raiseBy: number;
 }
 
-export function recommendFfe(design: SweepRow, basis: FfeRecommendation['designBasis'], occ: Occupancy, freeboardM?: number): FfeRecommendation | null {
+export function recommendFfe(design: SweepRow, basis: DesignBasis, occ: Occupancy, freeboardM?: number, onePercent?: SweepRow | null): FfeRecommendation | null {
   const run = design.run;
   if (!run.result || !Number.isFinite(run.grade)) return null;
   const fb = freeboardFor(occ);
@@ -388,6 +398,10 @@ export function recommendFfe(design: SweepRow, basis: FfeRecommendation['designB
   return {
     designLabel: design.level.label,
     designBasis: basis,
+    onePercent:
+      onePercent && onePercent !== design
+        ? { label: onePercent.level.label, wse: onePercent.run.result?.reached && Number.isFinite(onePercent.run.wse) ? onePercent.run.wse : NaN }
+        : null,
     designWse: wet ? run.wse : NaN,
     grade: run.grade,
     freeboardM: freeboard,
@@ -399,15 +413,32 @@ export function recommendFfe(design: SweepRow, basis: FfeRecommendation['designB
   };
 }
 
-/** The design row: the ladder's 100-yr level when it was run, else the user's selection, else the highest level. */
-export function pickDesign(rows: readonly SweepRow[], selectedId: string | null): { row: SweepRow; basis: FfeRecommendation['designBasis'] } | null {
+/**
+ * What the design event is and why, for the recommendation's "Design event" line — and, when the user designs to
+ * another level, what the 1 % level that was also run gives at the site.
+ */
+export function designEventText(rec: FfeRecommendation): string {
+  const op = rec.onePercent;
+  const opText = op ? `${op.label}: ${Number.isFinite(op.wse) ? `water surface ${fmt(op.wse, 2)} m above datum` : 'does not reach the site'}` : '';
+  if (rec.designBasis === '100-yr') return `${rec.designLabel} — the 1 %-annual-chance level`;
+  if (rec.designBasis === 'selected') return `${rec.designLabel} — your selection; ${op ? `the 1 % level was also run (${opText})` : 'no 1 % level was run'}`;
+  return `${rec.designLabel} — the highest level run, as no published 1 % level was run${op ? `; the level you gave a 100-yr return period was also run (${opText})` : ''}`;
+}
+
+/**
+ * The design row: the user's selection, else the ladder's published 1 % (100-yr) level when it was run, else the
+ * highest level. `onePercent` is the 1 % level that was run (a published one first, else one with a typed-in 100-yr
+ * return period), whichever row is the design — so the text can say it was run when the user designs to another one.
+ */
+export function pickDesign(rows: readonly SweepRow[], selectedId: string | null): { row: SweepRow; basis: DesignBasis; onePercent: SweepRow | null } | null {
   if (!rows.length) return null;
-  const sel = selectedId ? rows.find((r) => r.level.id === selectedId) : undefined;
-  if (sel) return { row: sel, basis: sel.level.returnPeriod === 100 ? '100-yr' : 'selected' };
   const rp100 = rows.find((r) => r.level.returnPeriod === 100 && r.level.rpFrom === 'source');
-  if (rp100) return { row: rp100, basis: '100-yr' };
+  const onePercent = rp100 ?? rows.find((r) => r.level.returnPeriod === 100) ?? null;
+  const sel = selectedId ? rows.find((r) => r.level.id === selectedId) : undefined;
+  if (sel) return { row: sel, basis: sel.level.returnPeriod === 100 ? '100-yr' : 'selected', onePercent };
+  if (rp100) return { row: rp100, basis: '100-yr', onePercent };
   const top = [...rows].sort((a, b) => levelOrder(b) - levelOrder(a))[0];
-  return { row: top, basis: 'selected' };
+  return { row: top, basis: 'highest', onePercent };
 }
 
 // ─── Mitigation options ──────────────────────────────────────────────────────────────────────────────────────────────

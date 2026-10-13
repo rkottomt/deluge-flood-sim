@@ -451,8 +451,17 @@ export interface FloodSolver {
   /**
    * Advance by `realSeconds * params.timeScale` simulated seconds (subject to CFL and maxSubstepsPerFrame).
    * Encodes and submits GPU work. Never blocks on GPU readback.
+   * `maxSimSeconds` (optional) caps this frame's advance: the solver runs no further than that, landing on it exactly
+   * (a final shorter substep) when the substep cap allows, and carries no time past it. Hosts use it to stop at an
+   * exact simulated time (the app's runFor).
    */
-  step(realSeconds: number): StepInfo;
+  step(realSeconds: number, maxSimSeconds?: number): StepInfo;
+
+  /**
+   * Optional: make sure a readback (snapshot) of the current state is on its way, for a host that has stopped stepping
+   * and needs one (a paused solver otherwise produces none). A no-op when the latest state already has one.
+   */
+  requestReadback?(): void;
 
   /** Reset water to the initial condition (initial fill), keep terrain edits unless resetTerrain. */
   reset(opts?: { resetTerrain?: boolean }): void;

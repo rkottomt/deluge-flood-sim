@@ -5,6 +5,7 @@ import { errorMessage } from './errors';
 import { NO_TRANSIENT, OverlayComposer } from './overlays';
 import { snapshotIsPhysical } from './evac';
 import { footprintRadius, stormWeight } from '../sim/forcing';
+import { rampFrameLimit } from './runFor';
 
 /** Rain rate (mm/hr) at grid position (gx, gy): global rain plus storm cells, with the solver's storm profile. */
 export function rainAt(state: Pick<AppState, 'sim' | 'storms'>, gx: number, gy: number): number {
@@ -144,22 +145,33 @@ export class FrameDriver {
     // 1. Simulation. The old scene may still be shown while a new one loads — never step it then.
     const hidden = document.hidden;
     const running = (!state.paused || runner.active) && !state.loading && !hidden;
+    // Running only for runFor (the user's flood is paused, as in every headless batch): stop exactly at the target,
+    // and while the river stage ramps, end frames on a fixed grid of simulated time (runFor.ts RAMP_FRAME_S).
+    let limit = state.paused ? runner.stepLimit() : Infinity;
+    if (state.paused && limit > 0 && runner.active && this.app.stageRamp.moving) limit = Math.min(limit, rampFrameLimit(this.simClock));
+    const stepping = running && limit > 0;
     this.lastAdvance = 0;
-    if (running) {
+    if (stepping) {
       if (!this.wasRunning) this.app.budget.restart();
       this.guard('solver.step', () => {
-        const info = solver.step(realDt);
+        const info = solver.step(realDt, limit);
         this.lastStepInfo = info;
         this.stepAverage.push(info);
         // A blown-up solver (stability demo) may report NaN; count the requested time so runFor can't hang.
-        const requested = realDt * this.app.sim.effectiveParams().timeScale;
+        const requested = Math.min(realDt * this.app.sim.effectiveParams().timeScale, limit);
         const advance = Number.isFinite(info.simSecondsAdvanced) ? info.simSecondsAdvanced : requested;
         this.lastAdvance = advance;
         this.simClock += advance;
         this.app.advanceStage(advance, now);
-        runner.onStep(advance, this.simClock, now, this.lastSnapshot);
+        runner.onStep(advance, this.simClock, now, this.lastSnapshot, Number.isFinite(limit));
         this.app.observeFrameBudget(frameMs, info, now);
       });
+    } else if (running) {
+      // runFor has reached its target (or was asked for 0 s): hold the sim where it stopped and make sure a readback
+      // of that moment comes, which is what completes the run.
+      this.app.setSimPressure(0);
+      runner.onStep(0, this.simClock, now, this.lastSnapshot, true);
+      this.guard('readback', () => solver.requestReadback?.());
     } else {
       // Paused / loading / hidden: nothing competes with the renderer for the GPU.
       this.app.setSimPressure(0);

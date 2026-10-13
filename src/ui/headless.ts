@@ -5,8 +5,11 @@
  * chunks so Cancel answers within one), collect the result, and finally put the user's scenario back — forcing,
  * stage, Manning n, the water from its start, play/pause — whatever happened.
  *
- * Progress is read off the simulation clock, not summed from the requests: runFor keeps the solver going until a
- * readback includes its target, so every chunk overshoots a little (more at high speed-ups).
+ * Every case runs exactly `durationS` simulated seconds: with the user's flood paused, runFor stops the solver on its
+ * target (FloodSolver.step's maxSimSeconds; src/app/runFor.ts), so the chunks add up to the duration to float
+ * rounding whatever their size. (They used to overshoot by up to a readback each — 600 s ended at 614–706 s — which
+ * made two runs of one level differ by more than the climate change being compared.) Progress is still read off
+ * the simulation clock rather than summed from the requests.
  */
 import type { AppActions, AppState, Store, TerrainData } from '../contracts';
 import type { SimControl } from './bridge';
@@ -65,6 +68,9 @@ export interface HeadlessOutcome {
   seconds: number;
 }
 
+/** A case is done when its clock is this close to the duration, s (the chunks' sum carries float rounding). */
+const CLOCK_SLACK_S = 1e-3;
+
 /** Stores with a batch in flight: two at once (a sweep and an ensemble) would fight over the same scenario. */
 const busyStores = new WeakSet<Store>();
 
@@ -100,8 +106,8 @@ async function runBatch<C extends HeadlessCase>(o: HeadlessOptions<C>): Promise<
       actions.resetWater();
       o.afterReset?.(i);
       let t = sim.simClock();
-      while (t < o.durationS - 1 && !o.cancelled()) {
-        await sim.runFor(Math.max(1, Math.min(o.chunkS, o.durationS - t)));
+      while (t < o.durationS - CLOCK_SLACK_S && !o.cancelled()) {
+        await sim.runFor(Math.min(o.chunkS, o.durationS - t));
         if (o.getTerrain() !== o.terrain) throw new Error('the scene changed during the run');
         t = sim.simClock();
         o.afterChunk?.(i, t);

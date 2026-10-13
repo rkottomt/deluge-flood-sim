@@ -23,17 +23,19 @@ function rig() {
   );
   let clock = 0;
   let resets = 0;
+  const calls: number[] = [];
   const hold: boolean[] = [];
   const sim: SimControl = {
     runFor: async (s) => {
-      clock += s + 3; // runFor overshoots a little, like the real one
+      clock += s; // runFor stops on its target, like the real one (src/app/runFor.ts)
+      calls.push(s);
     },
     simClock: () => clock,
     setRenderHold: (on) => hold.push(on),
   };
   const actions = { resetWater: () => ((clock = 0), resets++) } as unknown as AppActions;
   const terrain = {} as TerrainData;
-  return { store, sim, actions, terrain, hold, resets: () => resets };
+  return { store, sim, actions, terrain, hold, calls, resets: () => resets };
 }
 
 const scenario = (s: ReturnType<typeof createStore>) => {
@@ -61,7 +63,8 @@ test('runs every case its full time, then restores the scenario', async () => {
     cleanup: () => cleaned++,
   });
   assert.deepEqual([out.done, out.cancelled, out.error], [2, false, null]);
-  assert.ok(collected.every((c) => c.t >= 899 && c.n === 0.05), JSON.stringify(collected));
+  assert.ok(collected.every((c) => c.t === 900 && c.n === 0.05), JSON.stringify(collected));
+  assert.deepEqual(r.calls, [300, 300, 300, 300, 300, 300], 'each case: three chunks, no extra one');
   assert.equal(cleaned, 1);
   assert.equal(scenario(r.store), before, 'scenario restored');
   assert.deepEqual(r.hold, [true, false]);
