@@ -88,11 +88,27 @@ carries coordinates only — never an address or a name).
 `?usecase=dam&nid=<NID id>&breach=sunny|flood` breaches that dam on the valley below it (e.g. `nid=MI00549`, Edenville
 Dam; `&method=low|high|parametric` for a case other than the central one); `?usecase=surge&at=<lat>,<lon>` sets a coastal site up against NOAA's extreme water levels (an 8 km live area).
 Both need the internet for the terrain; the dam index and the tide-station table ship with the app.
-`?story=nepal-2026|pittsburgh-1936|houston-harvey|sikkim-2023|chamoli-2021` plays a narrated story (also *Watch the
-story* in the Scenario section, and the stories row under Use cases): the camera, the simulation and a caption card
-with sourced facts move together beat by beat (`Space` pause, `←`/`→` previous/next, `Esc` exit). The stories are data
-in [src/story/stories](src/story/stories); model times in captions are read live from the app, never typed in.
-`node scripts/record-story.mjs [--story=<id>|--all]` records one as a 1080p MP4 into `artifacts/stories/`.
+`?story=<id>` plays a narrated story (also *Watch the story* in the Scenario section, and the stories row under Use
+cases): the camera, the simulation and a caption card with sourced facts move together beat by beat (`Space` pause,
+`←`/`→` previous/next, `Esc` exit). Three walk a business viewer through a decision, and are listed first:
+
+* `site-decision` — *Should we build here?* Pittsburgh's two demo parcels (the site use case): the Site check sweep
+  through the river's levels, Parcel A's verdict, its way out, its expected annual loss, an indicative floor level
+  (to the 1 % level, and to the worst level that reaches it), Parcel B's verdict, and the pick.
+* `levee-bca` — *Is the levee worth it?* The one-click North Shore levee built, then Compare designs run headless
+  against the river without it on FEMA's 1 % level and the 1936 record (500-year: an assumption, labelled as the
+  user's): avoided EAL, cost, the BCR with its range and verdict, and the break-even construction cost.
+* `dam-upstream` — *A dam upstream.* Edenville Dam (NID MI00549) breached flood-induced on the valley below it, as the
+  dam use case does: the band of eight breach relations, the wave, arrival times at 1–8 km with their spread across
+  the band, and what to tell the county. Its valley is a live area, so this one needs the internet (USGS 3DEP).
+
+Then the events retold: `nepal-2026`, `pittsburgh-1936`, `houston-harvey`, `sikkim-2023`, `chamoli-2021`. The stories
+are data in [src/story/stories](src/story/stories), checked by a strict validator. Nothing a run computes is typed into
+a caption: model times, depths, egress, EAL, floor levels, BCRs, breach peaks and arrivals are live tokens
+([src/story/captions.ts](src/story/captions.ts)) read from the panels that computed them. Leaving a story (`Esc`, the
+close button, mid-sweep too) puts the user's own scenario back — stage, rain, view, walls, and their Site check sites
+and Compare designs; *Explore on your own* keeps the story's. `node scripts/record-story.mjs [--story=<id>|--all]`
+records one as a 1080p MP4 into `artifacts/stories/` (offline, except a dam story's terrain).
 
 ## Try this (30 seconds)
 
