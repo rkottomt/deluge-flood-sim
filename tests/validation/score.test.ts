@@ -4,8 +4,8 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { fillGeoJsonGeometry, fillPolygon, lineCells, rleDecode, rleEncode } from '../../src/validation/raster';
-import { EXTENT_CELL, FLOOD_M, nearestWetWse, scoreBfeProfile, scoreEms, scoreFema, scorePoints, type ModelFields } from '../../src/validation/score';
+import { fillGeoJsonGeometry, fillPolygon, lineCells, polygonCells, rleDecode, rleEncode } from '../../src/validation/raster';
+import { EXTENT_CELL, FLOOD_M, crestReach, nearestWetWse, scoreBfeProfile, scoreDamage, scoreEms, scoreFema, scorePoints, type ModelFields } from '../../src/validation/score';
 import type { EmsDamage, FemaZonesFile } from '../../src/validation/types';
 import { FEMA_CLASSES } from '../../src/validation/types';
 
@@ -185,4 +185,83 @@ test('scoreEms: damaged buildings reached, near-misses, and road cells against u
   assert.equal(r.roads.falseAlarms, 0);
   assert.equal(r.roads.correctNegatives, 2);
   assert.equal(r.analysedCells, 99);
+});
+
+test('polygonCells lists the cells fillPolygon fills, once each', () => {
+  const rings = [[1, 1, 9, 1, 9, 9, 1, 9], [4, 4, 6, 4, 6, 6, 4, 6]];
+  const cells = polygonCells(10, 10, rings);
+  const out = new Uint8Array(100);
+  fillPolygon(out, 10, 10, rings, 1);
+  assert.equal(cells.length, 60);
+  assert.equal(new Set(cells).size, 60);
+  for (const k of cells) assert.equal(out[k], 1);
+});
+
+/**
+ * Damage survey fixture on a 10×10 grid: the river is column 0, columns 1–3 are low ground (5 m) the river can reach
+ * at a crest of 8 m, the rest is 10 m except one low cell (8, 8) that no low ground connects to the river. The model
+ * floods columns 1–2 only.
+ */
+function damageFixture() {
+  const f = fields();
+  f.maxDepth.fill(0);
+  for (let j = 0; j < 10; j++) {
+    f.maxDepth[j * 10] = 2.5;
+    for (let i = 1; i <= 3; i++) f.ground[j * 10 + i] = 5;
+    f.maxDepth[j * 10 + 1] = 1;
+    f.maxDepth[j * 10 + 2] = 0.4;
+  }
+  f.ground[8 * 10 + 8] = 5;
+  const square = (i: number, j: number, s = 1) => [i + 0.5 - s / 2, j + 0.5 - s / 2, i + 0.5 + s / 2, j + 0.5 - s / 2, i + 0.5 + s / 2, j + 0.5 + s / 2, i + 0.5 - s / 2, j + 0.5 + s / 2];
+  const rings = [
+    square(1, 2), // A: damaged, flooded, in reach → hit
+    square(3, 2), // B: damaged, dry, in reach → miss
+    square(2, 6), // C: not recorded, flooded, in reach → false alarm
+    square(8, 8), // D: damaged, dry, low but cut off from the river → miss, out of reach
+    square(6, 1), // E: not recorded, dry → correct dry
+    square(0, 4), // F: on the river at t = 0 → left out
+    square(5, 5, 0.2), // G: smaller than a cell centre, its centroid's cell damaged, dry → miss
+  ];
+  const offsets = [0];
+  const verts: number[] = [];
+  for (const r of rings) {
+    verts.push(...r);
+    offsets.push(offsets[offsets.length - 1] + r.length / 2);
+  }
+  const mask = new Uint8Array(100);
+  for (const [i, j] of [[1, 2], [3, 2], [8, 8], [5, 5]]) mask[j * 10 + i] = 1;
+  return { f, footprints: { count: rings.length, offsets, verts }, maskRle: rleEncode(mask) };
+}
+
+test('scoreDamage: buildings on damaged parcels against modelled flooding, with the river’s reach at the crest', () => {
+  const { f, footprints, maskRle } = damageFixture();
+  const sfha = new Uint8Array(100);
+  for (let j = 0; j < 10; j++) sfha[j * 10 + 1] = 1;
+  const r = scoreDamage(f, maskRle, footprints, { sfhaCls: sfha, crestLevel: 8 });
+  assert.deepEqual([r.buildings.hits, r.buildings.misses, r.buildings.falseAlarms, r.buildings.correctNegatives], [1, 3, 1, 1]);
+  assert.equal(r.buildings.cells, 6, 'the footprint on the river is left out');
+  assert.equal(r.buildings.hitRate, 0.25);
+  assert.equal(r.buildings.falseAlarmRatio, 0.5);
+  assert.ok(r.inReach);
+  assert.deepEqual([r.inReach.hits, r.inReach.misses, r.inReach.falseAlarms, r.inReach.correctNegatives], [1, 1, 1, 0]);
+  assert.equal(r.damagedInSfha, 1);
+  assert.equal(r.parcelCells, 4);
+  assert.equal(r.parcelCellsFlooded, 1);
+  assert.deepEqual([...r.outcome], [EXTENT_CELL.hit, EXTENT_CELL.miss, EXTENT_CELL.falseAlarm, EXTENT_CELL.miss, EXTENT_CELL.correctDry, EXTENT_CELL.outside, EXTENT_CELL.miss]);
+  // Without a crest level or a zone raster those parts are absent, not zero.
+  const bare = scoreDamage(f, maskRle, footprints);
+  assert.equal(bare.inReach, null);
+  assert.equal(bare.damagedInSfha, null);
+  assert.deepEqual(bare.buildings, r.buildings);
+});
+
+test('crestReach: low ground connected to the river, not low ground cut off by high ground, not the river itself', () => {
+  const { f } = damageFixture();
+  const reach = crestReach(f, 8);
+  assert.equal(reach[2 * 10 + 1], 1);
+  assert.equal(reach[9 * 10 + 3], 1);
+  assert.equal(reach[8 * 10 + 8], 0, 'a hollow behind high ground');
+  assert.equal(reach[5 * 10 + 5], 0, 'above the crest');
+  assert.equal(reach[0], 0, 'the river at t = 0');
+  assert.equal(crestReach(f, 4).reduce((s, v) => s + v, 0), 0, 'a crest below every bank reaches nothing');
 });

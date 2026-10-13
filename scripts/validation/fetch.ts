@@ -38,6 +38,7 @@ import {
   type GaugePeak,
   type FemaLadder,
   type EmsDamage,
+  type ParcelDamage,
 } from '../../src/validation/types';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -65,6 +66,8 @@ interface PresetPlan {
   ladderGauge?: { id: string; name: string; lon: number; lat: number; kind: 'riverine' | 'coastal' };
   fema: boolean;
   ems?: { activation: string; aoi: number; product: string; url: string };
+  /** A post-flood parcel damage assessment (an ArcGIS polygon layer) and the gauged crest of the same flood. */
+  damage?: { event: string; survey: string; layerUrl: string; licence: string; gauge: { site: string; name: string; peakDate: string } };
   /** Why nothing observed is available (shown in the report instead of a number). */
   none?: string;
 }
@@ -86,9 +89,16 @@ const PLANS: Record<string, PresetPlan> = {
     fema: true,
   },
   nashville: {
-    event: 'May 2010 flood (no STN marks); FEMA 1 % zone at the matching stage',
+    event: 'May 2010 flood: Metro Nashville’s parcel damage assessment (no STN marks); FEMA 1 % zone at the matching stage',
     ladderGauge: { id: 'USGS 03431500', name: 'Cumberland River at Nashville', lon: -86.7726764, lat: 36.1614984, kind: 'riverine' },
     fema: true,
+    damage: {
+      event: 'Cumberland River flood, 1–3 May 2010',
+      survey: 'Metro Nashville windshield damage assessment after the May 2010 flood: parcels whose structure was damaged “based on outward appearance” (Metro Stormwater, Metro Codes)',
+      layerUrl: 'https://maps.nashville.gov/arcgis/rest/services/May2010Flood/May2010_DamageParcels/MapServer/1',
+      licence: 'Public record of the Metropolitan Government of Nashville and Davidson County (MetroGIS, Metro Stormwater, Metro Codes), published as a public map service with no licence stated; used with attribution. Only a rasterised mask is committed — no owners, addresses or parcel IDs.',
+      gauge: { site: '03431500', name: 'Cumberland River at Nashville', peakDate: '2010-05-03' },
+    },
   },
   houston: { event: 'Hurricane Harvey, Aug 2017', stn: { eventId: 180, eventName: '2017 Harvey', states: 'TX' }, fema: true },
   boulder: { event: 'Sep 2013 Colorado Front Range flood (no STN marks inside the domain)', stn: { eventId: 11, eventName: '2013 September CO Flood', states: 'CO' }, fema: true },
@@ -426,6 +436,87 @@ function deriveEms(meta: PresetMeta, e: NonNullable<PresetPlan['ems']>): EmsDama
   };
 }
 
+// ─── a parcel damage assessment (Nashville, May 2010) ──────────────────────────────────────────────────────────
+/** Every polygon of an ArcGIS layer that intersects the domain, paged by OBJECTID; only `fields` are requested. */
+function arcgisPolygons(cacheName: string, layerUrl: string, meta: PresetMeta, fields: string): GeoJsonFC {
+  const b = meta.bounds;
+  const all: GeoJsonFC = { type: 'FeatureCollection', features: [] };
+  for (let page = 0, offset = 0; page < 50; page++) {
+    const q = new URLSearchParams({
+      where: '1=1',
+      geometry: `${b.west},${b.south},${b.east},${b.north}`,
+      geometryType: 'esriGeometryEnvelope',
+      inSR: '4326',
+      spatialRel: 'esriSpatialRelIntersects',
+      outFields: fields,
+      returnGeometry: 'true',
+      outSR: '4326',
+      orderByFields: 'OBJECTID',
+      resultOffset: String(offset),
+      resultRecordCount: '1000',
+      f: 'geojson',
+    });
+    const fc = readJson<GeoJsonFC>(cached(`${cacheName}-p${page}.geojson`, `${layerUrl}/query?${q}`));
+    all.features.push(...fc.features);
+    const more = fc.exceededTransferLimit || fc.properties?.exceededTransferLimit;
+    if (!more || fc.features.length === 0) break;
+    offset += fc.features.length;
+  }
+  return all;
+}
+
+/**
+ * The damaged parcels as a mask on the grid. A parcel paints the cells whose centres it contains; a parcel too small
+ * to contain one (a condominium unit, a narrow lot) paints the cell under its vertex centroid instead, so no damaged
+ * parcel is lost to the raster. Only OBJECTID is requested: the layer also carries owner names and addresses, which
+ * the comparison does not need and the repo must not hold.
+ */
+function deriveDamage(id: string, meta: PresetMeta, d: NonNullable<PresetPlan['damage']>): ParcelDamage | null {
+  const fc = arcgisPolygons(`damage/${id}`, d.layerUrl, meta, 'OBJECTID');
+  const grid = gridOf(meta);
+  const toGrid = (lon: number, lat: number) => geoToGrid(grid, lon, lat);
+  const mask = new Uint8Array(meta.nx * meta.ny);
+  let parcels = 0;
+  let subCell = 0;
+  for (const f of fc.features) {
+    const g = f.geometry;
+    if (!g) continue;
+    const n = fillGeoJsonGeometry(mask, grid, g, 1);
+    // Vertex centroid of the outer ring(s), for the in-domain test and the sub-cell fallback.
+    const rings = g.type === 'Polygon' ? [(g.coordinates as number[][][])[0]] : g.type === 'MultiPolygon' ? (g.coordinates as number[][][][]).map((p) => p[0]) : [];
+    let sx = 0;
+    let sy = 0;
+    let m = 0;
+    for (const r of rings) for (const p of r) { sx += p[0]; sy += p[1]; m++; }
+    if (m === 0) continue;
+    const c = toGrid(sx / m, sy / m);
+    const i = Math.floor(c.gx);
+    const j = Math.floor(c.gy);
+    const inside = i >= 0 && j >= 0 && i < meta.nx && j < meta.ny;
+    if (n === 0 && !inside) continue;
+    parcels++;
+    if (n === 0) {
+      subCell++;
+      mask[j * meta.nx + i] = 1;
+    }
+  }
+  const gauge = d.gauge;
+  const [g] = deriveGauges(meta, [gauge]);
+  if (!g) {
+    console.warn(`  ! ${id}: no ${gauge.peakDate} peak at ${gauge.site} — damage comparison skipped`);
+    return null;
+  }
+  return {
+    event: d.event,
+    date: gauge.peakDate,
+    survey: d.survey,
+    gauge: { id: g.id, name: g.name, stageFt: g.stageFt, gaugeDatumFt: g.gaugeDatumFt, datum: 'NAVD88', elevation: g.elevation, source: g.source },
+    parcels,
+    subCellParcels: subCell,
+    maskRle: rleEncode(mask),
+  };
+}
+
 // ─── main ─────────────────────────────────────────────────────────────────────────────────────────────────────
 function writeJson(file: string, value: unknown): void {
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -498,6 +589,17 @@ function main(): void {
       const g: Record<string, number> = {};
       for (const b of observed.ems.buildings) g[b.grade] = (g[b.grade] ?? 0) + 1;
       console.log(`  EMS: ${observed.ems.buildings.length} graded buildings in the domain ${JSON.stringify(g)}, ${observed.ems.roads.length} road lines`);
+    }
+    if (plan.damage) {
+      const dmg = deriveDamage(id, meta, plan.damage);
+      if (dmg) {
+        observed.damage = dmg;
+        sources.push({ id: 'parcel-damage', title: plan.damage.survey, url: plan.damage.layerUrl, licence: plan.damage.licence, retrieved: TODAY });
+        if (!sources.some((s) => s.id === 'usgs-nwis')) {
+          sources.push({ id: 'usgs-nwis', title: 'USGS NWIS annual peak streamflow and site datum', url: 'https://nwis.waterdata.usgs.gov/nwis/peak', licence: 'Public domain (U.S. Geological Survey)', retrieved: TODAY });
+        }
+        console.log(`  damage: ${dmg.parcels} damaged parcels in the domain (${dmg.subCellParcels} smaller than a cell); crest ${dmg.gauge.stageFt} ft at ${dmg.gauge.id} = ${dmg.gauge.elevation} m NAVD88`);
+      }
     }
     writeJson(path.join(OUT, id, 'observed.json'), observed);
   }

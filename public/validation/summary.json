@@ -1,6 +1,6 @@
 {
  "version": 1,
- "generated": "2026-10-13T04:06:25.428Z",
+ "generated": "2026-10-13T16:30:44.289Z",
  "solver": "src/sim on nvidia turing nvidia-geforce-gtx-1660-ti D3D12 driver version 32.0.15.9595",
  "presets": {
   "pittsburgh": {
@@ -37,12 +37,19 @@
   },
   "nashville": {
    "preset": "nashville",
-   "event": "May 2010 flood (no STN marks); FEMA 1 % zone at the matching stage",
+   "event": "May 2010 flood: Metro Nashville’s parcel damage assessment (no STN marks); FEMA 1 % zone at the matching stage",
    "headline": {
     "label": "FEMA 1 % flood zone, at the 1 % river level (48.5 ft)",
     "value": "CSI 82 % · hit rate 88 % · false alarms 7 % · 1 % profile +0.26 m",
     "note": "Share of FEMA’s mapped 1 % floodplain (of the rivers this scene forces) that Deluge floods at the same river level, and how much it floods outside it."
    },
+   "more": [
+    {
+     "label": "May 2010 flood: Metro Nashville’s damage survey, river at the 52.55 ft crest",
+     "value": "reaches 31 % of the damaged buildings (98 % of those the river could reach) · 14 % of the buildings it floods were not recorded",
+     "note": "Building by building, against the parcels the city recorded as damaged. 70 % of that damage stands above the crest or out of the river’s reach — creeks, rain and drains this scene does not run. Damage is not inundation."
+    }
+   ],
    "metrics": {
     "fema.connected.csi": 0.8229,
     "fema.connected.hitRate": 0.8754,
@@ -57,13 +64,27 @@
     "bfe.bias": 0.2592,
     "bfe.rmse": 0.2726,
     "bfe.within03": 0.7,
-    "bfe.within1": 1
+    "bfe.within1": 1,
+    "damage.buildings.csi": 0.2914,
+    "damage.buildings.hitRate": 0.3063,
+    "damage.buildings.falseAlarmRatio": 0.1429,
+    "damage.buildings.frequencyBias": 0.3573,
+    "damage.parcelArea": 0.4516,
+    "damage.inReach.csi": 0.8431,
+    "damage.inReach.hitRate": 0.9847,
+    "damage.inReach.falseAlarmRatio": 0.1457,
+    "damage.inReach.frequencyBias": 1.1527
    },
    "runs": [
     {
      "id": "fema-1pct",
      "description": "stage raised to FEMA's 1 % level at USGS 03431500 (416 ft NAVD88) and held 30 min",
      "simMinutes": 32.97
+    },
+    {
+     "id": "may2010",
+     "description": "the May 2010 crest: stage raised to 52.55 ft at USGS 03431500 (USGS peak, 2010-05-03) and held 30 min",
+     "simMinutes": 33.37
     }
    ]
   },
