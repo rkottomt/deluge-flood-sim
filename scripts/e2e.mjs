@@ -2888,6 +2888,9 @@ const FLOWS = [
       await openSection('designs');
       await page.fill('[data-compare-field="minutes"]', String(minutes));
       await page.dispatchEvent('[data-compare-field="minutes"]', 'change');
+      // The FEMA default rate (flow 23 leaves 3.1 % behind when run first).
+      await page.fill('[data-compare-field="discount-rate"]', '7');
+      await page.dispatchEvent('[data-compare-field="discount-rate"]', 'change');
       await D(() => {
         const sel = document.querySelector('[data-compare="ladder"]');
         if (sel && sel.value !== 'stage') {
