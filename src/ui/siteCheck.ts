@@ -363,7 +363,9 @@ export function createSiteSection(ctx: UIContext): SiteSection {
    */
   function ensureRain() {
     const t = terrainRef;
-    if (!t || rain.for === t) return;
+    // A failed download is tried again on the next use (activate, the address case) — loadAtlas14Grid forgets a
+    // failure — instead of leaving the scene without a rain ladder until it changes.
+    if (!t || (rain.for === t && rain.status !== 'error')) return;
     const c = mapCentre(t);
     if (!atlas14MayCover(c.lat, c.lon)) {
       rain = { for: t, status: 'none', point: null, ready: Promise.resolve(false) };
@@ -375,7 +377,8 @@ export function createSiteSection(ctx: UIContext): SiteSection {
         if (terrainRef !== t) return false;
         const p = lookupAtlas14(g, c.lat, c.lon);
         rain = { ...mine, status: p ? 'ok' : 'none', point: p };
-        if (!sweeping) buildLadder();
+        // The grid arrives after the panel has been on screen: keep what the user ticked and typed.
+        if (!sweeping) buildLadder(true);
         render();
         return !!p;
       },
@@ -402,7 +405,9 @@ export function createSiteSection(ctx: UIContext): SiteSection {
     return ladderKind === 'rain' ? RAIN_SWEEP_MINUTES : SWEEP_MINUTES_DEFAULT;
   }
 
-  function buildLadder() {
+  /** Build the ladder on screen; `keep`: levels that are still there keep their tick and typed return period (by id). */
+  function buildLadder(keep = false) {
+    const prev = keep ? new Map(levels.map((l) => [l.id, l])) : null;
     const st = stageCtl();
     const ladder = ladderFor(store.get().presetId, store.get().scenario);
     const opts = ladderOptions();
@@ -439,7 +444,14 @@ export function createSiteSection(ctx: UIContext): SiteSection {
     } else {
       levels = SCALE_LADDER.map((k) => ({ id: `x${k}`, label: `Scenario forcing × ${k}`, ft: NaN, scale: k, mmPerHour: NaN, sourceRp: null, userRp: null, source: '', note: '', on: k === 0.5 || k === 1, outOfRange: false }));
     }
-    for (const l of levels) if (l.outOfRange) l.on = false;
+    for (const l of levels) {
+      const p = prev?.get(l.id);
+      if (p) {
+        l.on = p.on;
+        if (l.sourceRp == null) l.userRp = p.userRp;
+      }
+      if (l.outOfRange) l.on = false;
+    }
   }
 
   // ─── Reading the flood ──────────────────────────────────────────────────────────────────────────────────────
