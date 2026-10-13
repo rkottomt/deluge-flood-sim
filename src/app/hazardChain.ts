@@ -112,6 +112,12 @@ export class HazardChainController {
   /** The baked run's member parameters (the base every what-if is layered on) and its inflow's clock offset. */
   private baseOverrides: ChainOverrides = {};
   private bakedOffset: number | null = null;
+  /**
+   * Future-climate lake growth (src/climate, set by the app): multiplies the source volume of every run ON TOP of the
+   * baked member and the panel's what-if, so the chain panel keeps working in today's volumes. 1 = today.
+   */
+  private climateVolumeFactor = 1;
+  private climateLabel: string | null = null;
 
   constructor(private readonly deps: HazardChainDeps) {}
 
@@ -170,6 +176,7 @@ export class HazardChainController {
       inflow: this.inflow,
       origin: 'worker',
       ms: null,
+      climate: this.climateLabel ? { label: this.climateLabel, volumeFactor: this.climateVolumeFactor } : null,
     });
     this.bridge.chainControl = {
       run: (whatIf) => void this.run(whatIf),
@@ -233,8 +240,9 @@ export class HazardChainController {
     const token = this.sceneToken;
     const runId = ++this.runToken;
     const spec = specFor(view.spec, whatIf);
-    // The baked member's parameters under the user's changes (see BAKED RESULTS above).
+    // The baked member's parameters under the user's changes (see BAKED RESULTS above), then the climate's lake growth.
     const overrides: ChainOverrides = { ...this.baseOverrides, ...whatIf.overrides };
+    if (this.climateVolumeFactor !== 1) overrides.volumeFactor = (overrides.volumeFactor ?? 1) * this.climateVolumeFactor;
     // A job still in flight would make this run wait behind it: start a fresh worker instead.
     if (this.busy) this.disposeBackend();
     const backend = (this.backend ??= (this.deps.createBackend ?? createHazardWorker)());
@@ -308,6 +316,21 @@ export class HazardChainController {
       store.set({ scenario: { ...sc, sources }, sources: sources.map((w) => ({ ...w })) });
     }
     this.deps.resetWater();
+  }
+
+  /**
+   * Future-climate lake growth: the source-volume multiplier (1 = today) and the climate it stands for. A change re-runs
+   * the chain with the current what-if (when one has run on this scene; the first run of a scene picks it up anyway).
+   */
+  setClimateVolumeFactor(factor: number, label: string | null): void {
+    const f = Number.isFinite(factor) && factor > 0 ? factor : 1;
+    if (f === this.climateVolumeFactor && label === this.climateLabel) return;
+    const rerun = f !== this.climateVolumeFactor;
+    this.climateVolumeFactor = f;
+    this.climateLabel = f === 1 ? null : label;
+    this.publish({ climate: this.climateLabel ? { label: this.climateLabel, volumeFactor: f } : null });
+    const view = this.view;
+    if (rerun && view?.file && view.status !== 'loading') void this.run(view.whatIf);
   }
 
   /** Switch what drives the map (the chain result stays on screen either way). */

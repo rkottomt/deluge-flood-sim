@@ -30,6 +30,7 @@ import { ROAD_FLOODED_DEPTH as ROAD_FLOODED_DEPTH_M } from '../routing/constants
 import { h } from './dom';
 import { fmtNum, formatClock, formatMoney } from './format';
 import { CITATIONS } from './impactMethods';
+import { climateCompareBlock, type ClimateComparison } from './siteClimate';
 
 const FT = 0.3048;
 const num = (v: number, d = 0) => (Number.isFinite(v) ? fmtNum(v, d) : '—');
@@ -266,6 +267,8 @@ export interface SiteReportSite {
   rec: FfeRecommendation | null;
   options: SiteMitigation[];
   verdict: string[];
+  /** Today vs a future climate (siteClimate.ts), when that comparison was run. */
+  climate?: ClimateComparison | null;
 }
 
 export interface SiteReportInput {
@@ -314,6 +317,7 @@ export function buildSiteReport(i: SiteReportInput): HTMLElement {
         h('p', null, s.sweep.eal ? `${money(s.sweep.eal.low)} – ${money(s.sweep.eal.high)} a year (without / with the tail), from ${s.sweep.points.length} level${s.sweep.points.length === 1 ? '' : 's'} with a return period${s.sweep.userReturnPeriods ? ' — some entered by the user' : ''}.` : 'Not computed: no level run has a return period.'),
       );
       if (chart) parts.push(h('figure', { class: 'dl-rep-figure' }, chart, h('figcaption', null, 'Loss at the site against return period (log scale). One point per level with a return period.')));
+      if (s.climate) parts.push(h('h3', null, `Future climate — today vs ${s.climate.label}`), climateCompareBlock(s.climate, money, 'dl-rep-climate'));
       parts.push(
         h('h3', null, 'Egress timeline'),
         simpleTable(

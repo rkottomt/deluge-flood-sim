@@ -139,6 +139,29 @@ buildings reached and **$5.5 B** (±1σ curve range $3.8–7.0 B); the one-click
 are screening numbers for one simulated event on bare-earth terrain: not a flood study, not an insurance valuation,
 not a catastrophe model, and the real uncertainty is wider than the band (values, terrain, missing drains).
 
+## Future climate
+
+Anyone building or lending for 30–50 years gets asked what the site looks like in 2050 or 2080 (IFRS S2 scenario
+analysis, lender questionnaires). **Weather & rivers → Future climate** picks a horizon — Today, 2050, 2080, 2100 — and
+a pathway — SSP2-4.5 (middle of the road) or SSP5-8.5 (high) — and scales this scene's *forcing*; the solver then
+makes the flood:
+
+* **Rain and storm cells** × (1 + α)^ΔT, with ΔT the global warming since 1995–2014 from IPCC AR6 Table SPM.1 and α =
+  7 %/°C (Clausius–Clapeyron, AR6's figure for daily extremes) or 10 / 14 %/°C (the observed super-CC band for hourly
+  bursts). 2050 SSP5-8.5 at 7 %: ΔT 1.55 °C, rain × 1.11 (Harvey's 173 mm/hr → 192); 2100 SSP5-8.5: × 1.27.
+* **Rain-fed inflows** × the same factor; a dam-break surge (Johnstown 1889) and a hazard-chain wave are left alone.
+* **Sea level** at Fort Myers: + NOAA 2022 relative rise at gauge 8725520 (SSP2-4.5 → Intermediate-Low 0.28 / 0.49 /
+  0.62 m, SSP5-8.5 → Intermediate 0.32 / 0.70 / 1.10 m in 2050 / 2080 / 2100), on top of the stage slider.
+* **River stages** (Pittsburgh, Nashville) are not scaled — a stage is the hydraulics' answer, not a forcing.
+* **Glacial lakes**: South Lhonak's area grows with warming along its 2008–2023 trend (capped at 2×), its volume
+  follows from the chain's V–A relations, and the hazard chain re-runs with it.
+
+It is a layer on what the solver receives: the rain slider, the inflow list and the stage slider keep showing
+today's values, and the block lists every modified number with its source. In **Site check**, **Today vs future**
+runs the ladder twice and reports "EAL today $X → 2050 · SSP5-8.5 $Y" with per-level losses, in the panel and the
+report (return periods stay today's). Forcing-scaled, not downscaled projections; method, sources and gaps in
+[docs/research/climate-scenarios.md](docs/research/climate-scenarios.md), code in [`src/climate`](src/climate).
+
 ## Seven cities, offline
 
 Every scene below is baked into the repo and needs no network: real USGS elevation, real NAIP photography, real Census
@@ -254,6 +277,7 @@ every ~300 ms, never blocking: stats reduction pass ─▶ mapAsync ─▶ HUD +
 | [`src/data`](src/data) | USGS 3DEP / imagery / roads loaders, hydro-conditioning, presets, live areas |
 | [`src/routing`](src/routing) | road graph, flood status per edge, travel-time Dijkstra |
 | [`src/loss`](src/loss) | impact & loss: damage curves, values, hazard classes, access loss, sites/portfolio CSV, EAL/BCR, site check (egress timing, event ladders, FFE, verdict), ensemble sampling and aggregation (pure, no DOM) |
+| [`src/climate`](src/climate) | future-climate tables (AR6 warming, rain scaling, NOAA sea level, lake growth) and the forcing transforms (pure, no DOM) |
 | [`src/ui`](src/ui) | panels, tools, HUD, How it works, location picker |
 | [`src/app`](src/app) | scene loading, store → solver sync, stage ramp, protected-land analysis, frame pacing, screen wake lock, debug API (`window.__deluge`, dev and flagged builds only) |
 

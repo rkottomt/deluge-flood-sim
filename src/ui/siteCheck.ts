@@ -79,6 +79,8 @@ import {
 import { sitesFor } from './sites';
 import { selectTool } from './toolDefs';
 import { headlessBusy, runHeadless, saveScenario } from './headless';
+import { CLIMATE_TODAY, climateForcing, sweepComparable } from '../climate';
+import { climateCompareBlock, compareClimate, type ClimateSweepPair } from './siteClimate';
 
 const FT = 0.3048;
 /** Simulated minutes per sweep level, default and range. */
@@ -199,6 +201,10 @@ export function createSiteSection(ctx: UIContext): SiteSection {
   runBtn.dataset.site = 'run-sweep';
   const cancelBtn = button('Cancel', () => (cancelRequested = true), { className: 'dl-btn-sm', tip: 'Stop after the current chunk and restore your scenario', side: 'top' });
   cancelBtn.hidden = true;
+  // Future climate (siteClimate.ts): the ladder run under today's forcing, then under the selected climate.
+  let climatePair: ClimateSweepPair | null = null;
+  const climateBtn = button('Today vs future', () => void runClimateCompare(), { icon: 'play', className: 'dl-btn-sm', tip: 'Run the ticked levels twice — today’s forcing, then the climate chosen under Weather & rivers → Future climate — and compare loss and EAL', side: 'top' });
+  climateBtn.dataset.site = 'run-climate-sweep';
   const progress = h('progress', { class: 'dl-site-progress', max: 1, value: 0, hidden: true });
   const sweepStatus = h('p', { class: 'dl-impact-status', 'aria-live': 'polite', 'data-site': 'sweep-status' });
   const sweepOut = h('div', { class: 'dl-site-sweep-out' });
@@ -228,7 +234,7 @@ export function createSiteSection(ctx: UIContext): SiteSection {
       sweepIntro,
       ladderEl,
       durIn.el,
-      h('div', { class: 'dl-row dl-row-wrap' }, runBtn, cancelBtn),
+      h('div', { class: 'dl-row dl-row-wrap' }, runBtn, climateBtn, cancelBtn),
       progress,
       sweepStatus,
       sweepOut,
@@ -425,6 +431,8 @@ export function createSiteSection(ctx: UIContext): SiteSection {
       presetId: s0.presetId,
     };
     sweeping = true;
+    climatePair = null;
+    climateBtn.disabled = true;
     cancelRequested = false;
     runBtn.disabled = true;
     assessBtn.disabled = true;
@@ -494,6 +502,7 @@ export function createSiteSection(ctx: UIContext): SiteSection {
     assessBtn.disabled = false;
     cancelBtn.hidden = true;
     progress.hidden = true;
+    syncClimateBtn();
     if (state.levels.length) sweep = state;
     const secs = out.seconds;
     if (failed) setSweepStatus(`Sweep stopped: ${failed}. Your scenario was restored (the water restarts from its beginning).`, 'warn');
@@ -501,6 +510,55 @@ export function createSiteSection(ctx: UIContext): SiteSection {
     else setSweepStatus(`Done: ${todo.length} level${todo.length === 1 ? '' : 's'} in ${fmtNum(secs, 0)} s. Your scenario was restored; the water restarts from its beginning.`);
     current = null;
     render();
+  }
+
+  // ─── Today vs a future climate (siteClimate.ts) ─────────────────────────────────────────────────────────────
+  let comparing = false;
+  const rpOf = (id: string): number | null => {
+    const l = levels.find((x) => x.id === id);
+    return l ? (l.sourceRp ?? l.userRp) : null;
+  };
+
+  function syncClimateBtn() {
+    const s = store.get();
+    const c = sweepComparable(climateForcing(s.climate, s.presetId), stageCtl() ? 'stage' : 'scale');
+    climateBtn.disabled = sweeping || comparing || !c.ok;
+    climateBtn.dataset.tip = c.ok ? `Run the ticked levels under today’s forcing, then under ${climateForcing(s.climate, s.presetId).label}, and compare loss and EAL` : c.why;
+  }
+
+  /** The ladder twice: the climate layer off (today), then the user's selection; the user's selection is put back. */
+  async function runClimateCompare(): Promise<void> {
+    if (sweeping || busy || comparing) return;
+    const s0 = store.get();
+    const sel = s0.climate ?? { ...CLIMATE_TODAY };
+    const f = climateForcing(sel, s0.presetId);
+    const ok = sweepComparable(f, stageCtl() ? 'stage' : 'scale');
+    if (!ok.ok) return setSweepStatus(ok.why, 'warn');
+    const want = levels.filter((l) => l.on && !l.outOfRange).length;
+    const complete = (st: SweepState | null) => !!st && !st.cancelled && st.levels.length === want;
+    comparing = true;
+    try {
+      store.set({ climate: { ...sel, horizon: 'today' } });
+      await runSweep();
+      const today = sweep;
+      if (!complete(today)) return;
+      store.set({ climate: sel });
+      await runSweep();
+      const future = sweep;
+      if (!complete(future)) return;
+      const changes: string[] = [];
+      if (f.rainMult !== 1) changes.push(`rain & storm cells × ${fmtNum(f.rainMult, 2)}`);
+      if (f.inflowMult !== 1 && !f.chainInflows) changes.push(`rain-fed inflows × ${fmtNum(f.inflowMult, 2)}`);
+      if (f.seaRiseM > 0) changes.push(`sea +${fmtNum(f.seaRiseM, 2)} m (NOAA ${f.seaScenario})`);
+      climatePair = { label: f.label, changes, today: today!.rows, future: future!.rows };
+      sweep = today;
+      setSweepStatus(`Done: ${want} level${want === 1 ? '' : 's'} today and under ${f.label}. Your scenario and climate were restored.`);
+    } finally {
+      store.set({ climate: sel });
+      comparing = false;
+      syncClimateBtn();
+      renderSweep();
+    }
   }
 
   // ─── Derived results ────────────────────────────────────────────────────────────────────────────────────────
@@ -720,6 +778,8 @@ export function createSiteSection(ctx: UIContext): SiteSection {
     const parts: Array<HTMLElement | null> = [];
     if (stale) parts.push(h('p', { class: 'dl-impact-fine dl-warn' }, 'The site was edited after the sweep: these numbers are for the building as it was then. Run the sweep again.'));
     parts.push(h('div', { class: 'dl-site-verdict', 'data-site': 'verdict' }, ...d.verdict.map((v) => h('p', null, v))));
+    const cc = climatePair ? compareClimate(climatePair, s.id, rpOf) : null;
+    if (cc) parts.push(climateCompareBlock(cc, money));
     parts.push(h('div', { class: 'dl-impact-table dl-site-table' }, simpleTable(SWEEP_HEAD_COMPACT, sweepRowsCompact(d.sum, money), '')));
     const chart = exceedanceChart(d.sum, money);
     if (chart) parts.push(h('figure', { class: 'dl-site-figure' }, chart, h('figcaption', { class: 'dl-impact-fine' }, 'Loss at the site against return period (log). Hover a point for its numbers; the table above has them all.')));
@@ -794,7 +854,7 @@ export function createSiteSection(ctx: UIContext): SiteSection {
       sweep: sweep ? { durationS: sweep.durationS, source: sweep.source, ladder: sweep.ladder, gaugeLabel: sweep.gaugeLabel, sourceKeys: sweep.sourceKeys, levels: sweep.levels.length, cancelled: sweep.cancelled } : null,
       sites: registry.sites.map((spec) => {
         const d = derived(spec);
-        return { spec, current: current?.runs.get(spec.id) ?? null, sweep: d.sum, rec: d.rec, options: d.options, verdict: d.verdict };
+        return { spec, current: current?.runs.get(spec.id) ?? null, sweep: d.sum, rec: d.rec, options: d.options, verdict: d.verdict, climate: climatePair ? compareClimate(climatePair, spec.id, rpOf) : null };
       }),
     };
   }
@@ -823,6 +883,7 @@ export function createSiteSection(ctx: UIContext): SiteSection {
     (s) => `${s.presetId}|${s.terrainName}`,
     () => ensureScene(getTerrain()),
   );
+  ctx.bind((s) => `${s.presetId}|${s.climate?.horizon}|${s.climate?.pathway}|${s.climate?.scaling}|${!!s.scenario?.stage}`, () => syncClimateBtn());
   ctx.bind(
     (s) => s.stats,
     () => {
