@@ -211,6 +211,28 @@ buildings reached and **$5.5 B** (±1σ curve range $3.8–7.0 B); the one-click
 are screening numbers for one simulated event on bare-earth terrain: not a flood study, not an insurance valuation,
 not a catastrophe model, and the real uncertainty is wider than the band (values, terrain, missing drains).
 
+**People on foot.** Site check's card also answers "how do the people in this building get out?": occupants (the
+IBC design load by default — an upper bound; type the real number) leave through the exits at the SFPE flow rate
+after a pre-movement time and walk the streets, in both directions, to the nearest refuge — a shelter that stays safe
+or any ground that stays dry above the water — while each street closes once its water is unsafe for people (FD2321
+hazard rating 0.75 or AIDR H3, from the moment water first arrives there). Out come *everyone out by T+x and at a
+refuge by T+y if the alert goes out at T0*, *X of N reach safety*, the latest safe departure per walking group (able
+adults 1.22 m/s, older adults 0.91, mobility-impaired 0.6), *vertical evacuation feasible: yes/no (floor k)*, and the
+route drawn dashed on the map (orange when the flood closed it). The scenarios are time-lapses — Pittsburgh's 1936
+rise plays in minutes — so on the North Shore nobody walks out after a 10-minute pre-movement; that is the point of
+the alert-time input. Details: [ARCHITECTURE.md §7.1](ARCHITECTURE.md#71-evacuation-on-foot-srcroutingpedestriants-pedestrianevacts).
+
+**Infrastructure** (its own panel section) checks the scenario's substations, power plants, hospitals, clinics, fire
+and police stations, water and wastewater works, telecom exchanges, major-road bridges and fuel stations
+(OpenStreetMap, baked per scenario) against the flood: out of service / impaired / operational by screening depth
+thresholds per type, and from when, with status-coloured icons on the map. Site check lists what each site depends
+on: "power: Substation X floods at T+42 min (approximate service area)", the nearest hospital and fire station by
+road with flooded roads closed, flags such as *site dry but its substation floods* or *nearest hospital unreachable*,
+and the longer business-interruption downtime that follows (a labelled heuristic). At the 1936 crest after 30
+simulated minutes, 53 of Pittsburgh's 193 mapped facilities are out of service (mostly bridge approaches); under
+Harvey's rain after 20 minutes, 27 of Houston's 279 are out and 104 impaired. Live areas have no facilities (the
+selective OpenStreetMap query is not an allowed endpoint). Details: [ARCHITECTURE.md §7.2](ARCHITECTURE.md#72-infrastructure-dependencies-srcdatafacilitiests-srclossinfrats-infradepsts).
+
 ## Glacier hazards
 
 Three Himalayan scenarios start their flood upstream of the map, in a **hazard chain** (`src/hazard/`, design in
@@ -677,6 +699,10 @@ Rain return periods (Site check's rain ladder): **NOAA Atlas 14** precipitation-
 domain ("no restrictions apply"; NOAA asks for acknowledgement, which every site report carries), resampled into
 `public/atlas14/` by `scripts/bake-atlas14.ts` — provenance in
 [public/atlas14/SOURCES.txt](public/atlas14/SOURCES.txt).
+
+Critical facilities (`facilities.json`, every baked scenario): **OpenStreetMap** via the Overpass API, © OpenStreetMap
+contributors, ODbL 1.0 — `scripts/bake-facilities.ts`, tags and caveats in
+[public/presets/SOURCES.txt](public/presets/SOURCES.txt).
 
 Live areas and the location picker's basemap fetch **Esri World Imagery** at runtime (© Esri, Vantor, Earthstar
 Geographics, and the GIS User Community; Esri's terms apply). Fallbacks: **Mapzen Terrarium** elevation tiles (AWS Open
